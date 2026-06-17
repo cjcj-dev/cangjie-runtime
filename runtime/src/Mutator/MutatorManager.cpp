@@ -8,6 +8,7 @@
 #include "MutatorManager.h"
 
 #include <thread>
+#include <cstdlib>
 #include "Base/TimeUtils.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
@@ -19,6 +20,27 @@
 #include "CpuProfiler/CpuProfiler.h"
 
 namespace MapleRuntime {
+// Mutator-list write-lock watchdog timeout (seconds). Read once from env
+// cjMutatorLockTimeout, falling back to WAIT_LOCK_TIMEOUT, so heavy CPU-oversubscribed
+// builds can raise it without a rebuild. A reader holding the list lock can be starved
+// off-CPU far longer than the old fixed 30s under contention; failing fast there is a
+// false positive, not a real deadlock.
+static uint64_t GetWaitLockTimeoutSec()
+{
+    static const uint64_t timeout = []() -> uint64_t {
+        const char* env = std::getenv("cjMutatorLockTimeout");
+        if (env != nullptr) {
+            char* end = nullptr;
+            unsigned long long parsed = std::strtoull(env, &end, 10);
+            if (end != env && parsed > 0) {
+                return static_cast<uint64_t>(parsed);
+            }
+        }
+        return WAIT_LOCK_TIMEOUT;
+    }();
+    return timeout;
+}
+
 extern "C" uintptr_t MRT_GetSafepointProtectedPage()
 {
     return static_cast<uintptr_t>(true);
@@ -211,33 +233,42 @@ MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().
 
 void MutatorManager::AcquireMutatorManagementWLock()
 {
+    // Announce the pending writer so readers back off (writer-preference), then spin on
+    // the non-blocking write-lock acquisition. Without this, sustained mutator-list
+    // reader churn (many cjthreads registering/unregistering under heavy parallel
+    // compilation) keeps the lock count above zero and starves this acquisition until
+    // the watchdog below fires a false-positive "deadlock".
+    AnnounceMgmtWriterPending();
     uint64_t start = TimeUtil::NanoSeconds();
     bool acquired = TryAcquireMutatorManagementWLock();
     while (!acquired) {
         TimeUtil::SleepForNano(WAIT_LOCK_INTERVAL);
         acquired = TryAcquireMutatorManagementWLock();
         uint64_t now = TimeUtil::NanoSeconds();
-        if (!acquired && ((now - start) / SECOND_TO_NANO_SECOND > WAIT_LOCK_TIMEOUT)) {
+        if (!acquired && ((now - start) / SECOND_TO_NANO_SECOND > GetWaitLockTimeoutSec())) {
             LOG(RTLOG_FATAL, "Wait mutator list lock timeout");
         }
     }
+    WithdrawMgmtWriterPending();
 }
 
 bool MutatorManager::AcquireMutatorManagementWLockForCpuProfile()
 {
+    AnnounceMgmtWriterPending();
     uint64_t start = TimeUtil::NanoSeconds();
     bool acquired = TryAcquireMutatorManagementWLock();
     while (!acquired) {
         TimeUtil::SleepForNano(WAIT_LOCK_INTERVAL);
         acquired = TryAcquireMutatorManagementWLock();
         uint64_t now = TimeUtil::NanoSeconds();
-        if (!acquired && ((now - start) / SECOND_TO_NANO_SECOND > WAIT_LOCK_TIMEOUT)) {
+        if (!acquired && ((now - start) / SECOND_TO_NANO_SECOND > GetWaitLockTimeoutSec())) {
             LOG(RTLOG_FATAL, "Wait mutator list lock timeout");
         }
         if (!CpuProfiler::GetInstance().GetGenerator().GetIsStart()) {
             break;
         }
     }
+    WithdrawMgmtWriterPending();
     return acquired;
 }
 
