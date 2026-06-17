@@ -27,7 +27,11 @@
 
 namespace MapleRuntime {
 const uint64_t WAIT_LOCK_INTERVAL = 5000; // 5us
-const uint64_t WAIT_LOCK_TIMEOUT = 30;    // seconds
+const uint64_t WAIT_LOCK_TIMEOUT = 240;   // seconds (default; was 30). Aligned with the
+                                          // stop-the-world base timeout (STW_TIMEOUTS_BASE_MS)
+                                          // so the mutator-list write lock is not more aggressive
+                                          // than STW under heavy CPU contention. Override via env
+                                          // cjMutatorLockTimeout (seconds).
 const uint32_t MAX_TIMEOUT_TIMES = 1;
 const int STW_TIMEOUTS_THREADS_BASE_COUNT = 100;
 // STW wait base timeout in milliseconds, for every 100 threads, the time is increased by 240000ms.
@@ -90,8 +94,22 @@ public:
 
     bool TryAcquireMutatorManagementRLock()
     {
+        // Writer-preference: defer to a pending writer so a non-blocking reader does
+        // not help starve the GC's mutator-list write lock. The caller (DestroyMutator)
+        // already handles a false return by deferring the mutator to expiringMutators.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            return false;
+        }
         return mutatorManagementRWLock.TryLockRead();
     }
+
+    // Announce/withdraw a pending writer so readers back off. Used by the spin-based
+    // write-lock acquisition (AcquireMutatorManagementWLock*) which does not go through
+    // MutatorManagementWLock(). A counter (not a flag) supports several writers spinning
+    // concurrently; readers wait while any writer is pending.
+    void AnnounceMgmtWriterPending() { mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
+
+    void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
 
@@ -215,11 +233,27 @@ public:
     const SafepointPageManager* GetSafepointPageManager() const { return safepointPageManager; }
 #endif
 
-    void MutatorManagementRLock() { mutatorManagementRWLock.LockRead(); }
+    void MutatorManagementRLock()
+    {
+        // Writer-preference: block new readers while a writer is pending so the GC's
+        // mutator-list write lock cannot be starved by sustained reader churn (many
+        // cjthreads registering/unregistering under heavy parallel compilation). A
+        // reader waits here in the same state it would wait for an already-held write
+        // lock, so this adds no new stop-the-world deadlock.
+        while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            (void)sched_yield();
+        }
+        mutatorManagementRWLock.LockRead();
+    }
 
     void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
 
-    void MutatorManagementWLock() { mutatorManagementRWLock.LockWrite(); }
+    void MutatorManagementWLock()
+    {
+        AnnounceMgmtWriterPending();
+        mutatorManagementRWLock.LockWrite();
+        WithdrawMgmtWriterPending();
+    }
 
     void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
 
@@ -238,6 +272,11 @@ private:
 
     // guard mutator set for stop-the-world/light-sync
     RwLock mutatorManagementRWLock;
+
+    // Number of writers currently waiting for mutatorManagementRWLock. Read by the
+    // read-lock paths to implement writer-preference (see MutatorManagementRLock /
+    // TryAcquireMutatorManagementRLock), preventing GC write-lock starvation.
+    std::atomic<uint32_t> mgmtWritersWaiting{ 0 };
 
     // count of mutators need to be suspended for stw/lsync.
     // this field is also used as futex wait/wakeup word for stw/lsync.
