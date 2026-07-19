@@ -152,6 +152,8 @@ public:
         return liveInfo;
     }
 
+    LiveInfo* GetGhostLiveInfo() const { return metadata.liveInfo0; }
+
     LiveInfo* GetOrAllocLiveInfo()
     {
         do {
@@ -649,6 +651,25 @@ public:
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
+        if (UNLIKELY(preLiveBytes >= metadata.routeInfo.GetToRegion1UsedBytes() &&
+                     metadata.routeInfo.GetToRegion2Idx() == RouteInfo::INVALID_VALUE)) {
+            size_t offset = GetAddressOffset(fromAddress);
+            LiveInfo* ghostLiveInfo = metadata.liveInfo0;
+            bool survived = ghostLiveInfo != nullptr && ghostLiveInfo->IsSurvivedObject(offset);
+            size_t bitmapLiveBytes = ghostLiveInfo == nullptr ? 0 : ghostLiveInfo->GetBitmapLiveBytes();
+            size_t recomputedLiveBytes = ghostLiveInfo == nullptr ? 0 : ghostLiveInfo->RecomputeBitmapLiveBytes();
+            const char* producer = (bitmapLiveBytes != metadata.routeInfo.GetToRegion1UsedBytes() ||
+                recomputedLiveBytes != bitmapLiveBytes) ? "bitmap-liveByteCount-snapshot-mismatch" :
+                !survived ? "old-tagged-ref-or-root-to-non-survivor" : "cross-generation-or-route-plan-mismatch";
+            CHECK_E(true,
+                "GC route verifier: producer=%s fromRegion=%p unit=%zu state=%u fromObj=%p offset=%zu "
+                "survived=%u preLiveBytes=%zu bitmapLiveBytes=%zu recomputedLiveBytes=%zu "
+                "currentLiveByteCount=%u toRegion1UsedBytes=%u toRegion2Idx=%u ghostLiveInfo=%p",
+                producer, this, GetUnitIdx(), static_cast<unsigned>(GetRouteState()), fromObj, offset,
+                static_cast<unsigned>(survived), static_cast<size_t>(preLiveBytes), bitmapLiveBytes,
+                recomputedLiveBytes, GetLiveByteCount(), metadata.routeInfo.GetToRegion1UsedBytes(),
+                metadata.routeInfo.GetToRegion2Idx(), ghostLiveInfo);
+        }
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         return reinterpret_cast<BaseObject*>(toAddr);
     }
@@ -726,7 +747,7 @@ public:
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
             metadata.liveInfo = nullptr;
-            metadata.liveByteCount = 0;
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         }
     }
     void ClearLiveInfo()
@@ -734,7 +755,7 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
-        metadata.liveByteCount = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
     // only from-region should be locked.
@@ -953,9 +974,15 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    uint32_t GetLiveByteCount() const { return metadata.liveByteCount; }
+    uint32_t GetLiveByteCount() const
+    {
+        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+    }
 
-    void ResetLiveByteCount() { metadata.liveByteCount = 0; }
+    void ResetLiveByteCount()
+    {
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+    }
 
     void AddLiveByteCount(uint32_t count)
     {
@@ -1183,7 +1210,7 @@ private:
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
-        metadata.liveByteCount = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
         SetUnitRole(uClass);

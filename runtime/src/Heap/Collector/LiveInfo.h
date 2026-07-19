@@ -174,6 +174,18 @@ struct RegionBitmap {
         }
         return (preLiveBits + liveBits) * kMarkedBytesPerBit;
     }
+
+    size_t GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
+
+    size_t RecomputeLiveBytes() const
+    {
+        size_t liveBits = 0;
+        size_t count = wordCnt.load(std::memory_order_acquire);
+        for (size_t i = 0; i < count; ++i) {
+            liveBits += static_cast<size_t>(__builtin_popcountll(markWords[i].load(std::memory_order_acquire)));
+        }
+        return liveBits * kMarkedBytesPerBit;
+    }
 };
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
@@ -195,6 +207,24 @@ struct LiveInfo {
         }
         return liveBytes;
     }
+
+    bool IsSurvivedObject(size_t offset) const
+    {
+        return (markBitmap != nullptr && markBitmap->IsMarked(offset)) ||
+            (resurrectBitmap != nullptr && resurrectBitmap->IsMarked(offset));
+    }
+
+    size_t GetBitmapLiveBytes() const
+    {
+        return (markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
+            (resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
+    }
+
+    size_t RecomputeBitmapLiveBytes() const
+    {
+        return (markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
+            (resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
+    }
 };
 
 struct RouteInfo {
@@ -211,6 +241,8 @@ struct RouteInfo {
         toRegion1UsedBytes = to1used;
         toRegion2Idx = to2;
     }
+    uint32_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
+    uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H
