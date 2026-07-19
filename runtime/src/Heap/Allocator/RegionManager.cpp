@@ -982,6 +982,12 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     size_t fromBytes = region->GetLiveByteCount();
+    LiveInfo* ghostLiveInfo = region->GetGhostLiveInfo();
+    size_t bitmapLiveBytes = ghostLiveInfo == nullptr ? 0 : ghostLiveInfo->GetBitmapLiveBytes();
+    CHECK_DETAIL(ghostLiveInfo != nullptr && bitmapLiveBytes == fromBytes,
+        "GC route verifier: producer=bitmap-liveByteCount-snapshot-mismatch fromRegion=%p unit=%zu "
+        "liveInfo=%p liveByteCount=%zu bitmapLiveBytes=%zu",
+        region, region->GetUnitIdx(), ghostLiveInfo, fromBytes, bitmapLiveBytes);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);
