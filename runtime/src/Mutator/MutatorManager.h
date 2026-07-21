@@ -100,7 +100,17 @@ public:
         if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
             return false;
         }
-        return mutatorManagementRWLock.TryLockRead();
+        if (!mutatorManagementRWLock.TryLockRead()) {
+            return false;
+        }
+        // Close the race between the pending-writer check above and TryLockRead().
+        // A reader that overlapped a writer announcement must not join the reader
+        // set and extend the writer's wait indefinitely.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            mutatorManagementRWLock.UnlockRead();
+            return false;
+        }
+        return true;
     }
 
     // Announce/withdraw a pending writer so readers back off. Used by the spin-based
@@ -240,10 +250,20 @@ public:
         // cjthreads registering/unregistering under heavy parallel compilation). A
         // reader waits here in the same state it would wait for an already-held write
         // lock, so this adds no new stop-the-world deadlock.
-        while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
-            (void)sched_yield();
+        for (;;) {
+            while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+                (void)sched_yield();
+            }
+            mutatorManagementRWLock.LockRead();
+            // A writer may announce itself after the check above but before LockRead
+            // increments the reader count. Back out in that case. Once a writer is
+            // pending, only the finite set of readers which completed both checks
+            // before the announcement can remain, so the writer must make progress.
+            if (mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
+                return;
+            }
+            mutatorManagementRWLock.UnlockRead();
         }
-        mutatorManagementRWLock.LockRead();
     }
 
     void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
