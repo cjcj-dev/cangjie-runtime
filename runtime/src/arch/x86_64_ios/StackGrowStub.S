@@ -86,8 +86,7 @@ _CJ_MCC_StackGrowStub:
     movq   -8(%rbp), %rsi
     movq   8(%rbp),  %rdx
     callq  _MRT_StackGrow
-    .global _unwindPCForStackGrowStub
-_unwindPCForStackGrowStub:
+L_unwindPCForStackGrowStub:
 
     addq %rax, %rsp
     addq %rax, %rbp
@@ -158,3 +157,6 @@ _unwindPCForStackGrowStub:
     retq
 
     .cfi_endproc
+
+    .globl _unwindPCForStackGrowStub
+_unwindPCForStackGrowStub = L_unwindPCForStackGrowStub

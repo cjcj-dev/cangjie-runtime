@@ -19,7 +19,7 @@ __CJ_Init_Start:                        # @__CJ_Init_Start
     popq  %rax
     .cfi_def_cfa_offset 8
     retq
-.Lfunc_end:
+Lfunc_end:
     .cfi_endproc
                                             # -- End function
 
@@ -37,7 +37,7 @@ __CJ_Fini_End:                        # @__CJ_Fini_End
     popq  %rax
     .cfi_def_cfa_offset 8
     retq
-.Lfunc_fini_end:
+Lfunc_fini_end:
     .cfi_endproc
                                             # -- End function
 

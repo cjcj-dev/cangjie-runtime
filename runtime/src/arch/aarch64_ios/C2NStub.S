@@ -160,7 +160,7 @@ _CJ_MCC_C2NStub:
     add x0, x19, x0
     mov x1, sp
     cmp x1, x0
-    ble .L_stack_check_fail
+    ble L_stack_check_fail
 
     mov  x2, x28
 
@@ -173,8 +173,7 @@ _CJ_MCC_C2NStub:
     // save last managed context
     mov  x1, x29
     adr  x0, #4
-    .global _unwindPCForC2NStub
-_unwindPCForC2NStub:
+L_unwindPCForC2NStub:
 
     bl   _MRT_C2N_Enter                  // merged: SaveC2NContext + EnterSaferegion
     str  x0, [sp, #SafeStateOffset]
@@ -201,14 +200,14 @@ _unwindPCForC2NStub:
     cfi_restore (q7)
 
     // copy arg8, arg9, arg10, ... (if existed)
-.L_copy:
+L_copy:
     cmp x19, x28
-    ble .L_copy_end
+    ble L_copy_end
     ldp x1, x2, [x19, #-16]!
     // SP is always 16 byte-aligned.
     stp x1, x2, [sp,  #-16]!
-    b .L_copy
-.L_copy_end:
+    b L_copy
+L_copy_end:
 
     // prepare arguments for invoking target method
     mov  x0, x20
@@ -260,7 +259,7 @@ _unwindPCForC2NStub:
     cfi_restore (d2)
     cfi_restore (d3)
 
-.L_stack_restore:
+L_stack_restore:
     // restore all used callee-saved registers.
     ldp  x19, x20, [sp, #StubCalleeSaveAreaSize]
     cfi_restore (x19)
@@ -283,9 +282,12 @@ _unwindPCForC2NStub:
     cfi_restore (x29)
     cfi_restore (x30)
     ret
-.L_stack_check_fail:
+L_stack_check_fail:
     bl  _MCC_ThrowStackOverflowError
     bl  _MRT_GetThreadLocalData
     str x0, [sp, #StubCalleeSaveAreaSize+0x48]
-    b   .L_stack_restore
+    b   L_stack_restore
     .cfi_endproc
+
+    .globl _unwindPCForC2NStub
+_unwindPCForC2NStub = L_unwindPCForC2NStub
