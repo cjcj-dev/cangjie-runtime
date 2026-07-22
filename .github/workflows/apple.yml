@@ -170,16 +170,12 @@ jobs:
         run: |
           cd runtime
           python3 build.py install --prefix "$INSTALL_ROOT"
-          # libcangjie-runtime.dylib loads libboundscheck.dylib (add_library(... SHARED)) via
-          # @rpath, but build.py install does not place it in the runtime lib dir. Co-locate it
-          # so the installed tree matches the official SDK layout and @rpath resolution works.
-          runtime_lib_dir="$(dirname "$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)")"
-          boundscheck_dylib="$(find CMakebuild -type f -name 'libboundscheck.dylib' -print -quit)"
-          if [[ -n "$boundscheck_dylib" && -n "$runtime_lib_dir" ]]; then
-            cp -v "$boundscheck_dylib" "$runtime_lib_dir/"
-          else
-            echo "ERROR: libboundscheck.dylib ($boundscheck_dylib) or runtime lib dir ($runtime_lib_dir) missing" >&2
-            exit 1
+          # CMake installs libboundscheck.dylib next to libcangjie-runtime.dylib on macOS
+          # (runtime/CMakeLists.txt install(TARGETS boundscheck ...)); the dlopen smoke
+          # resolves it by leaf name, so assert it landed rather than copying it here.
+          if [[ "${{ matrix.kind }}" == "native" ]]; then
+            find "$INSTALL_ROOT" -type f -name 'libboundscheck.dylib' | grep . || {
+              echo "ERROR: libboundscheck.dylib missing from install tree" >&2; exit 1; }
           fi
           find "$INSTALL_ROOT" -type f -print | sort
 
