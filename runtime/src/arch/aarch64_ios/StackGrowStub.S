@@ -122,8 +122,7 @@ _CJ_MCC_StackGrowStub:
     ldur x1, [sp, #0x58] // get adjustedSize
     ldr x2, [sp, #0x8]
     bl  _MRT_StackGrow
-    .global _unwindPCForStackGrowStub
-_unwindPCForStackGrowStub:
+L_unwindPCForStackGrowStub:
 
     add x29, x29, x0
     add sp, sp, x0
@@ -134,7 +133,7 @@ _unwindPCForStackGrowStub:
 
     bl _MRT_DeleteC2NContext
 
-.L_noexception:
+L_noexception:
     ldp   q0,  q1, [sp, #0x110]
     ldp   q2,  q3, [sp, #0x130]
     ldp   q4,  q5, [sp, #0x150]
@@ -218,3 +217,6 @@ _unwindPCForStackGrowStub:
 
     ret
     .cfi_endproc
+
+    .globl _unwindPCForStackGrowStub
+_unwindPCForStackGrowStub = L_unwindPCForStackGrowStub

@@ -113,14 +113,13 @@ _CJ_MCC_C2NStub:
     movq    16(%rbp), %rbx
     addq    %rbx, %rax
     cmpq    %rax, %rsp
-    jbe     .L_stack_check_fail
+    jbe     L_stack_check_fail
 
     movq    %rbp,  %rsi
     // Get the current pc address through the following two assembly instructions.
-    call    .L_current_pc
-.L_current_pc:
-     .global _unwindPCForC2NStub
-_unwindPCForC2NStub:
+    call    L_current_pc
+L_current_pc:
+L_unwindPCForC2NStub:
     pop     %rdi
     mov     %r15, %rdx
     callq   _MRT_C2N_Enter         // merged: SaveC2NContext + EnterSaferegion
@@ -139,14 +138,14 @@ _unwindPCForC2NStub:
     addq    $32,  %r13
 
     // copy arg6, arg7, ...(if existed)
-.L_copy:
+L_copy:
     cmpq    %r13,    %r14
-    jle     .L_copy_end
+    jle     L_copy_end
     subq    $8,      %r14
     movq    0(%r14), %r15
     pushq   %r15
-    jmp     .L_copy
-.L_copy_end:
+    jmp     L_copy
+L_copy_end:
 
     // Prepare arg0 to arg6.
     movq    -48(%rbp),  %rdi
@@ -190,7 +189,7 @@ _unwindPCForC2NStub:
     addq    %rbx, %rsp
 
     // delete callee&cpStackSize, Restore the caller stack.
-.L_stack_check:
+L_stack_check:
     movq    0(%rbp),   %r12
     movq    %r12,      16(%rbp)
     movq    8(%rbp),   %r12
@@ -208,9 +207,12 @@ _unwindPCForC2NStub:
     popq    %rbp
     .cfi_def_cfa %rsp, 8
     retq
-.L_stack_check_fail:
+L_stack_check_fail:
     call    _MCC_ThrowStackOverflowError
     callq   _MRT_GetThreadLocalData
     movq    %rax, -8(%rbp)
-    jmp     .L_stack_check
+    jmp     L_stack_check
     .cfi_endproc
+
+    .globl _unwindPCForC2NStub
+_unwindPCForC2NStub = L_unwindPCForC2NStub

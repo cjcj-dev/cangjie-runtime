@@ -85,8 +85,7 @@ _CJ_MCC_HandleSafepoint:
     // call safepoint handler
     movq   %r15,     %rdi
     callq  _HandleSafepoint
-    .global _unwindPCForSafepointHandlerStub
-_unwindPCForSafepointHandlerStub:
+L_unwindPCForSafepointHandlerStub:
     callq  _MRT_GetThreadLocalData
     movq   %rax, %r15
     movq   %rax, %rdi
@@ -150,3 +149,6 @@ _unwindPCForSafepointHandlerStub:
 
     retq
     .cfi_endproc
+
+    .globl _unwindPCForSafepointHandlerStub
+_unwindPCForSafepointHandlerStub = L_unwindPCForSafepointHandlerStub
