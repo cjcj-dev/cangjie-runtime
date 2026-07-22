@@ -121,7 +121,7 @@ L_unwindPCForSafepointHandlerStub:
    bl _MRT_DeleteC2NContext
 
    // restore callee registers
-.L_noexception:
+L_noexception:
    ldp   q0,  q1, [sp, #0x110]
    ldp   q2,  q3, [sp, #0x130]
    ldp   q4,  q5, [sp, #0x150]
