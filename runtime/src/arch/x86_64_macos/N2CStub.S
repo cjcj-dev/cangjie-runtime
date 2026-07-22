@@ -143,14 +143,14 @@ _CJ_MCC_N2CStub:
     addq    $32,  %r13
 
     // copy arg6, arg7, ...(if existed)
-.L_copy:
+L_copy:
     cmpq    %r13,    %r14
-    jle     .L_copy_end
+    jle     L_copy_end
     subq    $8,      %r14
     movq    0(%r14), %r15
     pushq   %r15
-    jmp     .L_copy
-.L_copy_end:
+    jmp     L_copy
+L_copy_end:
     callq   _MRT_GetThreadLocalData
     movq    %rax, %r15
 
@@ -194,17 +194,17 @@ L_unwindPCForN2CStub:
     callq   _MRT_RestoreTopManagedContextFromN2CStub
     mov     -60(%rbp), %al
     cmp     $0, %al
-    je      .L_no_need_end
+    je      L_no_need_end
     callq   _MRT_EndForeignCJThread
     cmpq    $1, %rax
-    je      .L_none_enter
-.L_no_need_end:
+    je      L_none_enter
+L_no_need_end:
     mov     -64(%rbp), %al
     cmp     $0, %al
-    je     .L_none_enter
+    je     L_none_enter
     movq    $0, %rdi
     callq   _MRT_EnterSaferegion
-.L_none_enter:
+L_none_enter:
 
     // set potential return value
     movq    -112(%rbp), %rdx
@@ -290,14 +290,14 @@ _ApplyCangjieMethodStubFloat64:
     addq    %r12,  %rsi
 
     // copy arg6, arg7, ...(if existed)
-.L_copy_args:
+L_copy_args:
     cmpq    %rdi,    %rsi
-    jle     .L_copy_args_end
+    jle     L_copy_args_end
     subq    $8,      %rsi
     movq    (%rsi),  %rdx
     pushq   %rdx
-    jmp     .L_copy_args
-.L_copy_args_end:
+    jmp     L_copy_args
+L_copy_args_end:
 
     // prepare arg0-arg5
     movq    (%r10),   %rdi // arg0 in callee
