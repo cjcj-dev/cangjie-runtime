@@ -28,7 +28,7 @@ __CJ_Init_Start:                        // @__CJ_Init_Start
     blr     x16
     ldr     x30, [sp], #16          // 8-byte Folded Reload
     ret
-.Lfunc_end12:
+Lfunc_end12:
     .cfi_endproc
 
     .text
@@ -49,7 +49,7 @@ __CJ_Fini_End:                        // @__CJ_Fini_End
     blr     x16
     ldr     x30, [sp], #16          // 8-byte Folded Reload
     ret
-.Lfunc_end:
+Lfunc_end:
     .cfi_endproc
 
     .section  __CJMETAHEADER,__cjmetaheader
