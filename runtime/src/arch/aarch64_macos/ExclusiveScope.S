@@ -280,6 +280,9 @@ L_exc_cleanup:
 
     .cfi_endproc
 
+    .globl _unwindPCForExclusiveStub
+_unwindPCForExclusiveStub = L_unwindPCForExclusiveStub
+
 
 // ==============================================================================
 // ExecuteExclusiveCangjieStub: Execute Cangjie closure with new ThreadLocalData
@@ -360,3 +363,6 @@ L_unwindPCForExclusiveStubFull:
     ret
 
     .cfi_endproc
+
+    .globl _unwindPCForExclusiveStubFull
+_unwindPCForExclusiveStubFull = L_unwindPCForExclusiveStubFull

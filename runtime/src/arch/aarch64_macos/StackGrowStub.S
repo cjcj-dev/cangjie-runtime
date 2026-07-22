@@ -217,3 +217,6 @@ L_noexception:
 
     ret
     .cfi_endproc
+
+    .globl _unwindPCForStackGrowStub
+_unwindPCForStackGrowStub = L_unwindPCForStackGrowStub
