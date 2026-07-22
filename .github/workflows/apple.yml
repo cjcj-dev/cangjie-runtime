@@ -1,0 +1,323 @@
+name: Apple runtime matrix
+
+on:
+  push:
+    branches:
+      - ci/apple-matrix
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+defaults:
+  run:
+    shell: bash --noprofile --norc -euo pipefail {0}
+
+jobs:
+  apple-runtime:
+    name: ${{ matrix.runner }} / ${{ matrix.variant }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        # Standard public-repository labels are tested below. macos-13 is kept
+        # as an explicit retired-Intel probe; paid -large/-xlarge labels are not
+        # part of this free-runner matrix. Current free Intel coverage comes from
+        # macos-15-intel and macos-26-intel. macos-latest is retained as its own
+        # axis so a future alias migration is visible.
+        include:
+          - runner: macos-13
+            variant: native-macos-x86_64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: x86_64
+          - runner: macos-13
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-13
+            variant: ios-simulator-x86_64
+            kind: ios-simulator
+            target: ios-simulator-x86_64
+            sdk: iphonesimulator
+            macho_arch: x86_64
+          - runner: macos-14
+            variant: native-macos-arm64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: arm64
+          - runner: macos-14
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-14
+            variant: ios-simulator-aarch64
+            kind: ios-simulator
+            target: ios-simulator-aarch64
+            sdk: iphonesimulator
+            macho_arch: arm64
+          - runner: macos-15
+            variant: native-macos-arm64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: arm64
+          - runner: macos-15
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-15
+            variant: ios-simulator-aarch64
+            kind: ios-simulator
+            target: ios-simulator-aarch64
+            sdk: iphonesimulator
+            macho_arch: arm64
+          - runner: macos-15-intel
+            variant: native-macos-x86_64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: x86_64
+          - runner: macos-15-intel
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-15-intel
+            variant: ios-simulator-x86_64
+            kind: ios-simulator
+            target: ios-simulator-x86_64
+            sdk: iphonesimulator
+            macho_arch: x86_64
+          - runner: macos-26
+            variant: native-macos-arm64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: arm64
+          - runner: macos-26
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-26
+            variant: ios-simulator-aarch64
+            kind: ios-simulator
+            target: ios-simulator-aarch64
+            sdk: iphonesimulator
+            macho_arch: arm64
+          - runner: macos-26-intel
+            variant: native-macos-x86_64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: x86_64
+          - runner: macos-26-intel
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-26-intel
+            variant: ios-simulator-x86_64
+            kind: ios-simulator
+            target: ios-simulator-x86_64
+            sdk: iphonesimulator
+            macho_arch: x86_64
+          - runner: macos-latest
+            variant: native-macos-arm64
+            kind: native
+            target: native
+            sdk: macosx
+            macho_arch: arm64
+          - runner: macos-latest
+            variant: ios-device-aarch64
+            kind: ios-device
+            target: ios-aarch64
+            sdk: iphoneos
+            macho_arch: arm64
+          - runner: macos-latest
+            variant: ios-simulator-aarch64
+            kind: ios-simulator
+            target: ios-simulator-aarch64
+            sdk: iphonesimulator
+            macho_arch: arm64
+
+    env:
+      CANGJIE_BUILD_JOBS: 3
+      INSTALL_ROOT: ${{ runner.temp }}/cangjie-install
+      PACKAGE_ROOT: ${{ runner.temp }}/cangjie-package
+
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Print runner, Xcode, compiler, and SDK versions
+        run: |
+          sw_vers
+          uname -a
+          printf 'machine=%s\n' "$(uname -m)"
+          printf 'processor_count=%s\n' "$(sysctl -n hw.ncpu)"
+          xcodebuild -version
+          clang --version
+          cmake --version
+          for sdk in macosx iphoneos iphonesimulator; do
+            printf '%s SDK version: ' "$sdk"
+            xcrun --sdk "$sdk" --show-sdk-version
+            printf '%s SDK path: ' "$sdk"
+            xcrun --sdk "$sdk" --show-sdk-path
+          done
+
+      - name: Assert native runner architecture
+        if: matrix.kind == 'native'
+        env:
+          EXPECTED_ARCH: ${{ matrix.macho_arch }}
+        run: |
+          actual_arch="$(uname -m)"
+          if [[ "$actual_arch" != "$EXPECTED_ARCH" ]]; then
+            echo "expected runner architecture $EXPECTED_ARCH, got $actual_arch" >&2
+            exit 1
+          fi
+
+      - name: Build runtime through build.py
+        env:
+          BUILD_TARGET: ${{ matrix.target }}
+          BUILD_SDK: ${{ matrix.sdk }}
+          BUILD_KIND: ${{ matrix.kind }}
+        run: |
+          cd runtime
+          if [[ "$BUILD_KIND" == "native" ]]; then
+            python3 build.py build \
+              --target "$BUILD_TARGET" \
+              --build-type release \
+              --prefix "$RUNNER_TEMP/cangjie-preinstall"
+          else
+            sdk_root="$(xcrun --sdk "$BUILD_SDK" --show-sdk-path)"
+            clang_path="$(xcrun --sdk "$BUILD_SDK" --find clang)"
+            toolchain_root="$(dirname "$(dirname "$clang_path")")"
+            printf 'build.py target=%s\n' "$BUILD_TARGET"
+            printf 'build.py target toolchain=%s\n' "$toolchain_root"
+            printf 'build.py target sysroot=%s\n' "$sdk_root"
+            python3 build.py build \
+              --target "$BUILD_TARGET" \
+              --build-type release \
+              --target-toolchain "$toolchain_root" \
+              --target-sysroot "$sdk_root" \
+              --prefix "$RUNNER_TEMP/cangjie-preinstall"
+          fi
+
+      - name: Install runtime through build.py
+        run: |
+          cd runtime
+          python3 build.py install --prefix "$INSTALL_ROOT"
+          find "$INSTALL_ROOT" -type f -print | sort
+
+      - name: Assert installed runtime Mach-O architecture
+        env:
+          EXPECTED_ARCH: ${{ matrix.macho_arch }}
+        run: |
+          runtime_dylib="$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)"
+          if [[ -z "$runtime_dylib" ]]; then
+            echo "libcangjie-runtime.dylib was not installed" >&2
+            exit 1
+          fi
+          file_output="$(file "$runtime_dylib")"
+          echo "$file_output"
+          if [[ "$file_output" != *"$EXPECTED_ARCH"* ]]; then
+            echo "expected Mach-O architecture $EXPECTED_ARCH" >&2
+            exit 1
+          fi
+
+      - name: Run native tests and dlopen smoke
+        if: matrix.kind == 'native'
+        run: |
+          if [[ -f runtime/CMakebuild/CTestTestfile.cmake ]] && \
+             grep -Rqs 'add_test' runtime/CMakebuild; then
+            ctest --test-dir runtime/CMakebuild --output-on-failure
+          else
+            echo "No CTest/CJThread test registration exists; running the required dlopen smoke."
+          fi
+
+          runtime_dylib="$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)"
+          cat >"$RUNNER_TEMP/runtime_dlopen_smoke.c" <<'EOF'
+          #include <dlfcn.h>
+          #include <stdio.h>
+
+          int main(int argc, char **argv)
+          {
+              static const char *symbols[] = {
+                  "CJ_MRT_Demangle",
+                  "CJ_MRT_CjRuntimeInit",
+                  "CJ_MRT_SetCommandLineArgs",
+              };
+              if (argc != 2) {
+                  fprintf(stderr, "usage: %s DYLIB\n", argv[0]);
+                  return 2;
+              }
+              void *handle = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
+              if (handle == NULL) {
+                  fprintf(stderr, "dlopen failed: %s\n", dlerror());
+                  return 1;
+              }
+              for (unsigned long i = 0; i < sizeof(symbols) / sizeof(symbols[0]); ++i) {
+                  dlerror();
+                  void *symbol = dlsym(handle, symbols[i]);
+                  const char *error = dlerror();
+                  if (error != NULL || symbol == NULL) {
+                      fprintf(stderr, "dlsym(%s) failed: %s\n", symbols[i],
+                              error == NULL ? "null address" : error);
+                      return 1;
+                  }
+                  printf("resolved %s at %p\n", symbols[i], symbol);
+              }
+              if (dlclose(handle) != 0) {
+                  fprintf(stderr, "dlclose failed: %s\n", dlerror());
+                  return 1;
+              }
+              return 0;
+          }
+          EOF
+          clang -Wall -Wextra -Werror "$RUNNER_TEMP/runtime_dlopen_smoke.c" \
+            -o "$RUNNER_TEMP/runtime_dlopen_smoke"
+          "$RUNNER_TEMP/runtime_dlopen_smoke" "$runtime_dylib"
+
+      - name: Record simulator execution scope
+        if: matrix.kind == 'ios-simulator'
+        run: |
+          xcrun simctl list runtimes
+          echo "Simulator execution is build-only: a dylib cannot be launched by simctl on its own; an app bundle and executable lifecycle harness are required."
+          echo "The installed simulator dylib was still required to pass the Mach-O architecture assertion."
+
+      - name: Pack install tree for diagnosis
+        if: always()
+        env:
+          ARTIFACT_BASENAME: ${{ matrix.runner }}-${{ matrix.variant }}
+        run: |
+          mkdir -p "$PACKAGE_ROOT"
+          if [[ -d "$INSTALL_ROOT" ]]; then
+            tar -C "$INSTALL_ROOT" -czf "$PACKAGE_ROOT/$ARTIFACT_BASENAME.tar.gz" .
+          else
+            printf 'The build failed before an install tree was created. See the job log.\n' \
+              >"$PACKAGE_ROOT/NO_INSTALL_TREE.txt"
+            tar -C "$PACKAGE_ROOT" -czf "$PACKAGE_ROOT/$ARTIFACT_BASENAME.tar.gz" NO_INSTALL_TREE.txt
+          fi
+
+      - name: Upload install artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: install-${{ matrix.runner }}-${{ matrix.variant }}
+          path: ${{ runner.temp }}/cangjie-package/${{ matrix.runner }}-${{ matrix.variant }}.tar.gz
+          if-no-files-found: error
+          retention-days: 7
