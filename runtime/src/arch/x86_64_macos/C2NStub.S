@@ -119,8 +119,7 @@ _CJ_MCC_C2NStub:
     // Get the current pc address through the following two assembly instructions.
     call    .L_current_pc
 .L_current_pc:
-     .global _unwindPCForC2NStub
-_unwindPCForC2NStub:
+L_unwindPCForC2NStub:
     pop     %rdi
     mov     %r15, %rdx
     callq   _MRT_C2N_Enter         // merged: SaveC2NContext + EnterSaferegion
