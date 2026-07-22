@@ -170,6 +170,17 @@ jobs:
         run: |
           cd runtime
           python3 build.py install --prefix "$INSTALL_ROOT"
+          # libcangjie-runtime.dylib loads libboundscheck.dylib (add_library(... SHARED)) via
+          # @rpath, but build.py install does not place it in the runtime lib dir. Co-locate it
+          # so the installed tree matches the official SDK layout and @rpath resolution works.
+          runtime_lib_dir="$(dirname "$(find "$INSTALL_ROOT" -type f -name 'libcangjie-runtime.dylib' -print -quit)")"
+          boundscheck_dylib="$(find CMakebuild -type f -name 'libboundscheck.dylib' -print -quit)"
+          if [[ -n "$boundscheck_dylib" && -n "$runtime_lib_dir" ]]; then
+            cp -v "$boundscheck_dylib" "$runtime_lib_dir/"
+          else
+            echo "ERROR: libboundscheck.dylib ($boundscheck_dylib) or runtime lib dir ($runtime_lib_dir) missing" >&2
+            exit 1
+          fi
           find "$INSTALL_ROOT" -type f -print | sort
 
       - name: Assert installed runtime Mach-O architecture
@@ -239,7 +250,10 @@ jobs:
           EOF
           clang -Wall -Wextra -Werror "$RUNNER_TEMP/runtime_dlopen_smoke.c" \
             -o "$RUNNER_TEMP/runtime_dlopen_smoke"
-          "$RUNNER_TEMP/runtime_dlopen_smoke" "$runtime_dylib"
+          # libcangjie-runtime.dylib depends on @rpath/libboundscheck.dylib; make the co-located
+          # sibling resolvable by leaf name for the smoke process.
+          DYLD_LIBRARY_PATH="$(dirname "$runtime_dylib")${DYLD_LIBRARY_PATH:+:$DYLD_LIBRARY_PATH}" \
+            "$RUNNER_TEMP/runtime_dlopen_smoke" "$runtime_dylib"
 
       - name: Record simulator execution scope
         if: matrix.kind == 'ios-simulator'
