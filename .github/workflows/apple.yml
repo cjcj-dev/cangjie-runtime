@@ -3,7 +3,7 @@ name: Apple runtime matrix
 on:
   push:
     branches:
-      - ci/apple-matrix
+      - main
   workflow_dispatch:
 
 permissions:
