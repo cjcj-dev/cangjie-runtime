@@ -237,8 +237,15 @@ struct CJEnvMethods {
 
 bool IsCJRomSdkNamespace()
 {
-    Dl_namespace dlns;
-    dlns_get(nullptr, &dlns);
+    using DlnsGet = int (*)(const char*, Dl_namespace*);
+    auto dlnsGet = reinterpret_cast<DlnsGet>(dlsym(RTLD_DEFAULT, "dlns_get"));
+    if (dlnsGet == nullptr) {
+        return false;
+    }
+    Dl_namespace dlns {};
+    if (dlnsGet(nullptr, &dlns) != 0) {
+        return false;
+    }
     return strcmp(dlns.name, "cj_rom_sdk") == 0;
 }
 
