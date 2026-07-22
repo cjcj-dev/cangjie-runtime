@@ -277,6 +277,9 @@ def do_build(args):
         if args.target_toolchain == None:
             print("Please configure ios toolchain, for example '/root/workspace/ios_dep_files/'")
             sys.exit(1)
+        if args.target_sysroot == None:
+            print("Please configure ios sysroot, for example from 'xcrun --sdk iphoneos --show-sdk-path'")
+            sys.exit(1)
         os.environ["PATH"] = os.path.join(args.target_toolchain, "bin") + ":" + os.environ["PATH"]
         os.environ["SDKROOT"] = os.path.join(args.target_sysroot)
         ios_flag = "1" if target_args == "ios-aarch64" else "0"
@@ -308,6 +311,9 @@ def do_build(args):
             "-DDUMPADDRESS_FLAG=0",
             "-DCJ_SDK_VERSION={}".format(version),
             "-DDISABLE_VERSION_CHECK=1",
+            "-DCMAKE_SYSTEM_NAME=iOS",
+            "-DCMAKE_OSX_SYSROOT={}".format(args.target_sysroot),
+            "-DCMAKE_OSX_ARCHITECTURES={}".format("arm64" if target_arch == "aarch64" else target_arch),
             "-S", ".", "-B", "CMakebuild"
         ]
         build_target(cmake_command, args)
