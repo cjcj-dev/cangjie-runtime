@@ -99,11 +99,11 @@ _CJ_MCC_ExclusiveScope:
 
     // get oldCJThread, thread, oldProcessor
     bl      _CJ_CJThreadGetHandle
-    cbz     x0, .L_exc_no_cjthread
+    cbz     x0, L_exc_no_cjthread
     str     x0, [x29, #0xe8]            // oldCJThread
 
     ldr     x1, [x0, #CJTHREAD_THREAD_OFFSET]
-    cbz     x1, .L_exc_no_thread
+    cbz     x1, L_exc_no_thread
     str     x1, [x29, #0xf0]            // thread
 
     // Save oldProcessor before it's modified by ExclusiveExecutor
@@ -116,7 +116,7 @@ _CJ_MCC_ExclusiveScope:
     mov     x1, x20
     mov     x2, xzr                     // futureTi = 0
     bl      _MCC_NewExclusiveCJThread
-    cbz     x0, .L_exc_create_failed
+    cbz     x0, L_exc_create_failed
     str     x0, [x29, #0xe0]            // newCJThread
 
     // Save C2N context (unwindPCForExclusiveStub must be before MRT_SaveC2NContext)
@@ -150,7 +150,7 @@ L_unwindPCForExclusiveStub:
     str     x28, [x26, #CONTEXT_X28]
     str     x29, [x26, #CONTEXT_X29_FP]
     str     x30, [x26, #CONTEXT_X30_LR]
-    adr     x0, .L_exc_return_point
+    adr     x0, L_exc_return_point
     str     x0, [x26, #CONTEXT_PC]
     mov     x0, sp
     str     x0, [x26, #CONTEXT_SP]
@@ -170,19 +170,19 @@ L_unwindPCForExclusiveStub:
     // If so, skip stack switch to avoid clobbering current frames.
     ldr     x0, [x29, #0xe8]            // oldCJThread
     bl      _IsExclusiveCJThread
-    cbnz    w0, .L_exc_skip_stack_switch
+    cbnz    w0, L_exc_skip_stack_switch
 
     // Switch to OS thread
     mov     x0, x23                     // arg0 = thread pointer
     bl      _ExclusiveGetThreadContext  // returns void* = &thread->context
-    cbz     x0, .L_exc_skip_stack_switch
+    cbz     x0, L_exc_skip_stack_switch
     mov     x27, x0
     ldr     x0, [x27, #CONTEXT_SP]
-    cbz     x0, .L_exc_skip_stack_switch
+    cbz     x0, L_exc_skip_stack_switch
     tst     x0, x0
-    bmi     .L_exc_skip_stack_switch
+    bmi     L_exc_skip_stack_switch
     cmp     x0, #0x1000
-    b.lo    .L_exc_skip_stack_switch
+    b.lo    L_exc_skip_stack_switch
     mov     sp, x0
     ldr     w0, [x27, #CONTEXT_FPCR]
     msr     fpcr, x0
@@ -196,15 +196,15 @@ L_unwindPCForExclusiveStub:
     ldr     x0, [x29, #0xf0]            // thread
     ldr     x1, [x29, #0xe0]            // newCJThread
     bl      _ExclusiveExecutor
-    b       .L_exc_after_executor
+    b       L_exc_after_executor
 
-.L_exc_skip_stack_switch:
+L_exc_skip_stack_switch:
     // Already on OS thread stack, execute directly without switching sp.
     ldr     x0, [x29, #0xf0]            // thread
     ldr     x1, [x29, #0xe0]            // newCJThread
     bl      _ExclusiveExecutor
 
-.L_exc_after_executor:
+L_exc_after_executor:
     // Restore to original stack frame (still on current function's stack)
     ldr     x0, [x29, #0xc8]            // saved sp
     mov     sp, x0
@@ -221,32 +221,32 @@ L_unwindPCForExclusiveStub:
 
     // After ExclusiveRestore, continue cleanup
 
-.L_exc_return_point:
+L_exc_return_point:
     ldr     x0, [x29, #0xc8]
     mov     sp, x0
 
     ldr     x0, [x29, #0xc0]            // enterSafe
-    cbz     x0, .L_exc_skip_leave
+    cbz     x0, L_exc_skip_leave
     bl      _MRT_LeaveSaferegion
     bl      _MRT_GetThreadLocalData
     mov     x19, x0
-    b       .L_exc_do_delete
+    b       L_exc_do_delete
 
-.L_exc_skip_leave:
+L_exc_skip_leave:
     mov     x19, x28
 
-.L_exc_do_delete:
+L_exc_do_delete:
     mov     x0, x19
     bl      _MRT_DeleteC2NContext
     mov     x0, xzr
-    b       .L_exc_cleanup
+    b       L_exc_cleanup
 
-.L_exc_create_failed:
-.L_exc_no_cjthread:
-.L_exc_no_thread:
+L_exc_create_failed:
+L_exc_no_cjthread:
+L_exc_no_thread:
     mov     x0, xzr
 
-.L_exc_cleanup:
+L_exc_cleanup:
     ldp     d8, d9, [x29, #0x70]
     ldp     d10, d11, [x29, #0x80]
     ldp     d12, d13, [x29, #0x90]

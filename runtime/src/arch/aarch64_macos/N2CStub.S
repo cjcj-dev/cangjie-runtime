@@ -202,14 +202,14 @@ _CJ_MCC_N2CStub:
 
     sub  x10, x19, x28
     // copy arg8, arg9, arg10, ... (if existed)
-.L_copy:
+L_copy:
     cmp x19, x28
-    ble .L_copy_end
+    ble L_copy_end
     ldp x1, x2, [x19, #-16]!
     // SP is always 16 byte-aligned.
     stp x1, x2, [sp,  #-16]!
-    b .L_copy
-.L_copy_end:
+    b L_copy
+L_copy_end:
     mov  x19, x10
     mov  x28, x0
 
@@ -249,17 +249,17 @@ L_unwindPCForN2CStub:
     bl _MRT_RestoreTopManagedContextFromN2CStub
     ldr x0, [x29, #SafeStateOffset+0x8]
     cmp x0,  #0
-    beq .L_no_need_end
+    beq L_no_need_end
     bl _MRT_EndForeignCJThread
     cmp x0,  #1
-    beq .L_none_enter
-.L_no_need_end:
+    beq L_none_enter
+L_no_need_end:
     ldr x0, [x29, #SafeStateOffset]
     cmp  x0, #0
-    beq .L_none_enter
+    beq L_none_enter
     mov  x0, #0
     bl _MRT_EnterSaferegion
-.L_none_enter:
+L_none_enter:
 
     /* set potential return value */
     mov  x0, x21
@@ -400,15 +400,15 @@ _ApplyCangjieMethodStubFloat64:
     add x1, x1, #128 // (8 + 8) * 8
     add x1, x1, x21
 
-.L_copy_args:
+L_copy_args:
     cmp x1, x0
-    ble .L_copy_args_end
+    ble L_copy_args_end
     sub x1, x1, #16
     ldp x2, x3, [x1]
     // SP is always 16 byte-aligned.
     stp x2, x3, [sp,  #-16]!
-    b .L_copy_args
-.L_copy_args_end:
+    b L_copy_args
+L_copy_args_end:
 
     // mov dst, src
     // prepare arguments for invoking target method
