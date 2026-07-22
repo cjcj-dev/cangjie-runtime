@@ -27,42 +27,6 @@ jobs:
         # macos-15-intel and macos-26-intel. macos-latest is retained as its own
         # axis so a future alias migration is visible.
         include:
-          - runner: macos-13
-            variant: native-macos-x86_64
-            kind: native
-            target: native
-            sdk: macosx
-            macho_arch: x86_64
-          - runner: macos-13
-            variant: ios-device-aarch64
-            kind: ios-device
-            target: ios-aarch64
-            sdk: iphoneos
-            macho_arch: arm64
-          - runner: macos-13
-            variant: ios-simulator-x86_64
-            kind: ios-simulator
-            target: ios-simulator-x86_64
-            sdk: iphonesimulator
-            macho_arch: x86_64
-          - runner: macos-14
-            variant: native-macos-arm64
-            kind: native
-            target: native
-            sdk: macosx
-            macho_arch: arm64
-          - runner: macos-14
-            variant: ios-device-aarch64
-            kind: ios-device
-            target: ios-aarch64
-            sdk: iphoneos
-            macho_arch: arm64
-          - runner: macos-14
-            variant: ios-simulator-aarch64
-            kind: ios-simulator
-            target: ios-simulator-aarch64
-            sdk: iphonesimulator
-            macho_arch: arm64
           - runner: macos-15
             variant: native-macos-arm64
             kind: native
@@ -135,24 +99,6 @@ jobs:
             target: ios-simulator-x86_64
             sdk: iphonesimulator
             macho_arch: x86_64
-          - runner: macos-latest
-            variant: native-macos-arm64
-            kind: native
-            target: native
-            sdk: macosx
-            macho_arch: arm64
-          - runner: macos-latest
-            variant: ios-device-aarch64
-            kind: ios-device
-            target: ios-aarch64
-            sdk: iphoneos
-            macho_arch: arm64
-          - runner: macos-latest
-            variant: ios-simulator-aarch64
-            kind: ios-simulator
-            target: ios-simulator-aarch64
-            sdk: iphonesimulator
-            macho_arch: arm64
 
     env:
       CANGJIE_BUILD_JOBS: 3
