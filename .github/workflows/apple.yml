@@ -213,7 +213,9 @@ jobs:
           int main(int argc, char **argv)
           {
               static const char *symbols[] = {
-                  "CJ_MRT_Demangle",
+                  /* libcangjie-runtime exports DemangleHandle; plain CJ_MRT_Demangle
+                     lives only in the static cangjie-demangle lib (cjfilt), on Linux too. */
+                  "CJ_MRT_DemangleHandle",
                   "CJ_MRT_CjRuntimeInit",
                   "CJ_MRT_SetCommandLineArgs",
               };
