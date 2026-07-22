@@ -156,12 +156,15 @@ jobs:
 
     env:
       CANGJIE_BUILD_JOBS: 3
-      INSTALL_ROOT: ${{ runner.temp }}/cangjie-install
-      PACKAGE_ROOT: ${{ runner.temp }}/cangjie-package
 
     steps:
       - name: Check out source
         uses: actions/checkout@v4
+
+      - name: Resolve per-runner install roots
+        run: |
+          printf 'INSTALL_ROOT=%s/cangjie-install\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
+          printf 'PACKAGE_ROOT=%s/cangjie-package\n' "$RUNNER_TEMP" >> "$GITHUB_ENV"
 
       - name: Print runner, Xcode, compiler, and SDK versions
         run: |
