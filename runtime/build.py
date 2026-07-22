@@ -319,6 +319,7 @@ def do_build(args):
         sys.exit(1)
 
 def build_target(cmake_command, args=None):
+    build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", "8")
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
     try:
@@ -328,9 +329,9 @@ def build_target(cmake_command, args=None):
         os.makedirs(build_dir, exist_ok=True)
         os.chdir(build_dir)
 
-        subprocess.run(["make", "cangjie-runtime", "-j32", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "cangjie-runtime", f"-j{build_jobs}", "VERBOSE=1"], check=True)
 
-        subprocess.run(["make", "preinstall", "-j32", "VERBOSE=1"], check=True)
+        subprocess.run(["make", "preinstall", f"-j{build_jobs}", "VERBOSE=1"], check=True)
 
         print("Build and preinstall completed successfully.")
     except subprocess.CalledProcessError as e:
