@@ -69,13 +69,13 @@ _CJ_MCC_ExclusiveScope:
     // get oldCJThread thread oldProcessor
     callq   _CJ_CJThreadGetHandle
     testq   %rax, %rax
-    jz      .L_exc_no_cjthread
+    jz      L_exc_no_cjthread
     movq    %rax, -80(%rbp)     // oldCJThread
 
     // thread = oldCJThread->thread
     movq    CJTHREAD_THREAD_OFFSET(%rax), %r12
     testq   %r12, %r12
-    jz      .L_exc_no_thread
+    jz      L_exc_no_thread
     movq    %r12, -88(%rbp)     // thread
 
     // Save original processor (thread->processor) before it's modified
@@ -91,14 +91,13 @@ _CJ_MCC_ExclusiveScope:
     callq   _MCC_NewExclusiveCJThread
     
     testq   %rax, %rax
-    jz      .L_exc_create_failed
+    jz      L_exc_create_failed
     movq    %rax, -160(%rbp)    // newCJThread
 
     movq    %rbp,  %rsi                  // rsi = fa (frame address)
-    call    .L_exc_get_pc
-.L_exc_get_pc:
-    .global _unwindPCForExclusiveStub
-_unwindPCForExclusiveStub:
+    call    L_exc_get_pc
+L_exc_get_pc:
+L_unwindPCForExclusiveStub:
     pop     %rdi
     mov     %r15, %rdx
     callq   _MRT_SaveC2NContext
@@ -118,9 +117,9 @@ _unwindPCForExclusiveStub:
     movq    %r11, CONTEXT_RSP(%r14)
     movq    %rbp, CONTEXT_RBP(%r14)
     movq    %rbx, CONTEXT_RBX(%r14)
-    // Save return IP: use call/.L trick to get address of resume point
-    call    .L_exc_get_rip_for_ctx
-.L_exc_get_rip_for_ctx:
+    // Save return IP: use a private label to get address of resume point
+    call    L_exc_get_rip_for_ctx
+L_exc_get_rip_for_ctx:
     pop     %r11
     movq    %r11, CONTEXT_RIP(%r14)
     movq    %r12, CONTEXT_R12(%r14)
@@ -137,7 +136,7 @@ _unwindPCForExclusiveStub:
     movq    -80(%rbp), %rdi
     callq   _IsExclusiveCJThread
     testl   %eax, %eax
-    jnz     .L_exc_skip_stack_switch
+    jnz     L_exc_skip_stack_switch
 
     // ==================== switch to OS thread ====================
     movq    -88(%rbp), %r12             // thread
@@ -145,10 +144,10 @@ _unwindPCForExclusiveStub:
     
     movq    CONTEXT_RSP(%r15), %r11
     testq   %r11, %r11
-    jz      .L_exc_skip_stack_switch
-    js      .L_exc_skip_stack_switch
+    jz      L_exc_skip_stack_switch
+    js      L_exc_skip_stack_switch
     cmpq    $0x1000, %r11
-    jb      .L_exc_skip_stack_switch
+    jb      L_exc_skip_stack_switch
     movq    %r11, %rsp
     ldmxcsr CONTEXT_MXCSR(%r15)
     fldcw   CONTEXT_FPU_CW(%r15)
@@ -161,15 +160,15 @@ _unwindPCForExclusiveStub:
     movq    -88(%rbp), %rdi
     movq    -160(%rbp), %rsi
     callq   _ExclusiveExecutor
-    jmp     .L_exc_after_executor
+    jmp     L_exc_after_executor
 
-.L_exc_skip_stack_switch:
+L_exc_skip_stack_switch:
     // Already on OS thread stack, execute directly without switching rsp.
     movq    -88(%rbp), %rdi
     movq    -160(%rbp), %rsi
     callq   _ExclusiveExecutor
 
-.L_exc_after_executor:
+L_exc_after_executor:
 
     movq    %rax, %r13
     movapd  %xmm0, -128(%rbp)
@@ -192,14 +191,14 @@ _unwindPCForExclusiveStub:
     // ==================== LeaveSaferegion ====================
     movq    -96(%rbp), %rax
     cmpq    $0, %rax
-    je      .L_exc_skip_leave
+    je      L_exc_skip_leave
     callq   _MRT_LeaveSaferegion
     callq   _MRT_GetThreadLocalData
     movq    %rax, %r13
-    jmp     .L_exc_do_delete
-.L_exc_skip_leave:
+    jmp     L_exc_do_delete
+L_exc_skip_leave:
     movq    -64(%rbp), %r13
-.L_exc_do_delete:
+L_exc_do_delete:
     movq    %r13, %rdi
     callq   _MRT_DeleteC2NContext
 
@@ -207,15 +206,15 @@ _unwindPCForExclusiveStub:
     movapd  -128(%rbp), %xmm0
     movapd  -144(%rbp), %xmm1
 
-    jmp     .L_exc_cleanup
+    jmp     L_exc_cleanup
 
 // ==================== exception ====================
-.L_exc_create_failed:
-.L_exc_no_cjthread:
-.L_exc_no_thread:
+L_exc_create_failed:
+L_exc_no_cjthread:
+L_exc_no_thread:
     xorq    %rax, %rax
 
-.L_exc_cleanup:
+L_exc_cleanup:
     movq    -8(%rbp),  %r15
     movq    -16(%rbp), %r14
     movq    -24(%rbp), %r13
@@ -228,6 +227,9 @@ _unwindPCForExclusiveStub:
     retq
 
     .cfi_endproc
+
+    .globl _unwindPCForExclusiveStub
+_unwindPCForExclusiveStub = L_unwindPCForExclusiveStub
 
 
 //   void* ExecuteExclusiveCangjieStub(void* sret, void* arg1, void* closureObj, void* executeClosure, void* threadData)
@@ -281,8 +283,7 @@ _ExecuteExclusiveCangjieStub:
     movq    8(%r11),   %r11
 
     callq   *%r11
-    .global _unwindPCForExclusiveStubFull
-_unwindPCForExclusiveStubFull:
+L_unwindPCForExclusiveStubFull:
 
     // RestoreTopManagedContext
     movq    %rbp, %rdi
@@ -299,3 +300,6 @@ _unwindPCForExclusiveStubFull:
     .cfi_def_cfa %rsp, 8
     retq
     .cfi_endproc
+
+    .globl _unwindPCForExclusiveStubFull
+_unwindPCForExclusiveStubFull = L_unwindPCForExclusiveStubFull
