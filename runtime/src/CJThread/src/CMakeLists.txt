@@ -91,13 +91,13 @@ install(TARGETS cangjie-thread ARCHIVE DESTINATION ${CMAKE_INSTALL_PREFIX}/lib/$
 set(OBJCOPY_PROGRAM objcopy)
 set(STRIP_PROGRAM strip)
 
-if (NOT CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+if (NOT (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS"))
 install(CODE "execute_process(COMMAND ${OBJCOPY_PROGRAM} -D --rename-section .text=.text_thread \
             ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
         COMPONENT cangjie-thread)
 endif()
 if(CMAKE_BUILD_TYPE MATCHES "Release" OR CMAKE_BUILD_TYPE MATCHES "MinSizeRel")
-    if (CMAKE_SYSTEM_NAME STREQUAL "Darwin")
+    if (CMAKE_SYSTEM_NAME STREQUAL "Darwin" OR CMAKE_SYSTEM_NAME STREQUAL "iOS")
     install(CODE "execute_process(COMMAND ${STRIP_PROGRAM} -x ${CMAKE_INSTALL_PREFIX}/lib/${TARGET_ARCH}${SANITIZER_SUBPATH}/libcangjie-thread.a)"
         COMPONENT cangjie-thread)
     else()
