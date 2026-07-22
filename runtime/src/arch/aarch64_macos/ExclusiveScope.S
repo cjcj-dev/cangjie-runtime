@@ -120,9 +120,8 @@ _CJ_MCC_ExclusiveScope:
     str     x0, [x29, #0xe0]            // newCJThread
 
     // Save C2N context (unwindPCForExclusiveStub must be before MRT_SaveC2NContext)
-    .global _unwindPCForExclusiveStub
-_unwindPCForExclusiveStub:
-    adr     x0, _unwindPCForExclusiveStub
+L_unwindPCForExclusiveStub:
+    adr     x0, L_unwindPCForExclusiveStub
     mov     x1, x29
     mov     x2, x28
     bl      _MRT_SaveC2NContext
@@ -337,8 +336,7 @@ _ExecuteExclusiveCangjieStub:
     ldr     x9, [x20, #8]
     blr     x9
 
-    .global _unwindPCForExclusiveStubFull
-_unwindPCForExclusiveStubFull:
+L_unwindPCForExclusiveStubFull:
     mov     x19, x0
     mov     x0, x29
     bl      _MRT_RestoreTopManagedContextFromN2CStub

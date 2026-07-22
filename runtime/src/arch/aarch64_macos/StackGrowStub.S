@@ -122,8 +122,7 @@ _CJ_MCC_StackGrowStub:
     ldur x1, [sp, #0x58] // get adjustedSize
     ldr x2, [sp, #0x8]
     bl  _MRT_StackGrow
-    .global _unwindPCForStackGrowStub
-_unwindPCForStackGrowStub:
+L_unwindPCForStackGrowStub:
 
     add x29, x29, x0
     add sp, sp, x0

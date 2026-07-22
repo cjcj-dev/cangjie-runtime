@@ -223,8 +223,7 @@ _CJ_MCC_N2CStub:
     mov  x6, x26
     mov  x7, x27
     blr  x9
-    .global _unwindPCForN2CStub
-_unwindPCForN2CStub:
+L_unwindPCForN2CStub:
 
     // Restore the value od rsp before copy arg8, arg9, arg10...
     add  sp, sp, x19

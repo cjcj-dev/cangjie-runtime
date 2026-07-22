@@ -176,8 +176,7 @@ _CJ_MCC_N2CStub:
 
     // Get callee function address from rbx.
     callq   *%r12
-    .global _unwindPCForN2CStub
-_unwindPCForN2CStub:
+L_unwindPCForN2CStub:
 
     // keep potential return value
     // rax is 1st return register, rdx is 2nd return register

@@ -171,8 +171,7 @@ _CJ_MCC_C2NStub:
     // save last managed context
     mov  x1, x29
     adr  x0, #4
-    .global _unwindPCForC2NStub
-_unwindPCForC2NStub:
+L_unwindPCForC2NStub:
 
     bl   _MRT_C2N_Enter                   // merged: SaveC2NContext + EnterSaferegion
     str  x0, [sp, #SafeStateOffset]
