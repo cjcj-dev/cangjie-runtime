@@ -213,3 +213,6 @@ L_stack_check_fail:
     movq    %rax, -8(%rbp)
     jmp     L_stack_check
     .cfi_endproc
+
+    .globl _unwindPCForC2NStub
+_unwindPCForC2NStub = L_unwindPCForC2NStub
