@@ -304,6 +304,9 @@ L_none_enter:
     ret
     .cfi_endproc
 
+    .globl _unwindPCForN2CStub
+_unwindPCForN2CStub = L_unwindPCForN2CStub
+
 .section __TEXT,__cjrt_text,regular
 .align 2
 .global  _ExecuteCangjieStub

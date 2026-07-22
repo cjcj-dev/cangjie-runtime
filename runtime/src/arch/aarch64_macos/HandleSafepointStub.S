@@ -206,3 +206,8 @@ L_noexception:
    ret
 L_unwindPCForSafepointStubEnd:
    .cfi_endproc
+
+   .globl _unwindPCForSafepointHandlerStub
+_unwindPCForSafepointHandlerStub = L_unwindPCForSafepointHandlerStub
+   .globl _unwindPCForSafepointStubEnd
+_unwindPCForSafepointStubEnd = L_unwindPCForSafepointStubEnd

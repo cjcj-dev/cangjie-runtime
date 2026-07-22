@@ -286,3 +286,6 @@ L_stack_check_fail:
     str x0, [sp, #StubCalleeSaveAreaSize+0x48]
     b   L_stack_restore
     .cfi_endproc
+
+    .globl _unwindPCForC2NStub
+_unwindPCForC2NStub = L_unwindPCForC2NStub

@@ -149,3 +149,6 @@ L_unwindPCForSafepointHandlerStub:
 
     retq
     .cfi_endproc
+
+    .globl _unwindPCForSafepointHandlerStub
+_unwindPCForSafepointHandlerStub = L_unwindPCForSafepointHandlerStub

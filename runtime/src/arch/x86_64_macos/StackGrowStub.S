@@ -157,3 +157,6 @@ L_unwindPCForStackGrowStub:
     retq
 
     .cfi_endproc
+
+    .globl _unwindPCForStackGrowStub
+_unwindPCForStackGrowStub = L_unwindPCForStackGrowStub
