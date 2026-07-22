@@ -25,7 +25,7 @@ if (CMAKE_SYSTEM_NAME MATCHES "Linux")
     set(OS_PREFIX "linux")
 elseif (CMAKE_SYSTEM_NAME MATCHES "Windows")
     set(OS_PREFIX "windows")
-elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin")
+elseif (CMAKE_SYSTEM_NAME MATCHES "Darwin" OR CMAKE_SYSTEM_NAME MATCHES "iOS")
     set(OS_PREFIX "macos")
 endif ()
 
