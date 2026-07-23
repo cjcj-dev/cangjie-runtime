@@ -19,6 +19,7 @@
 #include "UnwindStack/PrintStackInfo.h"
 #include "UnwindStack/StackGrowStackInfo.h"
 #ifdef _WIN64
+#include <windows.h>
 #include "UnwindWin.h"
 #endif
 #if (defined(__linux__) || defined(__OHOS__) || defined(__ANDROID__)) && !defined(_WIN64)
@@ -27,11 +28,11 @@
 #endif
 #ifdef __APPLE__
 #include <dlfcn.h>
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
 #ifndef __IOS__
 #include <libproc.h>
 #else
-#include <mach-o/dyld.h>
-#include <mach-o/loader.h>
 #include <mach/vm_prot.h>
 #endif
 #endif
@@ -341,6 +342,94 @@ static bool GetSoTextAddrScopeFromSymbol(const void* symbol, Uptr& startAddr, Up
 #endif
 #endif
 
+#if defined(__linux__)
+static bool IsCangjieExecutable()
+{
+    FILE* file = fopen("/proc/self/exe", "rb");
+    if (file == nullptr) {
+        return false;
+    }
+
+    ElfW(Ehdr) elfHeader;
+    if (fread(&elfHeader, sizeof(elfHeader), 1, file) != 1 ||
+        memcmp(elfHeader.e_ident, ELFMAG, SELFMAG) != 0 || elfHeader.e_shoff == 0 || elfHeader.e_shnum == 0 ||
+        elfHeader.e_shentsize != sizeof(ElfW(Shdr)) || elfHeader.e_shstrndx >= elfHeader.e_shnum) {
+        std::fclose(file);
+        return false;
+    }
+
+    std::vector<ElfW(Shdr)> sectionHeaders(elfHeader.e_shnum);
+    if (fseek(file, static_cast<long>(elfHeader.e_shoff), SEEK_SET) != 0 ||
+        fread(sectionHeaders.data(), sizeof(ElfW(Shdr)), elfHeader.e_shnum, file) != elfHeader.e_shnum) {
+        std::fclose(file);
+        return false;
+    }
+
+    const ElfW(Shdr)& stringSection = sectionHeaders[elfHeader.e_shstrndx];
+    std::vector<char> sectionNames(stringSection.sh_size);
+    if (stringSection.sh_size == 0 || fseek(file, static_cast<long>(stringSection.sh_offset), SEEK_SET) != 0 ||
+        fread(sectionNames.data(), 1, stringSection.sh_size, file) != stringSection.sh_size) {
+        std::fclose(file);
+        return false;
+    }
+    std::fclose(file);
+
+    for (const auto& section : sectionHeaders) {
+        if (section.sh_name < sectionNames.size() && strcmp(sectionNames.data() + section.sh_name, ".cjmetadata") == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#elif defined(_WIN64)
+static bool IsCangjieExecutable()
+{
+    const HMODULE module = GetModuleHandle(nullptr);
+    if (module == nullptr) {
+        return false;
+    }
+    const auto dosHeader = reinterpret_cast<const IMAGE_DOS_HEADER*>(module);
+    if (dosHeader->e_magic != IMAGE_DOS_SIGNATURE) {
+        return false;
+    }
+    const auto ntHeaders = reinterpret_cast<const IMAGE_NT_HEADERS*>(
+        reinterpret_cast<Uptr>(module) + static_cast<Uptr>(dosHeader->e_lfanew));
+    if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
+        return false;
+    }
+    const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeaders);
+    for (uint16_t i = 0; i < ntHeaders->FileHeader.NumberOfSections; ++i, ++section) {
+        if (strncmp(reinterpret_cast<const char*>(section->Name), ".header", sizeof(".header") - 1) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+#elif defined(__APPLE__) && !defined(__IOS__)
+static bool IsCangjieExecutable()
+{
+    const auto header = reinterpret_cast<const mach_header_64*>(_dyld_get_image_header(0));
+    if (header == nullptr || header->magic != MH_MAGIC_64) {
+        return false;
+    }
+    const uint8_t* commandPtr = reinterpret_cast<const uint8_t*>(header) + sizeof(mach_header_64);
+    for (uint32_t i = 0; i < header->ncmds; ++i) {
+        const auto command = reinterpret_cast<const load_command*>(commandPtr);
+        if (command->cmd == LC_SEGMENT_64) {
+            const auto segment = reinterpret_cast<const segment_command_64*>(command);
+            const auto section = reinterpret_cast<const section_64*>(segment + 1);
+            for (uint32_t j = 0; j < segment->nsects; ++j) {
+                if (strncmp(section[j].sectname, "__cjmetaheader", sizeof("__cjmetaheader") - 1) == 0) {
+                    return true;
+                }
+            }
+        }
+        commandPtr += command->cmdsize;
+    }
+    return false;
+}
+#endif
+
 #if defined(__APPLE__) and !(defined(__IOS__) && !defined(COMPILE_DYNAMIC))
 static bool EndWith(const char* str, const char* suffix)
 {
@@ -487,12 +576,18 @@ void StackManager::InitAddressScope()
 
 // Init cjc address info.
 #if defined(__linux__)
-    std::vector<CString> cjcSoNameVec = {"cjc\n"};
-    GetEachSoAddrScope(cjcSoNameVec);
+    if (!IsCangjieExecutable()) {
+        std::vector<CString> cjcSoNameVec = {"cjc\n"};
+        GetEachSoAddrScope(cjcSoNameVec);
+    }
 #elif defined(_WIN64)                         // Windows
-    InitAddressInfoOnWindows("cjc.exe", StackManager::cjcSoStartAddr, StackManager::cjcSoEndAddr);
+    if (!IsCangjieExecutable()) {
+        InitAddressInfoOnWindows("cjc.exe", StackManager::cjcSoStartAddr, StackManager::cjcSoEndAddr);
+    }
 #elif defined(__APPLE__) && !defined(__IOS__) // MacOS
-    InitAddressInfoOnDarwin("/cjc", StackManager::cjcSoStartAddr, StackManager::cjcSoEndAddr);
+    if (!IsCangjieExecutable()) {
+        InitAddressInfoOnDarwin("/cjc", StackManager::cjcSoStartAddr, StackManager::cjcSoEndAddr);
+    }
 #endif
 }
 
