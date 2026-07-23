@@ -13,7 +13,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-
 void TypeGCInfo::FillTypeGCInfo(TypeInfo* ti, CString &gcTibStr, U32 &curSize)
 {
     U32 ptrSize = sizeof(void*);
