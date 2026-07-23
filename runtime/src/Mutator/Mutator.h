@@ -78,10 +78,7 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
-        if (satbNode != nullptr) {
-            SatbBuffer::Instance().RetireNode(satbNode);
-            satbNode = nullptr;
-        }
+        SatbBuffer::Instance().FlushQueue(satbNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -391,16 +388,6 @@ public:
 
     ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* obj) { RememberObjectImpl(obj); }
 
-    const SatbBuffer::Node* GetSatbBufferNode() const { return satbNode; }
-
-    void ClearSatbBufferNode()
-    {
-        if (satbNode == nullptr) {
-            return;
-        }
-        satbNode->Clear();
-    }
-
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }
@@ -508,12 +495,16 @@ protected:
 private:
     void RememberObjectImpl(const BaseObject* obj)
     {
-        if (LIKELY(Heap::IsHeapAddress(obj))) {
-            if (SatbBuffer::Instance().ShouldEnqueue(obj)) {
-                SatbBuffer::Instance().EnsureGoodNode(satbNode);
-                satbNode->Push(obj);
-            }
+        GCPhase phase = GetMutatorPhase();
+        if (UNLIKELY(phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE) &&
+            UNLIKELY(Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_ENUM)) {
+            return;
         }
+        if (LIKELY(satbNode != nullptr && satbNode->Push(obj))) {
+            return;
+        }
+        SatbBuffer::Instance().EnsureGoodNode(satbNode);
+        satbNode->Push(obj);
     }
     ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
