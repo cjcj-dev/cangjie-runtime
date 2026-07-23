@@ -581,6 +581,191 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGen
     return tiDesc;
 }
 
+TypeInfoManager::GenericTiDescFastMap::Entry::Entry(
+    U64 keyHash, TypeTemplate* keyTT, U32 keyArgSize, TypeInfo* keyArgs[], GenericTiDesc* value)
+    : hash(keyHash), tt(keyTT), argSize(keyArgSize), args {}, desc(value)
+{
+    for (U32 idx = 0; idx < argSize; ++idx) {
+        args[idx] = keyArgs[idx];
+    }
+}
+
+bool TypeInfoManager::GenericTiDescFastMap::Entry::Matches(
+    U64 keyHash, TypeTemplate* keyTT, U32 keyArgSize, TypeInfo* keyArgs[]) const
+{
+    if (hash != keyHash || tt != keyTT || argSize != keyArgSize) {
+        return false;
+    }
+    for (U32 idx = 0; idx < argSize; ++idx) {
+        if (args[idx] != keyArgs[idx]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+TypeInfoManager::GenericTiDescFastMap::Table::Table(size_t tableCapacity)
+    : capacity(tableCapacity), slots(new std::atomic<Entry*>[tableCapacity])
+{
+    CHECK_DETAIL(slots != nullptr, "fail to allocate generic TypeInfo fast map");
+    for (size_t idx = 0; idx < capacity; ++idx) {
+        slots[idx].store(nullptr, std::memory_order_relaxed);
+    }
+}
+
+TypeInfoManager::GenericTiDescFastMap::Table::~Table()
+{
+    delete[] slots;
+}
+
+size_t TypeInfoManager::GenericTiDescFastMap::NormalizeCapacity(size_t capacity)
+{
+    size_t normalized = 8;
+    while (normalized < capacity) {
+        normalized <<= 1;
+    }
+    return normalized;
+}
+
+U64 TypeInfoManager::GenericTiDescFastMap::ComputeHash(
+    TypeTemplate* tt, U32 argSize, TypeInfo* args[])
+{
+    constexpr U64 offsetBasis = 1469598103934665603ULL;
+    constexpr U64 prime = 1099511628211ULL;
+    U64 hash = offsetBasis;
+    auto mix = [&hash](Uptr value) {
+        hash ^= static_cast<U64>(value);
+        hash *= prime;
+    };
+    mix(reinterpret_cast<Uptr>(tt));
+    mix(argSize);
+    for (U32 idx = 0; idx < argSize; ++idx) {
+        mix(reinterpret_cast<Uptr>(args[idx]));
+    }
+    return hash;
+}
+
+TypeInfoManager::GenericTiDescFastMap::Entry* TypeInfoManager::GenericTiDescFastMap::FindInTable(
+    Table* table, U64 hash, TypeTemplate* tt, U32 argSize, TypeInfo* args[])
+{
+    size_t slot = hash & (table->capacity - 1);
+    for (size_t probe = 0; probe < table->capacity; ++probe) {
+        Entry* entry = table->slots[slot].load(std::memory_order_acquire);
+        if (entry == nullptr) {
+            return nullptr;
+        }
+        if (entry->Matches(hash, tt, argSize, args)) {
+            return entry;
+        }
+        slot = (slot + 1) & (table->capacity - 1);
+    }
+    return nullptr;
+}
+
+void TypeInfoManager::GenericTiDescFastMap::InsertIntoTable(Table* table, Entry* entry)
+{
+    size_t slot = entry->hash & (table->capacity - 1);
+    for (size_t probe = 0; probe < table->capacity; ++probe) {
+        if (table->slots[slot].load(std::memory_order_relaxed) == nullptr) {
+            table->slots[slot].store(entry, std::memory_order_release);
+            ++table->size;
+            return;
+        }
+        slot = (slot + 1) & (table->capacity - 1);
+    }
+    CHECK_DETAIL(false, "generic TypeInfo fast map has no empty slot");
+}
+
+TypeInfoManager::GenericTiDescFastMap::GenericTiDescFastMap(size_t initialCapacity)
+{
+    Table* table = new (std::nothrow) Table(NormalizeCapacity(initialCapacity));
+    CHECK_DETAIL(table != nullptr, "fail to allocate initial generic TypeInfo fast map");
+    tables.push_back(table);
+    activeTable.store(table, std::memory_order_release);
+}
+
+TypeInfoManager::GenericTiDescFastMap::~GenericTiDescFastMap()
+{
+    for (Table* table : tables) {
+        delete table;
+    }
+    for (Entry* entry : entries) {
+        delete entry;
+    }
+}
+
+TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescFastMap::Get(
+    TypeTemplate* tt, U32 argSize, TypeInfo* args[], U64& observedGeneration) const
+{
+    if (argSize > MAX_INLINE_ARGS) {
+        return nullptr;
+    }
+    observedGeneration = generation.load(std::memory_order_acquire);
+    Table* table = activeTable.load(std::memory_order_acquire);
+    U64 hash = ComputeHash(tt, argSize, args);
+    Entry* entry = FindInTable(table, hash, tt, argSize, args);
+    if (generation.load(std::memory_order_acquire) != observedGeneration) {
+        return nullptr;
+    }
+    return entry == nullptr ? nullptr : entry->desc;
+}
+
+void TypeInfoManager::GenericTiDescFastMap::PublishResizedTable(size_t capacity)
+{
+    Table* oldTable = activeTable.load(std::memory_order_relaxed);
+    Table* newTable = new (std::nothrow) Table(NormalizeCapacity(capacity));
+    CHECK_DETAIL(newTable != nullptr, "fail to resize generic TypeInfo fast map");
+    for (size_t idx = 0; idx < oldTable->capacity; ++idx) {
+        Entry* entry = oldTable->slots[idx].load(std::memory_order_relaxed);
+        if (entry != nullptr) {
+            InsertIntoTable(newTable, entry);
+        }
+    }
+    tables.push_back(newTable);
+    activeTable.store(newTable, std::memory_order_release);
+}
+
+void TypeInfoManager::GenericTiDescFastMap::Insert(
+    TypeTemplate* tt, U32 argSize, TypeInfo* args[], GenericTiDesc* desc, U64 expectedGeneration)
+{
+    if (argSize > MAX_INLINE_ARGS) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(writerMutex);
+    if (generation.load(std::memory_order_relaxed) != expectedGeneration) {
+        return;
+    }
+    Table* table = activeTable.load(std::memory_order_relaxed);
+    U64 hash = ComputeHash(tt, argSize, args);
+    if (FindInTable(table, hash, tt, argSize, args) != nullptr) {
+        return;
+    }
+    if ((table->size + 1) * 10 >= table->capacity * 7) {
+        PublishResizedTable(table->capacity * 2);
+        table = activeTable.load(std::memory_order_relaxed);
+    }
+    Entry* entry = new (std::nothrow) Entry(hash, tt, argSize, args, desc);
+    CHECK_DETAIL(entry != nullptr, "fail to allocate generic TypeInfo fast map entry");
+    entries.push_back(entry);
+    InsertIntoTable(table, entry);
+}
+
+void TypeInfoManager::GenericTiDescFastMap::Invalidate()
+{
+    std::lock_guard<std::mutex> lock(writerMutex);
+    Table* oldTable = activeTable.load(std::memory_order_relaxed);
+    Table* emptyTable = new (std::nothrow) Table(oldTable->capacity);
+    CHECK_DETAIL(emptyTable != nullptr, "fail to invalidate generic TypeInfo fast map");
+    tables.push_back(emptyTable);
+    activeTable.store(emptyTable, std::memory_order_release);
+    generation.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void TypeInfoManager::InvalidateGenericTypeInfoFastMap()
+{
+    genericTypeInfoFastMap.Invalidate();
+}
+
 TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
     GenericTiDesc desc(tt, argSize, args);
@@ -597,6 +782,11 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U
 
 TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
+    U64 fastMapGeneration = 0;
+    GenericTiDesc* fastTypeInfoDesc = genericTypeInfoFastMap.Get(tt, argSize, args, fastMapGeneration);
+    if (fastTypeInfoDesc != nullptr) {
+        return fastTypeInfoDesc->typeInfo;
+    }
     auto typeInfoDesc = GetTypeInfo(tt, argSize, args);
     if (IsRtk7QueryProbeEnabled()) {
         std::lock_guard<std::mutex> lock(probeMutex);
@@ -623,11 +813,13 @@ TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, Ty
         }
     }
     if (typeInfoDesc->IsInited()) {
+        genericTypeInfoFastMap.Insert(tt, argSize, args, typeInfoDesc, fastMapGeneration);
         return typeInfoDesc->typeInfo;
     }
     const U32 currentTid = static_cast<U32>(GetTid());
     do {
         if (typeInfoDesc->IsInited()) {
+            genericTypeInfoFastMap.Insert(tt, argSize, args, typeInfoDesc, fastMapGeneration);
             return typeInfoDesc->typeInfo;
         }
         if (typeInfoDesc->IsIniting() && typeInfoDesc->tid.load() == currentTid) {
