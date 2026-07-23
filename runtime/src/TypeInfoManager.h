@@ -114,6 +114,13 @@ private:
         U32 argSize;
         TypeInfo** args;
         U32 hash;
+        U64 probeHashNs { 0 };
+        U64 probeLockNs { 0 };
+        U64 probeLookupNs { 0 };
+        U64 probeScanNs { 0 };
+        U32 probeTemplateUUIDEnsures { 0 };
+        U32 probeArgumentUUIDEnsures { 0 };
+        U32 probeScanLength { 0 };
     private:
         std::vector<TypeInfo*> argsVector = { };
         std::atomic<TypeInfoStatus> status { TypeInfoStatus::TYPEINFO_NOT_CREATED };
