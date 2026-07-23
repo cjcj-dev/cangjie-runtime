@@ -460,13 +460,6 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     constexpr uint64_t maxIterationLoopNum = 1000;
     auto visitSatbObj = [this, &workStack]() {
         WorkStack remarkStack;
-        auto func = [&remarkStack](Mutator& mutator) {
-            const SatbBuffer::Node* node = mutator.GetSatbBufferNode();
-            if (node != nullptr) {
-                const_cast<SatbBuffer::Node*>(node)->GetObjects(remarkStack);
-            }
-        };
-        MutatorManager::Instance().VisitAllMutators(func);
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
