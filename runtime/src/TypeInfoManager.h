@@ -102,6 +102,10 @@ private:
             tid.store(GetTid());
         }
 
+#ifdef MRT_TYPEINFO_FAST_MAP_TEST
+        GenericTiDesc() : tt(nullptr), argSize(0), args(nullptr), hash(0) {}
+#endif
+
         GenericTiDesc& operator=(const GenericTiDesc& other) = delete;
         bool operator==(const GenericTiDesc &other) const;
 
@@ -197,6 +201,12 @@ private:
         std::vector<Table*> tables;
         std::vector<Entry*> entries;
     };
+#ifdef MRT_TYPEINFO_FAST_MAP_TEST
+public:
+    using TestGenericTiDesc = GenericTiDesc;
+    using TestGenericTiDescFastMap = GenericTiDescFastMap;
+private:
+#endif
     GenericTiDesc* InsertGenericTiDesc(GenericTiDesc& desc);
     GenericTiDesc* GetGenericTiDesc(GenericTiDesc& desc);
     GenericTiDesc* GetTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
