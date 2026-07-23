@@ -9,6 +9,7 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
+#include "ObjectModel/MArray.inline.h"
 
 namespace MapleRuntime {
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
@@ -233,9 +234,38 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
-    auto refFunc = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
+    auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (!typeInfo->HasRefField()) {
+        return;
+    }
 
-    obj->ForEachRefField(refFunc);
+    if (UNLIKELY(typeInfo->IsRawArray())) {
+        MArray* array = reinterpret_cast<MArray*>(obj);
+        MIndex arrayLength = array->GetLength();
+        TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
+        if (componentTypeInfo->IsStructType()) {
+            GCTib gcTib = componentTypeInfo->GetGCTib();
+            MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
+            size_t elementSize = array->GetElementSize();
+            for (MIndex i = 0; i < arrayLength; ++i) {
+                gcTib.ForEachBitmapWord(contentAddr, visitor);
+                contentAddr += elementSize;
+            }
+        } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
+                   componentTypeInfo->IsInterface()) {
+            RefField<>* arrayContent = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+            for (MIndex i = 0; i < arrayLength; ++i) {
+                visitor(arrayContent[i]);
+            }
+        } else {
+            LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
+        }
+        return;
+    }
+
+    MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
 }
 
 BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
