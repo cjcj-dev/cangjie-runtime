@@ -13,6 +13,7 @@
 #include "Interpreter/Options.h"
 #include "Loader/ILoader.h"
 #include "LoaderManager.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 bool LoaderManager::isReleased;
@@ -188,6 +189,7 @@ void LoaderManager::RegisterLoadFile(Uptr address) const
 
 void LoaderManager::UnregisterLoadFile(Uptr address) const
 {
+    TypeInfoManager::GetTypeInfoManager().InvalidateGenericTypeInfoFastMap();
     loader->UnregisterLoadFile(address);
 }
 
