@@ -8,6 +8,7 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -229,15 +230,14 @@ typedef TypeInfo* (*GenericFunc)(TypeInfo**);
 struct ShortGCTib {
     ArchUInt bitmap; // lower 63 bits are valid, each bit indicates 8-byte width, 1:ref, 0:no-ref
 
-    void ForEachBitmapWord(MAddress fieldAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress fieldAddr, const Visitor& visitor) const
     {
         ArchUInt gcInfo = bitmap & (~SIGN_BIT);
         while (LIKELY(gcInfo != 0)) {
-            if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
-            }
-            gcInfo >>= BITS_FOR_REF;
-            fieldAddr += sizeof(RefField<>);
+            U32 bitIndex = static_cast<U32>(__builtin_ctzll(static_cast<unsigned long long>(gcInfo)));
+            visitor(*reinterpret_cast<RefField<>*>(fieldAddr + bitIndex * sizeof(RefField<>)));
+            gcInfo &= gcInfo - 1;
         }
     }
     void ForEachBitmapWordInRange(MAddress baseAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -288,23 +288,40 @@ struct StdGCTib {
         bitmapWord >>= BITS_FOR_REF;
         fieldAddr += sizeof(RefField<>);
     }
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         const U8* bitmaps = bitmapWords;
-
-        // start address of fields.
         MAddress baseAddr = contentAddr;
-        // for each bitmap word.
-        for (U32 i = 0; i < nBitmapWords; ++i) {
-            U8 bitmapWord = bitmaps[i];
-            MAddress fieldAddr = baseAddr;
-
-            // for each bit in bitmap.
-            while (LIKELY(bitmapWord != 0)) {
-                VisitRefField(bitmapWord, fieldAddr, visitor);
+        U32 i = 0;
+        constexpr U32 bitmapWordsPerBatch = sizeof(ArchUInt);
+        constexpr U32 refsPerBatch = bitmapWordsPerBatch * REFS_PER_BIT_WORD;
+        for (; i + bitmapWordsPerBatch <= nBitmapWords; i += bitmapWordsPerBatch) {
+            ArchUInt bitmapBatch;
+            std::memcpy(&bitmapBatch, bitmaps + i, sizeof(bitmapBatch));
+            if (LIKELY(bitmapBatch == 0)) {
+                baseAddr += sizeof(RefField<>) * refsPerBatch;
+                continue;
             }
-            // go next bitmap word.
-            baseAddr += (sizeof(RefField<>) * REFS_PER_BIT_WORD);
+            for (U32 j = 0; j < bitmapWordsPerBatch; ++j) {
+                U8 bitmapWord = bitmaps[i + j];
+                MAddress wordBaseAddr = baseAddr + sizeof(RefField<>) * j * REFS_PER_BIT_WORD;
+                while (LIKELY(bitmapWord != 0)) {
+                    U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                    visitor(*reinterpret_cast<RefField<>*>(wordBaseAddr + bitIndex * sizeof(RefField<>)));
+                    bitmapWord &= static_cast<U8>(bitmapWord - 1);
+                }
+            }
+            baseAddr += sizeof(RefField<>) * refsPerBatch;
+        }
+        for (; i < nBitmapWords; ++i) {
+            U8 bitmapWord = bitmaps[i];
+            while (LIKELY(bitmapWord != 0)) {
+                U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                visitor(*reinterpret_cast<RefField<>*>(baseAddr + bitIndex * sizeof(RefField<>)));
+                bitmapWord &= static_cast<U8>(bitmapWord - 1);
+            }
+            baseAddr += sizeof(RefField<>) * REFS_PER_BIT_WORD;
         }
     }
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -353,7 +370,8 @@ union GCTib {
 #endif
     }
 
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         if (IsGCTibWord()) {
             bitmap.ForEachBitmapWord(contentAddr, visitor);
