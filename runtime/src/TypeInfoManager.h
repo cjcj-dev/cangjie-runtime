@@ -11,7 +11,6 @@
 #include <atomic>
 #include <mutex>
 #include <unordered_map>
-#include <unordered_set>
 #include <vector>
 
 #include "ObjectModel/MClass.h"
@@ -48,7 +47,6 @@ public:
     TypeInfo* GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
     void InvalidateGenericTypeInfoFastMap();
     void AddTypeInfo(TypeInfo* ti);
-    void ProbeRecordFETypeInfo(TypeInfo* ti);
     static U32 GetTypeSize(TypeInfo* ti);
     void ParseEnumInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[], TypeInfo* ti);
     void RecordMTableDesc(U32 uuid, MTableDesc* mTableDesc) { mTableList.emplace(uuid, mTableDesc); }
@@ -89,8 +87,7 @@ private:
     class GenericTiDesc {
     public:
         GenericTiDesc(TypeTemplate* pTypeTemplate, U32 pArgSize, TypeInfo* pArgs[])
-            : tt(pTypeTemplate), argSize(pArgSize), args(pArgs) {
-            hash = computeHash();
+            : tt(pTypeTemplate), argSize(pArgSize), args(pArgs), hash(computeHash()) {
         }
 
         GenericTiDesc(GenericTiDesc &desc)
@@ -110,7 +107,6 @@ private:
         bool operator==(const GenericTiDesc &other) const;
 
         U32 GetHash() const { return hash; }
-        TypeInfo* GetArg(U32 idx) const { return argsVector[idx]; }
 
         TypeInfo* typeInfo { nullptr };
         bool IsNotCreated() { return typeInfo == nullptr; }
@@ -123,14 +119,7 @@ private:
         TypeTemplate* tt;
         U32 argSize;
         TypeInfo** args;
-        U32 hash { 0 };
-        U64 probeHashNs { 0 };
-        U64 probeLockNs { 0 };
-        U64 probeLookupNs { 0 };
-        U64 probeScanNs { 0 };
-        U32 probeTemplateUUIDEnsures { 0 };
-        U32 probeArgumentUUIDEnsures { 0 };
-        U32 probeScanLength { 0 };
+        U32 hash;
     private:
         std::vector<TypeInfo*> argsVector = { };
         std::atomic<TypeInfoStatus> status { TypeInfoStatus::TYPEINFO_NOT_CREATED };
@@ -236,17 +225,6 @@ private:
     // record these two classes during initialization.
     TypeInfo* anyTi = nullptr;
     TypeInfo* objectTi = nullptr;
-    std::mutex probeMutex;
-    std::unordered_set<GenericTiDesc*> probeFEDescs;
-    std::unordered_map<GenericTiDesc*, U64> probeQueryCounts;
-    U64 probeTotalQueries = 0;
-    U64 probeFEHits = 0;
-    U64 probeNonFEHits = 0;
-    U64 probeMisses = 0;
-    U64 probeFastAttempts = 0;
-    U64 probeFastHits = 0;
-    U64 probeFastHitNs = 0;
-    U64 probeFastMissNs = 0;
 };
 } // namespace MapleRuntime
 #endif // MRT_TYPE_INFO_MANAGER_H

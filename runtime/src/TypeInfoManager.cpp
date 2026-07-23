@@ -6,12 +6,6 @@
 
 
 #include "TypeInfoManager.h"
-#include <algorithm>
-#include <array>
-#include <chrono>
-#include <cstdio>
-#include <cstdlib>
-#include <limits>
 #include "Base/CString.h"
 #include "Base/MemUtils.h"
 #include "ObjectModel/MClass.h"
@@ -19,106 +13,6 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
-namespace {
-constexpr size_t PROBE_SCAN_BUCKETS = 9;
-constexpr size_t PROBE_CLOCK_CALIBRATION_RUNS = 100000;
-
-struct TypeInfoLookupProbeSample {
-    U64 hashNs { 0 };
-    U64 lockNs { 0 };
-    U64 lookupNs { 0 };
-    U64 scanNs { 0 };
-    U32 templateUUIDEnsures { 0 };
-    U32 argumentUUIDEnsures { 0 };
-    U32 argumentCount { 0 };
-    U32 scanLength { 0 };
-};
-
-struct TypeInfoLookupProbeAggregate {
-    U64 queries { 0 };
-    U64 hashNs { 0 };
-    U64 lockNs { 0 };
-    U64 lookupNs { 0 };
-    U64 scanNs { 0 };
-    U64 templateUUIDEnsures { 0 };
-    U64 argumentUUIDEnsures { 0 };
-    U64 arguments { 0 };
-    U64 lockAcquisitions { 0 };
-    U64 comparisons { 0 };
-    std::array<U64, PROBE_SCAN_BUCKETS> scanLengths {};
-};
-
-thread_local TypeInfoLookupProbeSample probeLastLookup;
-TypeInfoLookupProbeAggregate probeAllCosts;
-TypeInfoLookupProbeAggregate probeFECosts;
-TypeInfoLookupProbeAggregate probeNonFECosts;
-TypeInfoLookupProbeAggregate probeMissCosts;
-
-bool IsRtk7QueryProbeEnabled()
-{
-    return std::getenv("CJC_RTK7QUERY_PROBE") != nullptr || std::getenv("CJC_RTGCK7_PROBE") != nullptr;
-}
-
-bool IsRtk7QueryCostProbeEnabled()
-{
-    return std::getenv("CJC_RTK7QUERY_PROBE") != nullptr;
-}
-
-U64 ProbeMonotonicNs()
-{
-    return static_cast<U64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count());
-}
-
-void RecordProbeCost(TypeInfoLookupProbeAggregate& aggregate, const TypeInfoLookupProbeSample& sample)
-{
-    ++aggregate.queries;
-    aggregate.hashNs += sample.hashNs;
-    aggregate.lockNs += sample.lockNs;
-    aggregate.lookupNs += sample.lookupNs;
-    aggregate.scanNs += sample.scanNs;
-    aggregate.templateUUIDEnsures += sample.templateUUIDEnsures;
-    aggregate.argumentUUIDEnsures += sample.argumentUUIDEnsures;
-    aggregate.arguments += sample.argumentCount;
-    ++aggregate.lockAcquisitions;
-    aggregate.comparisons += sample.scanLength;
-    ++aggregate.scanLengths[std::min<size_t>(sample.scanLength, PROBE_SCAN_BUCKETS - 1)];
-}
-
-void PrintProbeCost(const char* label, const TypeInfoLookupProbeAggregate& aggregate, U64 timerPairMinNs)
-{
-    const U64 measuredSegmentNs = aggregate.hashNs + aggregate.lookupNs;
-    const U64 timerPairs = aggregate.queries * 2;
-    const U64 timerOverheadNs = timerPairs * timerPairMinNs;
-    const U64 adjustedSegmentNs = measuredSegmentNs > timerOverheadNs ? measuredSegmentNs - timerOverheadNs : 0;
-    std::fprintf(stderr,
-        "RTK7QUERY COST label=%s queries=%llu args=%llu tt_uuid_ensures=%llu arg_uuid_ensures=%llu "
-        "lock_acquires=%llu comparisons=%llu hash_ns=%llu lock_ns=%llu scan_ns=%llu lookup_ns=%llu "
-        "segment_measured_ns=%llu timer_overhead_ns=%llu segment_adjusted_ns=%llu\n",
-        label, static_cast<unsigned long long>(aggregate.queries),
-        static_cast<unsigned long long>(aggregate.arguments),
-        static_cast<unsigned long long>(aggregate.templateUUIDEnsures),
-        static_cast<unsigned long long>(aggregate.argumentUUIDEnsures),
-        static_cast<unsigned long long>(aggregate.lockAcquisitions),
-        static_cast<unsigned long long>(aggregate.comparisons),
-        static_cast<unsigned long long>(aggregate.hashNs), static_cast<unsigned long long>(aggregate.lockNs),
-        static_cast<unsigned long long>(aggregate.scanNs), static_cast<unsigned long long>(aggregate.lookupNs),
-        static_cast<unsigned long long>(measuredSegmentNs), static_cast<unsigned long long>(timerOverheadNs),
-        static_cast<unsigned long long>(adjustedSegmentNs));
-    std::fprintf(stderr,
-        "RTK7QUERY SCAN label=%s len0=%llu len1=%llu len2=%llu len3=%llu len4=%llu len5=%llu "
-        "len6=%llu len7=%llu len_ge8=%llu\n",
-        label, static_cast<unsigned long long>(aggregate.scanLengths[0]),
-        static_cast<unsigned long long>(aggregate.scanLengths[1]),
-        static_cast<unsigned long long>(aggregate.scanLengths[2]),
-        static_cast<unsigned long long>(aggregate.scanLengths[3]),
-        static_cast<unsigned long long>(aggregate.scanLengths[4]),
-        static_cast<unsigned long long>(aggregate.scanLengths[5]),
-        static_cast<unsigned long long>(aggregate.scanLengths[6]),
-        static_cast<unsigned long long>(aggregate.scanLengths[7]),
-        static_cast<unsigned long long>(aggregate.scanLengths[8]));
-}
-} // namespace
 
 void TypeGCInfo::FillTypeGCInfo(TypeInfo* ti, CString &gcTibStr, U32 &curSize)
 {
@@ -179,8 +73,6 @@ CString TypeGCInfo::GetGCTibStr(TypeInfo* ti)
 
 U32 TypeInfoManager::GenericTiDesc::computeHash()
 {
-    const bool costProbeEnabled = IsRtk7QueryCostProbeEnabled();
-    const U64 hashStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
     TypeInfoManager& mgr = TypeInfoManager::GetTypeInfoManager();
     U32 H = 1;
     auto update = [&H](U32 val) {
@@ -188,7 +80,6 @@ U32 TypeInfoManager::GenericTiDesc::computeHash()
     };
     U32 uuidOfTT = tt->GetUUID();
     if (uuidOfTT == 0) {
-        ++probeTemplateUUIDEnsures;
         uuidOfTT = mgr.GetTypeTemplateUUID(tt);
     }
     update(uuidOfTT);
@@ -196,14 +87,10 @@ U32 TypeInfoManager::GenericTiDesc::computeHash()
     for (U32 idx = 0; idx < argSize; idx++) {
         TypeInfo* ti = args[idx];
         if (ti->IsInitialUUID()) {
-            ++probeArgumentUUIDEnsures;
             mgr.AddTypeInfo(ti);
         }
         CHECK(!ti->IsInitialUUID());
         update(ti->uuid);
-    }
-    if (costProbeEnabled) {
-        probeHashNs = ProbeMonotonicNs() - hashStartNs;
     }
     return H;
 }
@@ -261,110 +148,6 @@ void TypeInfoManager::Init()
 
 void TypeInfoManager::Fini()
 {
-    if (IsRtk7QueryProbeEnabled()) {
-        std::vector<std::pair<GenericTiDesc*, U64>> queries;
-        {
-            std::lock_guard<std::mutex> lock(probeMutex);
-            queries.assign(probeQueryCounts.begin(), probeQueryCounts.end());
-        }
-        std::sort(queries.begin(), queries.end(), [](const auto& lhs, const auto& rhs) {
-            return lhs.second > rhs.second;
-        });
-        U64 uniqueFEHits = 0;
-        for (const auto& query : queries) {
-            if (probeFEDescs.count(query.first) != 0) {
-                ++uniqueFEHits;
-            }
-        }
-        std::fprintf(stderr,
-            "RTGCK7 SUMMARY total=%llu fe_hits=%llu non_fe_hits=%llu misses=%llu unique_keys=%zu "
-            "fe_keys=%zu unique_fe_hits=%llu\n",
-            static_cast<unsigned long long>(probeTotalQueries),
-            static_cast<unsigned long long>(probeFEHits),
-            static_cast<unsigned long long>(probeNonFEHits),
-            static_cast<unsigned long long>(probeMisses), queries.size(), probeFEDescs.size(),
-            static_cast<unsigned long long>(uniqueFEHits));
-        size_t rank = 0;
-        for (const auto& query : queries) {
-            if (rank >= 20) {
-                break;
-            }
-            GenericTiDesc* desc = query.first;
-            std::vector<TypeInfo*> args;
-            for (U32 idx = 0; idx < desc->argSize; ++idx) {
-                args.push_back(desc->GetArg(idx));
-            }
-            CString name = desc->tt->GetTypeInfoName(desc->argSize, args.data());
-            std::fprintf(stderr, "RTGCK7 TOP rank=%zu count=%llu fe=%u hash=%u key=%s\n", ++rank,
-                static_cast<unsigned long long>(query.second), probeFEDescs.count(desc) != 0, desc->GetHash(),
-                name.Str());
-        }
-        size_t staticOnlyRank = 0;
-        for (GenericTiDesc* desc : probeFEDescs) {
-            if (probeQueryCounts.count(desc) != 0) {
-                continue;
-            }
-            std::vector<TypeInfo*> args;
-            for (U32 idx = 0; idx < desc->argSize; ++idx) {
-                args.push_back(desc->GetArg(idx));
-            }
-            CString name = desc->tt->GetTypeInfoName(desc->argSize, args.data());
-            std::fprintf(stderr, "RTGCK7 FE_ONLY rank=%zu hash=%u key=%s\n", ++staticOnlyRank,
-                desc->GetHash(), name.Str());
-            if (staticOnlyRank >= 20) {
-                break;
-            }
-        }
-        if (IsRtk7QueryCostProbeEnabled()) {
-            U64 timerPairMinNs = std::numeric_limits<U64>::max();
-            U64 timerPairTotalNs = 0;
-            for (size_t idx = 0; idx < PROBE_CLOCK_CALIBRATION_RUNS; ++idx) {
-                const U64 beginNs = ProbeMonotonicNs();
-                const U64 elapsedNs = ProbeMonotonicNs() - beginNs;
-                timerPairMinNs = std::min(timerPairMinNs, elapsedNs);
-                timerPairTotalNs += elapsedNs;
-            }
-            std::fprintf(stderr, "RTK7QUERY CLOCK unit=ns pair_min=%llu pair_avg=%llu runs=%zu\n",
-                static_cast<unsigned long long>(timerPairMinNs),
-                static_cast<unsigned long long>(timerPairTotalNs / PROBE_CLOCK_CALIBRATION_RUNS),
-                PROBE_CLOCK_CALIBRATION_RUNS);
-            U64 fastTimerOverheadNs = probeFastAttempts * timerPairMinNs;
-            U64 fastMeasuredNs = probeFastHitNs + probeFastMissNs;
-            U64 fastAdjustedNs = fastMeasuredNs > fastTimerOverheadNs ? fastMeasuredNs - fastTimerOverheadNs : 0;
-            std::fprintf(stderr,
-                "RTK7QUERY FAST attempts=%llu hits=%llu misses=%llu hit_ns=%llu miss_ns=%llu "
-                "measured_ns=%llu timer_overhead_ns=%llu adjusted_ns=%llu\n",
-                static_cast<unsigned long long>(probeFastAttempts),
-                static_cast<unsigned long long>(probeFastHits),
-                static_cast<unsigned long long>(probeFastAttempts - probeFastHits),
-                static_cast<unsigned long long>(probeFastHitNs),
-                static_cast<unsigned long long>(probeFastMissNs),
-                static_cast<unsigned long long>(fastMeasuredNs),
-                static_cast<unsigned long long>(fastTimerOverheadNs),
-                static_cast<unsigned long long>(fastAdjustedNs));
-            PrintProbeCost("ALL", probeAllCosts, timerPairMinNs);
-            PrintProbeCost("FE_HIT", probeFECosts, timerPairMinNs);
-            PrintProbeCost("NON_FE_HIT", probeNonFECosts, timerPairMinNs);
-            PrintProbeCost("MISS", probeMissCosts, timerPairMinNs);
-
-            std::array<U64, PROBE_SCAN_BUCKETS> tagUnique {};
-            std::array<U64, PROBE_SCAN_BUCKETS> tagHits {};
-            for (const auto& query : queries) {
-                if (probeFEDescs.count(query.first) == 0) {
-                    continue;
-                }
-                const size_t shape = std::min<size_t>(query.first->argSize, PROBE_SCAN_BUCKETS - 1);
-                ++tagUnique[shape];
-                tagHits[shape] += query.second;
-            }
-            for (size_t shape = 0; shape < PROBE_SCAN_BUCKETS; ++shape) {
-                std::fprintf(stderr, "RTK7QUERY TAG_SHAPE args=%s%zu unique_keys=%llu hits=%llu\n",
-                    shape == PROBE_SCAN_BUCKETS - 1 ? ">=" : "", shape,
-                    static_cast<unsigned long long>(tagUnique[shape]),
-                    static_cast<unsigned long long>(tagHits[shape]));
-            }
-        }
-    }
     // release resources
     for (const auto& mTable : mTableList) {
         delete mTable.second;
@@ -492,22 +275,6 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
     }
 }
 
-void TypeInfoManager::ProbeRecordFETypeInfo(TypeInfo* ti)
-{
-    if (!IsRtk7QueryProbeEnabled() || !ti->IsGenericTypeInfo() || ti->IsVArray()) {
-        return;
-    }
-    GenericTiDesc* desc = nullptr;
-    if (ti->IsRawArray() || ti->IsCPointer()) {
-        TypeInfo* args[] = { ti->GetComponentTypeInfo() };
-        desc = GetTypeInfo(ti->GetSourceGeneric(), 1, args);
-    } else {
-        desc = GetTypeInfo(ti->GetSourceGeneric(), ti->GetTypeArgNum(), ti->GetTypeArgs());
-    }
-    std::lock_guard<std::mutex> lock(probeMutex);
-    probeFEDescs.insert(desc);
-}
-
 U16 TypeInfoManager::GetTypeTemplateUUID(TypeTemplate* tt)
 {
     U16 ttUUID = tt->GetUUID();
@@ -541,36 +308,21 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetGenericTiDesc(GenericTiDesc&
 
 TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::GetGenericTiDesc(GenericTiDesc &desc)
 {
-    const bool costProbeEnabled = IsRtk7QueryCostProbeEnabled();
-    const U64 lookupStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
     const U32 h = desc.GetHash();
     const size_t bucketIdx = h % buckets.size();
     auto &bucket = buckets[bucketIdx];
-    const U64 lockStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
     bucket.rwLock.LockRead();
-    if (costProbeEnabled) {
-        desc.probeLockNs = ProbeMonotonicNs() - lockStartNs;
-    }
-    GenericTiDesc* result = nullptr;
     auto it = bucket.maps.find(h);
     if (it != bucket.maps.end()) {
-        const U64 scanStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
         for (auto descIt = it->second.begin(); descIt != it->second.end(); ++descIt) {
-            ++desc.probeScanLength;
             if (**descIt == desc) {
-                result = *descIt;
-                break;
+                bucket.rwLock.UnlockRead();
+                return *descIt;
             }
-        }
-        if (costProbeEnabled) {
-            desc.probeScanNs = ProbeMonotonicNs() - scanStartNs;
         }
     }
     bucket.rwLock.UnlockRead();
-    if (costProbeEnabled) {
-        desc.probeLookupNs = ProbeMonotonicNs() - lookupStartNs;
-    }
-    return result;
+    return nullptr;
 }
 
 TypeInfoManager::GenericTiDesc* TypeInfoManager::GenericTiDescHashMap::InsertGenericTiDesc(GenericTiDesc &desc)
@@ -787,65 +539,17 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U
     if (genericTiDesc == nullptr) {
         genericTiDesc = genericTypeInfoDescMap.InsertGenericTiDesc(desc);
     }
-    if (IsRtk7QueryCostProbeEnabled()) {
-        probeLastLookup = { desc.probeHashNs, desc.probeLockNs, desc.probeLookupNs, desc.probeScanNs,
-            desc.probeTemplateUUIDEnsures, desc.probeArgumentUUIDEnsures, desc.argSize, desc.probeScanLength };
-    }
     return genericTiDesc;
 }
 
 TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
-    const bool costProbeEnabled = IsRtk7QueryCostProbeEnabled();
-    const U64 fastLookupStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
     U64 fastMapGeneration = 0;
     GenericTiDesc* fastTypeInfoDesc = genericTypeInfoFastMap.Get(tt, argSize, args, fastMapGeneration);
-    const U64 fastLookupNs = costProbeEnabled ? ProbeMonotonicNs() - fastLookupStartNs : 0;
     if (fastTypeInfoDesc != nullptr) {
-        if (IsRtk7QueryProbeEnabled()) {
-            std::lock_guard<std::mutex> lock(probeMutex);
-            ++probeTotalQueries;
-            ++probeQueryCounts[fastTypeInfoDesc];
-            if (probeFEDescs.count(fastTypeInfoDesc) != 0) {
-                ++probeFEHits;
-            } else {
-                ++probeNonFEHits;
-            }
-            if (costProbeEnabled) {
-                ++probeFastAttempts;
-                ++probeFastHits;
-                probeFastHitNs += fastLookupNs;
-            }
-        }
         return fastTypeInfoDesc->typeInfo;
     }
     auto typeInfoDesc = GetTypeInfo(tt, argSize, args);
-    if (IsRtk7QueryProbeEnabled()) {
-        std::lock_guard<std::mutex> lock(probeMutex);
-        ++probeTotalQueries;
-        ++probeQueryCounts[typeInfoDesc];
-        if (!typeInfoDesc->IsInited()) {
-            ++probeMisses;
-            if (IsRtk7QueryCostProbeEnabled()) {
-                RecordProbeCost(probeMissCosts, probeLastLookup);
-            }
-        } else if (probeFEDescs.count(typeInfoDesc) != 0) {
-            ++probeFEHits;
-            if (IsRtk7QueryCostProbeEnabled()) {
-                RecordProbeCost(probeFECosts, probeLastLookup);
-            }
-        } else {
-            ++probeNonFEHits;
-            if (IsRtk7QueryCostProbeEnabled()) {
-                RecordProbeCost(probeNonFECosts, probeLastLookup);
-            }
-        }
-        if (IsRtk7QueryCostProbeEnabled()) {
-            ++probeFastAttempts;
-            probeFastMissNs += fastLookupNs;
-            RecordProbeCost(probeAllCosts, probeLastLookup);
-        }
-    }
     if (typeInfoDesc->IsInited()) {
         genericTypeInfoFastMap.Insert(tt, argSize, args, typeInfoDesc, fastMapGeneration);
         return typeInfoDesc->typeInfo;
