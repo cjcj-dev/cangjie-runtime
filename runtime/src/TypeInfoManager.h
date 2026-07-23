@@ -84,7 +84,8 @@ private:
     class GenericTiDesc {
     public:
         GenericTiDesc(TypeTemplate* pTypeTemplate, U32 pArgSize, TypeInfo* pArgs[])
-            : tt(pTypeTemplate), argSize(pArgSize), args(pArgs), hash(computeHash()) {
+            : tt(pTypeTemplate), argSize(pArgSize), args(pArgs) {
+            hash = computeHash();
         }
 
         GenericTiDesc(GenericTiDesc &desc)
@@ -113,7 +114,7 @@ private:
         TypeTemplate* tt;
         U32 argSize;
         TypeInfo** args;
-        U32 hash;
+        U32 hash { 0 };
         U64 probeHashNs { 0 };
         U64 probeLockNs { 0 };
         U64 probeLookupNs { 0 };
