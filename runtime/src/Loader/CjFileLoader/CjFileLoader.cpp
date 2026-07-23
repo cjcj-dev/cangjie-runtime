@@ -213,6 +213,7 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
             ti->SetvExtensionDataStart(tt->GetvExtensionDataStart());
         }
         typeInfoMgr.AddTypeInfo(ti);
+        typeInfoMgr.ProbeRecordFETypeInfo(ti);
         if (ti->IsEnum() || ti->IsTempEnum()) {
             ParseEnumCtor(ti);
         }

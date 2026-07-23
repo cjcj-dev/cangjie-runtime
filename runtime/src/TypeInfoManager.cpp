@@ -6,6 +6,9 @@
 
 
 #include "TypeInfoManager.h"
+#include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include "Base/CString.h"
 #include "Base/MemUtils.h"
 #include "ObjectModel/MClass.h"
@@ -147,6 +150,61 @@ void TypeInfoManager::Init()
 
 void TypeInfoManager::Fini()
 {
+    if (std::getenv("CJC_RTGCK7_PROBE") != nullptr) {
+        std::vector<std::pair<GenericTiDesc*, U64>> queries;
+        {
+            std::lock_guard<std::mutex> lock(probeMutex);
+            queries.assign(probeQueryCounts.begin(), probeQueryCounts.end());
+        }
+        std::sort(queries.begin(), queries.end(), [](const auto& lhs, const auto& rhs) {
+            return lhs.second > rhs.second;
+        });
+        U64 uniqueFEHits = 0;
+        for (const auto& query : queries) {
+            if (probeFEDescs.count(query.first) != 0) {
+                ++uniqueFEHits;
+            }
+        }
+        std::fprintf(stderr,
+            "RTGCK7 SUMMARY total=%llu fe_hits=%llu non_fe_hits=%llu misses=%llu unique_keys=%zu "
+            "fe_keys=%zu unique_fe_hits=%llu\n",
+            static_cast<unsigned long long>(probeTotalQueries),
+            static_cast<unsigned long long>(probeFEHits),
+            static_cast<unsigned long long>(probeNonFEHits),
+            static_cast<unsigned long long>(probeMisses), queries.size(), probeFEDescs.size(),
+            static_cast<unsigned long long>(uniqueFEHits));
+        size_t rank = 0;
+        for (const auto& query : queries) {
+            if (rank >= 20) {
+                break;
+            }
+            GenericTiDesc* desc = query.first;
+            std::vector<TypeInfo*> args;
+            for (U32 idx = 0; idx < desc->argSize; ++idx) {
+                args.push_back(desc->GetArg(idx));
+            }
+            CString name = desc->tt->GetTypeInfoName(desc->argSize, args.data());
+            std::fprintf(stderr, "RTGCK7 TOP rank=%zu count=%llu fe=%u hash=%u key=%s\n", ++rank,
+                static_cast<unsigned long long>(query.second), probeFEDescs.count(desc) != 0, desc->GetHash(),
+                name.Str());
+        }
+        size_t staticOnlyRank = 0;
+        for (GenericTiDesc* desc : probeFEDescs) {
+            if (probeQueryCounts.count(desc) != 0) {
+                continue;
+            }
+            std::vector<TypeInfo*> args;
+            for (U32 idx = 0; idx < desc->argSize; ++idx) {
+                args.push_back(desc->GetArg(idx));
+            }
+            CString name = desc->tt->GetTypeInfoName(desc->argSize, args.data());
+            std::fprintf(stderr, "RTGCK7 FE_ONLY rank=%zu hash=%u key=%s\n", ++staticOnlyRank,
+                desc->GetHash(), name.Str());
+            if (staticOnlyRank >= 20) {
+                break;
+            }
+        }
+    }
     // release resources
     for (const auto& mTable : mTableList) {
         delete mTable.second;
@@ -274,6 +332,22 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
     }
 }
 
+void TypeInfoManager::ProbeRecordFETypeInfo(TypeInfo* ti)
+{
+    if (std::getenv("CJC_RTGCK7_PROBE") == nullptr || !ti->IsGenericTypeInfo() || ti->IsVArray()) {
+        return;
+    }
+    GenericTiDesc* desc = nullptr;
+    if (ti->IsRawArray() || ti->IsCPointer()) {
+        TypeInfo* args[] = { ti->GetComponentTypeInfo() };
+        desc = GetTypeInfo(ti->GetSourceGeneric(), 1, args);
+    } else {
+        desc = GetTypeInfo(ti->GetSourceGeneric(), ti->GetTypeArgNum(), ti->GetTypeArgs());
+    }
+    std::lock_guard<std::mutex> lock(probeMutex);
+    probeFEDescs.insert(desc);
+}
+
 U16 TypeInfoManager::GetTypeTemplateUUID(TypeTemplate* tt)
 {
     U16 ttUUID = tt->GetUUID();
@@ -359,6 +433,18 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U
 TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
     auto typeInfoDesc = GetTypeInfo(tt, argSize, args);
+    if (std::getenv("CJC_RTGCK7_PROBE") != nullptr) {
+        std::lock_guard<std::mutex> lock(probeMutex);
+        ++probeTotalQueries;
+        ++probeQueryCounts[typeInfoDesc];
+        if (!typeInfoDesc->IsInited()) {
+            ++probeMisses;
+        } else if (probeFEDescs.count(typeInfoDesc) != 0) {
+            ++probeFEHits;
+        } else {
+            ++probeNonFEHits;
+        }
+    }
     if (typeInfoDesc->IsInited()) {
         return typeInfoDesc->typeInfo;
     }
