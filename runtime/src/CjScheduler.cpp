@@ -101,6 +101,12 @@ static size_t InitHeapSize(size_t defaultParam)
     size_t minSize = 4UL * KB;
 #endif
     size_t maxSize = g_sysmemSize / KB;
+    // cjHeapSwap=on lifts the cap to twice physical memory for swap-backed heaps
+    // (bootstrap builds compile the chir package with a heap larger than RAM).
+    const char* swapEnv = std::getenv("cjHeapSwap");
+    if (swapEnv != nullptr && strcmp(swapEnv, "on") == 0) {
+        maxSize = (g_sysmemSize * 2) / KB;
+    }
     if (size >= minSize && size <= maxSize) {
         return size;
     } else {
