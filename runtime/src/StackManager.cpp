@@ -397,7 +397,9 @@ static bool IsCangjieExecutable()
     if (ntHeaders->Signature != IMAGE_NT_SIGNATURE) {
         return false;
     }
-    const IMAGE_SECTION_HEADER* section = IMAGE_FIRST_SECTION(ntHeaders);
+    const auto sectionTable = reinterpret_cast<const uint8_t*>(&ntHeaders->OptionalHeader) +
+        ntHeaders->FileHeader.SizeOfOptionalHeader;
+    auto section = reinterpret_cast<const IMAGE_SECTION_HEADER*>(sectionTable);
     for (uint16_t i = 0; i < ntHeaders->FileHeader.NumberOfSections; ++i, ++section) {
         if (strncmp(reinterpret_cast<const char*>(section->Name), ".header", sizeof(".header") - 1) == 0) {
             return true;
