@@ -479,6 +479,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "MarkSatbBuffer is done for timeout");
+            visitSatbObj();
             GCThreadPool* threadPool = GetThreadPool();
             WorkStack tmp;
             TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
