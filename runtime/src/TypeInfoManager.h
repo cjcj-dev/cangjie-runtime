@@ -8,6 +8,7 @@
 #define MRT_TYPE_INFO_MANAGER_H
 
 #include <unordered_map>
+#include <unordered_set>
 
 #include "ObjectModel/MClass.h"
 #include "Base/SysCall.h"
@@ -42,6 +43,7 @@ public:
 
     TypeInfo* GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
     void AddTypeInfo(TypeInfo* ti);
+    void ProbeRecordFETypeInfo(TypeInfo* ti);
     static U32 GetTypeSize(TypeInfo* ti);
     void ParseEnumInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[], TypeInfo* ti);
     void RecordMTableDesc(U32 uuid, MTableDesc* mTableDesc) { mTableList.emplace(uuid, mTableDesc); }
@@ -98,6 +100,7 @@ private:
         bool operator==(const GenericTiDesc &other) const;
 
         U32 GetHash() const { return hash; }
+        TypeInfo* GetArg(U32 idx) const { return argsVector[idx]; }
 
         TypeInfo* typeInfo { nullptr };
         bool IsNotCreated() { return typeInfo == nullptr; }
@@ -169,6 +172,13 @@ private:
     // record these two classes during initialization.
     TypeInfo* anyTi = nullptr;
     TypeInfo* objectTi = nullptr;
+    std::mutex probeMutex;
+    std::unordered_set<GenericTiDesc*> probeFEDescs;
+    std::unordered_map<GenericTiDesc*, U64> probeQueryCounts;
+    U64 probeTotalQueries = 0;
+    U64 probeFEHits = 0;
+    U64 probeNonFEHits = 0;
+    U64 probeMisses = 0;
 };
 } // namespace MapleRuntime
 #endif // MRT_TYPE_INFO_MANAGER_H
