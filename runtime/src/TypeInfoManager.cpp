@@ -328,6 +328,20 @@ void TypeInfoManager::Fini()
                 static_cast<unsigned long long>(timerPairMinNs),
                 static_cast<unsigned long long>(timerPairTotalNs / PROBE_CLOCK_CALIBRATION_RUNS),
                 PROBE_CLOCK_CALIBRATION_RUNS);
+            U64 fastTimerOverheadNs = probeFastAttempts * timerPairMinNs;
+            U64 fastMeasuredNs = probeFastHitNs + probeFastMissNs;
+            U64 fastAdjustedNs = fastMeasuredNs > fastTimerOverheadNs ? fastMeasuredNs - fastTimerOverheadNs : 0;
+            std::fprintf(stderr,
+                "RTK7QUERY FAST attempts=%llu hits=%llu misses=%llu hit_ns=%llu miss_ns=%llu "
+                "measured_ns=%llu timer_overhead_ns=%llu adjusted_ns=%llu\n",
+                static_cast<unsigned long long>(probeFastAttempts),
+                static_cast<unsigned long long>(probeFastHits),
+                static_cast<unsigned long long>(probeFastAttempts - probeFastHits),
+                static_cast<unsigned long long>(probeFastHitNs),
+                static_cast<unsigned long long>(probeFastMissNs),
+                static_cast<unsigned long long>(fastMeasuredNs),
+                static_cast<unsigned long long>(fastTimerOverheadNs),
+                static_cast<unsigned long long>(fastAdjustedNs));
             PrintProbeCost("ALL", probeAllCosts, timerPairMinNs);
             PrintProbeCost("FE_HIT", probeFECosts, timerPairMinNs);
             PrintProbeCost("NON_FE_HIT", probeNonFECosts, timerPairMinNs);
@@ -782,9 +796,27 @@ TypeInfoManager::GenericTiDesc* TypeInfoManager::GetTypeInfo(TypeTemplate* tt, U
 
 TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[])
 {
+    const bool costProbeEnabled = IsRtk7QueryCostProbeEnabled();
+    const U64 fastLookupStartNs = costProbeEnabled ? ProbeMonotonicNs() : 0;
     U64 fastMapGeneration = 0;
     GenericTiDesc* fastTypeInfoDesc = genericTypeInfoFastMap.Get(tt, argSize, args, fastMapGeneration);
+    const U64 fastLookupNs = costProbeEnabled ? ProbeMonotonicNs() - fastLookupStartNs : 0;
     if (fastTypeInfoDesc != nullptr) {
+        if (IsRtk7QueryProbeEnabled()) {
+            std::lock_guard<std::mutex> lock(probeMutex);
+            ++probeTotalQueries;
+            ++probeQueryCounts[fastTypeInfoDesc];
+            if (probeFEDescs.count(fastTypeInfoDesc) != 0) {
+                ++probeFEHits;
+            } else {
+                ++probeNonFEHits;
+            }
+            if (costProbeEnabled) {
+                ++probeFastAttempts;
+                ++probeFastHits;
+                probeFastHitNs += fastLookupNs;
+            }
+        }
         return fastTypeInfoDesc->typeInfo;
     }
     auto typeInfoDesc = GetTypeInfo(tt, argSize, args);
@@ -809,6 +841,8 @@ TypeInfo* TypeInfoManager::GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, Ty
             }
         }
         if (IsRtk7QueryCostProbeEnabled()) {
+            ++probeFastAttempts;
+            probeFastMissNs += fastLookupNs;
             RecordProbeCost(probeAllCosts, probeLastLookup);
         }
     }

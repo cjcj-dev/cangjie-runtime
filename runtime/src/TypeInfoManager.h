@@ -233,6 +233,10 @@ private:
     U64 probeFEHits = 0;
     U64 probeNonFEHits = 0;
     U64 probeMisses = 0;
+    U64 probeFastAttempts = 0;
+    U64 probeFastHits = 0;
+    U64 probeFastHitNs = 0;
+    U64 probeFastMissNs = 0;
 };
 } // namespace MapleRuntime
 #endif // MRT_TYPE_INFO_MANAGER_H
