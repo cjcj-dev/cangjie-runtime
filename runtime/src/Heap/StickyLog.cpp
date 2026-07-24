@@ -6,6 +6,10 @@
 
 #include "StickyLog.h"
 
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
+
 #include "Allocator/MemMap.h"
 #include "Base/ImmortalWrapper.h"
 #include "Base/MemUtils.h"
@@ -21,7 +25,43 @@ extern "C" MRT_EXPORT const uint8_t __cj_sticky_line_shift = StickyLog::LINE_SHI
 
 static ImmortalWrapper<StickyLog> g_stickyLog;
 
+namespace {
+bool ReadStickyBoolean(const char* name)
+{
+    const char* value = std::getenv(name);
+    return value != nullptr && strcmp(value, "1") == 0;
+}
+
+size_t ReadStickyPositiveInteger(const char* name, size_t defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed == 0 ||
+        parsed > std::numeric_limits<size_t>::max()) {
+        LOG(RTLOG_ERROR, "Unsupported %s=%s; using default %zu", name, value, defaultValue);
+        return defaultValue;
+    }
+    return static_cast<size_t>(parsed);
+}
+} // namespace
+
 StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
+
+void StickyLog::ConfigureMinorFromEnvironment()
+{
+    minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR");
+    minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE");
+    forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH");
+    youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", 32 * MB);
+    size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
+    majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
+        static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+}
 
 void StickyLog::Init(MAddress start, size_t size)
 {
@@ -50,6 +90,9 @@ void StickyLog::Fini() noexcept
     heapSize = 0;
     loggedByteCount = 0;
     enabled = false;
+    minorEnabled = false;
+    minorValidatorEnabled = false;
+    forceSlowPathEnabled = false;
 }
 
 bool StickyLog::IsLoggedLine(MAddress address) const

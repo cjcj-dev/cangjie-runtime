@@ -30,9 +30,15 @@ public:
 
     void Init(MAddress heapStart, size_t heapSize);
     void Fini() noexcept;
+    void ConfigureMinorFromEnvironment();
 
     void Enable(bool value) { enabled = value; }
     bool IsEnabled() const { return enabled; }
+    bool IsMinorEnabled() const { return minorEnabled; }
+    bool IsMinorValidatorEnabled() const { return minorValidatorEnabled; }
+    bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
+    size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
+    uint32_t GetMajorInterval() const { return majorInterval; }
     bool IsLoggedLine(MAddress address) const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
@@ -48,6 +54,11 @@ private:
     size_t heapSize = 0;
     size_t loggedByteCount = 0;
     bool enabled = false;
+    bool minorEnabled = false;
+    bool minorValidatorEnabled = false;
+    bool forceSlowPathEnabled = false;
+    size_t youngBytesThreshold = 32 * MB;
+    uint32_t majorInterval = 8;
 };
 } // namespace MapleRuntime
 

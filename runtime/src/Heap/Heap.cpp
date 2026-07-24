@@ -178,7 +178,8 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 void HeapImpl::Init(const HeapParam& param)
 {
     theSpace->Init(param);
-    bool stickyLogBarrierEnabled = InitStickyLogBarrierEnabled();
+    StickyLog::Instance().ConfigureMinorFromEnvironment();
+    bool stickyLogBarrierEnabled = InitStickyLogBarrierEnabled() || StickyLog::Instance().IsMinorEnabled();
     StickyLog::Instance().Enable(stickyLogBarrierEnabled);
     idlePhaseBarrier = stickyLogBarrierEnabled ? static_cast<Barrier*>(&idleLogBarrier) : &idleBarrier;
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
