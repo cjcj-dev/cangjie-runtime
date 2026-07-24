@@ -257,7 +257,7 @@ public:
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
-    void CollectYoungGarbage(YoungCollectionStats& stats);
+    void CollectYoungGarbage(YoungCollectionStats& stats, const std::function<void(RegionInfo*)>& promoteVisitor);
     void PromoteAllRegions();
 
     void MergeRawPointerPinnedRegions()
