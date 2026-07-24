@@ -501,10 +501,9 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
-void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
-                                        const std::function<void(RegionInfo*)>& promoteVisitor)
+void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats)
 {
-    auto collect = [this, &stats, &promoteVisitor](RegionList& list, bool releaseResources) {
+    auto collect = [this, &stats](RegionList& list, bool releaseResources) {
         RegionInfo* region = list.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
@@ -518,7 +517,6 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 } else {
                     region->SetYoungRegionFlag(0);
                     region->SetYoungAge(0);
-                    promoteVisitor(region);
                 }
                 region = next;
                 continue;
