@@ -616,11 +616,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
-            object->ForEachRefField([this, &workStack](RefField<>& field) {
+            ForEachStrongRefSlot(object, [this, &workStack](RefSlotKind, BaseObject* target, RefField<>& field) {
                 if (StickyLog::Instance().IsMinorValidatorEnabled()) {
                     minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
                 }
-                PushYoungObject(ResolveMinorReference(field), workStack);
+                PushYoungObject(target, workStack);
             });
         });
     });
