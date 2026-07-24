@@ -7,6 +7,8 @@
 
 #include "WCollector.h"
 
+#include "Heap/StickyLog.h"
+
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -563,6 +565,11 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
 
+    if (StickyLog::Instance().IsEnabled()) {
+        ScopedStopTheWorld stw("advance sticky log epoch");
+        SatbBuffer::Instance().DiscardStickyLogBuffer();
+        StickyLog::Instance().BeginEpoch();
+    }
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     MergeResurrectExportObjects();
     PostResolveCycleTask();

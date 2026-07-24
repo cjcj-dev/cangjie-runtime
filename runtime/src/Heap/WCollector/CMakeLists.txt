@@ -6,6 +6,7 @@
 
 set(SRC_LIST
     "IdleBarrier.cpp"
+    "IdleLogBarrier.cpp"
     "EnumBarrier.cpp"
     "TraceBarrier.cpp"
     "PostTraceBarrier.cpp"

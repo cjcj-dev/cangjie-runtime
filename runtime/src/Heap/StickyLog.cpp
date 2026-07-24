@@ -10,6 +10,7 @@
 #include "Base/ImmortalWrapper.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
+#include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
@@ -47,6 +48,16 @@ void StickyLog::Fini() noexcept
     heapStart = 0;
     heapSize = 0;
     loggedByteCount = 0;
+    enabled = false;
+}
+
+bool StickyLog::IsLoggedLine(MAddress address) const
+{
+    if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {
+        return false;
+    }
+    size_t lineIndex = (address - heapStart) >> LINE_SHIFT;
+    return *reinterpret_cast<volatile uint8_t*>(__cj_sticky_logged_base + lineIndex) != 0;
 }
 
 bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
@@ -79,5 +90,25 @@ void StickyLog::BeginEpoch()
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky epoch may only advance while mutators are stopped");
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base), loggedByteCount, 0, loggedByteCount);
+}
+
+extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)
+{
+    if (object == nullptr) {
+        return;
+    }
+    StickyLog& stickyLog = StickyLog::Instance();
+    MAddress address = reinterpret_cast<MAddress>(object);
+    if (LIKELY(stickyLog.IsLoggedLine(address))) {
+        return;
+    }
+    Mutator* mutator = Mutator::GetMutator();
+    if (UNLIKELY(mutator == nullptr)) {
+        return;
+    }
+    MAddress lineStart = 0;
+    if (stickyLog.TryLogLine(address, lineStart)) {
+        mutator->RememberLineInStickyLogBuffer(lineStart);
+    }
 }
 } // namespace MapleRuntime

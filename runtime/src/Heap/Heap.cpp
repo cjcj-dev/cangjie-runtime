@@ -5,12 +5,14 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap.h"
+#include "StickyLog.h"
 
 #include "Collector/CollectorProxy.h"
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "WCollector/IdleBarrier.h"
+#include "WCollector/IdleLogBarrier.h"
 #include "WCollector/EnumBarrier.h"
 #include "WCollector/TraceBarrier.h"
 #include "WCollector/PostTraceBarrier.h"
@@ -52,12 +54,18 @@ static bool InitEnabledGCParam()
     return true;
 }
 
+static bool InitStickyLogBarrierEnabled()
+{
+    const char* enabled = std::getenv("MRT_STICKY_LOG_BARRIER");
+    return enabled != nullptr && strcmp(enabled, "1") == 0;
+}
+
 class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
           collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy),
-        idleBarrier(collectorProxy), enumBarrier(collectorProxy), traceBarrier(collectorProxy),
+        idleBarrier(collectorProxy), idleLogBarrier(collectorProxy), enumBarrier(collectorProxy), traceBarrier(collectorProxy),
         postTraceBarrier(collectorProxy), preforwardBarrier(collectorProxy), forwardBarrier(collectorProxy)
     {
         currentBarrier = &stwBarrier;
@@ -143,12 +151,14 @@ private:
     ExportRootTable exportRootsTable;
     Barrier stwBarrier;
     IdleBarrier idleBarrier;
+    IdleLogBarrier idleLogBarrier;
     EnumBarrier enumBarrier;
     TraceBarrier traceBarrier;
     PostTraceBarrier postTraceBarrier;
     PreforwardBarrier preforwardBarrier;
     ForwardBarrier forwardBarrier;
     Barrier* currentBarrier = nullptr;
+    Barrier* idlePhaseBarrier = nullptr;
 
     // manage gc roots entry
     StaticRootTable staticRootTable;
@@ -168,6 +178,9 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 void HeapImpl::Init(const HeapParam& param)
 {
     theSpace->Init(param);
+    bool stickyLogBarrierEnabled = InitStickyLogBarrierEnabled();
+    StickyLog::Instance().Enable(stickyLogBarrierEnabled);
+    idlePhaseBarrier = stickyLogBarrierEnabled ? static_cast<Barrier*>(&idleLogBarrier) : &idleBarrier;
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
     collectorResources.Init();
@@ -198,7 +211,7 @@ void HeapImpl::InstallBarrier(const GCPhase phase)
     } else if (phase == GCPhase::GC_PHASE_FORWARD) {
         currentBarrier = &forwardBarrier;
     } else if (phase == GCPhase::GC_PHASE_IDLE) {
-        currentBarrier = &idleBarrier;
+        currentBarrier = idlePhaseBarrier;
     } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
         currentBarrier = &postTraceBarrier;
     }
