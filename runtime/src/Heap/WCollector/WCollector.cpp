@@ -556,8 +556,185 @@ void WCollector::PostResolveCycleTask()
     CJ_MRT_RolveCycleRef();
 #endif
 }
+
+BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
+{
+    RefField<> value(field);
+    BaseObject* object = value.GetTargetObject();
+    if (IsOldPointer(value)) {
+        BaseObject* latest = FindLatestVersion(object);
+        return latest == nullptr ? object : latest;
+    }
+    return object;
+}
+
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
+{
+    RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        visitor(ResolveMinorReference(field));
+    };
+    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
+
+    MutatorManager::Instance().VisitAllMutators(
+        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(rawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* object : resurrectedExportObjectes) {
+            visitor(object);
+        }
+        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
+            visitor(object);
+        }
+    }
+    std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    for (const auto& entry : cycleRefWorkStack) {
+        visitor(entry.first);
+        for (BaseObject* object : entry.second) {
+            visitor(object);
+        }
+    }
+}
+
+void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object", object);
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+        workStack.push_back(object);
+    }
+}
+
+void WCollector::TraceYoungClosure(WorkStack& workStack)
+{
+    while (!workStack.empty()) {
+        BaseObject* object = workStack.back();
+        workStack.pop_back();
+        if (MarkObject(object)) {
+            continue;
+        }
+        object->ForEachRefField([this, &workStack](RefField<>& field) {
+            PushYoungObject(ResolveMinorReference(field), workStack);
+        });
+    }
+}
+
+void WCollector::RescanRememberedSet(WorkStack& workStack)
+{
+    StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(lineStart);
+        if (!region->IsValidRegion() || region->IsGarbageRegion() || region->IsYoungRegion()) {
+            return;
+        }
+        region->VisitAllObjects([this, &workStack, lineStart, lineEnd](BaseObject* object) {
+            MAddress objectStart = reinterpret_cast<MAddress>(object);
+            MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+            if (objectStart >= lineEnd || objectEnd <= lineStart) {
+                return;
+            }
+            object->ForEachRefField([this, &workStack](RefField<>& field) {
+                PushYoungObject(ResolveMinorReference(field), workStack);
+            });
+        });
+    });
+}
+
+void WCollector::ValidateYoungMarking()
+{
+    std::unordered_set<BaseObject*> reachable;
+    std::vector<BaseObject*> pending;
+    VisitMinorRoots([&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(object);
+        }
+    });
+
+    size_t youngReachable = 0;
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!Heap::IsHeapAddress(object) || !reachable.insert(object).second) {
+            continue;
+        }
+        CHECK_DETAIL(object->IsValidObject(), "sticky validator reached invalid object %p", object);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region->IsYoungRegion()) {
+            ++youngReachable;
+            MAddress line = reinterpret_cast<MAddress>(object) & ~(StickyLog::LINE_SIZE - 1);
+            CHECK_DETAIL(region->IsMarkedObject(object),
+                "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u",
+                object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
+                region->GetLiveByteCount());
+        }
+        object->ForEachRefField([this, &pending](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (Heap::IsHeapAddress(target)) {
+                pending.push_back(target);
+            }
+        });
+    }
+    VLOG(REPORT, "[StickyMinor] validator reachable=%zu young=%zu failures=0", reachable.size(), youngReachable);
+}
+
+void WCollector::FlushAllocationRegions()
+{
+    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+}
+
+void WCollector::DoYoungGarbageCollection()
+{
+    uint64_t start = TimeUtil::NanoSeconds();
+    ScopedStopTheWorld stw("sticky minor", true, GCPhase::GC_PHASE_ENUM);
+    TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    FlushAllocationRegions();
+
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates();
+    WorkStack workStack = NewWorkStack();
+    VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
+    RescanRememberedSet(workStack);
+    TraceYoungClosure(workStack);
+
+    if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+        ValidateYoungMarking();
+    }
+    manager.CollectYoungGarbage(stats);
+    SatbBuffer::Instance().DiscardStickyLogBuffer();
+    StickyLog::Instance().BeginEpoch();
+    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+
+    ++minorRunsSinceMajor;
+    ++minorTotalRuns;
+    GetGCStats().collectedBytes = stats.reclaimedBytes;
+    uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
+    VLOG(REPORT,
+        "[StickyMinor] run=%zu candidates=%zu candidateBytes=%zu reclaimedRegions=%zu reclaimedBytes=%zu pause=%zu us",
+        minorTotalRuns, stats.candidateRegions, stats.candidateBytes, stats.reclaimedRegions, stats.reclaimedBytes,
+        pauseUs);
+}
+
 void WCollector::DoGarbageCollection()
 {
+    StickyLog& stickyLog = StickyLog::Instance();
+    if (gcReason == GC_REASON_YOUNG && stickyLog.IsMinorEnabled() &&
+        minorRunsSinceMajor < stickyLog.GetMajorInterval()) {
+        DoYoungGarbageCollection();
+        return;
+    }
+
+    if (stickyLog.IsMinorEnabled()) {
+        ScopedStopTheWorld stw("sticky major allocation rollover");
+        FlushAllocationRegions();
+    }
     TraceHeap();
     PostTrace();
 
@@ -578,6 +755,12 @@ void WCollector::DoGarbageCollection()
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    if (stickyLog.IsMinorEnabled()) {
+        ScopedStopTheWorld stw("sticky major promotion");
+        FlushAllocationRegions();
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().PromoteAllRegions();
+        minorRunsSinceMajor = 0;
+    }
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
