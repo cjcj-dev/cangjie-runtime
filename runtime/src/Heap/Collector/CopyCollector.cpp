@@ -59,7 +59,9 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 
     PostGarbageCollection(gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
-    UpdateGCStats();
+    if (reason != GC_REASON_YOUNG) {
+        UpdateGCStats();
+    }
     uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
     double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
@@ -67,7 +69,9 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     g_gcCount++;
     g_gcTotalTimeUs += (gcTimeNs / NS_PER_US);
     g_gcCollectedTotalBytes += gcStats.collectedBytes;
-    gcStats.collectionRate = rate;
+    if (reason != GC_REASON_YOUNG) {
+        gcStats.collectionRate = rate;
+    }
 }
 
 void CopyCollector::ForwardFromSpace()
