@@ -710,7 +710,12 @@ void WCollector::DoYoungGarbageCollection()
     manager.CollectYoungGarbage(stats);
     SatbBuffer::Instance().DiscardStickyLogBuffer();
     StickyLog::Instance().BeginEpoch();
-    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    } else {
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    }
 
     ++minorRunsSinceMajor;
     ++minorTotalRuns;
@@ -747,7 +752,12 @@ void WCollector::DoGarbageCollection()
         SatbBuffer::Instance().DiscardStickyLogBuffer();
         StickyLog::Instance().BeginEpoch();
     }
-    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    } else {
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
