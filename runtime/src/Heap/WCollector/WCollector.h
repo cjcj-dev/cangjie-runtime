@@ -216,6 +216,9 @@ private:
     uint16_t currentTagID = 0;
     uint32_t minorRunsSinceMajor = 0;
     uint64_t minorTotalRuns = 0;
+    mutable std::unordered_set<MAddress> minorRescannedLines;
+    mutable std::unordered_set<MAddress> minorRescannedFields;
+    mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
