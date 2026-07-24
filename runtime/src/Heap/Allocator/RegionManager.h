@@ -366,8 +366,7 @@ public:
 
     size_t GetYoungAllocatedSize() const
     {
-        return tlRegionList.GetYoungAllocatedSize() + recentFullRegionList.GetYoungAllocatedSize() +
-            recentLargeRegionList.GetYoungAllocatedSize() + recentPinnedRegionList.GetYoungAllocatedSize();
+        return youngAllocatedBytes.load(std::memory_order_relaxed);
     }
 
     size_t GetSurvivedSize() const
@@ -617,6 +616,8 @@ private:
 
     // the time when previous region was allocated, which is assigned with returned value by timeutil::NanoSeconds().
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
+
+    std::atomic<size_t> youngAllocatedBytes = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };
