@@ -8,6 +8,7 @@
 
 #include "ast_api.h"
 
+#include <atomic>
 #include <cmath>
 
 #include "cangjie/Basic/DiagnosticEmitter.h"
@@ -20,6 +21,50 @@
 #include "cangjie/Parse/Parser.h"
 
 using namespace Cangjie;
+
+extern "C" {
+// A host compiler that is not the reference C++ implementation cannot pass a real MacroCall*
+// through the macro context handle. Such a host registers its own implementations of every
+// context-dependent entry point before evaluating any macro; the entry points below then forward
+// to the host table. Without registration the reference behaviour is unchanged. On ELF hosts the
+// same redirection happens implicitly through symbol interposition; PE binds these calls inside
+// this module at link time, so the redirection must be explicit.
+struct CJMacroHostCallbacks {
+    uint64_t structSize; // must equal sizeof(CJMacroHostCallbacks); rejects layout skew
+    ParseRes* (*astLex)(void* fptr, const char* code, int64_t codeLen);
+    ParseRes* (*astParseExpr)(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter);
+    ParseRes* (*astParsePattern)(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter);
+    ParseRes* (*astParseType)(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter);
+    ParseRes* (*astParseDecl)(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter);
+    ParseRes* (*astParsePropMemberDecl)(void* fptr, const uint8_t* tokensBytes);
+    ParseRes* (*astParsePrimaryConstructor)(void* fptr, const uint8_t* tokensBytes);
+    ParseRes* (*astParseTopLevel)(void* fptr, const uint8_t* tokensBytes);
+    bool (*checkParentContext)(void* fptr, char* parent, bool report);
+    void (*setItemInfo)(void* fptr, char* key, void* value, uint8_t type);
+    void*** (*getChildMessages)(void* fptr, char* children);
+    void (*getMacroPosition)(void* fptr, unsigned int* fileID, int* line, int* column);
+    uint8_t (*astDiagReport)(
+        void* fptr, const int* level, const uint8_t* tokensBytes, const char* message, const char* hint);
+};
+}
+
+namespace {
+std::atomic<const CJMacroHostCallbacks*> g_macroHostCallbacks{nullptr};
+
+const CJMacroHostCallbacks* GetMacroHostCallbacks()
+{
+    return g_macroHostCallbacks.load(std::memory_order_acquire);
+}
+} // namespace
+
+extern "C" bool CJ_MacroCall_RegisterHostCallbacks(const CJMacroHostCallbacks* table)
+{
+    if (table == nullptr || table->structSize != sizeof(CJMacroHostCallbacks)) {
+        return false;
+    }
+    g_macroHostCallbacks.store(table, std::memory_order_release);
+    return true;
+}
 
 namespace {
 // type is not an independent syntax. diagnosis engine does not provide a proper prompt message.
@@ -165,6 +210,9 @@ void TryCombineDoubleArrow(MacroCall* macCall, std::vector<Token> inputTokens, s
 extern "C" {
 ParseRes* CJ_AST_Lex(void* fptr, const char* code, int64_t codeLen)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astLex(fptr, code, codeLen);
+    }
     Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::PARSE);
     DiagnosticEngine diag;
     SourceManager sm;
@@ -219,6 +267,9 @@ ParseRes* CJ_AST_Lex(void* fptr, const char* code, int64_t codeLen)
 
 ParseRes* CJ_AST_ParseExpr(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParseExpr(fptr, tokensBytes, tokenCounter);
+    }
     Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::PARSE);
     std::vector<Token> tokens = TokenSerialization::GetTokensFromBytes(tokensBytes);
     DiagnosticEngine diag;
@@ -280,6 +331,9 @@ ParseRes* CJ_AST_ParseAnnotationArguments(const uint8_t* tokensBytes)
 
 ParseRes* CJ_AST_ParsePattern(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParsePattern(fptr, tokensBytes, tokenCounter);
+    }
     Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::PARSE);
     std::vector<Token> tokens = TokenSerialization::GetTokensFromBytes(tokensBytes);
     DiagnosticEngine diag;
@@ -312,6 +366,9 @@ ParseRes* CJ_AST_ParsePattern(void* fptr, const uint8_t* tokensBytes, int64_t* t
 
 ParseRes* CJ_AST_ParseType(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParseType(fptr, tokensBytes, tokenCounter);
+    }
     Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::PARSE);
     std::vector<Token> tokens = TokenSerialization::GetTokensFromBytes(tokensBytes);
     DiagnosticEngine diag;
@@ -390,21 +447,33 @@ ParseRes* CJ_ParseDeclCommon(void* fptr, const uint8_t* tokensBytes, ScopeKind s
 
 ParseRes* CJ_AST_ParseDecl(void* fptr, const uint8_t* tokensBytes, int64_t* tokenCounter)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParseDecl(fptr, tokensBytes, tokenCounter);
+    }
     return CJ_ParseDeclCommon(fptr, tokensBytes, ScopeKind::UNKNOWN_SCOPE, tokenCounter);
 }
 
 ParseRes* CJ_AST_ParsePropMemberDecl(void* fptr, const uint8_t* tokensBytes)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParsePropMemberDecl(fptr, tokensBytes);
+    }
     return CJ_ParseDeclCommon(fptr, tokensBytes, ScopeKind::PROP_MEMBER_GETTER_BODY, nullptr);
 }
 
 ParseRes* CJ_AST_ParsePrimaryConstructor(void* fptr, const uint8_t* tokensBytes)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParsePrimaryConstructor(fptr, tokensBytes);
+    }
     return CJ_ParseDeclCommon(fptr, tokensBytes, ScopeKind::CLASS_BODY, nullptr);
 }
 
 ParseRes* CJ_AST_ParseTopLevel(void* fptr, const uint8_t* tokensBytes)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astParseTopLevel(fptr, tokensBytes);
+    }
     Cangjie::ICE::TriggerPointSetter iceSetter(CompileStage::PARSE);
     std::vector<Token> tokens = TokenSerialization::GetTokensFromBytes(tokensBytes);
     DiagnosticEngine diag;
@@ -439,18 +508,28 @@ ParseRes* CJ_AST_ParseTopLevel(void* fptr, const uint8_t* tokensBytes)
 
 bool CJ_CheckParentContext(void* fptr, char* parent, bool report)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->checkParentContext(fptr, parent, report);
+    }
     auto macCall = reinterpret_cast<MacroCall*>(fptr);
     return macCall->CheckParentContext(parent, report);
 }
 
 void CJ_SetItemInfo(void* fptr, char* key, void* value, uint8_t type)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        host->setItemInfo(fptr, key, value, type);
+        return;
+    }
     auto macCall = reinterpret_cast<MacroCall*>(fptr);
     macCall->SetItemMacroContext(key, value, type);
 }
 
 void*** CJ_GetChildMessages(void* fptr, char* children)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->getChildMessages(fptr, children);
+    }
     auto macCall = reinterpret_cast<MacroCall*>(fptr);
     return macCall->GetChildMessagesFromMacroContext(children);
 }
@@ -467,6 +546,10 @@ void CJ_CheckAddSpace(const uint8_t* tokBytes, bool* spaceFlag)
 
 void CJ_GetMacroPosition(void* fptr, unsigned int* fileID, int* line, int* column)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        host->getMacroPosition(fptr, fileID, line, column);
+        return;
+    }
     auto macCall = reinterpret_cast<MacroCall*>(fptr);
     auto pos = macCall->GetBeginPos();
     *fileID = pos.fileID;
@@ -481,6 +564,9 @@ const uint8_t DIAG_REPORT_FILEID_ERROR = 2;
 uint8_t CJ_AST_DiagReport(
     void* fptr, const int* level, const uint8_t* tokensBytes, const char* message, const char* hint)
 {
+    if (const CJMacroHostCallbacks* host = GetMacroHostCallbacks()) {
+        return host->astDiagReport(fptr, level, tokensBytes, message, hint);
+    }
     if (fptr == nullptr) {
         return 0;
     }
