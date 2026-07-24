@@ -112,6 +112,18 @@ public:
         return CountAllocatedSize();
     }
 
+    size_t GetYoungAllocatedSize() const
+    {
+        size_t allocated = 0;
+        std::lock_guard<std::mutex> lock(const_cast<RegionList*>(this)->listMutex);
+        for (RegionInfo* region = listHead; region != nullptr; region = region->GetNextRegion()) {
+            if (region->IsYoungRegion()) {
+                allocated += region->GetRegionAllocatedSize();
+            }
+        }
+        return allocated;
+    }
+
     void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor)
     {
         std::lock_guard<std::mutex> lock(listMutex);

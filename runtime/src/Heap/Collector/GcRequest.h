@@ -32,6 +32,7 @@ enum GCReason : uint32_t {
     GC_REASON_HEU_SYNC,    // Just wait one gc request to reduce heap fragmentation.
     GC_REASON_NATIVE_SYNC, // Just wait one gc request to reduce native heap consumption.
     GC_REASON_FORCE,       // force gc is triggered when runtime triggers gc actively.
+    GC_REASON_YOUNG,       // Young-region allocation reaches the sticky minor threshold.
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };

@@ -354,6 +354,12 @@ public:
             recentPinnedRegionList.GetAllocatedSize();
     }
 
+    size_t GetYoungAllocatedSize() const
+    {
+        return tlRegionList.GetYoungAllocatedSize() + recentFullRegionList.GetYoungAllocatedSize() +
+            recentLargeRegionList.GetYoungAllocatedSize() + recentPinnedRegionList.GetYoungAllocatedSize();
+    }
+
     size_t GetSurvivedSize() const
     {
         return fromRegionList.GetAllocatedSize() + oldPinnedRegionList.GetAllocatedSize() +
