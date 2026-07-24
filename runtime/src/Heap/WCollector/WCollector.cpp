@@ -694,6 +694,7 @@ void WCollector::ValidateYoungMarking()
                 "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u "
                 "objectClass=%s source=%p sourceRegion=%p sourceType=%u sourceYoung=%u sourceLine=%#zx "
                 "sourceLogged=%u sourceLineRescanned=%u sourceFieldRescanned=%u targetDiscovered=%u targetCandidate=%u "
+                "targetAge=%u sourceAge=%u "
                 "sourceClass=%s sourceField=%#zx sourceOffset=%zu",
                 object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
                 region->GetLiveByteCount(), object->GetTypeInfo()->GetName(), source, sourceRegion,
@@ -704,6 +705,8 @@ void WCollector::ValidateYoungMarking()
                 static_cast<unsigned>(minorRescannedFields.count(sourceField) != 0),
                 static_cast<unsigned>(minorDiscoveredObjects.count(object) != 0),
                 static_cast<unsigned>(minorCandidateRegions.count(region) != 0),
+                static_cast<unsigned>(region->GetYoungAge()),
+                sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->GetYoungAge()),
                 source == nullptr ? "<root>" : source->GetTypeInfo()->GetName(), sourceField,
                 source == nullptr ? 0 : sourceField - reinterpret_cast<MAddress>(source));
         }
