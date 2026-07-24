@@ -608,21 +608,28 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(lineStart);
         if (!region->IsValidRegion() || region->IsGarbageRegion() || region->IsYoungRegion()) {
-            return;
+            return false;
         }
-        region->VisitAllObjects([this, &workStack, lineStart, lineEnd](BaseObject* object) {
+        bool retainLine = false;
+        region->VisitAllObjects([this, &workStack, lineStart, lineEnd, &retainLine](BaseObject* object) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
-            ForEachStrongRefSlot(object, [this, &workStack](RefSlotKind, BaseObject* target, RefField<>& field) {
-                if (StickyLog::Instance().IsMinorValidatorEnabled()) {
-                    minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
-                }
-                PushYoungObject(target, workStack);
-            });
+            ForEachStrongRefSlot(object,
+                [this, &workStack, &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+                    if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+                        minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
+                    }
+                    if (Heap::IsHeapAddress(target) &&
+                        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
+                        retainLine = true;
+                    }
+                    PushYoungObject(target, workStack);
+                });
         });
+        return retainLine;
     });
 }
 

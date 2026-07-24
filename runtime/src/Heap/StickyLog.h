@@ -46,7 +46,7 @@ public:
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
 
-    using LoggedLineVisitor = std::function<void(MAddress lineStart, MAddress lineEnd)>;
+    using LoggedLineVisitor = std::function<bool(MAddress lineStart, MAddress lineEnd)>;
     // TODO: the minor collector will consume logged lines through this interface and rescan objects in each line.
     void RescanLoggedLines(const LoggedLineVisitor& visitor);
 

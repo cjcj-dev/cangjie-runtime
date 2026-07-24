@@ -163,9 +163,9 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
         if (!IsLoggedLine(lineStart)) {
             return;
         }
-        visitor(lineStart, lineStart + LINE_SIZE);
         size_t lineIndex = (lineStart - heapStart) >> LINE_SHIFT;
-        __atomic_store_n(__cj_sticky_logged_base + lineIndex, static_cast<uint8_t>(0), __ATOMIC_RELEASE);
+        uint8_t retained = visitor(lineStart, lineStart + LINE_SIZE) ? 2 : 0;
+        __atomic_store_n(__cj_sticky_logged_base + lineIndex, retained, __ATOMIC_RELEASE);
     });
 
     uint8_t* dirtyBytes = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr());
@@ -178,20 +178,28 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
         }
         MAddress regionAddress = heapStart + regionIndex * RegionInfo::UNIT_SIZE;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddress);
+        bool regionRetained = false;
         if (region->IsValidRegion() && region->GetRegionStart() == regionAddress) {
             size_t firstLine = (regionAddress - heapStart) >> LINE_SHIFT;
             size_t lineCount = region->GetRegionSize() >> LINE_SHIFT;
             for (size_t lineOffset = 0; lineOffset < lineCount; ++lineOffset) {
                 uint8_t* loggedByte = __cj_sticky_logged_base + firstLine + lineOffset;
-                if (__atomic_load_n(loggedByte, __ATOMIC_ACQUIRE) == 0) {
+                uint8_t logged = __atomic_load_n(loggedByte, __ATOMIC_ACQUIRE);
+                if (logged == 0) {
                     continue;
                 }
-                MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
-                visitor(lineStart, lineStart + LINE_SIZE);
-                __atomic_store_n(loggedByte, static_cast<uint8_t>(0), __ATOMIC_RELEASE);
+                bool retain = logged == 2;
+                if (!retain) {
+                    MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
+                    retain = visitor(lineStart, lineStart + LINE_SIZE);
+                }
+                __atomic_store_n(loggedByte, static_cast<uint8_t>(retain), __ATOMIC_RELEASE);
+                regionRetained |= retain;
             }
         }
-        __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~mask), __ATOMIC_RELEASE);
+        if (!regionRetained) {
+            __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~mask), __ATOMIC_RELEASE);
+        }
     }
 }
 
