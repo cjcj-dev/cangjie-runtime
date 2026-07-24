@@ -481,15 +481,16 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
     }
 }
 
-YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates()
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
     YoungCollectionStats stats;
-    auto prepare = [&stats](RegionList& list) {
-        list.VisitAllRegions([&stats](RegionInfo* region) {
+    auto prepare = [&stats, &visitor](RegionList& list) {
+        list.VisitAllRegions([&stats, &visitor](RegionInfo* region) {
             if (!region->IsYoungRegion()) {
                 return;
             }
             region->ClearLiveInfo();
+            visitor(region);
             ++stats.candidateRegions;
             stats.candidateBytes += region->GetRegionAllocatedSize();
         });
