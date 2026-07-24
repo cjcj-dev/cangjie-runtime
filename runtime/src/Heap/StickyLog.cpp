@@ -12,6 +12,7 @@
 #include "Base/Panic.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
+#include "Mutator/SatbBuffer.h"
 
 namespace MapleRuntime {
 extern "C" MRT_EXPORT uint8_t* __cj_sticky_logged_base = nullptr;
@@ -90,6 +91,13 @@ void StickyLog::BeginEpoch()
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky epoch may only advance while mutators are stopped");
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base), loggedByteCount, 0, loggedByteCount);
+}
+
+void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
+{
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky lines may only be consumed while mutators are stopped");
+    SatbBuffer::Instance().VisitStickyLogLines(
+        [&visitor](MAddress lineStart) { visitor(lineStart, lineStart + LINE_SIZE); });
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)

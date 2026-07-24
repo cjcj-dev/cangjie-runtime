@@ -237,6 +237,7 @@ public:
     void FlushQueue(Node*& node);
     void FlushStickyLogQueue(Node*& node);
     void DiscardStickyLogBuffer();
+    void VisitStickyLogLines(const std::function<void(MAddress)>& visitor);
 
     // must not have thread racing
     void Init()

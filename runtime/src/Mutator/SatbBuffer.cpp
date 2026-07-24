@@ -76,6 +76,22 @@ void SatbBuffer::DiscardStickyLogBuffer()
     }
 }
 
+void SatbBuffer::VisitStickyLogLines(const std::function<void(MAddress)>& visitor)
+{
+    Node* head = stickyRetiredNodes.PopAll();
+    while (head != nullptr) {
+        std::vector<BaseObject*> lines;
+        head->GetObjects(lines);
+        for (BaseObject* line : lines) {
+            visitor(reinterpret_cast<MAddress>(line));
+        }
+        Node* oldHead = head;
+        head = head->next;
+        oldHead->Clear();
+        freeNodes.Push(oldHead);
+    }
+}
+
 static ImmortalWrapper<WeakRefBuffer> g_weakRefBuffer;
 
 WeakRefBuffer& WeakRefBuffer::Instance() noexcept { return *g_weakRefBuffer; }
