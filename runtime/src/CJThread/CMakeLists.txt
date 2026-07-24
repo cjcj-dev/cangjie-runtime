@@ -10,6 +10,8 @@ cmake_minimum_required(VERSION 3.14.1)
 if(${TARGET} STREQUAL "android_arm_cangjie" OR ${TARGET} STREQUAL "android_aarch64_cangjie" OR ${TARGET} STREQUAL "android_x86_64_cangjie")
     include(../../build/cmake/toolchain/config.cmake)
     include(../../build/cmake/toolchain/${TARGET}.cmake)
+elseif(${TARGET} STREQUAL "windows_x86_64")
+    include(../../build/cmake/toolchain/windows_x86_64.cmake)
 endif()
 
 project(cjthread C CXX)
