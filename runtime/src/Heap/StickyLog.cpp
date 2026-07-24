@@ -57,7 +57,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
     minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR");
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE");
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH");
-    youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", 32 * MB);
+    youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));

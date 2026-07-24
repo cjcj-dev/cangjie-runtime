@@ -25,6 +25,7 @@ class StickyLog {
 public:
     static constexpr uint8_t LINE_SHIFT = 8;
     static constexpr size_t LINE_SIZE = static_cast<size_t>(1) << LINE_SHIFT;
+    static constexpr size_t DEFAULT_YOUNG_BYTES = 32 * 1024 * 1024;
 
     static StickyLog& Instance() noexcept;
 
@@ -57,7 +58,7 @@ private:
     bool minorEnabled = false;
     bool minorValidatorEnabled = false;
     bool forceSlowPathEnabled = false;
-    size_t youngBytesThreshold = 32 * MB;
+    size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;
 };
 } // namespace MapleRuntime
