@@ -524,6 +524,7 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 continue;
             }
             list.DeleteRegion(region);
+            StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
             if (releaseResources) {
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
