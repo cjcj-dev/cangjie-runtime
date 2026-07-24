@@ -727,8 +727,13 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
     // release pages in PagePool
-    TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
-    SatbBuffer::Instance().ReclaimALLPages();
+    if (StickyLog::Instance().IsEnabled()) {
+        ScopedStopTheWorld stw("reclaim sticky log nodes", true, GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
+        SatbBuffer::Instance().ReclaimALLPages();
+    } else {
+        TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
+        SatbBuffer::Instance().ReclaimALLPages();
+    }
     PagePool::Instance().Trim();
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
