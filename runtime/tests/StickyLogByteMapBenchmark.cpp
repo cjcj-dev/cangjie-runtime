@@ -90,18 +90,22 @@ template<bool logged>
 void RunHot()
 {
     std::unique_ptr<ProbeLine[]> lines(new ProbeLine[HOT_LINES]{});
+    std::unique_ptr<ProbeLine*[]> linePointers(new ProbeLine*[HOT_LINES]);
     std::unique_ptr<uint8_t[]> loggedMap(new uint8_t[HOT_LINES]);
     std::memset(loggedMap.get(), 1, HOT_LINES);
+    for (size_t index = 0; index < HOT_LINES; ++index) {
+        linePointers[index] = &lines[index];
+    }
     uintptr_t heapBase = reinterpret_cast<uintptr_t>(lines.get());
     LineBuffer buffer;
     constexpr size_t warmupWrites = 1000000;
     for (size_t index = 0; index < warmupWrites; ++index) {
-        ProbeLine& line = lines[index & (HOT_LINES - 1)];
+        ProbeLine& line = *linePointers[index & (HOT_LINES - 1)];
         logged ? LoggedWrite(line, heapBase, loggedMap.get(), buffer, index) : BaselineWrite(line, index);
     }
     uint64_t start = NanoTime();
     for (size_t index = 0; index < HOT_WRITES; ++index) {
-        ProbeLine& line = lines[index & (HOT_LINES - 1)];
+        ProbeLine& line = *linePointers[index & (HOT_LINES - 1)];
         logged ? LoggedWrite(line, heapBase, loggedMap.get(), buffer, index) : BaselineWrite(line, index);
     }
     uint64_t elapsed = NanoTime() - start;
@@ -114,12 +118,17 @@ template<bool logged>
 void RunCold()
 {
     std::unique_ptr<ProbeLine[]> lines(new ProbeLine[COLD_WRITES]{});
+    std::unique_ptr<ProbeLine*[]> linePointers(new ProbeLine*[COLD_WRITES]);
     std::unique_ptr<uint8_t[]> loggedMap(new uint8_t[COLD_WRITES]{});
+    for (size_t index = 0; index < COLD_WRITES; ++index) {
+        linePointers[index] = &lines[index];
+    }
     uintptr_t heapBase = reinterpret_cast<uintptr_t>(lines.get());
     LineBuffer buffer;
     uint64_t start = NanoTime();
     for (size_t index = 0; index < COLD_WRITES; ++index) {
-        logged ? LoggedWrite(lines[index], heapBase, loggedMap.get(), buffer, index) : BaselineWrite(lines[index], index);
+        ProbeLine& line = *linePointers[index];
+        logged ? LoggedWrite(line, heapBase, loggedMap.get(), buffer, index) : BaselineWrite(line, index);
     }
     if (buffer.size != 0) {
         RetireLineBuffer(buffer);
