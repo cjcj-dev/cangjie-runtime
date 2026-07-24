@@ -633,12 +633,15 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
-    for (BaseObject* object : minorPromotedObjects) {
-        object->ForEachRefField([this, &workStack](RefField<>& field) {
-            PushYoungObject(ResolveMinorReference(field), workStack);
+    for (RegionInfo* region : minorPromotedRegions) {
+        (void)region->VisitLiveObjectsUntilFalse([this, &workStack](BaseObject* object) {
+            object->ForEachRefField([this, &workStack](RefField<>& field) {
+                PushYoungObject(ResolveMinorReference(field), workStack);
+            });
+            return true;
         });
     }
-    minorPromotedObjects.clear();
+    minorPromotedRegions.clear();
 
     StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
         if (StickyLog::Instance().IsMinorValidatorEnabled()) {
@@ -754,12 +757,8 @@ void WCollector::DoYoungGarbageCollection()
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
-    manager.CollectYoungGarbage(stats, [this](RegionInfo* region) {
-        (void)region->VisitLiveObjectsUntilFalse([this](BaseObject* object) {
-            minorPromotedObjects.push_back(object);
-            return true;
-        });
-    });
+    manager.CollectYoungGarbage(stats,
+        [this](RegionInfo* region) { minorPromotedRegions.push_back(region); });
     SatbBuffer::Instance().DiscardStickyLogBuffer();
     StickyLog::Instance().BeginEpoch();
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
@@ -789,7 +788,7 @@ void WCollector::DoGarbageCollection()
     }
 
     if (stickyLog.IsMinorEnabled()) {
-        minorPromotedObjects.clear();
+        minorPromotedRegions.clear();
         ScopedStopTheWorld stw("sticky major allocation rollover");
         FlushAllocationRegions();
     }
