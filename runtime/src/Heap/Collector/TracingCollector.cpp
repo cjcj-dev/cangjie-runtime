@@ -9,6 +9,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/StickyLog.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -676,6 +677,10 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
     SatbBuffer::Instance().ReclaimALLPages();
     PagePool::Instance().Trim();
+    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    }
     collectorResources.NotifyGCFinished(gcIndex);
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

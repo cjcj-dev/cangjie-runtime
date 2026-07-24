@@ -184,6 +184,14 @@ void HeapImpl::Init(const HeapParam& param)
     idlePhaseBarrier = stickyLogBarrierEnabled ? static_cast<Barrier*>(&idleLogBarrier) : &idleBarrier;
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
+    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+        SetGCPhase(GCPhase::GC_PHASE_ENUM);
+        InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    } else if (StickyLog::Instance().IsMinorEnabled()) {
+        LOG(RTLOG_WARNING,
+            "MRT_STICKY_MINOR is experimental: production correctness requires the compiler sticky barrier; "
+            "use MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 for the P1 correctness harness");
+    }
     collectorResources.Init();
 }
 

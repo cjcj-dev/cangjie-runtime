@@ -44,7 +44,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // ScopedStopTheWorld stw;
 
     gcReason = reason;
-    PreGarbageCollection(true);
+    PreGarbageCollection(reason != GC_REASON_YOUNG);
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
     VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[gcReason].name, gcIndex);
     GCStats& gcStats = GetGCStats();
