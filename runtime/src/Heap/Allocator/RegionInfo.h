@@ -814,6 +814,11 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
     }
 
+    void SetYoungRegionFlag(uint8_t flag)
+    {
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1, flag);
+    }
+
     RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
@@ -887,6 +892,8 @@ public:
     }
 
     bool IsTraceRegion() const { return metadata.isTraceRegion == 1; }
+
+    bool IsYoungRegion() const { return metadata.isYoungRegion == 1; }
 
     // copyable during concurrent copying gc.
     bool IsSmallRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS; }
@@ -1012,7 +1019,8 @@ private:
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
         ENQUEUED_REGION_FLAG,
-        RESURRECTED_REGION_FLAG
+        RESURRECTED_REGION_FLAG,
+        YOUNG_REGION_FLAG
     };
 
     struct UnitMetadata {
@@ -1073,6 +1081,7 @@ private:
                 uint8_t isMarked : 1;
                 uint8_t isEnqueued : 1;
                 uint8_t isResurrected : 1;
+                uint8_t isYoungRegion : 1;
             };
             BitField<uint16_t> regionStateBitField;
         };
@@ -1218,6 +1227,7 @@ private:
         SetMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
+        SetYoungRegionFlag(1);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
     }
 
