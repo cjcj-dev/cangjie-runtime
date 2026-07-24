@@ -23,8 +23,6 @@ public:
                                     MemoryOrder order) const override;
     bool CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
                                  MemoryOrder succOrder, MemoryOrder failOrder) const override;
-    void CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
-                      MIndex srcSize) const override;
     void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                          MIndex srcSize) const override;
     void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
