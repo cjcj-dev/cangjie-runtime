@@ -512,7 +512,12 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats)
                 continue;
             }
             if (region->GetLiveByteCount() != 0) {
-                region->SetYoungRegionFlag(0);
+                if (region->GetYoungAge() == 0) {
+                    region->SetYoungAge(1);
+                } else {
+                    region->SetYoungRegionFlag(0);
+                    region->SetYoungAge(0);
+                }
                 region = next;
                 continue;
             }
@@ -542,6 +547,7 @@ void RegionManager::PromoteAllRegions()
         regionAddr = region->GetRegionEnd();
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
         }
     }
     youngAllocatedBytes.store(0, std::memory_order_relaxed);
