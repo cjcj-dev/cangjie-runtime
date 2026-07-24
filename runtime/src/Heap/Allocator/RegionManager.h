@@ -27,6 +27,13 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 
+struct YoungCollectionStats {
+    size_t candidateRegions = 0;
+    size_t candidateBytes = 0;
+    size_t reclaimedRegions = 0;
+    size_t reclaimedBytes = 0;
+};
+
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
     static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
@@ -249,6 +256,9 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
+    YoungCollectionStats PrepareYoungGarbageCandidates();
+    void CollectYoungGarbage(YoungCollectionStats& stats);
+    void PromoteAllRegions();
 
     void MergeRawPointerPinnedRegions()
     {

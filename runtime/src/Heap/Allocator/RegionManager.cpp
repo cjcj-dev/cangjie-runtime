@@ -480,6 +480,70 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         region = nextRegion;
     }
 }
+
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates()
+{
+    YoungCollectionStats stats;
+    auto prepare = [&stats](RegionList& list) {
+        list.VisitAllRegions([&stats](RegionInfo* region) {
+            if (!region->IsYoungRegion()) {
+                return;
+            }
+            region->ClearLiveInfo();
+            ++stats.candidateRegions;
+            stats.candidateBytes += region->GetRegionAllocatedSize();
+        });
+    };
+    prepare(recentFullRegionList);
+    prepare(recentLargeRegionList);
+    prepare(recentPinnedRegionList);
+    return stats;
+}
+
+void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats)
+{
+    auto collect = [this, &stats](RegionList& list, bool releaseResources) {
+        RegionInfo* region = list.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsYoungRegion()) {
+                region = next;
+                continue;
+            }
+            if (region->GetLiveByteCount() != 0) {
+                region->SetYoungRegionFlag(0);
+                region = next;
+                continue;
+            }
+            list.DeleteRegion(region);
+            if (releaseResources) {
+                region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
+            }
+            ++stats.reclaimedRegions;
+            if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
+                stats.reclaimedBytes += ReleaseRegion(region);
+            } else {
+                stats.reclaimedBytes += CollectRegion(region);
+            }
+            region = next;
+        }
+    };
+    collect(recentFullRegionList, false);
+    collect(recentLargeRegionList, false);
+    collect(recentPinnedRegionList, true);
+}
+
+void RegionManager::PromoteAllRegions()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            region->SetYoungRegionFlag(0);
+        }
+    }
+}
+
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
 {
     regionList->DeleteRegionLocked(region);
