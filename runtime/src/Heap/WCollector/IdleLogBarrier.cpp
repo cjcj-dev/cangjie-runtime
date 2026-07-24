@@ -49,13 +49,6 @@ bool IdleLogBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fi
     return IdleBarrier::CompareAndSwapReference(obj, field, oldRef, newRef, succOrder, failOrder);
 }
 
-void IdleLogBarrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                  MAddress srcField, MIndex srcSize) const
-{
-    LogObject(dstObj);
-    IdleBarrier::CopyRefArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
-}
-
 void IdleLogBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                      MAddress srcField, MIndex srcSize) const
 {
@@ -65,7 +58,6 @@ void IdleLogBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MInd
 
 void IdleLogBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
-    LogObject(obj);
     IdleBarrier::WriteGeneric(obj, fieldPtr, src, size);
 }
 } // namespace MapleRuntime
