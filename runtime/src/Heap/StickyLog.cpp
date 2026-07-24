@@ -11,6 +11,7 @@
 #include <limits>
 
 #include "Allocator/MemMap.h"
+#include "Allocator/RegionInfo.h"
 #include "Base/ImmortalWrapper.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
@@ -66,7 +67,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
 
 void StickyLog::Init(MAddress start, size_t size)
 {
-    MRT_ASSERT(loggedMap == nullptr, "sticky logged map initialized twice");
+    MRT_ASSERT(loggedMap == nullptr && dirtyRegionMap == nullptr, "sticky logged map initialized twice");
     MRT_ASSERT((start & (LINE_SIZE - 1)) == 0, "heap start is not sticky-line aligned");
     heapStart = start;
     heapSize = size;
@@ -75,8 +76,13 @@ void StickyLog::Init(MAddress start, size_t size)
     MemMap::Option option = MemMap::DEFAULT_OPTIONS;
     option.tag = "cangjie_sticky_logged";
     loggedMap = MemMap::MapMemory(loggedByteCount, loggedByteCount, option);
+    size_t regionCount = (size + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+    dirtyRegionByteCount = (regionCount + 7) / 8;
+    option.tag = "cangjie_sticky_dirty_regions";
+    dirtyRegionMap = MemMap::MapMemory(dirtyRegionByteCount, dirtyRegionByteCount, option);
 #ifdef _WIN64
     MemMap::CommitMemory(loggedMap->GetBaseAddr(), loggedByteCount);
+    MemMap::CommitMemory(dirtyRegionMap->GetBaseAddr(), dirtyRegionByteCount);
 #endif
     __cj_sticky_logged_base = reinterpret_cast<uint8_t*>(loggedMap->GetBaseAddr());
     __cj_sticky_heap_base = heapStart;
@@ -89,9 +95,11 @@ void StickyLog::Fini() noexcept
     __cj_sticky_heap_base = 0;
     __cj_sticky_heap_size = 0;
     MemMap::DestroyMemMap(loggedMap);
+    MemMap::DestroyMemMap(dirtyRegionMap);
     heapStart = 0;
     heapSize = 0;
     loggedByteCount = 0;
+    dirtyRegionByteCount = 0;
     enabled = false;
     minorEnabled = false;
     minorValidatorEnabled = false;
@@ -118,6 +126,10 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
         return false;
     }
     *loggedByte = 1;
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
+    size_t regionIndex = (region->GetRegionStart() - heapStart) / RegionInfo::UNIT_SIZE;
+    uint8_t* dirtyByte = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr()) + regionIndex / 8;
+    __atomic_fetch_or(dirtyByte, static_cast<uint8_t>(1U << (regionIndex % 8)), __ATOMIC_RELEASE);
     lineStart = heapStart + (lineIndex << LINE_SHIFT);
     return true;
 }
@@ -131,19 +143,56 @@ void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
     size_t firstLine = (regionStart - heapStart) >> LINE_SHIFT;
     size_t lineCount = regionSize >> LINE_SHIFT;
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base + firstLine), lineCount, 0, lineCount);
+    size_t regionIndex = (regionStart - heapStart) / RegionInfo::UNIT_SIZE;
+    uint8_t* dirtyByte = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr()) + regionIndex / 8;
+    __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~(1U << (regionIndex % 8))), __ATOMIC_RELEASE);
 }
 
 void StickyLog::BeginEpoch()
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky epoch may only advance while mutators are stopped");
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base), loggedByteCount, 0, loggedByteCount);
+    MemorySet(reinterpret_cast<uintptr_t>(dirtyRegionMap->GetBaseAddr()), dirtyRegionByteCount, 0,
+              dirtyRegionByteCount);
 }
 
 void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky lines may only be consumed while mutators are stopped");
-    SatbBuffer::Instance().VisitStickyLogLines(
-        [&visitor](MAddress lineStart) { visitor(lineStart, lineStart + LINE_SIZE); });
+    SatbBuffer::Instance().VisitStickyLogLines([this, &visitor](MAddress lineStart) {
+        if (!IsLoggedLine(lineStart)) {
+            return;
+        }
+        visitor(lineStart, lineStart + LINE_SIZE);
+        size_t lineIndex = (lineStart - heapStart) >> LINE_SHIFT;
+        __atomic_store_n(__cj_sticky_logged_base + lineIndex, static_cast<uint8_t>(0), __ATOMIC_RELEASE);
+    });
+
+    uint8_t* dirtyBytes = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr());
+    size_t regionCount = (heapSize + RegionInfo::UNIT_SIZE - 1) / RegionInfo::UNIT_SIZE;
+    for (size_t regionIndex = 0; regionIndex < regionCount; ++regionIndex) {
+        uint8_t mask = static_cast<uint8_t>(1U << (regionIndex % 8));
+        uint8_t* dirtyByte = dirtyBytes + regionIndex / 8;
+        if ((__atomic_load_n(dirtyByte, __ATOMIC_ACQUIRE) & mask) == 0) {
+            continue;
+        }
+        MAddress regionAddress = heapStart + regionIndex * RegionInfo::UNIT_SIZE;
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddress);
+        if (region->IsValidRegion() && region->GetRegionStart() == regionAddress) {
+            size_t firstLine = (regionAddress - heapStart) >> LINE_SHIFT;
+            size_t lineCount = region->GetRegionSize() >> LINE_SHIFT;
+            for (size_t lineOffset = 0; lineOffset < lineCount; ++lineOffset) {
+                uint8_t* loggedByte = __cj_sticky_logged_base + firstLine + lineOffset;
+                if (__atomic_load_n(loggedByte, __ATOMIC_ACQUIRE) == 0) {
+                    continue;
+                }
+                MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
+                visitor(lineStart, lineStart + LINE_SIZE);
+                __atomic_store_n(loggedByte, static_cast<uint8_t>(0), __ATOMIC_RELEASE);
+            }
+        }
+        __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~mask), __ATOMIC_RELEASE);
+    }
 }
 
 extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)

@@ -52,9 +52,11 @@ public:
 
 private:
     MemMap* loggedMap = nullptr;
+    MemMap* dirtyRegionMap = nullptr;
     MAddress heapStart = 0;
     size_t heapSize = 0;
     size_t loggedByteCount = 0;
+    size_t dirtyRegionByteCount = 0;
     bool enabled = false;
     bool minorEnabled = false;
     bool minorValidatorEnabled = false;
