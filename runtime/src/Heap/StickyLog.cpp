@@ -21,6 +21,7 @@
 namespace MapleRuntime {
 extern "C" MRT_EXPORT uint8_t* __cj_sticky_logged_base = nullptr;
 extern "C" MRT_EXPORT uintptr_t __cj_sticky_heap_base = 0;
+extern "C" MRT_EXPORT uintptr_t __cj_sticky_heap_size = 0;
 extern "C" MRT_EXPORT const uint8_t __cj_sticky_line_shift = StickyLog::LINE_SHIFT;
 
 static ImmortalWrapper<StickyLog> g_stickyLog;
@@ -79,12 +80,14 @@ void StickyLog::Init(MAddress start, size_t size)
 #endif
     __cj_sticky_logged_base = reinterpret_cast<uint8_t*>(loggedMap->GetBaseAddr());
     __cj_sticky_heap_base = heapStart;
+    __cj_sticky_heap_size = heapSize;
 }
 
 void StickyLog::Fini() noexcept
 {
     __cj_sticky_logged_base = nullptr;
     __cj_sticky_heap_base = 0;
+    __cj_sticky_heap_size = 0;
     MemMap::DestroyMemMap(loggedMap);
     heapStart = 0;
     heapSize = 0;
