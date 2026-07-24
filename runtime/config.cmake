@@ -307,7 +307,12 @@ if (OHOS_FLAG IN_LIST OHOS_FLAG_LIST)
         --sysroot=${OHOS_ROOT}/out/sdk/obj/third_party/musl/sysroot ${OHOS_INCLUDE}"
     )
 elseif (WINDOWS_FLAG MATCHES 1)
-    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=hidden -fno-exceptions \
+    # The DLL link relies on -Wl,--export-all-symbols for its export surface (the
+    # upstream toolchain is mingw gcc, where visibility attributes are inert on
+    # PE-COFF). Under clang+lld, -fvisibility=hidden excludes every symbol not
+    # marked MRT_EXPORT from auto-export, dropping the MCC_* compiler-call
+    # surface products import — keep default visibility to match upstream.
+    set(CMAKE_INIT_FLAGS "-Wno-unused-command-line-argument -fno-omit-frame-pointer -fvisibility=default -fno-exceptions \
         -fno-rtti -Wall -fstack-protector-strong -Wno-inconsistent-dllimport -fno-strict-aliasing -fno-common")
 elseif (ANDROID_FLAG MATCHES 1 OR ANDROID_FLAG MATCHES 2)
     message("android toolchain, clang version=${CLANG_VERSION_STRING}")
