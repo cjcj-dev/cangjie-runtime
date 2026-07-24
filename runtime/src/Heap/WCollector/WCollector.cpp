@@ -610,6 +610,9 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
     CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object", object);
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+        if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+            minorDiscoveredObjects.insert(object);
+        }
         workStack.push_back(object);
     }
 }
@@ -631,6 +634,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
     StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
+        if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+            minorRescannedLines.insert(lineStart);
+        }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(lineStart);
         if (!region->IsValidRegion() || region->IsGarbageRegion() || region->IsYoungRegion()) {
             return;
@@ -642,6 +648,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                 return;
             }
             object->ForEachRefField([this, &workStack](RefField<>& field) {
+                if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+                    minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
+                }
                 PushYoungObject(ResolveMinorReference(field), workStack);
             });
         });
@@ -684,12 +693,16 @@ void WCollector::ValidateYoungMarking()
             CHECK_DETAIL(region->IsMarkedObject(object),
                 "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u "
                 "objectClass=%s source=%p sourceRegion=%p sourceType=%u sourceYoung=%u sourceLine=%#zx "
-                "sourceLogged=%u sourceClass=%s sourceField=%#zx sourceOffset=%zu",
+                "sourceLogged=%u sourceLineRescanned=%u sourceFieldRescanned=%u targetDiscovered=%u "
+                "sourceClass=%s sourceField=%#zx sourceOffset=%zu",
                 object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
                 region->GetLiveByteCount(), object->GetTypeInfo()->GetName(), source, sourceRegion,
                 sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->GetRegionType()),
                 sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->IsYoungRegion()), sourceLine,
                 source == nullptr ? 0 : static_cast<unsigned>(StickyLog::Instance().IsLoggedLine(sourceLine)),
+                static_cast<unsigned>(minorRescannedLines.count(sourceLine) != 0),
+                static_cast<unsigned>(minorRescannedFields.count(sourceField) != 0),
+                static_cast<unsigned>(minorDiscoveredObjects.count(object) != 0),
                 source == nullptr ? "<root>" : source->GetTypeInfo()->GetName(), sourceField,
                 source == nullptr ? 0 : sourceField - reinterpret_cast<MAddress>(source));
         }
@@ -717,6 +730,9 @@ void WCollector::DoYoungGarbageCollection()
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates();
+    minorRescannedLines.clear();
+    minorRescannedFields.clear();
+    minorDiscoveredObjects.clear();
     WorkStack workStack = NewWorkStack();
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
     RescanRememberedSet(workStack);
