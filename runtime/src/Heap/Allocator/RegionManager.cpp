@@ -531,6 +531,10 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats)
     collect(recentFullRegionList, false);
     collect(recentLargeRegionList, false);
     collect(recentPinnedRegionList, true);
+    CHECK_DETAIL(stats.candidateBytes <= youngAllocatedBytes.load(std::memory_order_relaxed),
+        "young byte accounting underflow: candidates=%zu accounted=%zu", stats.candidateBytes,
+        youngAllocatedBytes.load(std::memory_order_relaxed));
+    youngAllocatedBytes.fetch_sub(stats.candidateBytes, std::memory_order_relaxed);
 }
 
 void RegionManager::PromoteAllRegions()
@@ -542,6 +546,7 @@ void RegionManager::PromoteAllRegions()
             region->SetYoungRegionFlag(0);
         }
     }
+    youngAllocatedBytes.store(0, std::memory_order_relaxed);
 }
 
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
@@ -644,6 +649,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
             ClearStickyLogForUnavailableRegion(region);
+            youngAllocatedBytes.fetch_add(region->GetRegionAllocatedSize(), std::memory_order_relaxed);
             return region;
         } else {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -658,6 +664,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
+        youngAllocatedBytes.fetch_add(region->GetRegionAllocatedSize(), std::memory_order_relaxed);
         return region;
     }
 
@@ -681,6 +688,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             if (expectPhysicalMem) {
                 RegionInfo::ClearUnits(idx, num);
             }
+            youngAllocatedBytes.fetch_add(region->GetRegionAllocatedSize(), std::memory_order_relaxed);
             return region;
         } else {
             (void)inactiveZone.fetch_sub(size);
