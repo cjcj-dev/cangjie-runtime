@@ -634,11 +634,10 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
     for (RegionInfo* region : minorPromotedRegions) {
-        (void)region->VisitLiveObjectsUntilFalse([this, &workStack](BaseObject* object) {
+        region->VisitAllObjects([this, &workStack](BaseObject* object) {
             object->ForEachRefField([this, &workStack](RefField<>& field) {
                 PushYoungObject(ResolveMinorReference(field), workStack);
             });
-            return true;
         });
     }
     minorPromotedRegions.clear();
