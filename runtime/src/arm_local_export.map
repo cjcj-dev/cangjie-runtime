@@ -5,7 +5,7 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 CANGJIE {
-  global: MRT_LibraryOnLoad;MRT_LibraryUnLoad;CJ_MRT_*;CJ_MCC_*;
+  global: MRT_LibraryOnLoad;MRT_LibraryUnLoad;CJ_MRT_*;CJ_MCC_*;__cj_sticky_*;
           _ZN12MapleRuntime6Logger9GetLoggerEv;_ZN12MapleRuntime6Logger9FormatLogE10RTLogLevelbPKcz;
           _ZN12MapleRuntime8TimeUtil11NanoSecondsEv;_ZN12MapleRuntime8TimeUtil12GetTimestampEv;InitCJRuntime;RunCJTask;RunCJTaskWithLocal;
           RunCJTaskToSchedule;InitUIScheduler;RunUIScheduler;RegisterEventHandlerCallbacks;RegisterArkVMInRuntime;

@@ -14,6 +14,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "StickyLog.h"
 
 namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
@@ -111,6 +112,7 @@ void RegionSpace::Init(const HeapParam& vmHeapParam)
     regionManager.Initialize(unitNum, metadata);
     reservedStart = regionManager.GetRegionHeapStart();
     reservedEnd = reinterpret_cast<MAddress>(map->GetMappedEndAddr());
+    StickyLog::Instance().Init(reservedStart, reservedEnd - reservedStart);
 #if defined(MRT_DUMP_ADDRESS)
     VLOG(REPORT, "region metadata@%zx, heap @[0x%zx+%zu, 0x%zx)", metadata, reservedStart, reservedEnd - reservedStart,
          reservedEnd);
