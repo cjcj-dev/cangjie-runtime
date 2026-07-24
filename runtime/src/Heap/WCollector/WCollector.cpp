@@ -651,16 +651,17 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
 void WCollector::ValidateYoungMarking()
 {
     std::unordered_set<BaseObject*> reachable;
-    std::vector<BaseObject*> pending;
+    std::vector<std::pair<BaseObject*, BaseObject*>> pending;
     VisitMinorRoots([&pending](BaseObject* object) {
         if (Heap::IsHeapAddress(object)) {
-            pending.push_back(object);
+            pending.emplace_back(object, nullptr);
         }
     });
 
     size_t youngReachable = 0;
     while (!pending.empty()) {
-        BaseObject* object = pending.back();
+        BaseObject* object = pending.back().first;
+        BaseObject* source = pending.back().second;
         pending.pop_back();
         if (!Heap::IsHeapAddress(object) || !reachable.insert(object).second) {
             continue;
@@ -670,15 +671,23 @@ void WCollector::ValidateYoungMarking()
         if (region->IsYoungRegion()) {
             ++youngReachable;
             MAddress line = reinterpret_cast<MAddress>(object) & ~(StickyLog::LINE_SIZE - 1);
+            RegionInfo* sourceRegion = source == nullptr ? nullptr :
+                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(source));
+            MAddress sourceLine = source == nullptr ? 0 :
+                reinterpret_cast<MAddress>(source) & ~(StickyLog::LINE_SIZE - 1);
             CHECK_DETAIL(region->IsMarkedObject(object),
-                "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u",
+                "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u "
+                "source=%p sourceRegion=%p sourceType=%u sourceYoung=%u sourceLine=%#zx sourceLogged=%u",
                 object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
-                region->GetLiveByteCount());
+                region->GetLiveByteCount(), source, sourceRegion,
+                sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->GetRegionType()),
+                sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->IsYoungRegion()), sourceLine,
+                source == nullptr ? 0 : static_cast<unsigned>(StickyLog::Instance().IsLoggedLine(sourceLine)));
         }
-        object->ForEachRefField([this, &pending](RefField<>& field) {
+        object->ForEachRefField([this, &pending, object](RefField<>& field) {
             BaseObject* target = ResolveMinorReference(field);
             if (Heap::IsHeapAddress(target)) {
-                pending.push_back(target);
+                pending.emplace_back(target, object);
             }
         });
     }
