@@ -52,6 +52,30 @@ void SatbBuffer::FlushQueue(Node*& node)
     node = nullptr;
 }
 
+void SatbBuffer::FlushStickyLogQueue(Node*& node)
+{
+    if (node == nullptr) {
+        return;
+    }
+    if (node->IsEmpty()) {
+        freeNodes.Push(node);
+    } else {
+        stickyRetiredNodes.Push(node);
+    }
+    node = nullptr;
+}
+
+void SatbBuffer::DiscardStickyLogBuffer()
+{
+    Node* head = stickyRetiredNodes.PopAll();
+    while (head != nullptr) {
+        Node* oldHead = head;
+        head = head->next;
+        oldHead->Clear();
+        freeNodes.Push(oldHead);
+    }
+}
+
 static ImmortalWrapper<WeakRefBuffer> g_weakRefBuffer;
 
 WeakRefBuffer& WeakRefBuffer::Instance() noexcept { return *g_weakRefBuffer; }

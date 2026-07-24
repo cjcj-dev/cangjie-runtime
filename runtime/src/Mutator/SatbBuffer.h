@@ -44,6 +44,14 @@ public:
             objectContainer[--index] = const_cast<BaseObject*>(obj);
             return true;
         }
+        bool PushLine(MAddress line)
+        {
+            if (UNLIKELY(IsFull())) {
+                return false;
+            }
+            objectContainer[--index] = reinterpret_cast<BaseObject*>(line);
+            return true;
+        }
         template<typename T>
         void GetObjects(T& stack)
         {
@@ -197,9 +205,38 @@ public:
             CHECK_DETAIL(node->IsEmpty(), "get an unempty node from free nodes");
         }
     }
+    void EnsureGoodStickyNode(Node*& node)
+    {
+        if (node != nullptr) {
+            if (!node->IsFull()) {
+                return;
+            }
+            stickyRetiredNodes.Push(node);
+            node = nullptr;
+        }
+        node = freeNodes.Pop();
+        if (node == nullptr) {
+            Page* page = GetPages(MapleRuntime::MRT_PAGE_SIZE);
+            Node* list = ConstructFreeNodeList(page, MapleRuntime::MRT_PAGE_SIZE);
+            if (list == nullptr) {
+                return;
+            }
+            node = list;
+            Node* cur = list->next;
+            node->next = nullptr;
+            while (cur != nullptr) {
+                Node* next = cur->next;
+                freeNodes.Push(cur);
+                cur = next;
+            }
+        }
+        CHECK_DETAIL(node->IsEmpty(), "get an unempty node for sticky log");
+    }
     bool ShouldEnqueue(const BaseObject* obj);
     void Filter(Node* node);
     void FlushQueue(Node*& node);
+    void FlushStickyLogQueue(Node*& node);
+    void DiscardStickyLogBuffer();
 
     // must not have thread racing
     void Init()
@@ -220,7 +257,11 @@ public:
         }
     }
 
-    void Fini() { ReclaimALLPages(); }
+    void Fini()
+    {
+        DiscardStickyLogBuffer();
+        ReclaimALLPages();
+    }
 
     template<typename T>
     void GetRetiredObjects(T& stack)
@@ -251,6 +292,7 @@ public:
     {
         freeNodes.Reset();
         retiredNodes.Reset();
+        stickyRetiredNodes.Reset();
         Page* list = arena.PopAll();
         if (list == nullptr) {
             return;
@@ -294,6 +336,7 @@ private:
     LockedList<Page> arena;        // arena of allocatable area, first area is 64 * 4k = 256k, the rest is 4k
     LockedList<Node> freeNodes;    // free nodes, mutator will acquire nodes from this list to record old value writes
     LockedList<Node> retiredNodes; // has been filled by mutator, ready for scan
+    LockedList<Node> stickyRetiredNodes; // line addresses for the sticky remembered set, never scanned as SATB objects
 };
 
 class WeakRefBuffer {

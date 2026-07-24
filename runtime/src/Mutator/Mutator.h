@@ -79,6 +79,7 @@ public:
         tid = 0;
         stackBoundAddr = nullptr;
         SatbBuffer::Instance().FlushQueue(satbNode);
+        SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -388,6 +389,8 @@ public:
 
     ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* obj) { RememberObjectImpl(obj); }
 
+    ATTR_NO_INLINE void RememberLineInStickyLogBuffer(MAddress line) { RememberStickyLineImpl(line); }
+
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }
@@ -506,6 +509,15 @@ private:
         SatbBuffer::Instance().EnsureGoodNode(satbNode);
         satbNode->Push(obj);
     }
+    void RememberStickyLineImpl(MAddress line)
+    {
+        if (LIKELY(stickyLogNode != nullptr && stickyLogNode->PushLine(line))) {
+            return;
+        }
+        SatbBuffer::Instance().EnsureGoodStickyNode(stickyLogNode);
+        CHECK_DETAIL(stickyLogNode != nullptr, "failed to allocate sticky log node");
+        CHECK_DETAIL(stickyLogNode->PushLine(line), "failed to record sticky line");
+    }
     ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
@@ -542,6 +554,7 @@ private:
     ManagedList<BaseObject*> localFinalizers;
 
     SatbBuffer::Node* satbNode = nullptr;
+    SatbBuffer::Node* stickyLogNode = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif

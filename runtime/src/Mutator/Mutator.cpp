@@ -168,6 +168,7 @@ void Mutator::ResetMutator()
 {
     rawObject.object = nullptr;
     SatbBuffer::Instance().FlushQueue(satbNode);
+    SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
@@ -642,6 +643,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
         std::lock_guard<std::mutex> lg(mutatorLock);
         SatbBuffer::Instance().FlushQueue(satbNode);
+        SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
     } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
         HandleGCPhaseIDLE();
     }
