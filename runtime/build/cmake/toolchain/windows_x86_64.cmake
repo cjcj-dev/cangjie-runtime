@@ -86,6 +86,7 @@ set(CMAKE_CXX_FLAGS
     -D_WIN32_WINNT=_WIN32_WINNT_VISTA \
     -Wno-inconsistent-dllimport \
     -fno-exceptions \
+    -stdlib=libc++ \
     -Wno-pointer-to-int-cast \
     -pipe"
 )
