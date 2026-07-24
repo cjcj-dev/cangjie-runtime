@@ -219,6 +219,7 @@ private:
     mutable std::unordered_set<MAddress> minorRescannedLines;
     mutable std::unordered_set<MAddress> minorRescannedFields;
     mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;
+    std::unordered_set<RegionInfo*> minorCandidateRegions;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
