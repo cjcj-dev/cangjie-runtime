@@ -10,6 +10,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/StickyLog.h"
+#include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -115,18 +116,20 @@ public:
                 if (!obj->HasRefField()) {
                     continue;
                 }
-                // Skip marking the weakRef itself, but trace its children node
-                if (UNLIKELY(obj->IsWeakRef())) {
-                    RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent = collector.GetAndTryTagObj(obj, *referentField);
-                    if (referent != nullptr) {
-                        DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
-                        collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(referent), workStack);
-                        WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
-                    } // If referent is set to none, the corresponding weakref does not need to be recorded.
-                } else {
-                    collector.TraceObjectRefFields(obj, workStack);
-                }
+                collector.ForEachStrongRefSlot(obj,
+                    [this, obj](TracingCollector::RefSlotKind kind, BaseObject* target, RefField<>&) {
+                        if (kind == TracingCollector::RefSlotKind::WEAK_REFERENT) {
+                            if (target != nullptr) {
+                                DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &target, target);
+                                collector.TraceObjectRefFields(target, workStack);
+                                WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
+                            } // If referent is none, the corresponding weakref does not need to be recorded.
+                            return;
+                        }
+                        if (target != nullptr && !collector.IsMarkedObject(target)) {
+                            workStack.push_back(target);
+                        }
+                    });
             }
             // try to fork new task if needed.
             if (threadPool != nullptr) {
@@ -142,6 +145,56 @@ private:
     GCThreadPool* threadPool;
     TracingCollector::WorkStack workStack;
 };
+
+void TracingCollector::ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& visitor)
+{
+    TypeInfo* typeInfo = obj->GetTypeInfo();
+    if (!typeInfo->HasRefField()) {
+        return;
+    }
+
+    if (UNLIKELY(typeInfo->IsRawArray())) {
+        MArray* array = reinterpret_cast<MArray*>(obj);
+        MIndex arrayLength = array->GetLength();
+        TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
+        if (componentTypeInfo->IsStructType()) {
+            GCTib gcTib = componentTypeInfo->GetGCTib();
+            MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
+            size_t elementSize = array->GetElementSize();
+            for (MIndex i = 0; i < arrayLength; ++i) {
+                gcTib.ForEachBitmapWord(contentAddr, visitor);
+                contentAddr += elementSize;
+            }
+        } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
+                   componentTypeInfo->IsInterface()) {
+            RefField<>* arrayContent = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+            for (MIndex i = 0; i < arrayLength; ++i) {
+                visitor(arrayContent[i]);
+            }
+        } else {
+            LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
+        }
+        return;
+    }
+
+    MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
+}
+
+void TracingCollector::ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRefSlotVisitor& visitor)
+{
+    if (!obj->HasRefField()) {
+        return;
+    }
+    if (UNLIKELY(obj->IsWeakRef())) {
+        RefField<>* referentField = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+        visitor(RefSlotKind::WEAK_REFERENT, GetAndTryTagObj(obj, *referentField), *referentField);
+        return;
+    }
+    ForEachRefSlot(obj, [this, obj, &visitor](RefField<>& field) {
+        visitor(RefSlotKind::STRONG, GetAndTryTagObj(obj, field), field);
+    });
+}
 
 class ExportRootsTracingWork : public HeapWork {
 public:

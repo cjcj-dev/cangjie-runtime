@@ -11,7 +11,6 @@
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
-#include "ObjectModel/MArray.inline.h"
 
 namespace MapleRuntime {
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
@@ -237,37 +236,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
-    TypeInfo* typeInfo = obj->GetTypeInfo();
-    if (!typeInfo->HasRefField()) {
-        return;
-    }
-
-    if (UNLIKELY(typeInfo->IsRawArray())) {
-        MArray* array = reinterpret_cast<MArray*>(obj);
-        MIndex arrayLength = array->GetLength();
-        TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
-        if (componentTypeInfo->IsStructType()) {
-            GCTib gcTib = componentTypeInfo->GetGCTib();
-            MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
-            size_t elementSize = array->GetElementSize();
-            for (MIndex i = 0; i < arrayLength; ++i) {
-                gcTib.ForEachBitmapWord(contentAddr, visitor);
-                contentAddr += elementSize;
-            }
-        } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
-                   componentTypeInfo->IsInterface()) {
-            RefField<>* arrayContent = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
-            for (MIndex i = 0; i < arrayLength; ++i) {
-                visitor(arrayContent[i]);
-            }
-        } else {
-            LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
-        }
-        return;
-    }
-
-    MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
+    ForEachRefSlot(obj, visitor);
 }
 
 BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
@@ -633,6 +602,12 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
+    for (BaseObject* object : minorPromotedObjects) {
+        ForEachStrongRefSlot(object,
+            [this, &workStack](RefSlotKind, BaseObject* target, RefField<>&) { PushYoungObject(target, workStack); });
+    }
+    minorPromotedObjects.clear();
+
     StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
         if (StickyLog::Instance().IsMinorValidatorEnabled()) {
             minorRescannedLines.insert(lineStart);
@@ -747,7 +722,12 @@ void WCollector::DoYoungGarbageCollection()
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
-    manager.CollectYoungGarbage(stats);
+    manager.CollectYoungGarbage(stats, [this](RegionInfo* region) {
+        (void)region->VisitLiveObjectsUntilFalse([this](BaseObject* object) {
+            minorPromotedObjects.push_back(object);
+            return true;
+        });
+    });
     SatbBuffer::Instance().DiscardStickyLogBuffer();
     StickyLog::Instance().BeginEpoch();
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
@@ -777,6 +757,7 @@ void WCollector::DoGarbageCollection()
     }
 
     if (stickyLog.IsMinorEnabled()) {
+        minorPromotedObjects.clear();
         ScopedStopTheWorld stw("sticky major allocation rollover");
         FlushAllocationRegions();
     }
