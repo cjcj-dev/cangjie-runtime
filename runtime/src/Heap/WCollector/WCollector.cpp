@@ -602,12 +602,6 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
-    for (BaseObject* object : minorPromotedObjects) {
-        ForEachStrongRefSlot(object,
-            [this, &workStack](RefSlotKind, BaseObject* target, RefField<>&) { PushYoungObject(target, workStack); });
-    }
-    minorPromotedObjects.clear();
-
     StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
         if (StickyLog::Instance().IsMinorValidatorEnabled()) {
             minorRescannedLines.insert(lineStart);
@@ -722,14 +716,50 @@ void WCollector::DoYoungGarbageCollection()
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
-    manager.CollectYoungGarbage(stats, [this](RegionInfo* region) {
-        (void)region->VisitLiveObjectsUntilFalse([this](BaseObject* object) {
-            minorPromotedObjects.push_back(object);
+
+    SatbBuffer& satbBuffer = SatbBuffer::Instance();
+    satbBuffer.DiscardStickyLogBuffer();
+    StickyLog& stickyLog = StickyLog::Instance();
+    stickyLog.BeginEpoch();
+    SatbBuffer::Node* promotionNode = nullptr;
+    size_t promotedRegions = 0;
+    size_t promotedObjects = 0;
+    size_t promotedLoggedLines = 0;
+    uint64_t promotionScanNs = 0;
+    manager.CollectYoungGarbage(stats, [this, &satbBuffer, &stickyLog, &promotionNode, &promotedRegions,
+                                           &promotedObjects, &promotedLoggedLines, &promotionScanNs](RegionInfo* region) {
+        uint64_t scanStart = TimeUtil::NanoSeconds();
+        ++promotedRegions;
+        (void)region->VisitLiveObjectsUntilFalse([this, &satbBuffer, &stickyLog, &promotionNode,
+                                                    &promotedObjects, &promotedLoggedLines](BaseObject* object) {
+            ++promotedObjects;
+            bool logged = false;
+            ForEachStrongRefSlot(object,
+                [&satbBuffer, &stickyLog, &promotionNode, &promotedLoggedLines, &logged, object]
+                (RefSlotKind, BaseObject* target, RefField<>&) {
+                    if (logged || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (!targetRegion->IsYoungRegion()) {
+                        return;
+                    }
+                    MAddress lineStart = 0;
+                    if (stickyLog.TryLogLine(reinterpret_cast<MAddress>(object), lineStart)) {
+                        satbBuffer.EnsureGoodStickyNode(promotionNode);
+                        CHECK_DETAIL(promotionNode != nullptr && promotionNode->PushLine(lineStart),
+                                     "failed to remember promoted source line");
+                        ++promotedLoggedLines;
+                    }
+                    logged = true;
+                });
             return true;
         });
+        promotionScanNs += TimeUtil::NanoSeconds() - scanStart;
     });
-    SatbBuffer::Instance().DiscardStickyLogBuffer();
-    StickyLog::Instance().BeginEpoch();
+    satbBuffer.FlushStickyLogQueue(promotionNode);
+    VLOG(REPORT, "[StickyMinor] promotion scan regions=%zu objects=%zu loggedLines=%zu time=%zu us",
+         promotedRegions, promotedObjects, promotedLoggedLines, promotionScanNs / NS_PER_US);
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
@@ -757,7 +787,6 @@ void WCollector::DoGarbageCollection()
     }
 
     if (stickyLog.IsMinorEnabled()) {
-        minorPromotedObjects.clear();
         ScopedStopTheWorld stw("sticky major allocation rollover");
         FlushAllocationRegions();
     }
