@@ -15,6 +15,8 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/StickyLog.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -167,6 +169,7 @@ void Mutator::InitProtectStackAddr()
 void Mutator::ResetMutator()
 {
     rawObject.object = nullptr;
+    FlushDeferredLogObject();
     SatbBuffer::Instance().FlushQueue(satbNode);
     SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
     if (!localFinalizers.empty()) {
@@ -174,6 +177,34 @@ void Mutator::ResetMutator()
     }
     uwContext.Reset();
     exceptionWrapper.ClearInfo();
+}
+
+void Mutator::DeferLogObject(BaseObject* object)
+{
+    if (!StickyLog::Instance().IsEnabled()) {
+        deferredLogObject = nullptr;
+        return;
+    }
+    FlushDeferredLogObject();
+    deferredLogObject = object;
+}
+
+void Mutator::FlushDeferredLogObject()
+{
+    BaseObject* object = deferredLogObject;
+    deferredLogObject = nullptr;
+    if (object == nullptr || !StickyLog::Instance().IsEnabled()) {
+        return;
+    }
+
+    StickyLog& stickyLog = StickyLog::Instance();
+    MAddress objectStart = reinterpret_cast<MAddress>(object);
+    MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
+    MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+    for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
+        MAddress loggedLine = 0;
+        (void)stickyLog.TryLogLine(lineStart, loggedLine);
+    }
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)

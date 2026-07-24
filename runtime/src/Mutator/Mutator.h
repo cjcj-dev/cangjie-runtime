@@ -68,6 +68,7 @@ public:
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
+        deferredLogObject = nullptr;
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -78,6 +79,7 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
+        FlushDeferredLogObject();
         SatbBuffer::Instance().FlushQueue(satbNode);
         SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
 
@@ -391,6 +393,9 @@ public:
 
     ATTR_NO_INLINE void RememberLineInStickyLogBuffer(MAddress line) { RememberStickyLineImpl(line); }
 
+    void DeferLogObject(BaseObject* object);
+    void FlushDeferredLogObject();
+
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }
@@ -555,6 +560,7 @@ private:
 
     SatbBuffer::Node* satbNode = nullptr;
     SatbBuffer::Node* stickyLogNode = nullptr;
+    BaseObject* deferredLogObject = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif
