@@ -693,7 +693,7 @@ void WCollector::ValidateYoungMarking()
             CHECK_DETAIL(region->IsMarkedObject(object),
                 "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u "
                 "objectClass=%s source=%p sourceRegion=%p sourceType=%u sourceYoung=%u sourceLine=%#zx "
-                "sourceLogged=%u sourceLineRescanned=%u sourceFieldRescanned=%u targetDiscovered=%u "
+                "sourceLogged=%u sourceLineRescanned=%u sourceFieldRescanned=%u targetDiscovered=%u targetCandidate=%u "
                 "sourceClass=%s sourceField=%#zx sourceOffset=%zu",
                 object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
                 region->GetLiveByteCount(), object->GetTypeInfo()->GetName(), source, sourceRegion,
@@ -703,6 +703,7 @@ void WCollector::ValidateYoungMarking()
                 static_cast<unsigned>(minorRescannedLines.count(sourceLine) != 0),
                 static_cast<unsigned>(minorRescannedFields.count(sourceField) != 0),
                 static_cast<unsigned>(minorDiscoveredObjects.count(object) != 0),
+                static_cast<unsigned>(minorCandidateRegions.count(region) != 0),
                 source == nullptr ? "<root>" : source->GetTypeInfo()->GetName(), sourceField,
                 source == nullptr ? 0 : sourceField - reinterpret_cast<MAddress>(source));
         }
@@ -729,7 +730,9 @@ void WCollector::DoYoungGarbageCollection()
     FlushAllocationRegions();
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-    YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates();
+    minorCandidateRegions.clear();
+    YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
+        [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     minorRescannedLines.clear();
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
