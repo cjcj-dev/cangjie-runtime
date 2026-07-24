@@ -16,6 +16,7 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/StickyLog.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -27,6 +28,12 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+
+static void ClearStickyLogForUnavailableRegion(RegionInfo* region)
+{
+    MRT_ASSERT(region->IsFreeRegion(), "sticky region clear requires a region unavailable to mutators");
+    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+}
 
 static size_t GetPageSize() noexcept
 {
@@ -409,6 +416,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     region->InitFreeUnits();
+    ClearStickyLogForUnavailableRegion(region);
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
@@ -424,6 +432,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     region->InitFreeUnits();
+    ClearStickyLogForUnavailableRegion(region);
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
@@ -561,7 +570,9 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-            return RegionInfo::InitRegion(idx, num, type);
+            RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
+            ClearStickyLogForUnavailableRegion(region);
+            return region;
         } else {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             ReclaimRegion(head);
@@ -571,6 +582,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
     RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
     if (region != nullptr) {
+        ClearStickyLogForUnavailableRegion(region);
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
@@ -582,6 +594,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         uintptr_t addr = inactiveZone.fetch_add(size);
         if (addr < regionHeapEnd - size) {
             region = RegionInfo::InitRegionAt(addr, num, type);
+            ClearStickyLogForUnavailableRegion(region);
             size_t idx = region->GetUnitIdx();
 #ifdef _WIN64
             MemMap::CommitMemory(

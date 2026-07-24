@@ -8,7 +8,9 @@
 
 #include "Allocator/MemMap.h"
 #include "Base/ImmortalWrapper.h"
+#include "Base/MemUtils.h"
 #include "Base/Panic.h"
+#include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
 extern "C" MRT_EXPORT uint8_t* __cj_sticky_logged_base = nullptr;
@@ -60,5 +62,22 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
     *loggedByte = 1;
     lineStart = heapStart + (lineIndex << LINE_SHIFT);
     return true;
+}
+
+void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
+{
+    MRT_ASSERT(regionStart >= heapStart && regionStart + regionSize <= heapStart + heapSize,
+               "sticky region clear is outside heap");
+    MRT_ASSERT((regionStart & (LINE_SIZE - 1)) == 0 && (regionSize & (LINE_SIZE - 1)) == 0,
+               "sticky region clear is not line aligned");
+    size_t firstLine = (regionStart - heapStart) >> LINE_SHIFT;
+    size_t lineCount = regionSize >> LINE_SHIFT;
+    MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base + firstLine), lineCount, 0, lineCount);
+}
+
+void StickyLog::BeginEpoch()
+{
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky epoch may only advance while mutators are stopped");
+    MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base), loggedByteCount, 0, loggedByteCount);
 }
 } // namespace MapleRuntime
