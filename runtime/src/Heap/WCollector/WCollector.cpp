@@ -727,7 +727,6 @@ void WCollector::DoYoungGarbageCollection()
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();
     StickyLog& stickyLog = StickyLog::Instance();
-    stickyLog.BeginEpoch();
     SatbBuffer::Node* promotionNode = nullptr;
     size_t promotedRegions = 0;
     size_t promotedObjects = 0;
