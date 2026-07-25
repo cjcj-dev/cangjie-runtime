@@ -165,6 +165,35 @@ MTableDesc::MTableDesc(ArchUInt bitmap_)
     mTableBitmap.tag = bitmap_;
 }
 
+ExtensionData* MTableDesc::GetCachedExtensionData(U32 interfaceUUID) const
+{
+#if defined(MRT_DISABLE_MTABLE_CACHE) && MRT_DISABLE_MTABLE_CACHE
+    return nullptr;
+#else
+    if (interfaceUUID == CACHE_ENTRY_BUSY) {
+        return nullptr;
+    }
+    const CacheEntry& entry = extensionDataCache[interfaceUUID % CACHE_SIZE];
+    return entry.interfaceUUID.load(std::memory_order_acquire) == interfaceUUID ? entry.extensionData : nullptr;
+#endif
+}
+
+void MTableDesc::CacheExtensionData(U32 interfaceUUID, ExtensionData* extensionData)
+{
+#if !(defined(MRT_DISABLE_MTABLE_CACHE) && MRT_DISABLE_MTABLE_CACHE)
+    if (interfaceUUID == CACHE_ENTRY_BUSY) {
+        return;
+    }
+    CacheEntry& entry = extensionDataCache[interfaceUUID % CACHE_SIZE];
+    U32 expected = 0;
+    if (entry.interfaceUUID.compare_exchange_strong(
+            expected, CACHE_ENTRY_BUSY, std::memory_order_acquire, std::memory_order_relaxed)) {
+        entry.extensionData = extensionData;
+        entry.interfaceUUID.store(interfaceUUID, std::memory_order_release);
+    }
+#endif
+}
+
 void TypeInfo::TryInitMTableNoLock()
 {
     if (IsMTableDescUnInitialized()) {
@@ -581,9 +610,14 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     // Fast path: mTable ready and entry found with func table already updated
     if (LIKELY(!IsMTableDescUnInitialized() && mTableDesc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
+        ExtensionData* ed = mTableDesc->GetCachedExtensionData(itfUUID);
+        if (LIKELY(ed != nullptr) && LIKELY(ed->IsFuncTableUpdated())) {
+            return ed->GetFuncTable();
+        }
         auto it = mTableDesc->mTable.find(itfUUID);
         if (it != mTableDesc->mTable.end()) {
-            ExtensionData* ed = it->second.GetExtensionData();
+            ed = it->second.GetExtensionData();
+            mTableDesc->CacheExtensionData(itfUUID, ed);
             if (LIKELY(ed->IsFuncTableUpdated())) {
                 return ed->GetFuncTable();
             }

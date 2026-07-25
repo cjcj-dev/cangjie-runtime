@@ -8,8 +8,11 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <array>
+#include <atomic>
 #include <cstring>
 #include <functional>
+#include <limits>
 #include <mutex>
 #include <unordered_map>
 
@@ -213,6 +216,13 @@ private:
     AtomicTypeInfoArray cachedTypeInfos;
 };
 struct MTableDesc {
+    static constexpr size_t CACHE_SIZE = 8;
+    static constexpr U32 CACHE_ENTRY_BUSY = std::numeric_limits<U32>::max();
+    struct CacheEntry {
+        std::atomic<U32> interfaceUUID { 0 };
+        ExtensionData* extensionData { nullptr };
+    };
+
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
@@ -224,6 +234,11 @@ struct MTableDesc {
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
     inline bool NeedResolveInner() const { return needsResolveInner; }
     inline bool NeedResolveOuter() const { return needsResolveOuter; }
+    ExtensionData* GetCachedExtensionData(U32 interfaceUUID) const;
+    void CacheExtensionData(U32 interfaceUUID, ExtensionData* extensionData);
+
+private:
+    std::array<CacheEntry, CACHE_SIZE> extensionDataCache;
 };
 
 typedef TypeInfo* (*GenericFunc)(TypeInfo**);
