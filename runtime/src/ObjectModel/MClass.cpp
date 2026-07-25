@@ -168,6 +168,7 @@ MTableDesc::MTableDesc(ArchUInt bitmap_)
 ExtensionData* MTableDesc::GetCachedExtensionData(U32 interfaceUUID) const
 {
 #if defined(MRT_DISABLE_MTABLE_CACHE) && MRT_DISABLE_MTABLE_CACHE
+    (void)interfaceUUID;
     return nullptr;
 #else
     if (interfaceUUID == CACHE_ENTRY_BUSY) {
@@ -180,7 +181,10 @@ ExtensionData* MTableDesc::GetCachedExtensionData(U32 interfaceUUID) const
 
 void MTableDesc::CacheExtensionData(U32 interfaceUUID, ExtensionData* extensionData)
 {
-#if !(defined(MRT_DISABLE_MTABLE_CACHE) && MRT_DISABLE_MTABLE_CACHE)
+#if defined(MRT_DISABLE_MTABLE_CACHE) && MRT_DISABLE_MTABLE_CACHE
+    (void)interfaceUUID;
+    (void)extensionData;
+#else
     if (interfaceUUID == CACHE_ENTRY_BUSY) {
         return;
     }
