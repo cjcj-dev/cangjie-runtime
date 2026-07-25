@@ -20,7 +20,7 @@ void UpdatedFunction(void*) {}
 void StableFunction(void*) {}
 
 template<size_t Size, size_t Alignment>
-TypeInfo* InitTypeInfo(std::array<std::byte, Size>& storage, const char* name, I8 type, U32 uuid)
+TypeInfo* InitTypeInfo(std::array<unsigned char, Size>& storage, const char* name, I8 type, U32 uuid)
 {
     static_assert(Size == sizeof(TypeInfo));
     static_assert(Alignment == alignof(TypeInfo));
@@ -49,10 +49,10 @@ int main()
     stableExtensionData.UpdateFuncTable(1, stableTable);
     stableExtensionData.SetFuncTableUpdated();
 
-    alignas(TypeInfo) std::array<std::byte, sizeof(TypeInfo)> interfaceStorage {};
-    alignas(TypeInfo) std::array<std::byte, sizeof(TypeInfo)> superStorage {};
-    alignas(TypeInfo) std::array<std::byte, sizeof(TypeInfo)> forwardedTempEnumStorage {};
-    alignas(TypeInfo) std::array<std::byte, sizeof(TypeInfo)> standaloneTempEnumStorage {};
+    alignas(TypeInfo) std::array<unsigned char, sizeof(TypeInfo)> interfaceStorage {};
+    alignas(TypeInfo) std::array<unsigned char, sizeof(TypeInfo)> superStorage {};
+    alignas(TypeInfo) std::array<unsigned char, sizeof(TypeInfo)> forwardedTempEnumStorage {};
+    alignas(TypeInfo) std::array<unsigned char, sizeof(TypeInfo)> standaloneTempEnumStorage {};
     TypeInfo* interfaceType = InitTypeInfo<sizeof(TypeInfo), alignof(TypeInfo)>(
         interfaceStorage, "MTableCacheHarness.Interface", TypeKind::TYPE_KIND_INTERFACE, 101);
     TypeInfo* superType = InitTypeInfo<sizeof(TypeInfo), alignof(TypeInfo)>(
