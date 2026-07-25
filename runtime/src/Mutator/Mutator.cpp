@@ -182,29 +182,43 @@ void Mutator::ResetMutator()
 void Mutator::DeferLogObject(BaseObject* object)
 {
     if (!StickyLog::Instance().IsEnabled()) {
-        deferredLogObject = nullptr;
+        deferredLogRingIndex = 0;
         return;
     }
     FlushDeferredLogObject();
-    deferredLogObject = object;
+    deferredLogRing[0] = object;
+    deferredLogRingIndex = 1;
 }
 
 void Mutator::FlushDeferredLogObject()
 {
-    BaseObject* object = deferredLogObject;
-    deferredLogObject = nullptr;
-    if (object == nullptr || !StickyLog::Instance().IsEnabled()) {
+    size_t count = deferredLogRingIndex;
+    deferredLogRingIndex = 0;
+    CHECK_DETAIL(count <= DEFERRED_LOG_RING_SIZE, "invalid deferred log ring index");
+    if (count == 0 || !StickyLog::Instance().IsEnabled()) {
         return;
     }
 
     StickyLog& stickyLog = StickyLog::Instance();
-    MAddress objectStart = reinterpret_cast<MAddress>(object);
-    MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
-    MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
-    for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
-        MAddress loggedLine = 0;
-        (void)stickyLog.TryLogLine(lineStart, loggedLine);
+    for (size_t i = 0; i < count; ++i) {
+        BaseObject* object = deferredLogRing[i];
+        MAddress objectStart = reinterpret_cast<MAddress>(object);
+        MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
+        MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+        for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
+            MAddress loggedLine = 0;
+            (void)stickyLog.TryLogLine(lineStart, loggedLine);
+        }
     }
+}
+
+extern "C" BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->FlushDeferredLogObject();
+    }
+    return object;
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
