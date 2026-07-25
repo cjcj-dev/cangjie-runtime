@@ -496,7 +496,18 @@ private:
     void RememberObjectImpl(const BaseObject* obj)
     {
         GCPhase phase = GetMutatorPhase();
-        if (UNLIKELY(phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE) &&
+        // Marking is still consuming satb records in GC_PHASE_CLEAR_SATB_BUFFER: MarkSatbBuffer keeps
+        // tracing after the first CLEAR_SATB handshake and re-flushes every mutator's node once per
+        // remark iteration, so records written in this phase are both needed and consumed. Dropping
+        // them here loses deletion-barrier records inside the live remark window and lets a hidden
+        // object survive unmarked with previous-cycle tags in its fields, which PostTrace's
+        // PrepareForwardTable then makes unresolvable (tripping PostTraceBarrier's
+        // CHECK(IsCurrentPointer)). Records written after the remark fixpoint still land here and in
+        // the buffers, but they can only reference already-marked objects, objects in non-collected
+        // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
+        // those records safely, so accepting them is cheap and correct.
+        if (UNLIKELY(phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
+                     phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) &&
             UNLIKELY(Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_ENUM)) {
             return;
         }
