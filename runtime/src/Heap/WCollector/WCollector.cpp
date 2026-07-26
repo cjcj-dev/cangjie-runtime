@@ -178,7 +178,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<> oldField(refField);
     CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
-        rootSet.push_back(oldField.GetTargetObject());
+        BaseObject* root = oldField.GetTargetObject();
+        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+        rootSet.push_back(root);
         return;
     }
     BaseObject* root = oldField.GetTargetObject();
