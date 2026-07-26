@@ -7,7 +7,8 @@
 
 set -euo pipefail
 
-repo=$(git rev-parse --show-toplevel)
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+repo=$(git -C "$script_dir" rev-parse --show-toplevel)
 pre_ref=${1:-f56e60bfb05121f138f39dec46d7e0b38eb3165a}
 post_ref=${2:-HEAD}
 rounds=${3:-20}
