@@ -116,6 +116,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = oldRef.GetTargetObject();
+        CHECK_DETAIL(target->IsValidObject(), "TryUntagRefField encounters invalid tagged target %p at field %p",
+                     target, &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
