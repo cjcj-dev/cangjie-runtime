@@ -48,7 +48,7 @@ finalizer_mutator_scope()
 {
     git -C "$repo" show "$1:runtime/src/CjScheduler.cpp" |
         awk '
-            /CJThreadHandle NewFinalizerCJThread\(/ { active = 1 }
+            /void\* NewFinalizerCJThread\(/ { active = 1 }
             active && /MutatorManagementRUnlock\(\)/ { unlock = NR }
             active && /MRT_PreRunManagedCode\(/ { prerun = NR }
             active && /return cjthread;/ { print unlock, prerun; exit }
