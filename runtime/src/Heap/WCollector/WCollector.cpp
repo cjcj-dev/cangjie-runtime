@@ -7,12 +7,41 @@
 
 #include "WCollector.h"
 
+#include <atomic>
+#include <csignal>
+
 #include "Heap/StickyLog.h"
+#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+namespace {
+struct UntagRefFieldBreadcrumb {
+    const void* holder = nullptr;
+    const void* field = nullptr;
+    const void* target = nullptr;
+    const void* caller = nullptr;
+    size_t fieldOffset = 0;
+    volatile sig_atomic_t active = 0;
+};
+
+thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+} // namespace
+
+void PrintUntagRefFieldBreadcrumb() noexcept
+{
+    if (untagRefFieldBreadcrumb.active == 0) {
+        return;
+    }
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    FLOG(RTLOG_ERROR,
+         "GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p",
+         untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field, untagRefFieldBreadcrumb.fieldOffset,
+         untagRefFieldBreadcrumb.target, untagRefFieldBreadcrumb.caller);
+}
+
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 {
     // filter const string object.
@@ -116,8 +145,23 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = oldRef.GetTargetObject();
-        CHECK_DETAIL(target->IsValidObject(), "TryUntagRefField encounters invalid tagged target %p at field %p",
-                     target, &field);
+        untagRefFieldBreadcrumb.active = 0;
+        untagRefFieldBreadcrumb.holder = obj;
+        untagRefFieldBreadcrumb.field = &field;
+        untagRefFieldBreadcrumb.target = target;
+        untagRefFieldBreadcrumb.caller = __builtin_return_address(0);
+        untagRefFieldBreadcrumb.fieldOffset =
+            obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        untagRefFieldBreadcrumb.active = 1;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        const bool isValidTarget = target->IsValidObject();
+        if (LIKELY(isValidTarget)) {
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+            untagRefFieldBreadcrumb.active = 0;
+        }
+        CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
+                     &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
