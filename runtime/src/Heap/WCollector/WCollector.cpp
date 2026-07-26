@@ -253,6 +253,9 @@ BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
     BaseObject* latest = nullptr;
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
+        CHECK_DETAIL(targetObj->IsValidObject(),
+                     "Invalid object %p is referenced by weak object %p: %s and offset %zd", targetObj, obj,
+                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
     if (IsOldPointer(oldField)) {
