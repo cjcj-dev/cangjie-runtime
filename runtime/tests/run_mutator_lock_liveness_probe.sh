@@ -18,7 +18,8 @@ probe_tmp=$(mktemp -d /tmp/armlivelock-probe.XXXXXX)
 
 cleanup()
 {
-    unlink "$probe_tmp/pre" "$probe_tmp/post" 2>/dev/null || true
+    unlink "$probe_tmp/pre" 2>/dev/null || true
+    unlink "$probe_tmp/post" 2>/dev/null || true
     rmdir "$probe_tmp"
 }
 trap cleanup EXIT
