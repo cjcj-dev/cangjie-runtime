@@ -15,6 +15,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
+#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -108,6 +109,7 @@ static void CheckSuspendState()
 
 void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 {
+    PrintUntagRefFieldBreadcrumb();
     DLOG(SIGNAL, "Unexpected signal:\n%s", PrintSignalInfo(*info).Str());
     MRT_FlushGCInfo();
 
