@@ -141,6 +141,9 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
+        if (!fromRegionInfo->IsCompacted() && !obj->IsForwarded()) {
+            return nullptr;
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         return space.GetRegionManager().RouteObject(obj);
     }
