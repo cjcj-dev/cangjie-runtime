@@ -20,6 +20,7 @@
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "RegionManager.h"
+#include "Heap/StickyLog.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -52,6 +53,7 @@ public:
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
         Sanitizer::OnHeapDeallocated(map->GetBaseAddr(), map->GetMappedSize());
 #endif
+        StickyLog::Instance().Fini();
         MemMap::DestroyMemMap(map);
     }
 

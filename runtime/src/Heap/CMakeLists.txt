@@ -7,6 +7,7 @@
 set(SRC_LIST
     "Heap.cpp"
     "GcThreadPool.cpp"
+    "StickyLog.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

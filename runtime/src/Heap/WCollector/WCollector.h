@@ -8,6 +8,7 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
@@ -190,6 +191,14 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    BaseObject* ResolveMinorReference(RefField<>& field) const;
+    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
+    void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
+    void TraceYoungClosure(WorkStack& workStack);
+    void RescanRememberedSet(WorkStack& workStack);
+    void ValidateYoungMarking();
+    void DoYoungGarbageCollection();
+    void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
     void TraceHeap();
@@ -205,6 +214,12 @@ private:
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint16_t currentTagID = 0;
+    uint32_t minorRunsSinceMajor = 0;
+    uint64_t minorTotalRuns = 0;
+    mutable std::unordered_set<MAddress> minorRescannedLines;
+    mutable std::unordered_set<MAddress> minorRescannedFields;
+    mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;
+    std::unordered_set<RegionInfo*> minorCandidateRegions;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H

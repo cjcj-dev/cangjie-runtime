@@ -15,6 +15,8 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/StickyLog.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -167,12 +169,56 @@ void Mutator::InitProtectStackAddr()
 void Mutator::ResetMutator()
 {
     rawObject.object = nullptr;
+    FlushDeferredLogObject();
     SatbBuffer::Instance().FlushQueue(satbNode);
+    SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
     uwContext.Reset();
     exceptionWrapper.ClearInfo();
+}
+
+void Mutator::DeferLogObject(BaseObject* object)
+{
+    if (!StickyLog::Instance().IsEnabled()) {
+        deferredLogRingIndex = 0;
+        return;
+    }
+    FlushDeferredLogObject();
+    deferredLogRing[0] = object;
+    deferredLogRingIndex = 1;
+}
+
+void Mutator::FlushDeferredLogObject()
+{
+    size_t count = deferredLogRingIndex;
+    deferredLogRingIndex = 0;
+    CHECK_DETAIL(count <= DEFERRED_LOG_RING_SIZE, "invalid deferred log ring index");
+    if (count == 0 || !StickyLog::Instance().IsEnabled()) {
+        return;
+    }
+
+    StickyLog& stickyLog = StickyLog::Instance();
+    for (size_t i = 0; i < count; ++i) {
+        BaseObject* object = deferredLogRing[i];
+        MAddress objectStart = reinterpret_cast<MAddress>(object);
+        MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
+        MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+        for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
+            MAddress loggedLine = 0;
+            (void)stickyLog.TryLogLine(lineStart, loggedLine);
+        }
+    }
+}
+
+extern "C" BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->FlushDeferredLogObject();
+    }
+    return object;
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
@@ -642,6 +688,7 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
     } else if (newPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || newPhase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
         std::lock_guard<std::mutex> lg(mutatorLock);
         SatbBuffer::Instance().FlushQueue(satbNode);
+        SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
     } else if (newPhase == GCPhase::GC_PHASE_IDLE) {
         HandleGCPhaseIDLE();
     }

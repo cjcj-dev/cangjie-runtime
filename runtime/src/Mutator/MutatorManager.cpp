@@ -325,6 +325,7 @@ void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 
     // the world is stopped.
     worldStopped.store(true, std::memory_order_release);
+    VisitAllMutators([](Mutator& mutator) { mutator.FlushDeferredLogObject(); });
     if (syncGCPhase) { TransitionAllMutatorsToGCPhase(phase); }
 }
 

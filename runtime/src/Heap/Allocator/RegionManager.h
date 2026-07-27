@@ -27,6 +27,13 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 
+struct YoungCollectionStats {
+    size_t candidateRegions = 0;
+    size_t candidateBytes = 0;
+    size_t reclaimedRegions = 0;
+    size_t reclaimedBytes = 0;
+};
+
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
     static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
@@ -249,6 +256,9 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
+    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
+    void CollectYoungGarbage(YoungCollectionStats& stats, const std::function<void(RegionInfo*)>& promoteVisitor);
+    void PromoteAllRegions();
 
     void MergeRawPointerPinnedRegions()
     {
@@ -352,6 +362,11 @@ public:
     {
         return recentFullRegionList.GetAllocatedSize() + recentLargeRegionList.GetAllocatedSize() +
             recentPinnedRegionList.GetAllocatedSize();
+    }
+
+    size_t GetYoungAllocatedSize() const
+    {
+        return youngAllocatedBytes.load(std::memory_order_relaxed);
     }
 
     size_t GetSurvivedSize() const
@@ -601,6 +616,8 @@ private:
 
     // the time when previous region was allocated, which is assigned with returned value by timeutil::NanoSeconds().
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
+
+    std::atomic<size_t> youngAllocatedBytes = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };
