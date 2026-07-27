@@ -792,6 +792,7 @@ public:
     }
     void ClearLiveInfo()
     {
+        CHECK_DETAIL(IsValidRegion(), "ClearLiveInfo must be called on a region head");
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
