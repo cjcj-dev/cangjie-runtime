@@ -154,6 +154,14 @@ public:
 
     LiveInfo* GetGhostLiveInfo() const { return metadata.liveInfo0; }
 
+    LiveInfo* GetExemptLiveInfo() const { return metadata.exemptLiveInfo; }
+
+    void PreserveLiveInfoForExemptedRegion()
+    {
+        metadata.exemptLiveInfo = GetLiveInfo();
+        CHECK(metadata.exemptLiveInfo != nullptr);
+    }
+
     LiveInfo* GetOrAllocLiveInfo()
     {
         do {
@@ -758,6 +766,7 @@ public:
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
+        metadata.exemptLiveInfo = nullptr;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1055,6 +1064,8 @@ private:
             RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
         };
 
+        LiveInfo* exemptLiveInfo = nullptr;
+
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
 
@@ -1231,6 +1242,7 @@ private:
         metadata.nextRegionIdx = NULLPTR_IDX;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        metadata.exemptLiveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
         SetUnitRole(uClass);
         SetTraceRegionFlag(0);
