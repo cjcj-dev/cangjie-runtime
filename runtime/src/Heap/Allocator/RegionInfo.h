@@ -1099,15 +1099,11 @@ private:
             int32_t rawPointerObjectCount;
         };
 
-        union {
-            LiveInfo* liveInfo = nullptr;
-            RegionInfo* ownerRegion; // if unit is SUBORDINATE_UNIT
-        };
+        LiveInfo* liveInfo = nullptr;
+        RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
 
-        union {
-            LiveInfo* liveInfo0 = nullptr;
-            RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
-        };
+        LiveInfo* liveInfo0 = nullptr;
+        RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
 
         LiveInfo* retainedLiveInfo = nullptr;
         RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
@@ -1284,9 +1280,9 @@ private:
         UnitMetadata metadata;
     };
 
-    // unitRole guards the ownerRegion/liveInfo union, and its writers publish it with an acq_rel
+    // unitRole selects the ownerRegion/liveInfo payload, and its writers publish it with an acq_rel
     // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
-    // acquire so that the union read which follows in GetRegionInfo/GetRegionInfoAt/
+    // acquire so that the selected payload read which follows in GetRegionInfo/GetRegionInfoAt/
     // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
     // be reordered, or folded into an unconditional load plus a select, either of which would
     // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
@@ -1302,7 +1298,7 @@ private:
             unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
     }
 
-    // unitRole is the discriminator of the ownerRegion/liveInfo union and of allocPtr/regionEnd:
+    // unitRole selects between the ownerRegion/liveInfo payloads and allocPtr/regionEnd:
     // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
     // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
     // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
