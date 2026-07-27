@@ -716,6 +716,13 @@ void WCollector::DoYoungGarbageCollection()
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
     WorkStack workStack = NewWorkStack();
+    WorkStack enumRoots = NewWorkStack();
+    theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+    while (!enumRoots.empty()) {
+        BaseObject* object = enumRoots.back();
+        enumRoots.pop_back();
+        PushYoungObject(object, workStack);
+    }
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
     RescanRememberedSet(workStack);
     TraceYoungClosure(workStack);
