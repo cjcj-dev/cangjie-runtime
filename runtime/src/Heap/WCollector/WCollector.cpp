@@ -666,7 +666,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             return false;
         }
         bool retainLine = false;
-        region->VisitAllObjects([this, &workStack, lineStart, lineEnd, &retainLine](BaseObject* object) {
+        auto scanObject = [this, &workStack, lineStart, lineEnd, &retainLine](BaseObject* object) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
@@ -683,7 +683,28 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                     }
                     PushYoungObject(target, workStack);
                 });
-        });
+        };
+        LiveInfo* exemptLiveInfo = region->GetExemptLiveInfo();
+        if (exemptLiveInfo == nullptr) {
+            region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
+        } else if (region->IsLargeRegion()) {
+            if (exemptLiveInfo->IsSurvivedObject(0)) {
+                scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));
+            }
+        } else if (region->IsSmallRegion()) {
+            uintptr_t position = region->GetRegionStart();
+            size_t offset = 0;
+            uintptr_t allocPtr = region->GetRegionAllocPtr();
+            while (position < allocPtr) {
+                BaseObject* object = reinterpret_cast<BaseObject*>(position);
+                size_t allocSize = RegionSpace::GetAllocSize(*object);
+                position += allocSize;
+                if (exemptLiveInfo->IsSurvivedObject(offset)) {
+                    scanObject(object);
+                }
+                offset += allocSize;
+            }
+        }
         return retainLine;
     });
 }

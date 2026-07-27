@@ -579,6 +579,7 @@ size_t RegionManager::ExemptFromRegions()
                 del->GetUnitCount(), del->GetLiveByteCount());
 
             CHECK(del->IsFromRegion());
+            del->PreserveLiveInfoForExemptedRegion();
             RemoveRegionLocked(&fromRegionList, del);
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
@@ -588,6 +589,7 @@ size_t RegionManager::ExemptFromRegions()
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
+            del->PreserveLiveInfoForExemptedRegion();
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
