@@ -149,36 +149,38 @@ public:
 
     uintptr_t AllocPinned(size_t size)
     {
-        uintptr_t addr = 0;
         std::mutex& regionListMutex = recentPinnedRegionList.GetListMutex();
 
-        // enter saferegion when wait lock to avoid gc timeout.
-        // note that release the mutex when function end.
-        {
-            ScopedEnterSaferegion enterSaferegion(true);
-            regionListMutex.lock();
+        LockRegionListInSaferegion(regionListMutex);
+        uintptr_t addr = AllocPinnedLocked(size);
+        regionListMutex.unlock();
+        if (addr != 0) {
+            DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
+            return addr;
         }
 
-        RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
-        if (headRegion != nullptr) {
-            addr = headRegion->Alloc(size);
-        }
-        if (addr == 0) {
-            addr = AllocPinnedFromFreeList(size);
-        }
-        if (addr == 0) {
-            size_t needUnitCount = maxUnitCountPerRegion;
+        // TakeRegion() must not run while this mutator owns the pinned region list mutex: it
+        // enters a saferegion between try-lock rounds (FreeRegionManager.h:91) and again in
+        // ReclaimRegion() -> FreeRegionManager::AddGarbageUnits() (RegionManager.cpp:420,
+        // FreeRegionManager.h:100). Being in a saferegion lets StopTheWorld complete while the
+        // mutex is held, and the minor collection then blocks on that very mutex inside the
+        // stopped world (RegionManager.cpp:500 -> RegionList.h:117).
+        size_t needUnitCount = maxUnitCountPerRegion;
 #if defined(__EULER__)
-            needUnitCount = maxUnitCountPerPinnedRegion;
+        needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-            RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-            if (region == nullptr) {
-                regionListMutex.unlock();
-                return 0;
-            }
-            DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
-                 region->GetRegionType());
+        RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        if (region == nullptr) {
+            return 0;
+        }
+        DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
+             region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
+             region->GetRegionType());
+
+        LockRegionListInSaferegion(regionListMutex);
+        // another mutator may have installed a pinned region while the mutex was released.
+        addr = AllocPinnedLocked(size);
+        if (addr == 0) {
             // If allocate pinned obj during tracing, set region to traced new region.
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
@@ -187,10 +189,16 @@ public:
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
             addr = region->Alloc(size);
+            region = nullptr;
+        }
+        regionListMutex.unlock();
+        if (region != nullptr) {
+            // the region was not needed after all, hand it back the same way
+            // RegionSpace::FeedHungryBuffers() does (RegionSpace.cpp:302-306).
+            (void)CollectRegion(region);
         }
 
         DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
-        regionListMutex.unlock();
         return addr;
     }
 
@@ -533,6 +541,34 @@ public:
     }
 
 private:
+    // Acquire a region list mutex which the collector also takes while the world is stopped.
+    // Waiting for it in a saferegion is required so that a contended mutator cannot stall
+    // StopTheWorld (MutatorManager.cpp:485-490), but the mutex must never be owned while the
+    // saferegion guard is destroyed: LeaveSaferegion() parks the mutator in SuspendForSync()
+    // (Mutator.h:172-186, Mutator.cpp:229-280) and the collector would then wait for that mutex
+    // forever. Wait in try-lock rounds so every saferegion transition happens unlocked, exactly
+    // as FreeRegionManager::TakeRegion() does for the free unit trees (FreeRegionManager.h:45-92).
+    static void LockRegionListInSaferegion(std::mutex& listMutex)
+    {
+        while (!listMutex.try_lock()) {
+            ScopedEnterSaferegion enterSaferegion(true);
+        }
+    }
+
+    // caller must own recentPinnedRegionList's list mutex, and must not release it in between.
+    uintptr_t AllocPinnedLocked(size_t size)
+    {
+        uintptr_t addr = 0;
+        RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
+        if (headRegion != nullptr) {
+            addr = headRegion->Alloc(size);
+        }
+        if (addr == 0) {
+            addr = AllocPinnedFromFreeList(size);
+        }
+        return addr;
+    }
+
     static const size_t MAX_UNIT_COUNT_PER_REGION;
     static const size_t HUGE_PAGE;
     inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
