@@ -684,27 +684,29 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                     PushYoungObject(target, workStack);
                 });
         };
-        LiveInfo* exemptLiveInfo = region->GetExemptLiveInfo();
-        if (!region->HasExemptLiveInfo()) {
+        LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
+        RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
+        if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
-        } else if (exemptLiveInfo == nullptr) {
+        } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
             return false;
-        } else if (region->IsLargeRegion()) {
-            if (exemptLiveInfo->IsSurvivedObject(0)) {
+        } else {
+            CHECK(retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID && retainedLiveInfo != nullptr);
+            if (region->IsLargeRegion() && retainedLiveInfo->IsSurvivedObject(0)) {
                 scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));
-            }
-        } else if (region->IsSmallRegion()) {
-            uintptr_t position = region->GetRegionStart();
-            size_t offset = 0;
-            uintptr_t allocPtr = region->GetRegionAllocPtr();
-            while (position < allocPtr) {
-                BaseObject* object = reinterpret_cast<BaseObject*>(position);
-                size_t allocSize = RegionSpace::GetAllocSize(*object);
-                position += allocSize;
-                if (exemptLiveInfo->IsSurvivedObject(offset)) {
-                    scanObject(object);
+            } else if (region->IsSmallRegion()) {
+                uintptr_t position = region->GetRegionStart();
+                size_t offset = 0;
+                uintptr_t allocPtr = region->GetRegionAllocPtr();
+                while (position < allocPtr) {
+                    BaseObject* object = reinterpret_cast<BaseObject*>(position);
+                    size_t allocSize = RegionSpace::GetAllocSize(*object);
+                    position += allocSize;
+                    if (retainedLiveInfo->IsSurvivedObject(offset)) {
+                        scanObject(object);
+                    }
+                    offset += allocSize;
                 }
-                offset += allocSize;
             }
         }
         return retainLine;
@@ -905,13 +907,13 @@ void WCollector::DoGarbageCollection()
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
 
     CollectSmallSpace();
-    ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major promotion");
         FlushAllocationRegions();
         reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().PromoteAllRegions();
         minorRunsSinceMajor = 0;
     }
+    ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)

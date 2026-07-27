@@ -75,6 +75,12 @@ private:
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
 public:
+    enum class RetainedLiveInfoState : uint8_t {
+        NEVER_EXAMINED,
+        SNAPSHOT_VALID,
+        SNAPSHOT_EMPTY,
+    };
+
     enum RouteState : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
@@ -154,15 +160,17 @@ public:
 
     LiveInfo* GetGhostLiveInfo() const { return metadata.liveInfo0; }
 
-    LiveInfo* GetExemptLiveInfo() const { return metadata.exemptLiveInfo; }
+    LiveInfo* GetRetainedLiveInfo() const { return metadata.retainedLiveInfo; }
 
-    bool HasExemptLiveInfo() const { return metadata.hasExemptLiveInfo; }
+    RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
 
-    void PreserveLiveInfoForExemptedRegion()
+    void PreserveRetainedLiveInfo()
     {
-        metadata.exemptLiveInfo = GetLiveInfo();
-        CHECK(metadata.exemptLiveInfo != nullptr || GetLiveByteCount() == 0);
-        metadata.hasExemptLiveInfo = true;
+        metadata.retainedLiveInfo = GetLiveInfo();
+        CHECK(metadata.retainedLiveInfo != nullptr || GetLiveByteCount() == 0);
+        metadata.retainedLiveInfoState = metadata.retainedLiveInfo == nullptr
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::SNAPSHOT_VALID;
     }
 
     LiveInfo* GetOrAllocLiveInfo()
@@ -769,8 +777,8 @@ public:
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
-        metadata.exemptLiveInfo = nullptr;
-        metadata.hasExemptLiveInfo = false;
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1068,8 +1076,8 @@ private:
             RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
         };
 
-        LiveInfo* exemptLiveInfo = nullptr;
-        bool hasExemptLiveInfo = false;
+        LiveInfo* retainedLiveInfo = nullptr;
+        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
@@ -1247,8 +1255,8 @@ private:
         metadata.nextRegionIdx = NULLPTR_IDX;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
-        metadata.exemptLiveInfo = nullptr;
-        metadata.hasExemptLiveInfo = false;
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         SetRegionType(RegionType::FREE_REGION);
         SetUnitRole(uClass);
         SetTraceRegionFlag(0);
