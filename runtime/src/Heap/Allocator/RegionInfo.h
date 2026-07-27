@@ -798,7 +798,12 @@ public:
     }
     void ClearLiveInfo()
     {
-        CHECK_DETAIL(IsValidRegion(), "ClearLiveInfo must be called on a region head");
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
+        }
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "ClearLiveInfo must be called on a region head");
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
