@@ -498,7 +498,7 @@ public:
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
@@ -508,7 +508,7 @@ public:
     static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
@@ -534,7 +534,7 @@ public:
         if (unit->GetMetadata().inGhostFromRegion == 0) {
             return nullptr;
         }
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole0) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion0;
         }
         return reinterpret_cast<RegionInfo*>(unit);
@@ -1147,10 +1147,14 @@ private:
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
         }
 
+        // Publish the owner before the discriminator that guards it, so a reader which observes
+        // SUBORDINATE_UNIT always finds a non-null ownerRegion (:530-546). SetUnitRole is an
+        // acq_rel compare-exchange (BitField::SetAtomicValue :46-58), which orders the store
+        // above it.
         void InitSubordinateUnit(RegionInfo* owner)
         {
-            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
             metadata.ownerRegion = owner;
+            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
         }
 
         void ToFreeRegion() { InitFreeRegion(GetUnitIdx(this), 1); }
@@ -1186,8 +1190,39 @@ private:
         UnitMetadata metadata;
     };
 
+    // unitRole guards the ownerRegion/liveInfo union, and its writers publish it with an acq_rel
+    // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
+    // acquire so that the union read which follows in GetRegionInfo/GetRegionInfoAt/
+    // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
+    // be reordered, or folded into an unconditional load plus a select, either of which would
+    // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
+    // relaxed one, so this constrains the compiler and costs nothing at run time.
+    static UnitRole LoadUnitRole(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
+    }
+
+    static UnitRole LoadUnitRole0(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(
+            unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
+    }
+
+    // unitRole is the discriminator of the ownerRegion/liveInfo union and of allocPtr/regionEnd:
+    // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
+    // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
+    // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
+    // leaves the first state and enters the second, and the readers are not stopped by
+    // ScopedStopTheWorld -- the collector's own promotion walk (RegionManager.cpp:549-551) runs
+    // while the finalizer thread reclaims regions through here. So the role is moved to the
+    // neutral FREE_UNITS first, the payload is rewritten, and only then is the real role
+    // published. FREE_UNITS is safe to expose at any moment: it makes readers treat the unit as
+    // itself, and it is neither a valid region nor a subordinate one.
+    // SetUnitRole is an acq_rel compare-exchange (BitField::SetAtomicValue :46-58), so neither
+    // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        SetUnitRole(UnitRole::FREE_UNITS);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
@@ -1195,12 +1230,12 @@ private:
         metadata.liveByteCount = 0;
         metadata.liveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
-        SetUnitRole(uClass);
         SetTraceRegionFlag(0);
         SetMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        SetUnitRole(uClass);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)
