@@ -19,6 +19,40 @@
 
 namespace MapleRuntime {
 namespace {
+constexpr size_t NONFATAL_RETRY_LIMIT = 8;
+
+class NonfatalCheckCounter {
+public:
+    explicit NonfatalCheckCounter(const char* checkSite) : site(checkSite) {}
+
+    ~NonfatalCheckCounter()
+    {
+        LOG(RTLOG_ERROR, "GC nonfatal summary: site=%s passCount=%zu badCount=%zu guardCount=%zu", site,
+            passCount.load(std::memory_order_relaxed), badCount.load(std::memory_order_relaxed),
+            guardCount.load(std::memory_order_relaxed));
+    }
+
+    size_t RecordPass() { return passCount.fetch_add(1, std::memory_order_relaxed) + 1; }
+    size_t RecordBad() { return badCount.fetch_add(1, std::memory_order_relaxed) + 1; }
+    size_t RecordGuard() { return guardCount.fetch_add(1, std::memory_order_relaxed) + 1; }
+
+    static bool ShouldLog(size_t count)
+    {
+        return count <= NONFATAL_RETRY_LIMIT || (count & (count - 1)) == 0;
+    }
+
+private:
+    const char* site;
+    std::atomic<size_t> passCount = 0;
+    std::atomic<size_t> badCount = 0;
+    std::atomic<size_t> guardCount = 0;
+};
+
+struct UntagRefFieldRetryState {
+    const void* field = nullptr;
+    size_t consecutiveBadCount = 0;
+};
+
 struct UntagRefFieldBreadcrumb {
     const void* holder = nullptr;
     const void* field = nullptr;
@@ -28,7 +62,10 @@ struct UntagRefFieldBreadcrumb {
     volatile sig_atomic_t active = 0;
 };
 
+NonfatalCheckCounter tryUntagRefFieldCounter("TryUntagRefField:isValidTarget");
+NonfatalCheckCounter enumRefFieldRootCounter("EnumRefFieldRoot:latest->IsValidObject");
 thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+thread_local UntagRefFieldRetryState untagRefFieldRetryState;
 } // namespace
 
 void PrintUntagRefFieldBreadcrumb() noexcept
@@ -143,6 +180,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
     for (;;) {
         RefField<> oldRef(field);
         if (!oldRef.IsTagged()) {
+            untagRefFieldRetryState.field = nullptr;
+            untagRefFieldRetryState.consecutiveBadCount = 0;
             return false;
         }
         target = oldRef.GetTargetObject();
@@ -156,13 +195,41 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         std::atomic_signal_fence(std::memory_order_seq_cst);
         untagRefFieldBreadcrumb.active = 1;
         std::atomic_signal_fence(std::memory_order_seq_cst);
+        const size_t passCount = tryUntagRefFieldCounter.RecordPass();
         const bool isValidTarget = target->IsValidObject();
-        if (LIKELY(isValidTarget)) {
-            std::atomic_signal_fence(std::memory_order_seq_cst);
-            untagRefFieldBreadcrumb.active = 0;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        untagRefFieldBreadcrumb.active = 0;
+        if (UNLIKELY(!isValidTarget)) {
+            const size_t badCount = tryUntagRefFieldCounter.RecordBad();
+            if (NonfatalCheckCounter::ShouldLog(badCount)) {
+                LOG(RTLOG_ERROR,
+                    "TryUntagRefField encounters invalid tagged target %p at field %p: holder=%p caller=%p "
+                    "fieldOffset=%zu passCount=%zu badCount=%zu action=no-write",
+                    target, &field, obj, untagRefFieldBreadcrumb.caller, untagRefFieldBreadcrumb.fieldOffset,
+                    passCount, badCount);
+            }
+            if (untagRefFieldRetryState.field == &field) {
+                ++untagRefFieldRetryState.consecutiveBadCount;
+            } else {
+                untagRefFieldRetryState.field = &field;
+                untagRefFieldRetryState.consecutiveBadCount = 1;
+            }
+            if (untagRefFieldRetryState.consecutiveBadCount >= NONFATAL_RETRY_LIMIT) {
+                const size_t guardCount = tryUntagRefFieldCounter.RecordGuard();
+                LOG(RTLOG_ERROR,
+                    "TryUntagRefField retry guard exhausted: target=%p field=%p holder=%p caller=%p "
+                    "fieldOffset=%zu consecutiveBadCount=%zu guardCount=%zu action=return-null-no-write",
+                    target, &field, obj, untagRefFieldBreadcrumb.caller, untagRefFieldBreadcrumb.fieldOffset,
+                    untagRefFieldRetryState.consecutiveBadCount, guardCount);
+                target = nullptr;
+                untagRefFieldRetryState.field = nullptr;
+                untagRefFieldRetryState.consecutiveBadCount = 0;
+                return true;
+            }
+            return false;
         }
-        CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
-                     &field);
+        untagRefFieldRetryState.field = nullptr;
+        untagRefFieldRetryState.consecutiveBadCount = 0;
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
@@ -202,7 +269,18 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
+    const size_t passCount = enumRefFieldRootCounter.RecordPass();
+    const bool isValidLatest = latest->IsValidObject();
+    if (UNLIKELY(!isValidLatest)) {
+        const size_t badCount = enumRefFieldRootCounter.RecordBad();
+        if (NonfatalCheckCounter::ShouldLog(badCount)) {
+            LOG(RTLOG_ERROR,
+                "Enum static root %p(%p) encounters invalid object: holder=%p caller=%p fieldOffset=%zu "
+                "passCount=%zu badCount=%zu action=skip-no-write",
+                latest, &field, nullptr, __builtin_return_address(0), static_cast<size_t>(-1), passCount, badCount);
+        }
+        return;
+    }
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
