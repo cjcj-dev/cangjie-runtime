@@ -7,6 +7,7 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
+#include <sched.h>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -141,11 +142,25 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
-        if (!fromRegionInfo->IsCompacted() && !obj->IsForwarded()) {
-            return nullptr;
-        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(obj);
+        // COMPACTED: payload already published before routeState=COMPACTED.
+        if (fromRegionInfo->IsCompacted()) {
+            return space.GetRegionManager().RouteObject(obj);
+        }
+        // ROUTED path: route may exist before CopyObject completes (t0..t5).
+        // Spin until FORWARDED (t5) so callers never observe a half-copied to.
+        // Returning null while route exists livelocks ForwardBarrier::ReadReference
+        // (TryForwardRefField keeps failing on a still-tagged field).
+        // IsForwarded -> AtomicGetStateBits ACQUIRE pairs UnlockObject(FORWARDED).
+        for (;;) {
+            if (obj->IsForwarded()) {
+                return space.GetRegionManager().RouteObject(obj);
+            }
+            if (space.GetRegionManager().RouteObject(obj) == nullptr) {
+                return nullptr;
+            }
+            sched_yield();
+        }
     }
 
 protected:
