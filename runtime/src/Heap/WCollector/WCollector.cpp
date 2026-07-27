@@ -691,10 +691,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
             return false;
         } else {
-            CHECK(retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID && retainedLiveInfo != nullptr);
-            if (region->IsLargeRegion() && retainedLiveInfo->IsSurvivedObject(0)) {
+            CHECK(retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID);
+            if (region->IsLargeRegion()) {
                 scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));
             } else if (region->IsSmallRegion()) {
+                CHECK(retainedLiveInfo != nullptr);
                 uintptr_t position = region->GetRegionStart();
                 size_t offset = 0;
                 uintptr_t allocPtr = region->GetRegionAllocPtr();

@@ -167,6 +167,17 @@ public:
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();
+        if (IsLargeRegion()) {
+            if (GetLiveByteCount() == 0) {
+                metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
+                return;
+            }
+            size_t objectCount = 0;
+            VisitAllObjects([&objectCount](BaseObject*) { ++objectCount; });
+            CHECK(objectCount == 1);
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
         CHECK(metadata.retainedLiveInfo != nullptr || GetLiveByteCount() == 0);
         metadata.retainedLiveInfoState = metadata.retainedLiveInfo == nullptr
             ? RetainedLiveInfoState::SNAPSHOT_EMPTY
