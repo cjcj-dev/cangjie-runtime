@@ -188,11 +188,12 @@ void TracingCollector::ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRef
     }
     if (UNLIKELY(obj->IsWeakRef())) {
         RefField<>* referentField = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
-        visitor(RefSlotKind::WEAK_REFERENT, GetAndTryTagObj(obj, *referentField), *referentField);
+        visitor(RefSlotKind::WEAK_REFERENT,
+                GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, obj, *referentField), *referentField);
         return;
     }
     ForEachRefSlot(obj, [this, obj, &visitor](RefField<>& field) {
-        visitor(RefSlotKind::STRONG, GetAndTryTagObj(obj, field), field);
+        visitor(RefSlotKind::STRONG, GetAndTryTagObj(RefSlotKind::STRONG, obj, field), field);
     });
 }
 
