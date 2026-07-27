@@ -536,13 +536,22 @@ public:
         return reinterpret_cast<RegionInfo*>(unit);
     }
 
-    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    // Safely query a heap address whose unit may no longer have a live owning region.
+    static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
         if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
+    }
+
+    // The caller must know that allocAddr resolves to an extant region owner.
+    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    {
+        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
+        CHECK_DETAIL(region != nullptr, "heap address %#zx has no owning region", allocAddr);
+        return region;
     }
 
     static bool InGhostFromRegion(BaseObject* obj)
