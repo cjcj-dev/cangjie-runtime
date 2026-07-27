@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <sched.h>
 
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
@@ -952,8 +953,18 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
             BaseObject* toVersion = ForwardObjectImpl(obj, region);
             region->UnlockReadFromRegion();
             return toVersion;
-        } else {
-            return FindToVersion(obj);
+        }
+        // Read-lock miss (region write-lock / transient): do not use FindToVersion
+        // null-gate — ForwardBarrier::ReadReference would livelock on a still-tagged
+        // field. Wait for this object's FORWARDED publish (same acquire as t5).
+        for (;;) {
+            if (obj->IsForwarded()) {
+                return GetForwardPointer(obj, region);
+            }
+            if (region->IsCompacted()) {
+                return GetForwardPointer(obj, region);
+            }
+            sched_yield();
         }
     } else if (region->IsCompacted()) {
         return FindToVersion(obj);
