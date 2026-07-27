@@ -58,7 +58,13 @@ void ForwardDataManager::ForwardDataSpace::UnbindPreviousLiveInfo()
         LiveInfo* currentLiveInfo = reinterpret_cast<LiveInfo*>(current);
         RegionInfo* bindedRegion = currentLiveInfo->bindedRegion;
         CHECK(bindedRegion != nullptr);
-        bindedRegion->CheckAndClearLiveInfo(currentLiveInfo);
+        RegionInfo* currentRegion = RegionInfo::GetRegionInfo(bindedRegion->GetUnitIdx());
+        if (UNLIKELY(currentRegion != bindedRegion)) {
+            LOG(RTLOG_WARNING, "skip stale live-info binding %p: unit %p is now subordinate to region head %p",
+                currentLiveInfo, bindedRegion, currentRegion);
+            continue;
+        }
+        currentRegion->CheckAndClearLiveInfo(currentLiveInfo);
     }
 }
 } // namespace MapleRuntime
