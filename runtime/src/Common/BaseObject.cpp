@@ -121,7 +121,7 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
         MRT_ASSERT((alignedStart + contentSize) >= aggEnd, "aggregate element is not align\n");
         MAddress currentAddr = alignedStart;
         for (U64 i = startIndex; (i < arrayLen) && (currentAddr < aggEnd); ++i) {
-            gcTib.ForEachBitmapWord(currentAddr, visitor);
+            gcTib.ForEachBitmapWordInRange(currentAddr, visitor, aggStart, aggEnd);
             currentAddr += contentSize;
         }
     } else {
