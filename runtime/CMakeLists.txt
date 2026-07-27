@@ -421,7 +421,8 @@ elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST AND WINDOWS_FL
         "-lstdc++" ${LINK_LIBS} "-Wl,--end-group -lunwind -lclang_rt.builtins -lhilog_ndk.z -lhitrace_ndk.z")
 elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1) # Windows
     target_link_libraries(cangjie-runtime PRIVATE "-Wl,--start-group"
-        "-Wl,--export-all-symbols" "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
+        "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_x86_64_exports.def"
+        "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
 elseif (DOPRA_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0) # thread module
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"
         ${LINK_LIBS} "-Wl,--end-group -nodefaultlibs -Wl,-Bdynamic -lstdc++ -lm -lc -lgcc_s -lpthread -ldl")
