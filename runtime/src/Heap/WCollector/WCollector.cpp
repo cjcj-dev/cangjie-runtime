@@ -291,15 +291,15 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
     ForEachRefSlot(obj, visitor);
 }
 
-BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
+BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
 {
     RefField<> oldField(field);
+    const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        CHECK_DETAIL(targetObj->IsValidObject(),
-                     "Invalid object %p is referenced by weak object %p: %s and offset %zd", targetObj, obj,
-                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                     targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
     if (IsOldPointer(oldField)) {
@@ -312,8 +312,8 @@ BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by weak object %p: %s and offset %zd",
-                 latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
