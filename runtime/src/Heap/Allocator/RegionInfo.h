@@ -779,7 +779,12 @@ public:
     // the interface can only be used to clear live info after gc.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
     {
-        CHECK_DETAIL(IsValidRegion(), "CheckAndClearLiveInfo must be called on a region head");
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
+        }
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "CheckAndClearLiveInfo must be called on a region head");
         // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
         // We will clean it before the region is accessible.
         if (IsGarbageRegion()) {
