@@ -950,7 +950,11 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 
     if (fwdTable.RouteRegion(region)) {
         for (;;) {
-            if (obj->IsForwarded()) {
+            // Object-level t5 publish, or region-level FORWARDED (set before
+            // CollectRegion write-lock / type flip — after that TryLockRead
+            // always fails because !IsFromRegion).
+            if (obj->IsForwarded() ||
+                region->GetRouteState() == RegionInfo::RouteState::FORWARDED) {
                 return GetForwardPointer(obj, region);
             }
             if (region->TryLockReadFromRegion()) {
@@ -958,10 +962,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
                 region->UnlockReadFromRegion();
                 return toVersion;
             }
-            // Read-lock miss: never fall back to null-gated FindToVersion
-            // (ForwardBarrier::ReadReference livelocks on still-tagged field).
-            // Retry lock or observe FORWARDED; do not spin only on FORWARDED
-            // (unforwarded live objects need us to become the forwarder).
+            // Write-lock (CollectRegion) or transient: never null-gated FindToVersion.
             sched_yield();
         }
     } else if (region->IsCompacted()) {
