@@ -685,8 +685,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                 });
         };
         LiveInfo* exemptLiveInfo = region->GetExemptLiveInfo();
-        if (exemptLiveInfo == nullptr) {
+        if (!region->HasExemptLiveInfo()) {
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
+        } else if (exemptLiveInfo == nullptr) {
+            return false;
         } else if (region->IsLargeRegion()) {
             if (exemptLiveInfo->IsSurvivedObject(0)) {
                 scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));

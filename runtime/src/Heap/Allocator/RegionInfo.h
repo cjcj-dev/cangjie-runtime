@@ -156,10 +156,13 @@ public:
 
     LiveInfo* GetExemptLiveInfo() const { return metadata.exemptLiveInfo; }
 
+    bool HasExemptLiveInfo() const { return metadata.hasExemptLiveInfo; }
+
     void PreserveLiveInfoForExemptedRegion()
     {
         metadata.exemptLiveInfo = GetLiveInfo();
-        CHECK(metadata.exemptLiveInfo != nullptr);
+        CHECK(metadata.exemptLiveInfo != nullptr || GetLiveByteCount() == 0);
+        metadata.hasExemptLiveInfo = true;
     }
 
     LiveInfo* GetOrAllocLiveInfo()
@@ -767,6 +770,7 @@ public:
             SetMarkedRegionFlag(0);
         }
         metadata.exemptLiveInfo = nullptr;
+        metadata.hasExemptLiveInfo = false;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1065,6 +1069,7 @@ private:
         };
 
         LiveInfo* exemptLiveInfo = nullptr;
+        bool hasExemptLiveInfo = false;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
@@ -1243,6 +1248,7 @@ private:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         metadata.exemptLiveInfo = nullptr;
+        metadata.hasExemptLiveInfo = false;
         SetRegionType(RegionType::FREE_REGION);
         SetUnitRole(uClass);
         SetTraceRegionFlag(0);
