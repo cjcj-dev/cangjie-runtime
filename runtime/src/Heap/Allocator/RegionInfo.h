@@ -755,6 +755,9 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(0);
+        }
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
