@@ -8,7 +8,18 @@
 #include "Base/Log.h"
 #include "MObject.inline.h"
 #include "Inspector/CjAllocData.h"
+#include "Mutator/Mutator.h"
 namespace MapleRuntime {
+namespace {
+void DeferLogObject(BaseObject* object)
+{
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->DeferLogObject(object);
+    }
+}
+} // namespace
+
 MObject* MObject::NewObject(TypeInfo* ti, MSize size, AllocType allocType)
 {
     auto addr = HeapManager::Allocate(size, allocType);
@@ -22,7 +33,9 @@ MObject* MObject::NewObject(TypeInfo* ti, MSize size, AllocType allocType)
         CjAllocData::GetCjAllocData()->RecordAllocNodes(ti, size);
     }
 #endif
-    return Cast<MObject>(addr);
+    MObject* object = Cast<MObject>(addr);
+    DeferLogObject(object);
+    return object;
 }
 
 MObject* MObject::NewPinnedObject(TypeInfo* ti, MSize size)
@@ -39,7 +52,9 @@ MObject* MObject::NewPinnedObject(TypeInfo* ti, MSize size)
         CjAllocData::GetCjAllocData()->RecordAllocNodes(ti, size);
     }
 #endif
-    return Cast<MObject>(addr);
+    MObject* object = Cast<MObject>(addr);
+    DeferLogObject(object);
+    return object;
 }
 
 MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
@@ -57,6 +72,8 @@ MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
         CjAllocData::GetCjAllocData()->RecordAllocNodes(ti, size);
     }
 #endif
-    return Cast<MObject>(addr);
+    MObject* object = Cast<MObject>(addr);
+    DeferLogObject(object);
+    return object;
 }
 } // namespace MapleRuntime

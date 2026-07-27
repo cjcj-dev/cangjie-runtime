@@ -168,6 +168,12 @@ class TracingCollector : public Collector {
     friend ConcurrentMarkingWork;
     friend ExportRootsTracingWork;
 public:
+    enum class RefSlotKind : U8 {
+        STRONG,
+        WEAK_REFERENT,
+    };
+    using ClassifiedRefSlotVisitor = std::function<void(RefSlotKind, BaseObject*, RefField<>&)>;
+
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
         : Collector(), theAllocator(allocator), collectorResources(resources)
     {}
@@ -274,6 +280,7 @@ public:
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
     virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
     virtual BaseObject* GetAndTryTagObj(BaseObject* obj, RefField<>& field) { std::abort(); }
+    void ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRefSlotVisitor& visitor);
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
@@ -313,6 +320,7 @@ public:
     static const size_t MIN_MARKING_WORK_SIZE;
 
 protected:
+    static void ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& visitor);
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
 
     Allocator& theAllocator;

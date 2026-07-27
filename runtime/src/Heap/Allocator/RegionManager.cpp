@@ -16,6 +16,7 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/StickyLog.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -27,6 +28,12 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+
+static void ClearStickyLogForUnavailableRegion(RegionInfo* region)
+{
+    MRT_ASSERT(region->IsFreeRegion(), "sticky region clear requires a region unavailable to mutators");
+    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+}
 
 static size_t GetPageSize() noexcept
 {
@@ -409,6 +416,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     region->InitFreeUnits();
+    ClearStickyLogForUnavailableRegion(region);
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
@@ -424,6 +432,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
     region->InitFreeUnits();
+    ClearStickyLogForUnavailableRegion(region);
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
@@ -471,6 +480,82 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         region = nextRegion;
     }
 }
+
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
+{
+    YoungCollectionStats stats;
+    auto prepare = [&stats, &visitor](RegionList& list) {
+        list.VisitAllRegions([&stats, &visitor](RegionInfo* region) {
+            if (!region->IsYoungRegion()) {
+                return;
+            }
+            region->ClearLiveInfo();
+            visitor(region);
+            ++stats.candidateRegions;
+            stats.candidateBytes += region->GetRegionAllocatedSize();
+        });
+    };
+    prepare(recentFullRegionList);
+    prepare(recentLargeRegionList);
+    prepare(recentPinnedRegionList);
+    return stats;
+}
+
+void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
+                                        const std::function<void(RegionInfo*)>& promoteVisitor)
+{
+    auto collect = [this, &stats, &promoteVisitor](RegionList& list, bool releaseResources) {
+        RegionInfo* region = list.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsYoungRegion()) {
+                region = next;
+                continue;
+            }
+            if (region->GetLiveByteCount() != 0) {
+                if (region->GetYoungAge() == 0) {
+                    region->SetYoungAge(1);
+                } else {
+                    region->SetYoungRegionFlag(0);
+                    region->SetYoungAge(0);
+                    promoteVisitor(region);
+                }
+                region = next;
+                continue;
+            }
+            list.DeleteRegion(region);
+            StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+            if (releaseResources) {
+                region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
+            }
+            ++stats.reclaimedRegions;
+            if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
+                stats.reclaimedBytes += ReleaseRegion(region);
+            } else {
+                stats.reclaimedBytes += CollectRegion(region);
+            }
+            region = next;
+        }
+    };
+    collect(recentFullRegionList, false);
+    collect(recentLargeRegionList, false);
+    collect(recentPinnedRegionList, true);
+    youngAllocatedBytes.store(0, std::memory_order_relaxed);
+}
+
+void RegionManager::PromoteAllRegions()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+    }
+    youngAllocatedBytes.store(0, std::memory_order_relaxed);
+}
+
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
 {
     regionList->DeleteRegionLocked(region);
@@ -541,11 +626,19 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // a chance to invoke heuristic gc.
     if (!Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
-        size_t threshold = collector.GetGCStats().GetThreshold();
-        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-        if (allocated >= threshold) {
+        StickyLog& stickyLog = StickyLog::Instance();
+        size_t youngAllocated = GetYoungAllocatedSize();
+        if (stickyLog.IsMinorEnabled() && youngAllocated >= stickyLog.GetYoungBytesThreshold()) {
+            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated,
+                 stickyLog.GetYoungBytesThreshold());
+            collector.RequestGC(GC_REASON_YOUNG, true);
+        } else {
+            size_t threshold = collector.GetGCStats().GetThreshold();
+            size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
+            if (allocated >= threshold) {
             DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, threshold);
             collector.RequestGC(GC_REASON_HEU, true);
+            }
         }
     }
 
@@ -561,7 +654,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-            return RegionInfo::InitRegion(idx, num, type);
+            RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
+            ClearStickyLogForUnavailableRegion(region);
+            youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            return region;
         } else {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             ReclaimRegion(head);
@@ -571,9 +667,11 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
     RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
     if (region != nullptr) {
+        ClearStickyLogForUnavailableRegion(region);
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
+        youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
         return region;
     }
 
@@ -582,6 +680,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         uintptr_t addr = inactiveZone.fetch_add(size);
         if (addr < regionHeapEnd - size) {
             region = RegionInfo::InitRegionAt(addr, num, type);
+            ClearStickyLogForUnavailableRegion(region);
             size_t idx = region->GetUnitIdx();
 #ifdef _WIN64
             MemMap::CommitMemory(
@@ -596,6 +695,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             if (expectPhysicalMem) {
                 RegionInfo::ClearUnits(idx, num);
             }
+            youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             return region;
         } else {
             (void)inactiveZone.fetch_sub(size);

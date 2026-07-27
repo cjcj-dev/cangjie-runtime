@@ -9,6 +9,7 @@
 #define MRT_MUTATOR_H
 
 #include <climits>
+#include <cstddef>
 
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
@@ -68,6 +69,7 @@ public:
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
+        deferredLogRingIndex = 0;
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -78,7 +80,9 @@ public:
     {
         tid = 0;
         stackBoundAddr = nullptr;
+        FlushDeferredLogObject();
         SatbBuffer::Instance().FlushQueue(satbNode);
+        SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -388,6 +392,18 @@ public:
 
     ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* obj) { RememberObjectImpl(obj); }
 
+    ATTR_NO_INLINE void RememberLineInStickyLogBuffer(MAddress line) { RememberStickyLineImpl(line); }
+
+    void DeferLogObject(BaseObject* object);
+    void FlushDeferredLogObject();
+
+    static constexpr size_t DEFERRED_LOG_RING_SIZE = 32;
+    static constexpr size_t DEFERRED_LOG_RING_OFFSET = sizeof(void*);
+    static constexpr size_t DEFERRED_LOG_RING_INDEX_OFFSET =
+        DEFERRED_LOG_RING_OFFSET + DEFERRED_LOG_RING_SIZE * sizeof(void*);
+    static constexpr size_t DeferredLogRingOffset();
+    static constexpr size_t DeferredLogRingIndexOffset();
+
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
     inline uintptr_t GetStackSize() { return stackSize; }
@@ -517,10 +533,22 @@ private:
         SatbBuffer::Instance().EnsureGoodNode(satbNode);
         satbNode->Push(obj);
     }
+    void RememberStickyLineImpl(MAddress line)
+    {
+        if (LIKELY(stickyLogNode != nullptr && stickyLogNode->PushLine(line))) {
+            return;
+        }
+        SatbBuffer::Instance().EnsureGoodStickyNode(stickyLogNode);
+        CHECK_DETAIL(stickyLogNode != nullptr, "failed to allocate sticky log node");
+        CHECK_DETAIL(stickyLogNode->PushLine(line), "failed to record sticky line");
+    }
     ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
+    // ATTENTION: LLVM's inline allocation fast path writes this fixed layout.
+    BaseObject* deferredLogRing[DEFERRED_LOG_RING_SIZE] = {};
+    size_t deferredLogRingIndex = 0;
     // thread id
     uint32_t tid = 0;
     // cjthread ptr
@@ -553,6 +581,7 @@ private:
     ManagedList<BaseObject*> localFinalizers;
 
     SatbBuffer::Node* satbNode = nullptr;
+    SatbBuffer::Node* stickyLogNode = nullptr;
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     GCInfos gcInfos;
 #endif
@@ -589,6 +618,23 @@ public:
     }
 #endif
 };
+
+constexpr size_t Mutator::DeferredLogRingOffset()
+{
+    return offsetof(Mutator, deferredLogRing);
+}
+
+constexpr size_t Mutator::DeferredLogRingIndexOffset()
+{
+    return offsetof(Mutator, deferredLogRingIndex);
+}
+
+static_assert(Mutator::DeferredLogRingOffset() == Mutator::DEFERRED_LOG_RING_OFFSET,
+              "need to modify the deferred log ring offset in llvm-project at the same time");
+static_assert(Mutator::DeferredLogRingIndexOffset() == Mutator::DEFERRED_LOG_RING_INDEX_OFFSET,
+              "need to modify the deferred log ring index offset in llvm-project at the same time");
+
+extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object);
 
 // This function is mainly used to initialize the context of mutator.
 // Ensured that updated fa is the caller layer of the managed function to be called.

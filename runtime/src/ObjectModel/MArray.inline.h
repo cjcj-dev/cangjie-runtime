@@ -14,6 +14,7 @@
 #include "Heap/Barrier/Barrier.inline.h"
 #include "Heap/Heap.h"
 #include "HeapManager.inline.h"
+#include "Mutator/Mutator.h"
 // module internal interfaces
 #include "MArray.h"
 #include "MClass.inline.h"
@@ -135,6 +136,10 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
             CjAllocData::GetCjAllocData()->RecordAllocNodes(&arrayClass, arraySize);
         }
 #endif
+        Mutator* mutator = Mutator::GetMutator();
+        if (mutator != nullptr) {
+            mutator->DeferLogObject(newArray);
+        }
         return newArray;
     }
     return nullptr;
