@@ -43,9 +43,9 @@ public:
 
 private:
     const char* site;
-    std::atomic<size_t> passCount = 0;
-    std::atomic<size_t> badCount = 0;
-    std::atomic<size_t> guardCount = 0;
+    std::atomic<size_t> passCount { 0 };
+    std::atomic<size_t> badCount { 0 };
+    std::atomic<size_t> guardCount { 0 };
 };
 
 struct UntagRefFieldRetryState {
