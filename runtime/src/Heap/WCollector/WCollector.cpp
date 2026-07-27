@@ -276,11 +276,11 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         if (NonfatalCheckCounter::ShouldLog(badCount)) {
             LOG(RTLOG_ERROR,
                 "Enum static root %p(%p) encounters invalid object: holder=%p caller=%p fieldOffset=%zu "
-                "passCount=%zu badCount=%zu action=skip-no-write",
+                "passCount=%zu badCount=%zu action=fatal-upstream-check",
                 latest, &field, nullptr, __builtin_return_address(0), static_cast<size_t>(-1), passCount, badCount);
         }
-        return;
     }
+    CHECK_DETAIL(isValidLatest, "Enum static root %p(%p) encounters invalid object", latest, &field);
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
