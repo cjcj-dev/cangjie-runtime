@@ -1042,6 +1042,12 @@ public:
     }
     void ClearLiveInfo()
     {
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
+        }
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "ClearLiveInfo must be called on a region head");
         // Phase: STW GC (Assemble*GarbageCandidates / ClearAllLiveInfo / young prepare).
         // R2 validity-end: ClearLiveInfo (snapshot semantics flip).
         BumpSnapshotEpoch();
