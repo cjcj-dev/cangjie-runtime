@@ -764,13 +764,13 @@ public:
 
     void DispelGhostFromRegion()
     {
-        metadata.routeState = NORMAL;
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
         }
+        metadata.routeState = NORMAL;
     }
 
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
