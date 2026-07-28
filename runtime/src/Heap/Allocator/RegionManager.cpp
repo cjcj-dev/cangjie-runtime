@@ -1307,6 +1307,18 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    if (allocPtr != 0 && StickyLog::Instance().IsMinorEnabled()) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
+        if (region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID) {
+            LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
+            CHECK(retainedLiveInfo != nullptr);
+            RegionBitmap* retainedBitmap = retainedLiveInfo->markBitmap != nullptr
+                ? retainedLiveInfo->markBitmap : retainedLiveInfo->resurrectBitmap;
+            CHECK(retainedBitmap != nullptr);
+            size_t offset = allocPtr - region->GetRegionStart();
+            (void)retainedBitmap->MarkBits(offset, size, region->GetRegionSize());
+        }
+    }
     // For making bitmap comform with live object count, do not mark object repeated.
     if (allocPtr == 0 ||
         (mutatorPhase != GCPhase::GC_PHASE_ENUM &&
