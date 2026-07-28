@@ -15,6 +15,7 @@
 #include "Heap/Allocator/Allocator.h"
 #include "Heap/Collector/GcInfos.h"
 #include "LoaderManager.h"
+#include "Mutator/CJDeferredLogRingABI.h"
 #include "Mutator/ThreadLocal.h"
 #include "SatbBuffer.h"
 #include "schedule.h"
@@ -397,12 +398,13 @@ public:
     void DeferLogObject(BaseObject* object);
     void FlushDeferredLogObject();
 
-    static constexpr size_t DEFERRED_LOG_RING_SIZE = 32;
+    static constexpr size_t DEFERRED_LOG_RING_SIZE = CangjieDeferredLogRingABI::Capacity;
     static constexpr size_t DEFERRED_LOG_RING_OFFSET = sizeof(void*);
     static constexpr size_t DEFERRED_LOG_RING_INDEX_OFFSET =
         DEFERRED_LOG_RING_OFFSET + DEFERRED_LOG_RING_SIZE * sizeof(void*);
     static constexpr size_t DeferredLogRingOffset();
     static constexpr size_t DeferredLogRingIndexOffset();
+    static constexpr size_t DeferredLogRingCapacity();
 
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
@@ -629,12 +631,27 @@ constexpr size_t Mutator::DeferredLogRingIndexOffset()
     return offsetof(Mutator, deferredLogRingIndex);
 }
 
+constexpr size_t Mutator::DeferredLogRingCapacity()
+{
+    return sizeof(deferredLogRing) / sizeof(deferredLogRing[0]);
+}
+
 static_assert(Mutator::DeferredLogRingOffset() == Mutator::DEFERRED_LOG_RING_OFFSET,
               "need to modify the deferred log ring offset in llvm-project at the same time");
 static_assert(Mutator::DeferredLogRingIndexOffset() == Mutator::DEFERRED_LOG_RING_INDEX_OFFSET,
               "need to modify the deferred log ring index offset in llvm-project at the same time");
+static_assert(Mutator::DeferredLogRingCapacity() == Mutator::DEFERRED_LOG_RING_SIZE,
+              "need to modify the deferred log ring capacity in llvm-project at the same time");
+#if defined(__x86_64__) || defined(__aarch64__)
+static_assert(Mutator::DeferredLogRingOffset() == CangjieDeferredLogRingABI::Offset,
+              "deferred log ring offset does not match the versioned ABI symbol");
+static_assert(Mutator::DeferredLogRingIndexOffset() == CangjieDeferredLogRingABI::IndexOffset,
+              "deferred log ring index offset does not match the versioned ABI symbol");
+static_assert(Mutator::DeferredLogRingCapacity() == CangjieDeferredLogRingABI::Capacity,
+              "deferred log ring capacity does not match the versioned ABI symbol");
+#endif
 
-extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object);
+extern "C" MRT_EXPORT BaseObject* CANGJIE_DEFERRED_LOG_RING_SYMBOL(BaseObject* object);
 
 // This function is mainly used to initialize the context of mutator.
 // Ensured that updated fa is the caller layer of the managed function to be called.

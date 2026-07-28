@@ -212,7 +212,7 @@ void Mutator::FlushDeferredLogObject()
     }
 }
 
-extern "C" BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object)
+extern "C" BaseObject* CANGJIE_DEFERRED_LOG_RING_SYMBOL(BaseObject* object)
 {
     Mutator* mutator = Mutator::GetMutator();
     if (mutator != nullptr) {
