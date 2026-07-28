@@ -206,6 +206,10 @@ private:
     // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
     void InvalidateOldTaggedRefsBeforeDispel();
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
+    // R1: after ForwardFromSpace, rewrite plain→ghost-from edges via FixEdgeSet
+    // index only (P-G). No VisitAllObjects / ForEachObj holder walk (H1).
+    void FixHolderForwardRefField(BaseObject* holder, RefField<>& field);
+    void BulkForwardHolderRefs();
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();

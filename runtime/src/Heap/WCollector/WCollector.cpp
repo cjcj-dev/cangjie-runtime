@@ -10,6 +10,7 @@
 #include <atomic>
 #include <csignal>
 
+#include "Heap/FixEdgeSet.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
@@ -280,6 +281,12 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
              newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     }
 
+    // R1 I4 Trace complement: plain→from observed at scan; register so BulkForward
+    // can close if tag CAS lost or P7 left plain. Consume skips tagged slots.
+    if (!oldField.IsTagged() && IsFromObject(latest)) {
+        FixEdgeSet::Instance().MaybeAdd(&field, latest);
+    }
+
     if (!IsMarkedObject(latest)) {
         workStack.push_back(latest);
     }
@@ -509,6 +516,98 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
             ForEachRefSlot(obj, [this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
         },
         false);
+}
+
+// After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
+// Predicate aligned with bulkfwd f04 (plain-only + route state + ghost live).
+// holder arg is diagnostic only — P-G walks slot addresses from FixEdgeSet.
+void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
+{
+    RefField<> oldField(field);
+    // b316 A/B producers are plain (untagged) edges; leave tagged to F3/barriers.
+    if (oldField.IsTagged()) {
+        return;
+    }
+    BaseObject* target = oldField.GetTargetObject();
+    if (!Heap::IsHeapAddress(target)) {
+        return;
+    }
+    // Only rewrite edges into ghost-from survivors with a published route.
+    // Avoid FindToVersion/RouteRegion side effects on FORWARDABLE regions.
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+    if (ghost == nullptr) {
+        return;
+    }
+    RegionInfo::RouteState st = ghost->GetRouteState();
+    if (st != RegionInfo::RouteState::ROUTED && st != RegionInfo::RouteState::FORWARDED &&
+        st != RegionInfo::RouteState::COMPACTED) {
+        return;
+    }
+    LiveInfo* ghostLive = ghost->GetGhostLiveInfo();
+    if (ghostLive == nullptr) {
+        return;
+    }
+    size_t offset = ghost->GetAddressOffset(reinterpret_cast<MAddress>(target));
+    if (!ghostLive->IsSurvivedObject(offset)) {
+        return;
+    }
+    BaseObject* toObj = ghost->GetRoute(target);
+    if (toObj == nullptr || toObj == target) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(toObj) || !toObj->IsValidObject()) {
+        return;
+    }
+    // Success shape of TryUpdateRefFieldImpl: plain to (WCollector.cpp:102-111).
+    RefField<> newField(toObj);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(FIX, "r1rt fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
+             oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target);
+    }
+}
+
+// R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
+// VisitAllObjects (H1 bulkfwd SEGV path). Worst-case pause = O(|FixSet| + |Roots|) (H2).
+void WCollector::BulkForwardHolderRefs()
+{
+    MRT_PHASE_TIMER("BulkForwardHolderRefs");
+    ScopedStopTheWorld stw("bulk forward holder refs");
+    const uint64_t startNs = TimeUtil::NanoSeconds();
+    size_t rewritten = 0;
+    const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
+
+    auto fixOne = [this, &rewritten](BaseObject* holder, RefField<>& field) {
+        RefField<> before(field);
+        FixHolderForwardRefField(holder, field);
+        if (RefField<>(field).GetFieldValue() != before.GetFieldValue()) {
+            ++rewritten;
+        }
+    };
+
+    RootVisitor fixRoot = [&fixOne](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        fixOne(nullptr, field);
+    };
+    RefFieldVisitor fixRootField = [&fixOne](RefField<>& field) { fixOne(nullptr, field); };
+
+    MutatorManager::Instance().VisitAllMutators(
+        [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+    Heap::GetHeap().VisitStaticRoots(fixRootField);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+    Heap::GetHeap().VisitAllExportRoots(fixRoot);
+
+    // Index-only walk: each entry is a field slot address registered at store time.
+    FixEdgeSet::Instance().VisitAndClear(
+        [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
+
+    const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu",
+         static_cast<size_t>(pauseUs), rewritten, fixSetSize);
 }
 
 void WCollector::PostTrace()
@@ -957,6 +1056,10 @@ void WCollector::DoGarbageCollection()
     Preforward();
 
     ForwardFromSpace();
+
+    // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
+    // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
+    BulkForwardHolderRefs();
 
     if (StickyLog::Instance().IsEnabled()) {
         ScopedStopTheWorld stw("advance sticky log epoch");

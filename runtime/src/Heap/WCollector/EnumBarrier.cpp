@@ -7,6 +7,7 @@
 
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -129,6 +130,7 @@ void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    FixEdgeSet::Instance().MaybeAdd(&field, ref);
 }
 
 void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
@@ -231,6 +233,7 @@ BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     mutator->RememberObjectInSatbBuffer(newRef);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
 
@@ -252,6 +255,7 @@ void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     } else {
         DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
 bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
@@ -268,6 +272,7 @@ bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
             Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);
             mutator->RememberObjectInSatbBuffer(newRef);
+            FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);

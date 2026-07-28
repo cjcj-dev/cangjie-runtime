@@ -7,6 +7,7 @@
 
 #include "PostTraceBarrier.h"
 
+#include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -100,12 +101,14 @@ void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, B
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    FixEdgeSet::Instance().MaybeAdd(&field, ref);
 }
 
 void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    FixEdgeSet::Instance().MaybeAdd(&field, ref);
 }
 
 void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -196,6 +199,7 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
     } else {
         DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
 BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,

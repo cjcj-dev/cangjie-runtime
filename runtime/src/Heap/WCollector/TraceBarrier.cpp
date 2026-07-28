@@ -7,6 +7,7 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -135,6 +136,8 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    // R1 I4/I5: Trace-phase store may leave plain→from when !IsFromObject (P7).
+    FixEdgeSet::Instance().MaybeAdd(&field, ref);
 }
 
 void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
@@ -250,6 +253,7 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
     } else {
         DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
 BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -264,6 +268,7 @@ BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& f
     mutator->RememberObjectInSatbBuffer(oldRef);
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
 
@@ -280,6 +285,7 @@ bool TraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fiel
     while (oldVersion == oldRef) {
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             mutator->RememberObjectInSatbBuffer(oldRef);
+            FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
