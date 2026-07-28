@@ -1074,7 +1074,13 @@ void WCollector::DoGarbageCollection()
     {
         ScopedStopTheWorld stw("normalize trace region references");
         RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-        manager.VisitTraceRegionObjects([this](BaseObject* object) { NormalizeTraceRegionObject(object); });
+        manager.VisitTraceRegionObjects([this](BaseObject* object) {
+            if (object != nullptr && object->IsWeakRef()) {
+                NormalizeTraceRegionObject(object);
+            } else {
+                ForEachStrongRefSlot(object, [](RefSlotKind, BaseObject*, RefField<>&) {});
+            }
+        });
         manager.HandleTraceRegions();
     }
     CollectSmallSpace();
