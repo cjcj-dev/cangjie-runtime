@@ -7,6 +7,8 @@
 
 #include "CjFile.h"
 
+#include <cstring>
+
 #include "Base/Types.h"
 #include "CjFileMeta.h"
 #include "Common/TypeDef.h"
@@ -38,8 +40,8 @@ void CJFile::LoadGCFlags(const CJGCFlagsTable* gcFlags, U32 gcFlagsSize)
     if (gcFlagsBytes[sizeof(CJGCFlagsTable)] != 0) {
         return;
     }
-    cJFileMeta.stickyBarrierMetadata = *reinterpret_cast<const CJStickyBarrierMetadata*>(
-        gcFlagsBytes + CJ_STICKY_BARRIER_METADATA_OFFSET);
+    std::memcpy(&cJFileMeta.stickyBarrierMetadata, gcFlagsBytes + CJ_STICKY_BARRIER_METADATA_OFFSET,
+        sizeof(CJStickyBarrierMetadata));
 }
 
 bool CJFile::HasStickyBarrier() const
