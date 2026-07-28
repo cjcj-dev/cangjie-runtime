@@ -455,14 +455,14 @@ void RegionManager::AssembleSmallGarbageCandidates()
     fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 
-    fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
+    fromRegionList.VisitAllRegions([](RegionInfo* region) { region->PrepareRetainedLiveInfoCandidate(); });
 }
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
     oldLargeRegionList.MergeRegionList(recentLargeRegionList, RegionInfo::RegionType::LARGE_REGION);
     for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
-        region->ClearLiveInfo();
+        region->PrepareRetainedLiveInfoCandidate();
     }
 }
 
@@ -476,7 +476,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
             oldPinnedRegionList.DeleteRegion(region);
             rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
         }
-        region->ClearLiveInfo();
+        region->PrepareRetainedLiveInfoCandidate();
         region = nextRegion;
     }
 }
@@ -550,11 +550,11 @@ void RegionManager::PromoteAllRegions()
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         regionAddr = region->GetRegionEnd();
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
-            // Concurrent marking may only partially cover a recent pinned region while allocation continues.
-            if (region->GetLiveInfo() != nullptr &&
-                region->GetRegionType() != RegionInfo::RegionType::RECENT_PINNED_REGION) {
+            // Only regions included in this full-GC tracing closure have a complete current live-info snapshot.
+            if (region->GetLiveInfo() != nullptr && region->IsRetainedLiveInfoCandidate()) {
                 region->PreserveRetainedLiveInfo();
             }
+            region->SetRetainedLiveInfoCandidate(0);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
