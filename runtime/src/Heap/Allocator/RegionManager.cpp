@@ -469,6 +469,7 @@ void RegionManager::AssembleLargeGarbageCandidates()
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 {
     oldPinnedRegionList.MergeRegionList(recentPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
+    std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
     RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* nextRegion = region->GetNextRegion();
