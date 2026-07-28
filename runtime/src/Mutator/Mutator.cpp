@@ -465,11 +465,22 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         rootList.pop();
         resSet.insert(objSlot);
         BaseObject* obj = *objSlot;
-        if (!obj->IsValidObject() || !obj->HasRefField()) {
+        if (!obj->IsValidObject()) {
             continue;
-        } else {
-            obj->ForEachRefField(refVisitor);
         }
+        TypeInfo* tip = obj->GetTypeInfo();
+        uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+        CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
+                     "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) is not 8-byte aligned "
+                     "(stateWord non-zero is not a managed-object proof)",
+                     tip, obj, objSlot);
+        CHECK_DETAIL(tip->IsVaildType(),
+                     "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) has invalid type kind",
+                     tip, obj, objSlot);
+        if (!obj->HasRefField()) {
+            continue;
+        }
+        obj->ForEachRefField(refVisitor);
     }
 }
 
@@ -572,7 +583,18 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 
 inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
 {
-    if (rootSet.insert(obj).second && obj->IsValidObject() && obj->HasRefField()) {
+    if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
+        return;
+    }
+    TypeInfo* tip = obj->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
+                 "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
+                 "(stateWord non-zero is not a managed-object proof)",
+                 tip, obj);
+    CHECK_DETAIL(tip->IsVaildType(),
+                 "CheckAndPush: TypeInfo %p on stack object %p has invalid type kind", tip, obj);
+    if (obj->HasRefField()) {
         rootStack.push(obj);
     }
 }
