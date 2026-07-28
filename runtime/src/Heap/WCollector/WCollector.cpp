@@ -443,14 +443,20 @@ void WCollector::TraceHeap()
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
 
+        // Seal the last tracing window before finalizer classification and weak-reference processing. A weak read
+        // returns a strong reference to the mutator and records the referent in SATB; stopping in CLEAR flushes every
+        // active node, and keeping the world stopped through POST publication prevents another TraceBarrier record
+        // from escaping the final drain.
+        ScopedStopTheWorld stw("final tracing closure", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+        CHECK_DETAIL(MarkSatbBuffer(workStack), "not cleared\n");
         ProcessFinalizers();
+        TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     }
 }
 
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
-    TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.GetRegionManager().HandleTraceRegions();
     // clear weakRef List, set the referent as null
