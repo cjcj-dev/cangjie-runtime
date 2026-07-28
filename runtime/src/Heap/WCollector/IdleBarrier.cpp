@@ -164,7 +164,7 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
     // when holder is a heap object (same source-proof as WriteReference).
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         obj->ForEachRefInStruct(
-            [](RefField<false>& field) {
+            [obj](RefField<false>& field) {
                 BaseObject* ref = field.GetTargetObject();
                 FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
             },
