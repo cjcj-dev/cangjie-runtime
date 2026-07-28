@@ -450,6 +450,19 @@ public:
     void SetLargeObjectThreshold();
     void SetGarbageThreshold();
 
+    // Walk objects still parked in the TRACE-phase region caches before merge.
+    // Used by post-forward slot normalization (WCollector::DoGarbageCollection).
+    void VisitTraceRegionObjects(const std::function<void(BaseObject*)>& visitor)
+    {
+        auto visitObjects = [&visitor](RegionList& regions) {
+            regions.VisitAllRegions([&visitor](RegionInfo* region) {
+                region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
+            });
+        };
+        visitObjects(fullTraceRegions);
+        visitObjects(largeTraceRegions);
+    }
+
     void HandleTraceRegions()
     {
         fullTraceRegions.DeactivateRegionCache();

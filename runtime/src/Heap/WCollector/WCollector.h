@@ -206,6 +206,10 @@ private:
     // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
     void InvalidateOldTaggedRefsBeforeDispel();
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
+    // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
+    // Weak referents soft-clear when dead; strong slots keep hard validity checks.
+    void NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent);
+    void NormalizeTraceRegionObject(BaseObject* object);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();
