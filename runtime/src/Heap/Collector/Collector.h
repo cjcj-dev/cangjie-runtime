@@ -96,18 +96,9 @@ public:
     virtual void RemoveRawPointerObject(BaseObject*) { std::abort(); }
     virtual void ResolveCycleRef() { std::abort(); }
 
-    BaseObject* FindLatestVersion(BaseObject* obj) const
-    {
-        if (obj == nullptr) {
-            return nullptr;
-        }
-
-        auto to = FindToVersion(obj);
-        if (to != nullptr) {
-            return to;
-        }
-        return obj;
-    };
+    // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
+    // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
+    BaseObject* FindLatestVersion(BaseObject* obj) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { std::abort(); }

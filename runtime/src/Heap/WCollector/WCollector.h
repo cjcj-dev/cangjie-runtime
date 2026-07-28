@@ -202,6 +202,10 @@ private:
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
     void TraceHeap();
+    // F3: before DispelGhostFromRegion, rewrite IsOldPointer slots to plain/to so
+    // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
+    void InvalidateOldTaggedRefsBeforeDispel();
+    void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();
