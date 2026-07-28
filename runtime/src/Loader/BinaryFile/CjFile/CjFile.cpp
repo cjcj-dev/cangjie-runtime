@@ -11,6 +11,7 @@
 #include "CjFileMeta.h"
 #include "Common/TypeDef.h"
 #include "Heap/Heap.h"
+#include "Heap/StickyLog.h"
 #include "Utils/Demangler.h"
 namespace MapleRuntime {
 void CJFile::RegisterFile() { LoadCJFileMeta(); }
@@ -19,6 +20,35 @@ void CJFile::UnregisterFile()
 {
     // unregist gcroot
     Heap::GetHeap().UnregisterStaticRoots(cJFileMeta.gcRootsAddr, cJFileMeta.gcRootSize);
+}
+
+void CJFile::LoadGCFlags(const CJGCFlagsTable* gcFlags, U32 gcFlagsSize)
+{
+    cJFileMeta.gcFlagsSize = gcFlagsSize;
+    cJFileMeta.gcFlagsTbl = {};
+    cJFileMeta.stickyBarrierMetadata = {};
+    if (gcFlagsSize < sizeof(CJGCFlagsTable)) {
+        return;
+    }
+    cJFileMeta.gcFlagsTbl = *gcFlags;
+    if (gcFlagsSize != CJ_STICKY_BARRIER_GC_FLAGS_SIZE) {
+        return;
+    }
+    const U8* gcFlagsBytes = reinterpret_cast<const U8*>(gcFlags);
+    if (gcFlagsBytes[sizeof(CJGCFlagsTable)] != 0) {
+        return;
+    }
+    cJFileMeta.stickyBarrierMetadata = *reinterpret_cast<const CJStickyBarrierMetadata*>(
+        gcFlagsBytes + CJ_STICKY_BARRIER_METADATA_OFFSET);
+}
+
+bool CJFile::HasStickyBarrier() const
+{
+    const CJStickyBarrierMetadata& metadata = cJFileMeta.stickyBarrierMetadata;
+    return cJFileMeta.gcFlagsSize == CJ_STICKY_BARRIER_GC_FLAGS_SIZE &&
+        metadata.magic == CJ_STICKY_BARRIER_METADATA_MAGIC &&
+        metadata.version == CJ_STICKY_BARRIER_METADATA_VERSION &&
+        metadata.barrierKind == static_cast<U32>(CJBarrierKind::STICKY) && metadata.producerFingerprint != 0;
 }
 
 #if defined(_WIN64)
@@ -49,12 +79,8 @@ void CJFile::LoadWinCJFileMeta()
     cJFileMeta.staticGITbl.staticGITotalSize = *header->tables[STATIC_GI_TABLE].tableSize;
     cJFileMeta.staticGITbl.staticGIBasePtr =
         reinterpret_cast<void*>(*header->tables[STATIC_GI_TABLE].tableAddr);
-    cJFileMeta.gcFlagsTbl.withSafepoint =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->withSafepoint;
-    cJFileMeta.gcFlagsTbl.withBarrier =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->withBarrier;
-    cJFileMeta.gcFlagsTbl.hasStackPointerMap =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->hasStackPointerMap;
+    LoadGCFlags(reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr),
+        *header->tables[GC_FLAGS_TABLE].tableSize);
     cJFileMeta.gcRootsAddr = *header->tables[GC_ROOT_TABLE].tableAddr;
     cJFileMeta.gcRootSize = *header->tables[GC_ROOT_TABLE].tableSize / sizeof(U64);
     cJFileMeta.packageInfoTbl.packageInfoBasePtr = *header->tables[PACKINFO_TABLE].tableAddr;
@@ -91,12 +117,8 @@ void CJFile::LoadMacCJFileMeta()
     cJFileMeta.staticGITbl.staticGITotalSize = *header->tables[STATIC_GI_TABLE].tableSize;
     cJFileMeta.staticGITbl.staticGIBasePtr =
         reinterpret_cast<void*>(*header->tables[STATIC_GI_TABLE].tableAddr);
-    cJFileMeta.gcFlagsTbl.withSafepoint =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->withSafepoint;
-    cJFileMeta.gcFlagsTbl.withBarrier =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->withBarrier;
-    cJFileMeta.gcFlagsTbl.hasStackPointerMap =
-        reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr)->hasStackPointerMap;
+    LoadGCFlags(reinterpret_cast<CJGCFlagsTable*>(*header->tables[GC_FLAGS_TABLE].tableAddr),
+        *header->tables[GC_FLAGS_TABLE].tableSize);
     cJFileMeta.gcRootsAddr = *header->tables[GC_ROOT_TABLE].tableAddr;
     cJFileMeta.gcRootSize = *header->tables[GC_ROOT_TABLE].tableSize / sizeof(U64);
     cJFileMeta.packageInfoTbl.packageInfoBasePtr = *header->tables[PACKINFO_TABLE].tableAddr;
@@ -137,12 +159,8 @@ void CJFile::LoadLinuxCJFileMeta()
     cJFileMeta.staticGITbl.staticGITotalSize = header->tables[STATIC_GI_TABLE].tableSize;
     cJFileMeta.staticGITbl.staticGIBasePtr =
         reinterpret_cast<void*>(begin + header->tables[STATIC_GI_TABLE].tableOffset);
-    cJFileMeta.gcFlagsTbl.withSafepoint =
-        reinterpret_cast<CJGCFlagsTable*>(begin + header->tables[GC_FLAGS_TABLE].tableOffset)->withSafepoint;
-    cJFileMeta.gcFlagsTbl.withBarrier =
-        reinterpret_cast<CJGCFlagsTable*>(begin + header->tables[GC_FLAGS_TABLE].tableOffset)->withBarrier;
-    cJFileMeta.gcFlagsTbl.hasStackPointerMap =
-        reinterpret_cast<CJGCFlagsTable*>(begin + header->tables[GC_FLAGS_TABLE].tableOffset)->hasStackPointerMap;
+    LoadGCFlags(reinterpret_cast<CJGCFlagsTable*>(begin + header->tables[GC_FLAGS_TABLE].tableOffset),
+        header->tables[GC_FLAGS_TABLE].tableSize);
     cJFileMeta.gcRootsAddr = begin + header->tables[GC_ROOT_TABLE].tableOffset;
     cJFileMeta.gcRootSize = header->tables[GC_ROOT_TABLE].tableSize / sizeof(ArchUInt);
     cJFileMeta.packageInfoTbl.packageInfoBasePtr = begin + header->tables[PACKINFO_TABLE].tableOffset;
@@ -167,6 +185,17 @@ void CJFile::LoadCJFileMeta()
         if (cJFileMeta.gcFlagsTbl.withSafepoint != 1 || cJFileMeta.gcFlagsTbl.withBarrier != 1) {
             LOG(RTLOG_FATAL, "no safepoint or barrier defined in file %s \n", GetBaseName().Str());
         }
+    }
+    if (StickyLog::Instance().IsMinorEnabled() && !StickyLog::Instance().IsForceSlowPathEnabled() &&
+        !HasStickyBarrier()) {
+        const CJStickyBarrierMetadata& metadata = cJFileMeta.stickyBarrierMetadata;
+        LOG(RTLOG_FATAL,
+            "Refusing MRT_STICKY_MINOR=1: Cangjie module %s has no valid sticky write-barrier metadata; "
+            "minor GC could miss old-to-young references and reclaim live objects. Rebuild every managed module "
+            "with the sticky profile or unset MRT_STICKY_MINOR "
+            "(gcFlagsSize=%u, magic=0x%08x, version=%u, barrierKind=%u, producerFingerprint=0x%08x).",
+            GetBaseName().Str(), cJFileMeta.gcFlagsSize, metadata.magic, metadata.version, metadata.barrierKind,
+            metadata.producerFingerprint);
     }
     if (CangjieRuntime::stackGrowConfig == StackGrowConfig::UNDEF) {
         if (cJFileMeta.gcFlagsTbl.hasStackPointerMap == 0) {

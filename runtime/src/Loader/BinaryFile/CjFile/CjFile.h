@@ -50,6 +50,8 @@ public:
 #endif
 
 private:
+    void LoadGCFlags(const CJGCFlagsTable* gcFlags, U32 gcFlagsSize);
+    bool HasStickyBarrier() const;
     Uptr* GetGlobalInitFuncPtr(const CJFileMeta& cFileMeta) const;
     U32 GetGlobalInitFuncSize(const CJFileMeta& cFileMeta) const;
     CJFileMeta cJFileMeta;
