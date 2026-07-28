@@ -422,13 +422,16 @@ bool MRT_NewForeignCJThread()
     void* cjthread = ThreadLocal::GetForeignCJThread();
     ThreadLocal::SetCJThread(cjthread);
     Mutator* mutator = reinterpret_cast<Mutator*>(CJThreadGetMutator());
-    MutatorManager::Instance().BindMutator(*mutator);
+    auto& mutatorManager = MutatorManager::Instance();
+    mutatorManager.MutatorManagementRLock();
+    mutatorManager.BindMutator(*mutator);
     if (scheduler == nullptr) {
         scheduler = GetCJThreadScheduler();
         ThreadLocal::SetSchedule(scheduler);
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
+    mutatorManager.MutatorManagementRUnlock();
     // 1: state is SCHEDULE_RUNNING
     SetSchedulerState(1);
 #ifdef __OHOS__
