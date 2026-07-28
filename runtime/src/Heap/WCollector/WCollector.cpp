@@ -447,6 +447,71 @@ void WCollector::TraceHeap()
     }
 }
 
+void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
+{
+    RefField<> oldField(field);
+    if (!IsOldPointer(oldField)) {
+        return;
+    }
+    BaseObject* fromObj = oldField.GetTargetObject();
+    BaseObject* latest = FindToVersion(fromObj);
+    if (latest == nullptr) {
+        latest = fromObj;
+    }
+    if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject()) {
+        CHECK_DETAIL(false,
+                     "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
+                     "(no live to-version before dispel)",
+                     fromObj, holder, latest);
+        return;
+    }
+    RefField<> newField = GetAndTryTagRefField(latest);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
+             oldField.GetFieldValue(), newField.GetFieldValue(), latest);
+    }
+}
+
+void WCollector::InvalidateOldTaggedRefsBeforeDispel()
+{
+    MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
+    ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
+
+    auto fixField = [this](BaseObject* holder, RefField<>& field) { FixOldTaggedRefField(holder, field); };
+    auto fixRootField = [this](RefField<>& field) { FixOldTaggedRefField(nullptr, field); };
+    auto fixRoot = [this](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        FixOldTaggedRefField(nullptr, field);
+    };
+
+    MutatorManager::Instance().VisitAllMutators(
+        [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+    Heap::GetHeap().VisitStaticRoots(fixRootField);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+    Heap::GetHeap().VisitAllExportRoots(fixRoot);
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    space.ForEachObj(
+        [this, &fixField](BaseObject* obj) {
+            if (obj == nullptr || !obj->IsValidObject()) {
+                return;
+            }
+            if (!IsSurvivedObject(obj)) {
+                return;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            ForEachRefSlot(obj, [this, obj, &fixField](RefField<>& field) { fixField(obj, field); });
+        },
+        false);
+}
+
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
@@ -462,6 +527,9 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
+    // F3: dispel previous ghost from-regions next; kill one-gen-stale tags first so
+    // IsOldPointer cannot outlive FindToVersion's ghost gate (D phase).
+    InvalidateOldTaggedRefsBeforeDispel();
     fwdTable.PrepareForwardTable();
 }
 
