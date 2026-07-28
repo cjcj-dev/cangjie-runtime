@@ -394,6 +394,9 @@ public:
         CHECK(regionSize > 0);
         bool marked = GetOrAllocEnqueueBitmap()->MarkBits(offset, objSize, regionSize);
         CHECK(IsEnqueuedObject(offset));
+        if (!marked && IsRetainedLiveInfoCandidate() && !IsSurvivedObject(offset)) {
+            SetRetainedLiveInfoCandidate(0);
+        }
         return marked;
     }
 

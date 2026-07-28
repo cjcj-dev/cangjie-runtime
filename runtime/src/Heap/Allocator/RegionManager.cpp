@@ -574,8 +574,11 @@ size_t RegionManager::ExemptFromRegions()
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     double exempt = exemptedRegionThreshold;
-    rawPointerPinnedRegionList.VisitAllRegions(
-        [](RegionInfo* region) { region->PreserveRetainedLiveInfo(); });
+    rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
+        if (region->IsRetainedLiveInfoCandidate()) {
+            region->PreserveRetainedLiveInfo();
+        }
+    });
     auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
         size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
         size_t liveBytes = fromRegion->GetLiveByteCount();
@@ -587,7 +590,9 @@ size_t RegionManager::ExemptFromRegions()
                 del->GetUnitCount(), del->GetLiveByteCount());
 
             CHECK(del->IsFromRegion());
-            del->PreserveRetainedLiveInfo();
+            if (del->IsRetainedLiveInfoCandidate()) {
+                del->PreserveRetainedLiveInfo();
+            }
             RemoveRegionLocked(&fromRegionList, del);
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
@@ -597,7 +602,9 @@ size_t RegionManager::ExemptFromRegions()
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
-            del->PreserveRetainedLiveInfo();
+            if (del->IsRetainedLiveInfoCandidate()) {
+                del->PreserveRetainedLiveInfo();
+            }
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
