@@ -21,7 +21,14 @@ const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking tas
 void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
-    gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
+    // L741: map::insert keeps first value; must not inflate totalRootsCount on dup key.
+    auto result = gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
+    if (!result.second) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::RegisterRoots duplicate key %p size %u (kept size %u); totalRootsCount not increased",
+            addr, size, result.first->second);
+        return;
+    }
     totalRootsCount += size;
 }
 
@@ -29,10 +36,19 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     auto iter = gcRootsBuckets.find(addr);
-    if (iter != gcRootsBuckets.end()) {
-        gcRootsBuckets.erase(iter);
+    if (iter == gcRootsBuckets.end()) {
+        LOG(RTLOG_ERROR, "StaticRootTable::UnregisterRoots missing key %p size %u", addr, size);
+        return;
+    }
+    if (iter->second != size) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::UnregisterRoots size mismatch key %p caller %u registered %u; using registered",
+            addr, size, iter->second);
+        totalRootsCount -= iter->second;
+    } else {
         totalRootsCount -= size;
     }
+    gcRootsBuckets.erase(iter);
 }
 
 void StaticRootTable::VisitRoots(const RefFieldVisitor& visitor)
