@@ -550,7 +550,9 @@ void RegionManager::PromoteAllRegions()
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         regionAddr = region->GetRegionEnd();
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
-            if (region->GetLiveInfo() != nullptr) {
+            // Concurrent marking may only partially cover a recent pinned region while allocation continues.
+            if (region->GetLiveInfo() != nullptr &&
+                region->GetRegionType() != RegionInfo::RegionType::RECENT_PINNED_REGION) {
                 region->PreserveRetainedLiveInfo();
             }
             region->SetYoungRegionFlag(0);
