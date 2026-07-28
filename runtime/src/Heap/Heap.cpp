@@ -187,6 +187,9 @@ void HeapImpl::Init(const HeapParam& param)
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         SetGCPhase(GCPhase::GC_PHASE_ENUM);
         InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        LOG(RTLOG_WARNING,
+            "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
+            "barriers; compiler sticky metadata is not required and performance is not production representative");
     } else if (StickyLog::Instance().IsMinorEnabled()) {
         LOG(RTLOG_WARNING,
             "MRT_STICKY_MINOR is experimental: production correctness requires the compiler sticky barrier; "

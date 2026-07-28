@@ -138,6 +138,26 @@ using CJGCFlagsTable = struct {
     U8 hasStackPointerMap;
 };
 
+constexpr U32 CJ_STICKY_BARRIER_METADATA_OFFSET = 4;
+constexpr U32 CJ_STICKY_BARRIER_METADATA_MAGIC = 0x53424A43;
+constexpr U32 CJ_STICKY_BARRIER_METADATA_VERSION = 1;
+
+enum class CJBarrierKind : U32 {
+    NONE = 0,
+    ORDINARY = 1,
+    STICKY = 2,
+};
+
+using CJStickyBarrierMetadata = struct {
+    U32 magic;
+    U32 version;
+    U32 barrierKind;
+    U32 producerFingerprint;
+};
+
+constexpr U32 CJ_STICKY_BARRIER_GC_FLAGS_SIZE =
+    CJ_STICKY_BARRIER_METADATA_OFFSET + sizeof(CJStickyBarrierMetadata);
+
 using CJPackageInfoTable = struct {
     U32 packageInfoTotalSize;
     Uptr packageInfoBasePtr;
@@ -154,6 +174,8 @@ using CJFileMeta = struct CJFileMetadata {
     CJOuterTypeExtensionTable outerTyExtensionTbl;
     CJStaticGITable staticGITbl;
     CJGCFlagsTable gcFlagsTbl;
+    U32 gcFlagsSize;
+    CJStickyBarrierMetadata stickyBarrierMetadata;
     CJPackageInfoTable packageInfoTbl;
     Uptr gcRootsAddr;
     U32 gcRootSize;
