@@ -269,8 +269,11 @@ void FinalizerProcessor::ProcessFinalizables()
     }
     DLOG(FINALIZE, "finalizer: working size %zu", workingFinalizables.size());
     ProcessFinalizableList();
-    if (finalizables.empty()) {
-        hasFinalizableJob.store(false, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> l(listLock);
+        if (finalizables.empty()) {
+            hasFinalizableJob.store(false, std::memory_order_relaxed);
+        }
     }
 }
 
