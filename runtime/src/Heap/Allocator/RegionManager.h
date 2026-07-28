@@ -18,6 +18,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
+#include "Heap/StickyLog.h"
 #include "RegionList.h"
 #include "securec.h"
 #include "SlotList.h"
