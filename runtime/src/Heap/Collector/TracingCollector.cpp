@@ -389,7 +389,7 @@ void TracingCollector::AddExportObjectsTracingWork(RootSet &exportRoots)
 
 void TracingCollector::TracingImpl(WorkStack& workStack, WorkStack& foreignRootsSet, bool parallel)
 {
-    if (workStack.empty()) {
+    if (workStack.empty() && foreignRootsSet.empty()) {
         return;
     }
 
