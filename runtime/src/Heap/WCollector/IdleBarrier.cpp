@@ -160,16 +160,9 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);
 #endif
-    // plainsrc P3: memcpy preserves plain refs; register each ref slot in range
-    // when holder is a heap object (same source-proof as WriteReference).
-    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
-        obj->ForEachRefInStruct(
-            [obj](RefField<false>& field) {
-                BaseObject* ref = field.GetTargetObject();
-                FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
-            },
-            dst, dst + dstLen);
-    }
+    // P3 struct memcpy registration deferred (ForEachRefInStruct post-memcpy
+    // risked incomplete-aggregate walk → early SEGV). Per-ref WriteReference still
+    // registers. Compiler dual-track covers Idle plain bulk copies (r1cc).
 }
 
 void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const { WriteReference(nullptr, field, ref); }
