@@ -480,12 +480,11 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
     ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
 
-    auto fixField = [this](BaseObject* holder, RefField<>& field) { FixOldTaggedRefField(holder, field); };
-    auto fixRootField = [this](RefField<>& field) { FixOldTaggedRefField(nullptr, field); };
-    auto fixRoot = [this](ObjectRef& root) {
+    RootVisitor fixRoot = [this](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         FixOldTaggedRefField(nullptr, field);
     };
+    RefFieldVisitor fixRootField = [this](RefField<>& field) { FixOldTaggedRefField(nullptr, field); };
 
     MutatorManager::Instance().VisitAllMutators(
         [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
@@ -497,7 +496,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.ForEachObj(
-        [this, &fixField](BaseObject* obj) {
+        [this](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
@@ -507,7 +506,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
             if (!obj->HasRefField()) {
                 return;
             }
-            ForEachRefSlot(obj, [this, obj, &fixField](RefField<>& field) { fixField(obj, field); });
+            ForEachRefSlot(obj, [this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
         },
         false);
 }
