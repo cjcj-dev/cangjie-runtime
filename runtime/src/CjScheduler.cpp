@@ -422,13 +422,24 @@ bool MRT_NewForeignCJThread()
     void* cjthread = ThreadLocal::GetForeignCJThread();
     ThreadLocal::SetCJThread(cjthread);
     Mutator* mutator = reinterpret_cast<Mutator*>(CJThreadGetMutator());
-    MutatorManager::Instance().BindMutator(*mutator);
+    // Register under management R-lock (CreateMutator / CreateRuntimeMutator). Do not hold the
+    // lock across LeaveSaferegion: managed-entry may block on STW/phase.
+    // Anchors: MutatorManager.cpp:115-128,181-198; UnwindCApi.cpp:136-141; gcr_stw ESCAPE 1.
+    auto& mutatorManager = MutatorManager::Instance();
+    mutatorManager.MutatorManagementRLock();
+    mutatorManager.BindMutator(*mutator);
     if (scheduler == nullptr) {
         scheduler = GetCJThreadScheduler();
         ThreadLocal::SetSchedule(scheduler);
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    mutatorManager.MutatorManagementRUnlock();
+    // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
+    if (UNLIKELY(mutatorManager.SyncTriggered())) {
+        mutator->SetSuspensionFlag(Mutator::SuspensionType::SUSPENSION_FOR_SYNC);
+    }
     // 1: state is SCHEDULE_RUNNING
     SetSchedulerState(1);
 #ifdef __OHOS__
