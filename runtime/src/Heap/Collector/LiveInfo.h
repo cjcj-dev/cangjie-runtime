@@ -230,18 +230,18 @@ struct LiveInfo {
 struct RouteInfo {
     static constexpr uint32_t INVALID_VALUE = std::numeric_limits<uint32_t>::max();
     uintptr_t toRegion1StartAddress = 0;
-    uint32_t toRegion1UsedBytes = 0;
+    uint64_t toRegion1UsedBytes = 0;
     uint32_t toRegion2Idx = 0;
 
     uintptr_t GetRoute(uint64_t preLiveBytes);
 
-    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = INVALID_VALUE)
+    void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = INVALID_VALUE)
     {
         toRegion1StartAddress = to1;
         toRegion1UsedBytes = to1used;
         toRegion2Idx = to2;
     }
-    uint32_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
+    uint64_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
     uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
 };
 } // namespace MapleRuntime

@@ -681,7 +681,7 @@ public:
         }
     }
 
-    void SetRouteInfo(uintptr_t to1, uint32_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
+    void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
@@ -703,7 +703,7 @@ public:
             CHECK_E(true,
                 "GC route verifier: producer=%s fromRegion=%p unit=%zu state=%u fromObj=%p offset=%zu "
                 "survived=%u preLiveBytes=%zu bitmapLiveBytes=%zu recomputedLiveBytes=%zu "
-                "currentLiveByteCount=%zu toRegion1UsedBytes=%u toRegion2Idx=%u ghostLiveInfo=%p",
+                "currentLiveByteCount=%zu toRegion1UsedBytes=%zu toRegion2Idx=%u ghostLiveInfo=%p",
                 producer, this, GetUnitIdx(), static_cast<unsigned>(GetRouteState()), fromObj, offset,
                 static_cast<unsigned>(survived), static_cast<size_t>(preLiveBytes), bitmapLiveBytes,
                 recomputedLiveBytes, GetLiveByteCount(), metadata.routeInfo.GetToRegion1UsedBytes(),
