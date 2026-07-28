@@ -16,6 +16,15 @@
 #include "Heap/StickyLog.h"
 #include "Utils/Demangler.h"
 namespace MapleRuntime {
+namespace {
+bool IsStickyBarrierMetadata(const CJStickyBarrierMetadata& metadata)
+{
+    return metadata.magic == CJ_STICKY_BARRIER_METADATA_MAGIC &&
+        metadata.version == CJ_STICKY_BARRIER_METADATA_VERSION &&
+        metadata.barrierKind == static_cast<U32>(CJBarrierKind::STICKY) && metadata.producerFingerprint != 0;
+}
+} // namespace
+
 void CJFile::RegisterFile() { LoadCJFileMeta(); }
 
 void CJFile::UnregisterFile()
@@ -33,24 +42,29 @@ void CJFile::LoadGCFlags(const CJGCFlagsTable* gcFlags, U32 gcFlagsSize)
         return;
     }
     cJFileMeta.gcFlagsTbl = *gcFlags;
-    if (gcFlagsSize != CJ_STICKY_BARRIER_GC_FLAGS_SIZE) {
+    if (gcFlagsSize < CJ_STICKY_BARRIER_RECORD_SIZE || gcFlagsSize % CJ_STICKY_BARRIER_RECORD_SIZE != 0) {
         return;
     }
     const U8* gcFlagsBytes = reinterpret_cast<const U8*>(gcFlags);
-    if (gcFlagsBytes[sizeof(CJGCFlagsTable)] != 0) {
-        return;
+    for (U32 offset = 0; offset < gcFlagsSize; offset += CJ_STICKY_BARRIER_RECORD_SIZE) {
+        const U8* recordBytes = gcFlagsBytes + offset;
+        cJFileMeta.stickyBarrierMetadata = {};
+        if (recordBytes[sizeof(CJGCFlagsTable)] != 0) {
+            return;
+        }
+        std::memcpy(&cJFileMeta.stickyBarrierMetadata, recordBytes + CJ_STICKY_BARRIER_METADATA_OFFSET,
+            sizeof(CJStickyBarrierMetadata));
+        if (!IsStickyBarrierMetadata(cJFileMeta.stickyBarrierMetadata)) {
+            return;
+        }
     }
-    std::memcpy(&cJFileMeta.stickyBarrierMetadata, gcFlagsBytes + CJ_STICKY_BARRIER_METADATA_OFFSET,
-        sizeof(CJStickyBarrierMetadata));
 }
 
 bool CJFile::HasStickyBarrier() const
 {
     const CJStickyBarrierMetadata& metadata = cJFileMeta.stickyBarrierMetadata;
-    return cJFileMeta.gcFlagsSize == CJ_STICKY_BARRIER_GC_FLAGS_SIZE &&
-        metadata.magic == CJ_STICKY_BARRIER_METADATA_MAGIC &&
-        metadata.version == CJ_STICKY_BARRIER_METADATA_VERSION &&
-        metadata.barrierKind == static_cast<U32>(CJBarrierKind::STICKY) && metadata.producerFingerprint != 0;
+    return cJFileMeta.gcFlagsSize >= CJ_STICKY_BARRIER_RECORD_SIZE &&
+        cJFileMeta.gcFlagsSize % CJ_STICKY_BARRIER_RECORD_SIZE == 0 && IsStickyBarrierMetadata(metadata);
 }
 
 #if defined(_WIN64)

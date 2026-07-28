@@ -158,7 +158,7 @@ using CJStickyBarrierMetadata = struct {
 static_assert(sizeof(CJGCFlagsTable) == 3, "legacy GC flags wire size must remain three bytes");
 static_assert(sizeof(CJStickyBarrierMetadata) == 16, "sticky barrier metadata v1 wire size must remain 16 bytes");
 
-constexpr U32 CJ_STICKY_BARRIER_GC_FLAGS_SIZE =
+constexpr U32 CJ_STICKY_BARRIER_RECORD_SIZE =
     CJ_STICKY_BARRIER_METADATA_OFFSET + sizeof(CJStickyBarrierMetadata);
 
 using CJPackageInfoTable = struct {
