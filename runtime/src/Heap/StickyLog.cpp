@@ -110,14 +110,16 @@ void StickyLog::ConfigureMinorFromEnvironment()
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-    // Fail-safe for non-sticky main ELF: upgrade to existing force-slow harness so
-    // IdleLogBarrier records remset edges. Does not claim full sticky product closure.
+    // Fail-safe for non-sticky main ELF (L355): fast sticky minor with empty remset
+    // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
+    // a harness that still aborts under this load; major-only matches sticky0 green path.
+    // Does not claim full sticky product closure (see REPORT-stickyclosure.md).
     if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
-        forceSlowPathEnabled = true;
+        minorEnabled = false;
         LOG(RTLOG_WARNING,
             "MRT_STICKY_MINOR=1 but main executable has no sticky barrier consumer "
-            "(__cj_sticky_logged_base); auto-enabling MRT_STICKY_MINOR_FORCE_SLOW_PATH "
-            "to avoid incorrect young reclamation");
+            "(__cj_sticky_logged_base); disabling sticky minor to avoid incorrect young "
+            "reclamation (use a sticky-lowered main binary or MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
     }
 }
 
