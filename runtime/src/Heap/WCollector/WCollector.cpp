@@ -1075,11 +1075,10 @@ void WCollector::DoGarbageCollection()
         ScopedStopTheWorld stw("normalize trace region references");
         RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
         manager.VisitTraceRegionObjects([this](BaseObject* object) {
-            if (object != nullptr && object->IsWeakRef()) {
-                NormalizeTraceRegionObject(object);
-            } else {
-                ForEachStrongRefSlot(object, [](RefSlotKind, BaseObject*, RefField<>&) {});
-            }
+            // Soft path for all slots: never GetAndTryTagObj hard-CHECK during
+            // post-Flip normalize (5d8fa1f2 WEAK_MSG was strong RawArray holders
+            // hitting a message that always said "weak object").
+            NormalizeTraceRegionObject(object);
         });
         manager.HandleTraceRegions();
     }
