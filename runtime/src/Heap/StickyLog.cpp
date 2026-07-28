@@ -7,12 +7,16 @@
 #include "StickyLog.h"
 
 #include <cerrno>
+#include <cstdio>
 #include <cstdlib>
+#include <cstring>
 #include <limits>
+#include <vector>
 
 #include "Allocator/MemMap.h"
 #include "Allocator/RegionInfo.h"
 #include "Base/ImmortalWrapper.h"
+#include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Mutator/Mutator.h"
@@ -50,6 +54,49 @@ size_t ReadStickyPositiveInteger(const char* name, size_t defaultValue)
     }
     return static_cast<size_t>(parsed);
 }
+
+// Sticky minor remset is only complete when the main managed executable embeds the
+// compiler sticky-logged-map consumer (`__cj_sticky_logged_base`). Runtime defines
+// that symbol; scanning /proc/self/exe (not the runtime DSO) detects consumer code.
+// Missing consumer + fast minor ⇒ unreclaimed live young objects (L355 bare rc139).
+// StickyLog.cpp:ConfigureMinorFromEnvironment / Heap.cpp:190-193
+bool MainExecutableHasStickyConsumer()
+{
+    FILE* file = std::fopen("/proc/self/exe", "rb");
+    if (file == nullptr) {
+        return false;
+    }
+    static constexpr char needle[] = "__cj_sticky_logged_base";
+    static constexpr size_t needleLen = sizeof(needle) - 1;
+    static constexpr size_t chunkSize = 1 << 20;
+    std::vector<char> buf(chunkSize + needleLen);
+    size_t carry = 0;
+    bool found = false;
+    while (!found) {
+        size_t n = std::fread(buf.data() + carry, 1, chunkSize, file);
+        if (n == 0) {
+            break;
+        }
+        size_t total = carry + n;
+        for (size_t i = 0; i + needleLen <= total; ++i) {
+            if (std::memcmp(buf.data() + i, needle, needleLen) == 0) {
+                found = true;
+                break;
+            }
+        }
+        if (found || n < chunkSize) {
+            break;
+        }
+        if (needleLen > 1) {
+            std::memmove(buf.data(), buf.data() + total - (needleLen - 1), needleLen - 1);
+            carry = needleLen - 1;
+        } else {
+            carry = 0;
+        }
+    }
+    std::fclose(file);
+    return found;
+}
 } // namespace
 
 StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
@@ -63,6 +110,15 @@ void StickyLog::ConfigureMinorFromEnvironment()
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+    // Fail-safe for non-sticky main ELF: upgrade to existing force-slow harness so
+    // IdleLogBarrier records remset edges. Does not claim full sticky product closure.
+    if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
+        forceSlowPathEnabled = true;
+        LOG(RTLOG_WARNING,
+            "MRT_STICKY_MINOR=1 but main executable has no sticky barrier consumer "
+            "(__cj_sticky_logged_base); auto-enabling MRT_STICKY_MINOR_FORCE_SLOW_PATH "
+            "to avoid incorrect young reclamation");
+    }
 }
 
 void StickyLog::Init(MAddress start, size_t size)
