@@ -1318,7 +1318,9 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
             CHECK(retainedBitmap != nullptr);
             size_t offset = allocPtr - region->GetRegionStart();
             (void)retainedBitmap->MarkBits(offset, size, region->GetRegionSize());
-        } else if (mutatorPhase == GCPhase::GC_PHASE_IDLE) {
+        } else if (mutatorPhase == GCPhase::GC_PHASE_IDLE ||
+                   mutatorPhase == GCPhase::GC_PHASE_PREFORWARD ||
+                   mutatorPhase == GCPhase::GC_PHASE_FORWARD) {
             (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
         }
     }
