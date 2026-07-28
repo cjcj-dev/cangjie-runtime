@@ -577,6 +577,16 @@ private:
         RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
         if (headRegion != nullptr) {
             addr = headRegion->Alloc(size);
+            if (addr != 0 && StickyLog::Instance().IsMinorEnabled() &&
+                headRegion->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID) {
+                LiveInfo* retainedLiveInfo = headRegion->GetRetainedLiveInfo();
+                CHECK(retainedLiveInfo != nullptr);
+                RegionBitmap* retainedBitmap = retainedLiveInfo->markBitmap != nullptr
+                    ? retainedLiveInfo->markBitmap : retainedLiveInfo->resurrectBitmap;
+                CHECK(retainedBitmap != nullptr);
+                size_t offset = addr - headRegion->GetRegionStart();
+                (void)retainedBitmap->MarkBits(offset, size, headRegion->GetRegionSize());
+            }
         }
         if (addr == 0) {
             addr = AllocPinnedFromFreeList(size);
