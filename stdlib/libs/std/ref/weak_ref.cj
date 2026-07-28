@@ -29,6 +29,9 @@ sealed abstract class WeakRefBase {
     let _cleanupPolicy: CleanupPolicy
 
     init(value: Option<Object>, cleanupPolicy: CleanupPolicy) {
+        if (cleanupPolicy == DEFERRED) {
+            throw IllegalStateException("CleanupPolicy.DEFERRED is not supported by this runtime.")
+        }
         _value = value
         _cleanupPolicy = cleanupPolicy
     }
