@@ -35,8 +35,9 @@ public:
     // slotAddr = absolute address of RefField<> storage (edge key).
     void Add(MAddress slotAddr);
 
-    // Convenience: register when newRef is a heap object pointer.
-    void MaybeAdd(RefField<>* slot, BaseObject* newRef);
+    // Register when newRef is already From/GhostFrom (I5). holder may be null
+    // (static root). Skips stores into from/ghost holders (slot would evacuate).
+    void MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef);
 
     // STW-only: visit each registered slot once (best-effort unique via sort+unique).
     using SlotVisitor = std::function<void(RefField<>& field)>;

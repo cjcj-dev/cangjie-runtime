@@ -124,7 +124,7 @@ void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fi
     } else {
         DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
     }
-    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
 BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -135,7 +135,7 @@ BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<tru
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
-    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
 
@@ -148,7 +148,7 @@ bool PreforwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>&
     while (oldVersion == oldRef) {
         RefField<> newField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
-            FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+            FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);

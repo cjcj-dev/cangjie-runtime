@@ -284,7 +284,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     // R1 I4 Trace complement: plain→from observed at scan; register so BulkForward
     // can close if tag CAS lost or P7 left plain. Consume skips tagged slots.
     if (!oldField.IsTagged() && IsFromObject(latest)) {
-        FixEdgeSet::Instance().MaybeAdd(&field, latest);
+        FixEdgeSet::Instance().MaybeAdd(obj, &field, latest);
     }
 
     if (!IsMarkedObject(latest)) {

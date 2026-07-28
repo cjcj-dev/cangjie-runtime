@@ -106,7 +106,7 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     }
     field.SetTargetObject(newRef, order);
     // R1 fix-set: register edge after successful store (plainsrc P2).
-    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
 BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -118,7 +118,7 @@ BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(order), newRef);
-    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
 
@@ -133,7 +133,7 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
     while (oldVersion == oldRef) {
         RefField<> newField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
-            FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<RefField<>*>(&field), newRef);
+            FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
@@ -149,7 +149,7 @@ void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     field.SetTargetObject(ref);
     // R1 fix-set production (I5): edge key = field slot absolute address (H3).
     // Established on store; cleared after BulkForward (H4). plainsrc P1.
-    FixEdgeSet::Instance().MaybeAdd(&field, ref);
+    FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 }
 
 void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -166,7 +166,7 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
         obj->ForEachRefInStruct(
             [](RefField<false>& field) {
                 BaseObject* ref = field.GetTargetObject();
-                FixEdgeSet::Instance().MaybeAdd(&field, ref);
+                FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
             },
             dst, dst + dstLen);
     }

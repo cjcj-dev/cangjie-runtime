@@ -9,6 +9,7 @@
 #include <algorithm>
 
 #include "Base/Log.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -28,19 +29,40 @@ void FixEdgeSet::Add(MAddress slotAddr)
     count.fetch_add(1, std::memory_order_relaxed);
 }
 
-void FixEdgeSet::MaybeAdd(RefField<>* slot, BaseObject* newRef)
+void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef)
 {
     if (slot == nullptr || newRef == nullptr) {
         return;
     }
-    // Runtime-track completeness for plain→later-from (plainsrc P1/P11): register
-    // every heap-object ref store that passes a runtime barrier. Consume-side
-    // predicates filter to ghost-from survivors with route. Compiler Idle plain
-    // stores (P5) do not enter here — residual expected until r1cc.
     if (!Heap::IsHeapAddress(newRef)) {
         return;
     }
-    Add(reinterpret_cast<MAddress>(slot));
+    // Slot must remain at the same absolute address until BulkForward. If the
+    // holder is itself in from/ghost, evacuation moves the field — skip (roots
+    // and to-space holders only). Static roots: holder == nullptr.
+    if (holder != nullptr) {
+        if (!Heap::IsHeapAddress(holder)) {
+            return;
+        }
+        if (RegionInfo::InGhostFromRegion(holder)) {
+            return;
+        }
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+        if (hr != nullptr && hr->IsFromRegion()) {
+            return;
+        }
+    }
+    // I5: only edges whose target is already From or GhostFrom need bulk fix.
+    // plainsrc P11 (Idle plain→then-from) is covered by Trace I4 complement when
+    // the holder is scanned; unreached holders need compiler dual-track (r1cc).
+    if (RegionInfo::InGhostFromRegion(newRef)) {
+        Add(reinterpret_cast<MAddress>(slot));
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
+    if (region != nullptr && region->IsFromRegion()) {
+        Add(reinterpret_cast<MAddress>(slot));
+    }
 }
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
@@ -57,7 +79,11 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
     std::sort(local.begin(), local.end());
     local.erase(std::unique(local.begin(), local.end()), local.end());
     for (MAddress addr : local) {
-        if (addr == 0) {
+        if (addr == 0 || !Heap::IsHeapAddress(addr)) {
+            continue;
+        }
+        // Stale evacuated slots: field body moved with holder — skip.
+        if (RegionInfo::InGhostFromRegion(reinterpret_cast<BaseObject*>(addr))) {
             continue;
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.
