@@ -431,6 +431,7 @@ bool MRT_NewForeignCJThread()
         ThreadLocal::SetProtectAddr(nullptr);
     }
     mutator->InitForeignCJThread();
+    mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
     mutatorManager.MutatorManagementRUnlock();
     // 1: state is SCHEDULE_RUNNING
     SetSchedulerState(1);
