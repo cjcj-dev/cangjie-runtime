@@ -1307,6 +1307,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    BaseObject* object = reinterpret_cast<BaseObject*>(allocPtr);
     if (allocPtr != 0 && StickyLog::Instance().IsMinorEnabled()) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
         if (region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID) {
@@ -1317,6 +1318,8 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
             CHECK(retainedBitmap != nullptr);
             size_t offset = allocPtr - region->GetRegionStart();
             (void)retainedBitmap->MarkBits(offset, size, region->GetRegionSize());
+        } else if (mutatorPhase == GCPhase::GC_PHASE_IDLE) {
+            (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
         }
     }
     // For making bitmap comform with live object count, do not mark object repeated.
@@ -1328,7 +1331,6 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     }
 
     // Mark new allocated pinned object.
-    BaseObject* object = reinterpret_cast<BaseObject*>(allocPtr);
     (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
     return allocPtr;
 }
