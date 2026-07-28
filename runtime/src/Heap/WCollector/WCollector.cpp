@@ -479,9 +479,9 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
 {
     // Soft path for post-FlipTagID repair of TRACE-born slots. Do not call
     // GetAndTryTagObj / FindLatestVersion here: both hard-CHECK invalid targets,
-    // and weak slots may still name referents reclaimed by CollectLargeGarbage
+    // and slots may still name referents reclaimed by CollectLargeGarbage
     // (or never registered in WeakRefBuffer because the WeakRef itself was
-    // allocated after its referent was scanned). Strong slots keep a hard check.
+    // allocated after its referent was scanned). Weak: clear; strong: skip.
     RefField<> oldField(field);
     BaseObject* raw = oldField.GetTargetObject();
     if (!Heap::IsHeapAddress(raw)) {
