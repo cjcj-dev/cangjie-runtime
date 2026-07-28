@@ -1174,6 +1174,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 
 void RegionManager::CompactRegion(RegionInfo* region)
 {
+    region->SetRetainedLiveInfoCandidate(0);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
@@ -1211,6 +1212,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
 void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 {
+    region->SetRetainedLiveInfoCandidate(0);
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
