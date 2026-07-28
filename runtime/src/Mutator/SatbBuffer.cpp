@@ -17,6 +17,11 @@ SatbBuffer& SatbBuffer::Instance() noexcept { return *g_instance; }
 
 bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
 {
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    if (UNLIKELY(phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
+                 phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
+        return false;
+    }
     if (UNLIKELY(obj == nullptr)) {
         return false;
     }
