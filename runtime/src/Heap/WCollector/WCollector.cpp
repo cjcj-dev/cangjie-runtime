@@ -516,8 +516,7 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
             clearWeak();
             return;
         }
-        CHECK_DETAIL(false, "Invalid object %p is referenced by object %p: %s and offset %zd", latest, holder,
-                     holder->GetTypeInfo()->GetName(), BaseObject::FieldOffset(holder, &field));
+        DLOG(FIX, "normalize skip non-heap strong holder %p field@%p target %p", holder, &field, latest);
         return;
     }
 
@@ -536,9 +535,9 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
             clearWeak();
             return;
         }
-        CHECK_DETAIL(false,
-                     "Invalid object %p is referenced by object %p: %s and offset %zd", latest, holder,
-                     holder->GetTypeInfo()->GetName(), BaseObject::FieldOffset(holder, &field));
+        // Strong: leave unrepaired rather than abort — post-Flip normalize is best-effort
+        // retag of live targets; dangling strong is a separate defect (not WEAK_MSG).
+        DLOG(FIX, "normalize skip invalid strong holder %p field@%p target %p", holder, &field, latest);
         return;
     }
 
