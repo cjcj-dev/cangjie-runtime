@@ -82,8 +82,10 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
         if (addr == 0 || !Heap::IsHeapAddress(addr)) {
             continue;
         }
-        // Stale evacuated slots: field body moved with holder — skip.
-        if (RegionInfo::InGhostFromRegion(reinterpret_cast<BaseObject*>(addr))) {
+        // Slot must sit in a non-ghost region (holder not evacuated).
+        RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(addr));
+        if (slotRegion == nullptr || slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() ||
+            slotRegion->IsFreeRegion() || slotRegion->IsGarbageRegion()) {
             continue;
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.
