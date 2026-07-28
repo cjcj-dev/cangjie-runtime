@@ -26,8 +26,8 @@ const char* Collector::GetGCPhaseName(GCPhase phase)
         "stub phase",      "stub phase",
         "init phase",      "enum phase",
         "trace phase",     "clear satb phase",
-        "forward phase",   "enum fix phase",
-        "trace fix phase", "clear trace fix phase",
+        "post trace phase", "preforward phase",
+        "forward phase",    "clear trace fix phase",
         "fix stack phase", "preforward phase",
     };
     return phaseNames[phase];
