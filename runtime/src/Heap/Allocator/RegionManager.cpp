@@ -597,7 +597,7 @@ size_t RegionManager::ExemptFromRegions()
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         if (liveBytes > threshold) { // ignore this region
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %u live bytes", del,
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %zu live bytes", del,
                 del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount());
 
@@ -608,7 +608,7 @@ size_t RegionManager::ExemptFromRegions()
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         } else if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %u live bytes rawPtr cnt %u",
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
@@ -1293,7 +1293,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
-    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %u",
+    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
         region->GetRegionType(), region->GetLiveByteCount());
 

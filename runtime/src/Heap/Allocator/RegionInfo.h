@@ -703,7 +703,7 @@ public:
             CHECK_E(true,
                 "GC route verifier: producer=%s fromRegion=%p unit=%zu state=%u fromObj=%p offset=%zu "
                 "survived=%u preLiveBytes=%zu bitmapLiveBytes=%zu recomputedLiveBytes=%zu "
-                "currentLiveByteCount=%u toRegion1UsedBytes=%u toRegion2Idx=%u ghostLiveInfo=%p",
+                "currentLiveByteCount=%zu toRegion1UsedBytes=%u toRegion2Idx=%u ghostLiveInfo=%p",
                 producer, this, GetUnitIdx(), static_cast<unsigned>(GetRouteState()), fromObj, offset,
                 static_cast<unsigned>(survived), static_cast<size_t>(preLiveBytes), bitmapLiveBytes,
                 recomputedLiveBytes, GetLiveByteCount(), metadata.routeInfo.GetToRegion1UsedBytes(),
@@ -1030,7 +1030,7 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    uint32_t GetLiveByteCount() const
+    uint64_t GetLiveByteCount() const
     {
         return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
     }
@@ -1040,7 +1040,7 @@ public:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
-    void AddLiveByteCount(uint32_t count)
+    void AddLiveByteCount(uint64_t count)
     {
         (void)__atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
     }
@@ -1082,7 +1082,7 @@ private:
             uint32_t nextRegionIdx;
             uint32_t prevRegionIdx; // support fast deletion for region list.
 
-            uint32_t liveByteCount;
+            uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
         };
 

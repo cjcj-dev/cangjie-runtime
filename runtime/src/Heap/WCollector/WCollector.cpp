@@ -66,7 +66,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
+        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
     return marked;
@@ -77,7 +77,7 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
             region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
+            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
                  obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
         }
         return resurrected;
@@ -748,7 +748,7 @@ void WCollector::ValidateYoungMarking()
             MAddress sourceLine = source == nullptr ? 0 :
                 reinterpret_cast<MAddress>(source) & ~(StickyLog::LINE_SIZE - 1);
             CHECK_DETAIL(region->IsMarkedObject(object),
-                "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%u "
+                "sticky minor validator missed object=%p region=%p type=%u line=%#zx logged=%u liveBytes=%zu "
                 "objectClass=%s source=%p sourceRegion=%p sourceType=%u sourceYoung=%u sourceLine=%#zx "
                 "sourceLogged=%u sourceLineRescanned=%u sourceFieldRescanned=%u targetDiscovered=%u targetCandidate=%u "
                 "targetAge=%u sourceAge=%u "
