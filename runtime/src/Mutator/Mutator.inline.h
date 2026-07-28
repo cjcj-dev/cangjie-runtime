@@ -65,8 +65,16 @@ __attribute__((always_inline)) inline bool Mutator::TransitionGCPhase(bool bySel
             }
         }
 
+        // L743: GC-side NO_TRANSITION must not silently succeed when phase diverges.
+        // Phase already matches ⇒ success (same as old true). Mismatch ⇒ false + log.
         if (!bySelf && state == NO_TRANSITION) {
-            return true;
+            bool phaseMatch = mutatorPhase.load() == Heap::GetHeap().GetGCPhase();
+            if (!phaseMatch) {
+                LOG(RTLOG_ERROR,
+                    "gc transition mutator %p (phase %u) NO_TRANSITION while gc phase %u",
+                    this, mutatorPhase.load(), Heap::GetHeap().GetGCPhase());
+            }
+            return phaseMatch;
         }
 
         // Current thread set atomic variable to ensure atomicity of phase transition

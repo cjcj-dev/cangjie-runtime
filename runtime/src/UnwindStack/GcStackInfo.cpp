@@ -266,6 +266,10 @@ void GCStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            // L742: fail-observable; do not elevate to FATAL (preserve route-verifier order).
+            LOG(RTLOG_ERROR,
+                "GCStackInfo unwind truncated at frames=%zu ip=%p fa=%p (GC roots may be incomplete)",
+                stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
@@ -288,6 +292,9 @@ void RecordStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            LOG(RTLOG_ERROR,
+                "RecordStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
+                stacks.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
@@ -309,6 +316,9 @@ void CJThreadStackInfo::FillInStackTrace()
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            LOG(RTLOG_ERROR,
+                "CJThreadStackInfo unwind truncated at frames=%zu ip=%p fa=%p",
+                stack.size(), uwContext.frameInfo.mFrame.GetIP(), uwContext.frameInfo.mFrame.GetFA());
             return;
         }
         uwContext = caller;
