@@ -11,6 +11,7 @@
 #include "CartesianTree.h"
 #include "RegionInfo.h"
 #include "Common/ScopedObjectAccess.h"
+#include "Heap/StickyLog.h"
 
 namespace MapleRuntime {
 class RegionManager;
@@ -55,6 +56,8 @@ public:
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
+                    StickyLog::Instance().ClearUnavailableRegion(
+                        RegionInfo::GetUnitAddress(idx), num * RegionInfo::UNIT_SIZE);
                     // it makes sense to slow down allocation by clearing region memory.
                     RegionInfo::ClearUnits(idx, num);
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
@@ -73,6 +76,8 @@ public:
                 bool releasedOk = releasedUnitTree.TakeUnits(num, idx);
 #endif
                 if (releasedOk) {
+                    StickyLog::Instance().ClearUnavailableRegion(
+                        RegionInfo::GetUnitAddress(idx), num * RegionInfo::UNIT_SIZE);
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);

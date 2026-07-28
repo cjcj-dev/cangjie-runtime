@@ -660,10 +660,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
             auto idx = head->GetUnitIdx();
+            StickyLog::Instance().ClearUnavailableRegion(head->GetRegionStart(), head->GetRegionSize());
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
-            ClearStickyLogForUnavailableRegion(region);
             youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
             return region;
         } else {
@@ -675,7 +675,6 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
     RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
     if (region != nullptr) {
-        ClearStickyLogForUnavailableRegion(region);
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
