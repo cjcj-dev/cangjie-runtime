@@ -415,8 +415,8 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
+    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
     region->InitFreeUnits();
-    ClearStickyLogForUnavailableRegion(region);
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
@@ -431,8 +431,8 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
+    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
     region->InitFreeUnits();
-    ClearStickyLogForUnavailableRegion(region);
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
