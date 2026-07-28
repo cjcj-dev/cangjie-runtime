@@ -52,12 +52,17 @@ public:
                 bool dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
 #endif
                 if (dirtyOk) {
+                    MAddress regionStart = RegionInfo::GetUnitAddress(idx);
+                    size_t regionSize = num * RegionInfo::UNIT_SIZE;
                     DLOG(REGION, "c-tree %p alloc dirty units[%u+%u, %u) @[0x%zx, 0x%zx), %u dirty-units left",
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
-                    StickyLog::Instance().ClearUnavailableRegion(
-                        RegionInfo::GetUnitAddress(idx), num * RegionInfo::UNIT_SIZE);
+                    MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(idx) && regionSize != 0 &&
+                                   (regionSize % RegionInfo::UNIT_SIZE) == 0 &&
+                                   regionSize == num * RegionInfo::UNIT_SIZE,
+                               "sticky region clear must cover exactly the captured units");
+                    StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
                     // it makes sense to slow down allocation by clearing region memory.
                     RegionInfo::ClearUnits(idx, num);
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
@@ -76,8 +81,13 @@ public:
                 bool releasedOk = releasedUnitTree.TakeUnits(num, idx);
 #endif
                 if (releasedOk) {
-                    StickyLog::Instance().ClearUnavailableRegion(
-                        RegionInfo::GetUnitAddress(idx), num * RegionInfo::UNIT_SIZE);
+                    MAddress regionStart = RegionInfo::GetUnitAddress(idx);
+                    size_t regionSize = num * RegionInfo::UNIT_SIZE;
+                    MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(idx) && regionSize != 0 &&
+                                   (regionSize % RegionInfo::UNIT_SIZE) == 0 &&
+                                   regionSize == num * RegionInfo::UNIT_SIZE,
+                               "sticky region clear must cover exactly the captured units");
+                    StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);

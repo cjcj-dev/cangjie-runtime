@@ -409,13 +409,18 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
 {
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
+    MAddress regionStart = region->GetRegionStart();
+    size_t regionSize = region->GetRegionSize();
     if (num >= HUGE_PAGE) {
         UntagHugePage(region, num);
     }
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+    MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(unitIndex) && regionSize != 0 &&
+                   (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
+               "sticky region clear must cover exactly the captured units");
+    StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
     region->InitFreeUnits();
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
@@ -425,13 +430,18 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
+    MAddress regionStart = region->GetRegionStart();
+    size_t regionSize = region->GetRegionSize();
     if (num >= HUGE_PAGE) {
         UntagHugePage(region, num);
     }
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+    MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(unitIndex) && regionSize != 0 &&
+                   (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
+               "sticky region clear must cover exactly the captured units");
+    StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
     region->InitFreeUnits();
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
@@ -524,8 +534,15 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 region = next;
                 continue;
             }
+            size_t num = region->GetUnitCount();
+            size_t unitIndex = region->GetUnitIdx();
+            MAddress regionStart = region->GetRegionStart();
+            size_t regionSize = region->GetRegionSize();
             list.DeleteRegion(region);
-            StickyLog::Instance().ClearUnavailableRegion(region->GetRegionStart(), region->GetRegionSize());
+            MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(unitIndex) && regionSize != 0 &&
+                           (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
+                       "sticky region clear must cover exactly the captured units");
+            StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
             if (releaseResources) {
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
@@ -660,7 +677,12 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
             auto idx = head->GetUnitIdx();
-            StickyLog::Instance().ClearUnavailableRegion(head->GetRegionStart(), head->GetRegionSize());
+            MAddress regionStart = head->GetRegionStart();
+            size_t regionSize = head->GetRegionSize();
+            MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(idx) && regionSize != 0 &&
+                           (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
+                       "sticky region clear must cover exactly the captured units");
+            StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
