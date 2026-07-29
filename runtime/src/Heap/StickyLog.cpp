@@ -32,10 +32,21 @@ extern "C" MRT_EXPORT const uint8_t __cj_sticky_line_shift = StickyLog::LINE_SHI
 static ImmortalWrapper<StickyLog> g_stickyLog;
 
 namespace {
-bool ReadStickyBoolean(const char* name)
+bool ReadStickyBoolean(const char* name, bool defaultValue)
 {
     const char* value = std::getenv(name);
-    return value != nullptr && strcmp(value, "1") == 0;
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    if (strcmp(value, "1") == 0) {
+        return true;
+    }
+    if (strcmp(value, "0") == 0) {
+        return false;
+    }
+    LOG(RTLOG_ERROR, "Unsupported %s=%s; expected 0 or 1, using default %u", name, value,
+        static_cast<unsigned int>(defaultValue));
+    return defaultValue;
 }
 
 size_t ReadStickyPositiveInteger(const char* name, size_t defaultValue)
@@ -103,24 +114,33 @@ StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
 
 void StickyLog::ConfigureMinorFromEnvironment()
 {
-    minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR");
-    minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE");
-    forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH");
+    // Product default ON (0.0.2 form A). Exact MRT_STICKY_MINOR=0 is the escape hatch.
+    const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
+    const bool envExplicitOff = minorEnv != nullptr && strcmp(minorEnv, "0") == 0;
+    minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR", true);
+    minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE", false);
+    forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH", false);
     youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
-    // Fail-safe for non-sticky main ELF (L355): fast sticky minor with empty remset
+    // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
     // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
     // a harness that still aborts under this load; major-only matches sticky0 green path.
     // Does not claim full sticky product closure (see REPORT-stickyclosure.md).
-    if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
+    const char* mode = "on(default)";
+    if (envExplicitOff) {
+        mode = "off(env)";
+    } else if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
         minorEnabled = false;
+        mode = "auto-disabled(no consumer)";
         LOG(RTLOG_WARNING,
-            "MRT_STICKY_MINOR=1 but main executable has no sticky barrier consumer "
+            "sticky minor on by default but main executable has no sticky barrier consumer "
             "(__cj_sticky_logged_base); disabling sticky minor to avoid incorrect young "
-            "reclamation (use a sticky-lowered main binary or MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
+            "reclamation (use a sticky-lowered main binary, or MRT_STICKY_MINOR=0 / "
+            "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
     }
+    LOG(RTLOG_INFO, "sticky minor: %s", mode);
 }
 
 void StickyLog::Init(MAddress start, size_t size)
