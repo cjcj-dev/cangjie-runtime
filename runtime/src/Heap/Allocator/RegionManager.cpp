@@ -671,6 +671,84 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
     ForEachObjUnsafe(visitor);
 }
 
+void RegionManager::RecordYoungRegionAccounting(YoungAccountingSource source, RegionInfo* region)
+{
+    if (!StickyLog::Instance().IsMinorEnabled()) {
+        return;
+    }
+    size_t delta = region->GetRegionSize();
+    size_t ordinal = youngAccountingOrdinal.load(std::memory_order_relaxed);
+    const char* sourceName = nullptr;
+    switch (source) {
+        case YoungAccountingSource::NEW_REGION:
+            sourceName = "new_region";
+            youngDiagnosticNewRegionEvents.fetch_add(1, std::memory_order_relaxed);
+            youngDiagnosticNewRegionBytes.fetch_add(delta, std::memory_order_relaxed);
+            break;
+        case YoungAccountingSource::REUSED_GARBAGE_REGION:
+            sourceName = "reused_garbage_region";
+            youngDiagnosticReusedGarbageEvents.fetch_add(1, std::memory_order_relaxed);
+            youngDiagnosticReusedGarbageBytes.fetch_add(delta, std::memory_order_relaxed);
+            break;
+        case YoungAccountingSource::REUSED_FREE_REGION:
+            sourceName = "reused_free_region";
+            youngDiagnosticReusedFreeEvents.fetch_add(1, std::memory_order_relaxed);
+            youngDiagnosticReusedFreeBytes.fetch_add(delta, std::memory_order_relaxed);
+            break;
+    }
+    youngDiagnosticAccountedBytes.fetch_add(delta, std::memory_order_relaxed);
+    VLOG(REPORT, "[YoungAccountingEvent] gcOrdinal=%zu source=%s delta=%zu region_idx=%zu",
+         ordinal, sourceName, delta, region->GetUnitIdx());
+}
+
+void RegionManager::RecordYoungActualAllocation(size_t bytes)
+{
+    youngDiagnosticActualBytes.fetch_add(bytes, std::memory_order_relaxed);
+    youngDiagnosticActualObjects.fetch_add(1, std::memory_order_relaxed);
+    if (bytes <= 64) {
+        youngDiagnosticActualLe64.fetch_add(1, std::memory_order_relaxed);
+    } else if (bytes <= 256) {
+        youngDiagnosticActualLe256.fetch_add(1, std::memory_order_relaxed);
+    } else if (bytes <= 1024) {
+        youngDiagnosticActualLe1024.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        youngDiagnosticActualGt1024.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+YoungAccountingStats RegionManager::SnapshotYoungAccounting()
+{
+    YoungAccountingStats stats;
+    stats.gcOrdinal = youngAccountingOrdinal.fetch_add(1, std::memory_order_relaxed);
+    stats.accountedBytes = youngDiagnosticAccountedBytes.exchange(0, std::memory_order_relaxed);
+    stats.actualBytes = youngDiagnosticActualBytes.exchange(0, std::memory_order_relaxed);
+    stats.actualObjects = youngDiagnosticActualObjects.exchange(0, std::memory_order_relaxed);
+    stats.actualLe64 = youngDiagnosticActualLe64.exchange(0, std::memory_order_relaxed);
+    stats.actualLe256 = youngDiagnosticActualLe256.exchange(0, std::memory_order_relaxed);
+    stats.actualLe1024 = youngDiagnosticActualLe1024.exchange(0, std::memory_order_relaxed);
+    stats.actualGt1024 = youngDiagnosticActualGt1024.exchange(0, std::memory_order_relaxed);
+    stats.newRegionEvents = youngDiagnosticNewRegionEvents.exchange(0, std::memory_order_relaxed);
+    stats.newRegionBytes = youngDiagnosticNewRegionBytes.exchange(0, std::memory_order_relaxed);
+    stats.reusedGarbageEvents = youngDiagnosticReusedGarbageEvents.exchange(0, std::memory_order_relaxed);
+    stats.reusedGarbageBytes = youngDiagnosticReusedGarbageBytes.exchange(0, std::memory_order_relaxed);
+    stats.reusedFreeEvents = youngDiagnosticReusedFreeEvents.exchange(0, std::memory_order_relaxed);
+    stats.reusedFreeBytes = youngDiagnosticReusedFreeBytes.exchange(0, std::memory_order_relaxed);
+    return stats;
+}
+
+void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const
+{
+    VLOG(REPORT,
+         "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_bytes=%zu actual_bytes=%zu actual_objects=%zu "
+         "actual_size_hist_le64=%zu le256=%zu le1024=%zu gt1024=%zu "
+         "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
+         "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
+         stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.actualBytes, stats.actualObjects,
+         stats.actualLe64, stats.actualLe256, stats.actualLe1024, stats.actualGt1024,
+         stats.newRegionEvents, stats.newRegionBytes, stats.reusedGarbageEvents, stats.reusedGarbageBytes,
+         stats.reusedFreeEvents, stats.reusedFreeBytes);
+}
+
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem)
 {
     // a chance to invoke heuristic gc.
@@ -713,6 +791,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             RegionInfo* region = RegionInfo::InitRegion(idx, num, type);
             youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            RecordYoungRegionAccounting(YoungAccountingSource::REUSED_GARBAGE_REGION, region);
             return region;
         } else {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -729,6 +808,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             TagHugePage(region, num);
         }
         youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+        RecordYoungRegionAccounting(YoungAccountingSource::REUSED_FREE_REGION, region);
         return region;
     }
 
@@ -755,6 +835,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 RegionInfo::ClearUnits(idx, num);
             }
             youngAllocatedBytes.fetch_add(region->GetRegionSize(), std::memory_order_relaxed);
+            RecordYoungRegionAccounting(YoungAccountingSource::NEW_REGION, region);
             return region;
         } else {
             (void)inactiveZone.fetch_sub(size);

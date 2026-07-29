@@ -1180,6 +1180,7 @@ void WCollector::DoYoungGarbageCollection()
     FlushAllocationRegions();
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    YoungAccountingStats accountingStats = manager.SnapshotYoungAccounting();
     minorCandidateRegions.clear();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
@@ -1259,6 +1260,7 @@ void WCollector::DoYoungGarbageCollection()
         "[StickyMinor] run=%zu candidates=%zu candidateBytes=%zu reclaimedRegions=%zu reclaimedBytes=%zu pause=%zu us",
         minorTotalRuns, stats.candidateRegions, stats.candidateBytes, stats.reclaimedRegions, stats.reclaimedBytes,
         pauseUs);
+    manager.ReportYoungAccounting(accountingStats, "minor");
 }
 
 void WCollector::DoGarbageCollection()
@@ -1270,9 +1272,12 @@ void WCollector::DoGarbageCollection()
         return;
     }
 
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    YoungAccountingStats accountingStats;
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major allocation rollover");
         FlushAllocationRegions();
+        accountingStats = manager.SnapshotYoungAccounting();
     }
     TraceHeap();
     PostTrace();
@@ -1305,7 +1310,10 @@ void WCollector::DoGarbageCollection()
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major promotion");
         FlushAllocationRegions();
-        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().PromoteAllRegions();
+        manager.PromoteAllRegions();
+        YoungAccountingStats concurrentStats = manager.SnapshotYoungAccounting();
+        manager.ReportYoungAccounting(accountingStats, "major");
+        manager.ReportYoungAccounting(concurrentStats, "major_concurrent_discarded");
         minorRunsSinceMajor = 0;
     }
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();

@@ -84,6 +84,9 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
     if (internalAddr == 0) {
         return 0;
     }
+    if (UNLIKELY(StickyLog::Instance().IsMinorEnabled())) {
+        regionManager.RecordYoungActualAllocation(allocSize);
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAllocObject(reinterpret_cast<void *>(internalAddr), allocSize);
 #endif

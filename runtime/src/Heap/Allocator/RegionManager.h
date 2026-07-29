@@ -38,6 +38,29 @@ struct YoungCollectionStats {
     size_t reclaimedBytes = 0;
 };
 
+enum class YoungAccountingSource : uint8_t {
+    NEW_REGION,
+    REUSED_GARBAGE_REGION,
+    REUSED_FREE_REGION,
+};
+
+struct YoungAccountingStats {
+    size_t gcOrdinal = 0;
+    size_t accountedBytes = 0;
+    size_t actualBytes = 0;
+    size_t actualObjects = 0;
+    size_t actualLe64 = 0;
+    size_t actualLe256 = 0;
+    size_t actualLe1024 = 0;
+    size_t actualGt1024 = 0;
+    size_t newRegionEvents = 0;
+    size_t newRegionBytes = 0;
+    size_t reusedGarbageEvents = 0;
+    size_t reusedGarbageBytes = 0;
+    size_t reusedFreeEvents = 0;
+    size_t reusedFreeBytes = 0;
+};
+
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
     static constexpr size_t SYNC_OBJECT_SIZE = CJFuture::SYNC_OBJECT_SIZE;
@@ -399,6 +422,10 @@ public:
     {
         return youngAllocatedBytes.load(std::memory_order_relaxed);
     }
+
+    void RecordYoungActualAllocation(size_t bytes);
+    YoungAccountingStats SnapshotYoungAccounting();
+    void ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const;
 
     size_t GetSurvivedSize() const
     {
@@ -834,6 +861,21 @@ private:
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
 
     std::atomic<size_t> youngAllocatedBytes = { 0 };
+    void RecordYoungRegionAccounting(YoungAccountingSource source, RegionInfo* region);
+    std::atomic<size_t> youngAccountingOrdinal = { 1 };
+    std::atomic<size_t> youngDiagnosticAccountedBytes = { 0 };
+    std::atomic<size_t> youngDiagnosticActualBytes = { 0 };
+    std::atomic<size_t> youngDiagnosticActualObjects = { 0 };
+    std::atomic<size_t> youngDiagnosticActualLe64 = { 0 };
+    std::atomic<size_t> youngDiagnosticActualLe256 = { 0 };
+    std::atomic<size_t> youngDiagnosticActualLe1024 = { 0 };
+    std::atomic<size_t> youngDiagnosticActualGt1024 = { 0 };
+    std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
+    std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
+    std::atomic<size_t> youngDiagnosticReusedGarbageEvents = { 0 };
+    std::atomic<size_t> youngDiagnosticReusedGarbageBytes = { 0 };
+    std::atomic<size_t> youngDiagnosticReusedFreeEvents = { 0 };
+    std::atomic<size_t> youngDiagnosticReusedFreeBytes = { 0 };
     std::atomic<size_t> routeEpochMismatchCount = { 0 };
     // Probe misses on non-ghost regions with current identity (defined negative answers).
     std::atomic<size_t> routeNotGhostProbeCount = { 0 };
