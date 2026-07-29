@@ -134,6 +134,10 @@ public:
         __atomic_fetch_add(&metadata.epoch, 1, std::memory_order_acq_rel);
     }
 
+#ifdef MRT_REGION_EPOCH_TEST
+    void SetEpochForTest(uint64_t epoch) { __atomic_store_n(&metadata.epoch, epoch, __ATOMIC_RELEASE); }
+#endif
+
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
