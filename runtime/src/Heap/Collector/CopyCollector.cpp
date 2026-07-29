@@ -10,6 +10,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Heap/ForwardFactTable.h"
+#include "Heap/RelocationDiagnosticTable.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -30,10 +31,14 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 {
     uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
+    TypeInfo* typeInfo = fromObj.GetTypeInfo();
     CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK, "memmove_s fail");
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    // r1missbucket: independent observation only. In particular, retain the
+    // identity compact copies that ForwardFactTable intentionally rejects.
+    RelocationDiagnosticTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size, typeInfo);
     // R2.1: copy-time fact — both addresses in hand, payload committed. All
     // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
     // Aborted paths never reach this point (no half entry).

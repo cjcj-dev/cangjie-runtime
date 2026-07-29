@@ -12,6 +12,7 @@
 
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
+#include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
@@ -528,7 +529,8 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 // r1route2 R2.1: consume ForwardFactTable only (copy-time side table).
 // ⛔ GetRoute/RouteObject/FindToVersion (r1segv D5) and ⛔ IsValidObject(to).
 // ⛔ FindLatestVersion (silent fallback returns from when to==null).
-void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact)
+void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact,
+                                          BulkMissBuckets* missBuckets)
 {
     RefField<> oldField(field);
     // b316 A/B producers are plain (untagged) edges; leave tagged to F3/barriers.
@@ -565,6 +567,45 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (toObj == nullptr || toObj == target) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                RelocationDiagnosticTable::Entry entry{ false, nullptr, nullptr, 0, nullptr };
+                if (RelocationDiagnosticTable::Instance().Lookup(target, entry)) {
+                    if (entry.identity) {
+                        ++missBuckets->b1LegitIdentity;
+                    } else {
+                        ++missBuckets->b3RealLoss;
+                        ++missBuckets->b3Types[entry.typeInfo];
+                        ++missBuckets->b3RegionTypes[static_cast<unsigned>(ghost->GetRegionType())];
+                        ++missBuckets->b3RouteStates[static_cast<unsigned>(st)];
+                    }
+                } else {
+                    size_t containingOffset = 0;
+                    if (RelocationDiagnosticTable::Instance().LookupContaining(target, entry, containingOffset)) {
+                        if (entry.identity) {
+                            ++missBuckets->b1LegitIdentity;
+                        } else {
+                            // The address is strictly inside a copied object, so
+                            // it is not a BaseObject relocation key. Rewriting it
+                            // with the containing object's base fact would be wrong.
+                            ++missBuckets->b2LegitOther;
+                            ++missBuckets->b2InteriorNonObjectBase;
+                            static std::atomic<size_t> containedSample{ 0 };
+                            size_t sample = containedSample.fetch_add(1, std::memory_order_relaxed) + 1;
+                            if ((sample & (sample - 1)) == 0) {
+                                VLOG(REPORT,
+                                     "[MISSBUCKET_B2_INTERIOR] target=%p source=%p to=%p offset=%zu "
+                                     "size=%zu type_info=%p type=%s region_type=%u route_state=%u n=%zu",
+                                     target, entry.from, entry.to, containingOffset, entry.size, entry.typeInfo,
+                                     entry.typeInfo == nullptr ? "<null>" : entry.typeInfo->GetName(),
+                                     static_cast<unsigned>(ghost->GetRegionType()), static_cast<unsigned>(st), sample);
+                            }
+                        }
+                    } else {
+                        ++missBuckets->unclassified;
+                        ++missBuckets->unclassifiedNoCopyRange;
+                    }
+                }
+            }
             static std::atomic<size_t> skipSample{ 0 };
             size_t n = skipSample.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
@@ -578,6 +619,10 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (!Heap::IsHeapAddress(toObj)) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToNotHeap;
+            }
             static std::atomic<size_t> skipSampleBad{ 0 };
             size_t n = skipSampleBad.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
@@ -596,6 +641,10 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToRegion;
+            }
             static std::atomic<size_t> skipSampleReg{ 0 };
             size_t n = skipSampleReg.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
@@ -610,6 +659,10 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToBounds;
+            }
             static std::atomic<size_t> skipSampleBnd{ 0 };
             size_t n = skipSampleBnd.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
@@ -639,12 +692,14 @@ void WCollector::BulkForwardHolderRefs()
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
     size_t skippedNoFact = 0;
+    BulkMissBuckets missBuckets;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
     const size_t factTableSize = ForwardFactTable::Instance().SizeApprox();
+    const size_t relocationDiagnosticSize = RelocationDiagnosticTable::Instance().Size();
 
-    auto fixOne = [this, &rewritten, &skippedNoFact](BaseObject* holder, RefField<>& field) {
+    auto fixOne = [this, &rewritten, &skippedNoFact, &missBuckets](BaseObject* holder, RefField<>& field) {
         RefField<> before(field);
-        FixHolderForwardRefField(holder, field, &skippedNoFact);
+        FixHolderForwardRefField(holder, field, &skippedNoFact, &missBuckets);
         if (RefField<>(field).GetFieldValue() != before.GetFieldValue()) {
             ++rewritten;
         }
@@ -670,13 +725,36 @@ void WCollector::BulkForwardHolderRefs()
 
     // R2.1: fact table lifetime ends with BulkForward (same major STW bracket).
     ForwardFactTable::Instance().Clear();
+    // r1missbucket diagnostic lifetime matches the product fact window.
+    RelocationDiagnosticTable::Instance().Clear();
 
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    const size_t bucketTotal = missBuckets.b1LegitIdentity + missBuckets.b2LegitOther +
+        missBuckets.b3RealLoss + missBuckets.unclassified;
     VLOG(REPORT,
          "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu skipped_no_fact=%zu fixset=%zu "
-         "facttable=%zu fromTarget=%zu crossRegion=%zu",
+         "facttable=%zu fromTarget=%zu crossRegion=%zu relocation_diag=%zu "
+         "MISSBUCKET_B1=%zu_B2=%zu_B3=%zu_UNCLASSIFIED=%zu_of_%zu "
+         "invalid_to_not_heap=%zu invalid_to_region=%zu invalid_to_bounds=%zu "
+         "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu",
          static_cast<size_t>(pauseUs), rewritten, skippedNoFact, fixSetSize, factTableSize,
-         FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered());
+         FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered(),
+         relocationDiagnosticSize, missBuckets.b1LegitIdentity, missBuckets.b2LegitOther,
+         missBuckets.b3RealLoss, missBuckets.unclassified, bucketTotal, missBuckets.invalidToNotHeap,
+         missBuckets.invalidToRegion, missBuckets.invalidToBounds, missBuckets.b2InteriorNonObjectBase,
+         missBuckets.unclassifiedNoCopyRange);
+    for (const auto& type : missBuckets.b3Types) {
+        VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
+             type.first == nullptr ? "<null>" : type.first->GetName(), type.second);
+    }
+    for (const auto& regionType : missBuckets.b3RegionTypes) {
+        VLOG(REPORT, "[MISSBUCKET_B3_REGION] region_type=%u count=%zu stage=BulkForward", regionType.first,
+             regionType.second);
+    }
+    for (const auto& routeState : missBuckets.b3RouteStates) {
+        VLOG(REPORT, "[MISSBUCKET_B3_ROUTE] route_state=%u count=%zu stage=BulkForward", routeState.first,
+             routeState.second);
+    }
 }
 
 void WCollector::PostTrace()
