@@ -129,10 +129,10 @@ public:
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
     // this is called when caller assures from-object/from-region still exists.
-    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
+    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region, uint64_t expectedEpoch)
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(fromObj, region);
+        return space.GetRegionManager().RouteObject(fromObj, region, expectedEpoch);
     }
 
     BaseObject* FindToVersion(BaseObject* obj) const override
@@ -141,12 +141,13 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
+        const uint64_t expectedEpoch = fromRegionInfo->GetEpoch();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(obj);
+        return space.GetRegionManager().RouteObject(obj, fromRegionInfo, expectedEpoch);
     }
 
 protected:
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
+    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;

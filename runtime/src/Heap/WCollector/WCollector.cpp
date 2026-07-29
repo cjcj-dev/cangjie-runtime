@@ -1127,10 +1127,11 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     if (region == nullptr) {
         return nullptr;
     }
+    const uint64_t expectedEpoch = region->GetEpoch();
 
     if (fwdTable.RouteRegion(region)) {
         if (region->TryLockReadFromRegion()) {
-            BaseObject* toVersion = ForwardObjectImpl(obj, region);
+            BaseObject* toVersion = ForwardObjectImpl(obj, region, expectedEpoch);
             region->UnlockReadFromRegion();
             return toVersion;
         } else {
@@ -1142,7 +1143,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
+BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
     do {
@@ -1150,7 +1151,8 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
         // 1. object has already been forwarded
         if (obj->IsForwarded()) {
-            auto toObj = GetForwardPointer(obj, ghostFromRegion);
+            auto toObj = GetForwardPointer(obj, ghostFromRegion, expectedEpoch);
+            CHECK_DETAIL(toObj != nullptr, "route epoch changed before reading forwarded object %p", obj);
             DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
             return toObj;
         }

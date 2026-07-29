@@ -26,20 +26,27 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
         std::printf("EPOCH_PROBE route result=FAIL reason=take-region\n");
         return false;
     }
-    // Install a dummy route stamped with current region epoch (no Bump on install, R2).
+    // Establish a real from/ghost route lifetime, then retain the caller's view.
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
-    const uint64_t install = region->GetRouteInstallEpoch();
-    const bool matchBefore = region->RouteEpochMatches(install);
-    // Simulate route-teardown validity-end (DispelGhost bumps + restamps installEpoch).
-    region->BumpEpoch();
-    region->SetRouteInfo(0);
+    const uint64_t expected = region->GetEpoch();
+    const bool matchBefore = region->RouteEpochMatches(expected);
+
+    // Real route teardown: bump region epoch, restamp RouteInfo, and clear ghost state.
+    region->DispelGhostFromRegion();
     const uint64_t afterTeardown = region->GetRouteInstallEpoch();
-    const bool matchAfter = region->RouteEpochMatches(install);
-    const bool pass = matchBefore && !matchAfter && (afterTeardown != install);
+    RegionManager::ResetRouteEpochMismatchCount();
+    BaseObject* stale = manager.RouteObject(
+        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected);
+    const size_t mismatchCount = RegionManager::GetRouteEpochMismatchCount();
+    const bool pass = matchBefore && stale == nullptr && mismatchCount > 0 && afterTeardown != expected;
     std::printf(
-        "EPOCH_PROBE route result=%s install=%llu after_teardown=%llu match_before=%d match_after=%d\n",
-        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(install),
-        static_cast<unsigned long long>(afterTeardown), matchBefore ? 1 : 0, matchAfter ? 1 : 0);
+        "EPOCH_PROBE route result=%s expected=%llu after_teardown=%llu match_before=%d "
+        "stale_null=%d mismatch_count=%zu\n",
+        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(expected),
+        static_cast<unsigned long long>(afterTeardown), matchBefore ? 1 : 0,
+        stale == nullptr ? 1 : 0, mismatchCount);
     manager.ReclaimRegion(region);
     return pass;
 }
