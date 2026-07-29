@@ -15,8 +15,8 @@
 // 7) retained snapshot binds its coverage boundary (allocation frontier)
 // 8) a stale EMPTY snapshot is detected via snapshot epoch
 // 9) large-region promotion preserves a valid flag-shaped retained snapshot
-// 10) reclaim invalidates ghost lookup and route metadata for stale object
-//     addresses (head and subordinate, order independent)
+// 10) garbage consumers retain a ghost carrier until dispel; the original reclaim
+//     path then invalidates head/subordinate lookup and route metadata
 // Note: k6's post-geometry-read probe was retired with its product window —
 // an acquired by-value snapshot cannot change under the reader (k7 protocol).
 
@@ -372,20 +372,38 @@ bool ProbeReclaimGhostTeardown(RegionManager& manager)
     const MAddress staleSubordinate = staleHead + RegionInfo::UNIT_SIZE;
     const bool ghostBefore = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
         RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
-    manager.ReclaimRegion(region);
+    (void)manager.CollectRegion(region);
+    manager.ReclaimGarbageRegions();
+    const bool retainedInGarbage = region->IsGarbageRegion() &&
+        RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
+        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region &&
+        region->AcquireRouteInfo().IsInstalled();
+    RegionInfo* other = manager.TakeRegion(2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    const bool takeSkippedGhost = other != region;
+    if (other != nullptr && other != region) {
+        manager.ReclaimRegion(other);
+    }
 
+    region->DispelGhostFromRegion();
+    manager.ReclaimGarbageRegions();
     const bool headCleared = RegionInfo::GetGhostFromRegionAt(staleHead) == nullptr;
     const bool subordinateCleared = RegionInfo::GetGhostFromRegionAt(staleSubordinate) == nullptr;
-    // k7 protocol: teardown publishes carrier absence, not an epoch sentinel.
     const bool routeCleared = !region->AcquireRouteInfo().IsInstalled() &&
         region->GetRouteState() == RegionInfo::RouteState::NORMAL;
-    const bool pass = ghostBefore && headCleared && subordinateCleared && routeCleared;
+    const bool reclaimedAfterDispel = region->IsFreeRegion();
+    const bool pass = ghostBefore && retainedInGarbage && takeSkippedGhost && headCleared &&
+        subordinateCleared && routeCleared && reclaimedAfterDispel;
     std::printf(
-        "EPOCH_PROBE reclaim_ghost result=%s ghost_before=%d head_null=%d subordinate_null=%d "
-        "route_absent=%d route_normal=%d\n",
-        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, headCleared ? 1 : 0, subordinateCleared ? 1 : 0,
+        "EPOCH_PROBE reclaim_ghost result=%s ghost_before=%d retained_in_garbage=%d "
+        "take_skipped_ghost=%d head_null=%d subordinate_null=%d route_absent=%d "
+        "route_normal=%d reclaimed_after_dispel=%d\n",
+        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, retainedInGarbage ? 1 : 0,
+        takeSkippedGhost ? 1 : 0, headCleared ? 1 : 0, subordinateCleared ? 1 : 0,
         region->AcquireRouteInfo().IsInstalled() ? 0 : 1,
-        region->GetRouteState() == RegionInfo::RouteState::NORMAL ? 1 : 0);
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL ? 1 : 0, reclaimedAfterDispel ? 1 : 0);
+    if (other == region) {
+        manager.ReclaimRegion(region);
+    }
     return pass;
 }
 
