@@ -31,6 +31,13 @@ struct UntagRefFieldBreadcrumb {
 };
 
 thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+
+constexpr bool IsInvalidCopyDestinationState(bool missing, bool free, bool garbage, bool from, bool invalidRole)
+{
+    return missing || free || garbage || from || invalidRole;
+}
+static_assert(IsInvalidCopyDestinationState(false, false, true, false, false),
+              "garbage copy destinations must remain fail-closed");
 } // namespace
 
 void PrintUntagRefFieldBreadcrumb() noexcept
@@ -639,17 +646,26 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         }
         return;
     }
-    // Fail-closed bounds only (no IsValidObject): r1segv early SEGV was header
-    // touch on uncommitted to pages. Reject free/garbage/ghost/from to-region
-    // and addresses past to-region allocPtr.
+    // Fail-closed current-state and bounds only (no IsValidObject): r1segv early
+    // SEGV was a header touch on uncommitted to pages. Ghost and route describe
+    // historical/planning state and must not reject a current copy destination.
     RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(toObj));
-    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion() ||
-        toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
+    const bool toRegionMissing = toRegion == nullptr;
+    const bool toFree = toRegion != nullptr && toRegion->IsFreeRegion();
+    const bool toGarbage = toRegion != nullptr && toRegion->IsGarbageRegion();
+    const bool toFrom = toRegion != nullptr && toRegion->IsFromRegion();
+    const bool toInvalidRole = toRegion != nullptr && !toFree && !toRegion->IsValidRegion();
+    if (IsInvalidCopyDestinationState(toRegionMissing, toFree, toGarbage, toFrom, toInvalidRole)) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
             if (missBuckets != nullptr) {
                 ++missBuckets->unclassified;
                 ++missBuckets->invalidToRegion;
+                missBuckets->invalidToRegionMissing += static_cast<size_t>(toRegionMissing);
+                missBuckets->invalidToRegionFree += static_cast<size_t>(toFree);
+                missBuckets->invalidToRegionGarbage += static_cast<size_t>(toGarbage);
+                missBuckets->invalidToRegionFrom += static_cast<size_t>(toFrom);
+                missBuckets->invalidToRegionRole += static_cast<size_t>(toInvalidRole);
             }
             static std::atomic<size_t> skipSampleReg{ 0 };
             size_t n = skipSampleReg.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -678,6 +694,9 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
             }
         }
         return;
+    }
+    if (toRegion->IsGhostFromRegion() && missBuckets != nullptr) {
+        ++missBuckets->ghostOverlayPassedActiveGate;
     }
     RefField<> newField(toObj);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
@@ -747,13 +766,17 @@ void WCollector::BulkForwardHolderRefs()
          "facttable=%zu fromTarget=%zu crossRegion=%zu relocation_diag=%zu "
          "MISSBUCKET_B1=%zu_B2=%zu_B3=%zu_UNCLASSIFIED=%zu_of_%zu "
          "invalid_to_not_heap=%zu invalid_to_region=%zu invalid_to_bounds=%zu "
+         "invalid_to_region_missing=%zu invalid_to_region_free=%zu invalid_to_region_garbage=%zu "
+         "invalid_to_region_from=%zu invalid_to_region_role=%zu ghost_overlay_passed_active_gate=%zu "
          "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu",
          static_cast<size_t>(pauseUs), rewritten, interiorRewritten, skippedNoFact, fixSetSize, factTableSize,
          FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered(),
          relocationDiagnosticSize, missBuckets.b1LegitIdentity, missBuckets.b2LegitOther,
          missBuckets.b3RealLoss, missBuckets.unclassified, bucketTotal, missBuckets.invalidToNotHeap,
-         missBuckets.invalidToRegion, missBuckets.invalidToBounds, missBuckets.b2InteriorNonObjectBase,
-         missBuckets.unclassifiedNoCopyRange);
+         missBuckets.invalidToRegion, missBuckets.invalidToBounds, missBuckets.invalidToRegionMissing,
+         missBuckets.invalidToRegionFree, missBuckets.invalidToRegionGarbage, missBuckets.invalidToRegionFrom,
+         missBuckets.invalidToRegionRole, missBuckets.ghostOverlayPassedActiveGate,
+         missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange);
     for (const auto& type : missBuckets.b3Types) {
         VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
              type.first == nullptr ? "<null>" : type.first->GetName(), type.second);

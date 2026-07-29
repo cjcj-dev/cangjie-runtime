@@ -199,6 +199,12 @@ private:
         size_t invalidToNotHeap = 0;
         size_t invalidToRegion = 0;
         size_t invalidToBounds = 0;
+        size_t invalidToRegionMissing = 0;
+        size_t invalidToRegionFree = 0;
+        size_t invalidToRegionGarbage = 0;
+        size_t invalidToRegionFrom = 0;
+        size_t invalidToRegionRole = 0;
+        size_t ghostOverlayPassedActiveGate = 0;
         size_t b2InteriorNonObjectBase = 0;
         size_t unclassifiedNoCopyRange = 0;
         std::unordered_map<TypeInfo*, size_t> b3Types;
