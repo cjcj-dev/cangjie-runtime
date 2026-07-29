@@ -167,6 +167,8 @@ void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
                 if (oldField.GetFieldValue() != newField.GetFieldValue()) {
                     refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
                 }
+                // E3: register post-copy plain target (I5) for BulkForward.
+                FixEdgeSet::Instance().MaybeAdd(obj, &refField, untagged);
             },
             dst, dst + dstLen);
     }

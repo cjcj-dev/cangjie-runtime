@@ -126,6 +126,8 @@ void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen,
                 if (oldValue != newField.GetFieldValue()) {
                     refField.CompareExchange(oldValue, newField.GetFieldValue());
                 }
+                // E3: register post-copy plain target (I5) for BulkForward.
+                FixEdgeSet::Instance().MaybeAdd(obj, &refField, latestVerison);
             },
             dst, dst + dstLen);
     }
