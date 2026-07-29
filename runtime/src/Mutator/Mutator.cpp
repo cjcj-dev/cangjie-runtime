@@ -221,6 +221,10 @@ extern "C" BaseObject* CANGJIE_DEFERRED_LOG_RING_SYMBOL(BaseObject* object)
     return object;
 }
 
+// stickyon3 cjc imports unversioned symbol; keep versioned ABI + unversioned alias.
+extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object)
+    __attribute__((alias(CANGJIE_DEFERRED_LOG_RING_SYMBOL_STRING)));
+
 void Mutator::SetManagedContext(bool isManagedContext)
 {
     inManagedContext.store(isManagedContext, std::memory_order_release);
