@@ -639,13 +639,20 @@ public:
         RegionInfo* region = ghostFromRegionList.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextGhostRegion();
-            DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
-                 region->GetRegionEnd());
             if (region->IsGhostFromRegion() && region->IsGarbageRegion()) {
                 ++retainedRegions;
                 retainedBytes += region->GetGhostRegionSize();
             }
+            region = next;
+        }
+        ghostFromRegionList.VisitAllGhostRegions([](RegionInfo* region) {
+            DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
+                 region->GetRegionEnd());
             region->DispelGhostFromRegion();
+        });
+        region = ghostFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextGhostRegion();
             if (TryTakeGarbageRegionAfterDispel(region)) {
                 ReclaimRegion(region);
             }
