@@ -160,9 +160,17 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);
 #endif
-    // P3 struct memcpy registration deferred (ForEachRefInStruct post-memcpy
-    // risked incomplete-aggregate walk → early SEGV). Per-ref WriteReference still
-    // registers. Compiler dual-track covers Idle plain bulk copies (r1cc).
+    // E2/plainsrc P3: memcpy preserves plain refs; register each dst ref slot
+    // when holder is a stable heap object (same source-proof as WriteReference).
+    // MaybeAdd skips from/ghost holders and non-From/Ghost targets (I5).
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        obj->ForEachRefInStruct(
+            [obj](RefField<false>& field) {
+                BaseObject* ref = field.GetTargetObject();
+                FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
+            },
+            dst, dst + dstLen);
+    }
 }
 
 void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const { WriteReference(nullptr, field, ref); }
@@ -250,6 +258,17 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+
+    // E2: bulk struct-array copy leaves plain refs in dst slots; register each
+    // so BulkForward can close plain→from/ghost edges (I5/P-G).
+    if (Heap::IsHeapAddress(dstObj)) {
+        MArray* dstArray = static_cast<MArray*>(dstObj);
+        RefFieldVisitor regVisitor = [dstObj](RefField<false>& field) {
+            BaseObject* ref = field.GetTargetObject();
+            FixEdgeSet::Instance().MaybeAdd(dstObj, &field, ref);
+        };
+        dstArray->ForEachRefFieldInRange(regVisitor, dstField, dstField + dstSize);
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
