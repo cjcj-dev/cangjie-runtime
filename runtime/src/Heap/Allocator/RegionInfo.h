@@ -816,7 +816,7 @@ public:
 
     void DispelGhostFromRegion()
     {
-        // Phase: STW (PrepareFromRegionList / PostTrace dispel).
+        // Phase: POST_TRACE PrepareForwardTable, after InvalidateOldTaggedRefsBeforeDispel's local STW; no region lock.
         // R2 validity-end: route teardown (not Forward complete).
         BumpEpoch();
         metadata.routeState = NORMAL;
