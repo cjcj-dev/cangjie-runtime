@@ -798,6 +798,10 @@ public:
     void ClearGhostRegionBit()
     {
         if (IsGhostFromRegion()) {
+            // POST_TRACE AddRawPointerObject path; no STW or region lock is held.
+            // Clearing the unique route guard ends this carrier lifetime.
+            BumpEpoch();
+            metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
             size_t nUnit = GetUnitCount();
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
