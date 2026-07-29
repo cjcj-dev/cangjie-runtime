@@ -554,14 +554,14 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    BaseObject* toObj = ghost->GetRoute(target);
+    // Prefer FindToVersion (RouteObject) over bare GetRoute: RouteObject can
+    // return nullptr on unroutable; GetRoute alone yields raw computed addresses
+    // that may sit past to-region allocPtr (unmapped). Touching those with
+    // IsValidObject is the r1segv early SEGV (rc=139 prior_site=0).
+    BaseObject* toObj = FindToVersion(target);
     if (toObj == nullptr || toObj == target) {
         return;
     }
-    // GetRoute returns a computed address — may sit past to-region's current
-    // allocPtr (unmapped/uncommitted). IsHeapAddress is range-only and can pass
-    // for such addresses; IsValidObject then SEGV. Gate with owning to-region
-    // bounds before any object header touch (r1segv early SEGV root cause).
     if (!Heap::IsHeapAddress(toObj)) {
         return;
     }
@@ -574,9 +574,8 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
         return;
     }
-    if (!toObj->IsValidObject()) {
-        return;
-    }
+    // ⛔ no IsValidObject(toObj): header touch is what SEGVed on uncommitted pages.
+    // Bounds above are the fail-closed substitute for this consume path only.
     // Success shape of TryUpdateRefFieldImpl: plain to (WCollector.cpp:102-111).
     RefField<> newField(toObj);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
