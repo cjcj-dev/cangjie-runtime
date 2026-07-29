@@ -97,20 +97,29 @@ bool ProbeClearGhostRouteEpoch(RegionManager& manager)
     region->AddLiveByteCount(16);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
+    region->PreserveRetainedLiveInfo();
+    const uint64_t snapshotBefore = region->GetSnapshotEpoch();
+    const bool snapshotValidBefore = region->IsRetainedSnapshotValid() &&
+        region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID;
     const uint64_t before = region->GetIdentityEpoch();
     region->ClearGhostRegionBit();
     const uint64_t after = region->GetIdentityEpoch();
+    const uint64_t snapshotAfter = region->GetSnapshotEpoch();
     const uint64_t routeEpoch = region->GetRouteInstallEpoch();
     const bool matchAfter = region->RouteEpochMatches(after);
     const bool pass = after != before && routeEpoch == RouteInfo::INVALID_EPOCH && !matchAfter &&
-        !region->IsGhostFromRegion();
+        !region->IsGhostFromRegion() && snapshotAfter != snapshotBefore && snapshotValidBefore &&
+        region->IsRetainedSnapshotValid();
     std::printf(
         "EPOCH_PROBE clear_ghost result=%s before=%llu after=%llu bumped=%d sentinel=%d "
-        "match_after=%d ghost=%d\n",
+        "match_after=%d ghost=%d snapshot_before=%llu snapshot_after=%llu "
+        "snapshot_valid_before=%d snapshot_valid_after=%d\n",
         pass ? "PASS" : "FAIL", static_cast<unsigned long long>(before),
         static_cast<unsigned long long>(after), after != before ? 1 : 0,
         routeEpoch == RouteInfo::INVALID_EPOCH ? 1 : 0, matchAfter ? 1 : 0,
-        region->IsGhostFromRegion() ? 1 : 0);
+        region->IsGhostFromRegion() ? 1 : 0, static_cast<unsigned long long>(snapshotBefore),
+        static_cast<unsigned long long>(snapshotAfter), snapshotValidBefore ? 1 : 0,
+        region->IsRetainedSnapshotValid() ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }
@@ -122,17 +131,66 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
         std::printf("EPOCH_PROBE snapshot result=FAIL reason=take-region\n");
         return false;
     }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
     region->PreserveRetainedLiveInfo();
-    const bool beforeClear = region->GetRetainedLiveInfoState() ==
-            RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY ||
-        region->IsRetainedSnapshotValid() ||
-        region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED;
+    const uint64_t identityBefore = region->GetIdentityEpoch();
+    const uint64_t snapshotBefore = region->GetSnapshotEpoch();
+    const bool beforeClear = region->IsRetainedSnapshotValid() &&
+        region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
+        region->RouteEpochMatches(identityBefore);
     region->ClearLiveInfo();
+    BaseObject* routed = manager.RouteObject(
+        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, identityBefore);
     const bool afterClear = !region->IsRetainedSnapshotValid();
-    const bool pass = beforeClear && afterClear;
-    std::printf("EPOCH_PROBE snapshot result=%s after_clear_invalid=%d\n", pass ? "PASS" : "FAIL",
-                afterClear ? 1 : 0);
+    const bool pass = beforeClear && afterClear && region->GetIdentityEpoch() == identityBefore &&
+        region->GetSnapshotEpoch() != snapshotBefore && region->RouteEpochMatches(identityBefore) &&
+        routed != nullptr;
+    std::printf(
+        "EPOCH_PROBE snapshot result=%s identity_before=%llu identity_after=%llu "
+        "snapshot_before=%llu snapshot_after=%llu route_match_after=%d route_nonnull=%d "
+        "snapshot_invalid_after=%d\n",
+        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(identityBefore),
+        static_cast<unsigned long long>(region->GetIdentityEpoch()),
+        static_cast<unsigned long long>(snapshotBefore),
+        static_cast<unsigned long long>(region->GetSnapshotEpoch()),
+        region->RouteEpochMatches(identityBefore) ? 1 : 0, routed != nullptr ? 1 : 0, afterClear ? 1 : 0);
     manager.ReclaimRegion(region);
+    return pass;
+}
+
+bool ProbeRegionReuseRouteEpoch(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE reuse_route result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
+    const uint64_t expected = region->GetIdentityEpoch();
+    manager.ReclaimRegion(region);
+    RegionInfo* reused = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    const bool sameRegion = reused == region;
+    BaseObject* stale = sameRegion ? manager.RouteObject(
+        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected) : nullptr;
+    const bool identityChanged = sameRegion && region->GetIdentityEpoch() != expected;
+    const bool pass = sameRegion && identityChanged && stale == nullptr;
+    std::printf(
+        "EPOCH_PROBE reuse_route result=%s same_region=%d expected=%llu actual=%llu "
+        "identity_changed=%d stale_null=%d\n",
+        pass ? "PASS" : "FAIL", sameRegion ? 1 : 0, static_cast<unsigned long long>(expected),
+        static_cast<unsigned long long>(sameRegion ? region->GetIdentityEpoch() : 0),
+        identityChanged ? 1 : 0, stale == nullptr ? 1 : 0);
+    if (reused != nullptr) {
+        manager.ReclaimRegion(reused);
+    }
     return pass;
 }
 
@@ -236,14 +294,16 @@ int main()
     const bool route = MapleRuntime::ProbeRouteEpochMismatch(manager);
     const bool clearGhost = MapleRuntime::ProbeClearGhostRouteEpoch(manager);
     const bool snapshot = MapleRuntime::ProbeRetainedSnapshotEpoch(manager);
+    const bool reuseRoute = MapleRuntime::ProbeRegionReuseRouteEpoch(manager);
     const bool boundary = MapleRuntime::ProbeRetainedCoveredBoundary(manager);
     const bool staleEmpty = MapleRuntime::ProbeStaleEmpty(manager);
     const bool largePromotion = MapleRuntime::ProbeLargePromotion(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
     std::printf(
-        "EPOCH_PROBE summary route=%s clear_ghost=%s snapshot=%s boundary=%s "
+        "EPOCH_PROBE summary route=%s clear_ghost=%s snapshot=%s reuse_route=%s boundary=%s "
         "stale_empty=%s large_promotion=%s\n",
         route ? "PASS" : "FAIL", clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL",
-        boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL");
-    return route && clearGhost && snapshot && boundary && staleEmpty && largePromotion ? 0 : 1;
+        reuseRoute ? "PASS" : "FAIL", boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL",
+        largePromotion ? "PASS" : "FAIL");
+    return route && clearGhost && snapshot && reuseRoute && boundary && staleEmpty && largePromotion ? 0 : 1;
 }
