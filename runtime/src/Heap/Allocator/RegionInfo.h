@@ -891,7 +891,6 @@ public:
     {
         metadata.unitRoleBitField.SetAtomicValue(BIT_LENGTH, BIT_LENGTH, static_cast<uint8_t>(role));
     }
-    void SetRegionType(RegionType type);
     void SetTraceRegionFlag(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
@@ -1401,26 +1400,28 @@ private:
         }
     }
 
+public:
+    ALWAYS_INLINE void SetRegionType(RegionType type)
+    {
+        if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION) {
+            // End the ghost route lifetime before publishing the region to an allocator supply list/tree.
+            // The ghost bit is the reader discriminator, so invalidate its payload before clearing the bit.
+            metadata.routeState = NORMAL;
+            metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
+            size_t nUnit = GetUnitCount();
+            UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
+            UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+            for (size_t i = 0; i < nUnit; ++i) {
+                array[i].SetInGhostRegion(0);
+            }
+        }
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
+                                                    static_cast<uint8_t>(type));
+    }
+
+private:
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;
     UnitMetadata metadata;
 };
-
-inline void RegionInfo::SetRegionType(RegionType type)
-{
-    if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION) {
-        // End the ghost route lifetime before publishing the region to an allocator supply list/tree.
-        // The ghost bit is the reader discriminator, so invalidate its payload before clearing the bit.
-        metadata.routeState = NORMAL;
-        metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
-        size_t nUnit = GetUnitCount();
-        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
-        for (size_t i = 0; i < nUnit; ++i) {
-            array[i].SetInGhostRegion(0);
-        }
-    }
-    metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
-                                                static_cast<uint8_t>(type));
-}
 } // namespace MapleRuntime
 #endif // MRT_REGION_INFO_H
