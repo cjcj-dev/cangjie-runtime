@@ -8,15 +8,26 @@
 // 1) route teardown: GetRoute after BumpEpoch/dispel-style install mismatch fails
 // 2) retained LiveInfo snapshot becomes invalid after its region epoch changes
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 
+#define MRT_REGION_EPOCH_TEST 1
 #include "Allocator/RegionManager.h"
 #include "Allocator/RegionSpace.h"
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
+std::atomic<bool> routeTeardownAfterGeometry { false };
+
+void RouteEpochAfterGeometryReadForTest(RegionInfo* region)
+{
+    if (routeTeardownAfterGeometry.exchange(false, std::memory_order_acq_rel)) {
+        region->DispelGhostFromRegion();
+    }
+}
+
 namespace {
 
 bool ProbeRouteEpochMismatch(RegionManager& manager)
@@ -33,28 +44,58 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     const uint64_t expected = region->GetEpoch();
     const bool matchBefore = region->RouteEpochMatches(expected);
 
-    // Real route teardown: bump region epoch, restamp RouteInfo, and clear ghost state.
-    region->DispelGhostFromRegion();
-    const uint64_t afterTeardown = region->GetRouteInstallEpoch();
+    // Deterministically tear down after GetRoute has consumed geometry but before
+    // RouteObject's final epoch/ghost validation publishes the computed address.
     manager.ResetRouteEpochMismatchCount();
-    BaseObject* stale = manager.RouteObject(
+    routeTeardownAfterGeometry.store(true, std::memory_order_release);
+    BaseObject* geometryRace = manager.RouteObject(
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected);
-    const size_t mismatchCount = manager.GetRouteEpochMismatchCount();
-    // Close the lookup->epoch-capture interleaving too: after teardown all three
-    // epochs equal again, but the actual ghost/route state makes consumption invalid.
+    const size_t geometryMismatchCount = manager.GetRouteEpochMismatchCount();
+    const uint64_t afterTeardown = region->GetRouteInstallEpoch();
     const uint64_t lateExpected = region->GetEpoch();
+    const bool lateMatch = region->RouteEpochMatches(lateExpected);
     manager.ResetRouteEpochMismatchCount();
     BaseObject* late = manager.RouteObject(
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, lateExpected);
     const size_t lateMismatchCount = manager.GetRouteEpochMismatchCount();
-    const bool pass = matchBefore && stale == nullptr && mismatchCount > 0 && afterTeardown != expected &&
-        late == nullptr && lateMismatchCount > 0;
+    const bool pass = matchBefore && geometryRace == nullptr && geometryMismatchCount > 0 &&
+        afterTeardown == RouteInfo::INVALID_EPOCH && !lateMatch && late == nullptr && lateMismatchCount > 0;
     std::printf(
         "EPOCH_PROBE route result=%s expected=%llu after_teardown=%llu match_before=%d "
-        "stale_null=%d mismatch_count=%zu late_null=%d late_mismatch_count=%zu\n",
+        "sentinel=%d geometry_race_null=%d geometry_mismatch_count=%zu "
+        "late_match=%d late_null=%d late_mismatch_count=%zu\n",
         pass ? "PASS" : "FAIL", static_cast<unsigned long long>(expected),
         static_cast<unsigned long long>(afterTeardown), matchBefore ? 1 : 0,
-        stale == nullptr ? 1 : 0, mismatchCount, late == nullptr ? 1 : 0, lateMismatchCount);
+        afterTeardown == RouteInfo::INVALID_EPOCH ? 1 : 0, geometryRace == nullptr ? 1 : 0,
+        geometryMismatchCount, lateMatch ? 1 : 0, late == nullptr ? 1 : 0, lateMismatchCount);
+    manager.ReclaimRegion(region);
+    return pass;
+}
+
+bool ProbeClearGhostRouteEpoch(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE clear_ghost result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
+    const uint64_t before = region->GetEpoch();
+    region->ClearGhostRegionBit();
+    const uint64_t after = region->GetEpoch();
+    const uint64_t routeEpoch = region->GetRouteInstallEpoch();
+    const bool matchAfter = region->RouteEpochMatches(after);
+    const bool pass = after != before && routeEpoch == RouteInfo::INVALID_EPOCH && !matchAfter &&
+        !region->IsGhostFromRegion();
+    std::printf(
+        "EPOCH_PROBE clear_ghost result=%s before=%llu after=%llu bumped=%d sentinel=%d "
+        "match_after=%d ghost=%d\n",
+        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(before),
+        static_cast<unsigned long long>(after), after != before ? 1 : 0,
+        routeEpoch == RouteInfo::INVALID_EPOCH ? 1 : 0, matchAfter ? 1 : 0,
+        region->IsGhostFromRegion() ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }
@@ -91,9 +132,10 @@ int main()
         reinterpret_cast<MapleRuntime::RegionSpace&>(MapleRuntime::Heap::GetHeap().GetAllocator());
     MapleRuntime::RegionManager& manager = allocator.GetRegionManager();
     const bool route = MapleRuntime::ProbeRouteEpochMismatch(manager);
+    const bool clearGhost = MapleRuntime::ProbeClearGhostRouteEpoch(manager);
     const bool snapshot = MapleRuntime::ProbeRetainedSnapshotEpoch(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
-    std::printf("EPOCH_PROBE summary route=%s snapshot=%s\n", route ? "PASS" : "FAIL",
-                snapshot ? "PASS" : "FAIL");
-    return route && snapshot ? 0 : 1;
+    std::printf("EPOCH_PROBE summary route=%s clear_ghost=%s snapshot=%s\n", route ? "PASS" : "FAIL",
+                clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL");
+    return route && clearGhost && snapshot ? 0 : 1;
 }
