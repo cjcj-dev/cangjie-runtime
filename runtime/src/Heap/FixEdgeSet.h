@@ -30,6 +30,7 @@ class BaseObject;
 // ⛔ no target-region stamp/compare (LIE-1). Consumer rejects on slot-epoch mismatch
 // (definitional expiry; E9 free/garbage kept as parallel observe — same intercept set).
 // No cross-major retention. Mutator Add vs STW Visit/Clear: STW excludes mutators.
+// Public Add(MAddress) signature preserved (export surface / mutator ABI unchanged).
 class FixEdgeSet {
 public:
     struct Entry {
@@ -42,7 +43,11 @@ public:
 
     // Register a heap ref slot that was just written (or Trace-observed).
     // slotAddr = absolute address of RefField<> storage (edge key).
-    void Add(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch);
+    // Stamps slot-region epoch internally when the address is a heap region.
+    void Add(MAddress slotAddr);
+
+    // Test/harness: register with explicit slot epoch (not on export path).
+    void AddWithEpoch(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch);
 
     // Register when newRef is already From/GhostFrom (I5). holder may be null
     // (static root). Skips stores into from/ghost holders (slot would evacuate).

@@ -46,7 +46,7 @@ bool ProbeReuseEpochSkip(RegionManager& manager)
     ProbeSlot slot;
     // Use a heap address for the slot if possible; otherwise exercise Add+Visit path via MaybeAdd
     // with synthetic stamp by calling Add directly.
-    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(&slot.field), e0, true);
+    FixEdgeSet::Instance().AddWithEpoch(reinterpret_cast<MAddress>(&slot.field), e0, true);
 
     // Bump again as free/reuse would.
     region->BumpEpoch();
@@ -69,7 +69,7 @@ bool ProbeReuseEpochSkip(RegionManager& manager)
     auto* heapField = reinterpret_cast<RefField<>*>(alloc);
     const uint64_t stamp = region->GetEpoch();
     FixEdgeSet::Instance().ResetSkipCounts();
-    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(heapField), stamp, true);
+    FixEdgeSet::Instance().AddWithEpoch(reinterpret_cast<MAddress>(heapField), stamp, true);
     // free/reuse bump invalidates stamp
     region->BumpEpoch();
     size_t visited2 = 0;
@@ -94,20 +94,17 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     // Install a dummy route stamped with current region epoch (no Bump on install, R2).
     region->SetRouteInfo(region->GetRegionStart(), 16);
     const uint64_t install = region->GetRouteInstallEpoch();
-    // Stale expected epoch must fail before ghost live access.
-    BaseObject* bogus = reinterpret_cast<BaseObject*>(region->GetRegionStart());
-    BaseObject* stale = region->GetRoute(bogus, install - 1);
+    const bool matchBefore = region->RouteEpochMatches(install);
     // Simulate route-teardown validity-end (DispelGhost bumps + restamps installEpoch).
     region->BumpEpoch();
     region->SetRouteInfo(0);
     const uint64_t afterTeardown = region->GetRouteInstallEpoch();
-    BaseObject* after = region->GetRoute(bogus, install);
-    const bool pass = (stale == nullptr) && (after == nullptr) && (afterTeardown != install);
+    const bool matchAfter = region->RouteEpochMatches(install);
+    const bool pass = matchBefore && !matchAfter && (afterTeardown != install);
     std::printf(
-        "EPOCH_PROBE route result=%s install=%llu after_teardown=%llu stale_null=%d after_null=%d\n",
+        "EPOCH_PROBE route result=%s install=%llu after_teardown=%llu match_before=%d match_after=%d\n",
         pass ? "PASS" : "FAIL", static_cast<unsigned long long>(install),
-        static_cast<unsigned long long>(afterTeardown), stale == nullptr ? 1 : 0,
-        after == nullptr ? 1 : 0);
+        static_cast<unsigned long long>(afterTeardown), matchBefore ? 1 : 0, matchAfter ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }

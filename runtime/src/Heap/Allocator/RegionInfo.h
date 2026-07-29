@@ -718,24 +718,13 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
     }
 
-    // GetRoute family (EPOCH_DESIGN_0729 R2/R2.1): expectedEpoch is install stamp.
-    // Mismatch ⇒ definitional fail (nullptr). Guards non-FixHolder readers only.
+    // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): geometry read under installEpoch.
+    // Residual readers cache GetRouteInstallEpoch() and re-check before call;
+    // teardown restamps installEpoch ⇒ definitional fail for stale caches.
     // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
-    BaseObject* GetRoute(BaseObject* fromObj, uint64_t expectedEpoch)
+    // Signature matches pre-epoch export surface (single arg).
+    BaseObject* GetRoute(BaseObject* fromObj)
     {
-        const uint64_t installEpoch = metadata.routeInfo.GetInstallEpoch();
-        if (expectedEpoch != installEpoch) {
-            static std::atomic<size_t> routeEpochSkip{ 0 };
-            size_t n = routeEpochSkip.fetch_add(1, std::memory_order_relaxed) + 1;
-            if ((n & (n - 1)) == 0) {
-                VLOG(REPORT,
-                     "[GetRoute] epoch_skip region=%p epoch_seen=%llu epoch_route=%llu epoch_now=%llu n=%zu",
-                     this, static_cast<unsigned long long>(expectedEpoch),
-                     static_cast<unsigned long long>(installEpoch),
-                     static_cast<unsigned long long>(GetEpoch()), n);
-            }
-            return nullptr;
-        }
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         if (UNLIKELY(preLiveBytes >= metadata.routeInfo.GetToRegion1UsedBytes() &&
@@ -761,13 +750,13 @@ public:
         return reinterpret_cast<BaseObject*>(toAddr);
     }
 
-    // Reader convenience: expected = current install stamp.
-    BaseObject* GetRoute(BaseObject* fromObj)
-    {
-        return GetRoute(fromObj, metadata.routeInfo.GetInstallEpoch());
-    }
-
     uint64_t GetRouteInstallEpoch() const { return metadata.routeInfo.GetInstallEpoch(); }
+
+    // True iff reader-held install stamp still matches (route not torn down / restamped).
+    bool RouteEpochMatches(uint64_t expectedInstallEpoch) const
+    {
+        return expectedInstallEpoch == metadata.routeInfo.GetInstallEpoch();
+    }
 
     void PrepareForwardableRegion()
     {

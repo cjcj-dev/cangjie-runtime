@@ -19,7 +19,7 @@ FixEdgeSet& FixEdgeSet::Instance() noexcept
     return instance;
 }
 
-void FixEdgeSet::Add(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch)
+void FixEdgeSet::AddWithEpoch(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch)
 {
     if (slotAddr == 0) {
         return;
@@ -33,6 +33,24 @@ void FixEdgeSet::Add(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch)
     count.fetch_add(1, std::memory_order_relaxed);
 }
 
+void FixEdgeSet::Add(MAddress slotAddr)
+{
+    if (slotAddr == 0) {
+        return;
+    }
+    // R2: stamp slot-region epoch only (E9 constructive). ⛔ no target stamp.
+    uint64_t sEpoch = 0;
+    bool hasS = false;
+    if (Heap::IsHeapAddress(slotAddr)) {
+        RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(slotAddr));
+        if (slotRegion != nullptr) {
+            sEpoch = slotRegion->GetEpoch();
+            hasS = true;
+        }
+    }
+    AddWithEpoch(slotAddr, sEpoch, hasS);
+}
+
 void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef)
 {
     if (slot == nullptr || newRef == nullptr) {
@@ -44,7 +62,6 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
     // Slot must remain at the same absolute address until BulkForward. If the
     // holder is itself in from/ghost, evacuation moves the field — skip (roots
     // and to-space holders only). Static roots: holder == nullptr.
-    RegionInfo* slotRegion = nullptr;
     if (holder != nullptr) {
         if (!Heap::IsHeapAddress(holder)) {
             return;
@@ -56,28 +73,18 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
         if (hr != nullptr && hr->IsFromRegion()) {
             return;
         }
-        slotRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(slot));
-    } else {
-        slotRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(slot));
     }
-
-    auto stampAndAdd = [&]() {
-        // R2: stamp slot-region epoch only (E9 constructive). ⛔ no target stamp.
-        const uint64_t sEpoch = slotRegion != nullptr ? slotRegion->GetEpoch() : 0;
-        const bool hasS = slotRegion != nullptr;
-        Add(reinterpret_cast<MAddress>(slot), sEpoch, hasS);
-    };
 
     // I5: only edges whose target is already From or GhostFrom need bulk fix.
     // plainsrc P11 (Idle plain→then-from) is covered by Trace I4 complement when
     // the holder is scanned; unreached holders need compiler dual-track (r1cc).
     if (RegionInfo::InGhostFromRegion(newRef)) {
-        stampAndAdd();
+        Add(reinterpret_cast<MAddress>(slot));
         return;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
     if (region != nullptr && region->IsFromRegion()) {
-        stampAndAdd();
+        Add(reinterpret_cast<MAddress>(slot));
     }
 }
 

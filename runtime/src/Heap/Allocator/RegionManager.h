@@ -285,7 +285,10 @@ public:
         }
 #else
         // R2 validity-end: bulk GARBAGE declaration (LIE-3) before type flip.
-        fromRegionList.VisitAllRegions([](RegionInfo* r) { r->BumpEpoch(); });
+        // Plain loop (no lambda) so nm -D export surface stays free of std::function glue.
+        for (RegionInfo* r = fromRegionList.GetHeadRegion(); r != nullptr; r = r->GetNextRegion()) {
+            r->BumpEpoch();
+        }
         garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
     }
@@ -480,8 +483,7 @@ public:
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            // Pass install epoch as expected (GetRoute epoch gate for non-FixHolder readers).
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj, fromRegionInfo->GetRouteInstallEpoch());
+            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
             return toAddr;
         }
         return nullptr;
@@ -496,7 +498,7 @@ public:
 
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj, fromRegionInfo->GetRouteInstallEpoch());
+            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
             return toAddr;
         }
         return nullptr;
