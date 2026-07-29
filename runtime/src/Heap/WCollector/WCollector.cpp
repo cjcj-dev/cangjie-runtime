@@ -11,6 +11,7 @@
 #include <csignal>
 
 #include "Heap/FixEdgeSet.h"
+#include "Heap/ForwardFactTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
@@ -524,9 +525,9 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 // After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
 // Predicate aligned with bulkfwd f04 (plain-only + route state + ghost live).
 // holder arg is diagnostic only — P-G walks slot addresses from FixEdgeSet.
-// r1route: consume copy-time fact via FindToVersion only (Collector.h:85).
-// ⛔ never GetRoute (geometry plan, r1segv D5) and ⛔ never IsValidObject(to).
-// ⛔ never FindLatestVersion (silent fallback returns from when to==null).
+// r1route2 R2.1: consume ForwardFactTable only (copy-time side table).
+// ⛔ GetRoute/RouteObject/FindToVersion (r1segv D5) and ⛔ IsValidObject(to).
+// ⛔ FindLatestVersion (silent fallback returns from when to==null).
 void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact)
 {
     RefField<> oldField(field);
@@ -557,38 +558,19 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // Fact carrier (copy-time), not geometry plan:
-    //   COMPACTED  — payload published before routeState=COMPACTED
-    //   FORWARDED  — region-level: ForwardRegion finished all survivors (may have
-    //                zeroed from-headers; still a published fact, fwdrootfix)
-    //   ROUTED+obj FORWARDED — per-object copy done under region plan
-    // ROUTED alone = plan only (r1segv D5 GetRoute SEGV) → loud skip.
-    // ⛔ FindLatestVersion (returns from when to==null). ⛔ bare GetRoute call.
-    const bool hasCopyFact = (st == RegionInfo::RouteState::COMPACTED) ||
-        (st == RegionInfo::RouteState::FORWARDED) || target->IsForwarded();
-    if (!hasCopyFact) {
+    // R2.1 sole fact source: copy-time side table. Miss = dead or not-from or
+    // not yet copied under this major — loud skip is correct (not silent).
+    // ⛔ no FindToVersion/GetRoute/RouteObject (geometry plan SEGV after ForwardRegion).
+    BaseObject* toObj = ForwardFactTable::Instance().Lookup(target);
+    if (toObj == nullptr || toObj == target) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
             static std::atomic<size_t> skipSample{ 0 };
             size_t n = skipSample.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
-                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=%u n=%zu",
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=%u reason=no_table_fact n=%zu",
                      holder, &field, target, static_cast<unsigned>(st), n);
-            }
-        }
-        return;
-    }
-    BaseObject* toObj = FindToVersion(target);
-    if (toObj == nullptr || toObj == target) {
-        if (skippedNoFact != nullptr) {
-            ++(*skippedNoFact);
-            static std::atomic<size_t> skipSampleNull{ 0 };
-            size_t n = skipSampleNull.fetch_add(1, std::memory_order_relaxed) + 1;
-            if ((n & (n - 1)) == 0) {
-                VLOG(REPORT,
-                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=null_or_self n=%zu",
-                     holder, &field, target, n);
             }
         }
         return;
@@ -596,6 +578,13 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (!Heap::IsHeapAddress(toObj)) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            static std::atomic<size_t> skipSampleBad{ 0 };
+            size_t n = skipSampleBad.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_not_heap n=%zu",
+                     holder, &field, target, toObj, n);
+            }
         }
         return;
     }
@@ -607,6 +596,13 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            static std::atomic<size_t> skipSampleReg{ 0 };
+            size_t n = skipSampleReg.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_region_bad n=%zu",
+                     holder, &field, target, toObj, n);
+            }
         }
         return;
     }
@@ -614,6 +610,13 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
+            static std::atomic<size_t> skipSampleBnd{ 0 };
+            size_t n = skipSampleBnd.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_oob n=%zu",
+                     holder, &field, target, toObj, n);
+            }
         }
         return;
     }
@@ -622,7 +625,7 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         return;
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(FIX, "r1route fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
+        DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
              oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target);
     }
 }
@@ -637,6 +640,7 @@ void WCollector::BulkForwardHolderRefs()
     size_t rewritten = 0;
     size_t skippedNoFact = 0;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
+    const size_t factTableSize = ForwardFactTable::Instance().SizeApprox();
 
     auto fixOne = [this, &rewritten, &skippedNoFact](BaseObject* holder, RefField<>& field) {
         RefField<> before(field);
@@ -664,11 +668,14 @@ void WCollector::BulkForwardHolderRefs()
     FixEdgeSet::Instance().VisitAndClear(
         [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
 
+    // R2.1: fact table lifetime ends with BulkForward (same major STW bracket).
+    ForwardFactTable::Instance().Clear();
+
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
     VLOG(REPORT,
          "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu skipped_no_fact=%zu fixset=%zu "
-         "fromTarget=%zu crossRegion=%zu",
-         static_cast<size_t>(pauseUs), rewritten, skippedNoFact, fixSetSize,
+         "facttable=%zu fromTarget=%zu crossRegion=%zu",
+         static_cast<size_t>(pauseUs), rewritten, skippedNoFact, fixSetSize, factTableSize,
          FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered());
 }
 

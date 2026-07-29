@@ -9,6 +9,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
+#include "Heap/ForwardFactTable.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -33,6 +34,10 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    // R2.1: copy-time fact — both addresses in hand, payload committed. All
+    // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
+    // Aborted paths never reach this point (no half entry).
+    ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

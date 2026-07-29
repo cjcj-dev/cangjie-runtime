@@ -9,6 +9,7 @@ set(SRC_LIST
     "GcThreadPool.cpp"
     "StickyLog.cpp"
     "FixEdgeSet.cpp"
+    "ForwardFactTable.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})

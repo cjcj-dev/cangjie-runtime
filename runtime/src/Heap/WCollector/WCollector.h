@@ -208,7 +208,7 @@ private:
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
     // R1: after ForwardFromSpace, rewrite plain→ghost-from edges via FixEdgeSet
     // index only (P-G). No VisitAllObjects / ForEachObj holder walk (H1).
-    // skippedNoFact: loud skip when FindToVersion fact missing (r1route).
+    // skippedNoFact: loud skip when ForwardFactTable miss (r1route2 R2.1).
     void FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact = nullptr);
     void BulkForwardHolderRefs();
     void PreforwardConcurrencyModelRoots();
