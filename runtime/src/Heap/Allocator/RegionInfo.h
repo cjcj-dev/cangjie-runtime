@@ -154,7 +154,8 @@ public:
     }
 
 #ifdef MRT_REGION_EPOCH_TEST
-    void SetEpochForTest(uint64_t epoch) { __atomic_store_n(&metadata.epoch, epoch, __ATOMIC_RELEASE); }
+    // Post-domain-split: identity is the domain routes bind to (harness max-epoch probe).
+    void SetEpochForTest(uint64_t epoch) { __atomic_store_n(&metadata.identityEpoch, epoch, __ATOMIC_RELEASE); }
 #endif
 
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
