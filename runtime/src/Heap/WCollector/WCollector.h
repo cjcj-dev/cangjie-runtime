@@ -158,6 +158,8 @@ protected:
     __attribute__((visibility("hidden")))
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
+    __attribute__((visibility("hidden")))
+    BaseObject* ForwardObjectExclusive(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 

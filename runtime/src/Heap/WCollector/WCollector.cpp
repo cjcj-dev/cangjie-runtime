@@ -1171,7 +1171,7 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
 
         // 3. hope we can forward this object
         if (obj->TryLockObject(oldWord)) {
-            return ForwardObjectExclusive(obj);
+            return ForwardObjectExclusive(obj, ghostFromRegion, expectedEpoch);
         }
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
@@ -1180,8 +1180,17 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
+    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    CHECK_DETAIL(region != nullptr, "forward object %p has no ghost-from region", obj);
+    return ForwardObjectExclusive(obj, region, region->GetEpoch());
+}
+
+__attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclusive(
+    BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
+{
     size_t size = RegionSpace::GetAllocSize(*obj);
-    BaseObject* toObj = fwdTable.RouteObject(obj);
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    BaseObject* toObj = space.GetRegionManager().RouteObject(obj, ghostFromRegion, expectedEpoch);
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
