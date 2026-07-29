@@ -1406,7 +1406,7 @@ public:
         if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION) {
             // End the ghost route lifetime before publishing the region to an allocator supply list/tree.
             // The ghost bit is the reader discriminator, so invalidate its payload before clearing the bit.
-            metadata.routeState = NORMAL;
+            SetRouteState(RouteState::NORMAL);
             metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
             size_t nUnit = GetUnitCount();
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
