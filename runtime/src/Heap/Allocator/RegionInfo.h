@@ -179,11 +179,24 @@ public:
 
     RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
 
-    void PreserveRetainedLiveInfo()
+    uint64_t GetRetainedLiveInfoEpoch() const { return metadata.retainedLiveInfoEpoch; }
+
+    MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
+
+    void PreserveRetainedLiveInfo(MAddress coveredUpToOverride = 0)
     {
         metadata.retainedLiveInfo = GetLiveInfo();
         // Stamp region epoch at snapshot build (EPOCH_DESIGN_0729 §2).
         metadata.retainedLiveInfoEpoch = GetEpoch();
+        // Exclusive allocation boundary: objects allocated after this point are implicitly live.
+        metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride == 0
+            ? GetRegionAllocPtr()
+            : coveredUpToOverride;
+        if (coveredUpToOverride != 0 && coveredUpToOverride == GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
                 metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
@@ -201,10 +214,10 @@ public:
             : RetainedLiveInfoState::SNAPSHOT_VALID;
     }
 
-    // SNAPSHOT_VALID ⇔ state==SNAPSHOT_VALID && retained epoch matches region epoch.
+    // VALID and EMPTY are both snapshot results and share the same epoch validity protocol.
     bool IsRetainedSnapshotValid() const
     {
-        if (metadata.retainedLiveInfoState != RetainedLiveInfoState::SNAPSHOT_VALID) {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return false;
         }
         return metadata.retainedLiveInfoEpoch == GetEpoch();
@@ -855,6 +868,7 @@ public:
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1154,8 +1168,9 @@ private:
 
         LiveInfo* retainedLiveInfo = nullptr;
         RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
-        // Region epoch when retained snapshot was built (SNAPSHOT_VALID ⇔ match GetEpoch()).
+        // Region epoch and exclusive allocation boundary when the retained snapshot was built.
         uint64_t retainedLiveInfoEpoch = 0;
+        MAddress retainedLiveInfoCoveredUpTo = 0;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
@@ -1373,6 +1388,7 @@ private:
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
         // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
         // R2 validity-end: region re-alloc reuse (all prior carriers expire).
         BumpEpoch();
