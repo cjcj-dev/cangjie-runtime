@@ -119,6 +119,19 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
+    // Region epoch (EPOCH_DESIGN_0729 §1): monotonic u64 lifetime of region semantics.
+    // Carriers stamp GetEpoch() at production; consumers reject on mismatch (definitional expiry).
+    uint64_t GetEpoch() const
+    {
+        return __atomic_load_n(&metadata.epoch, std::memory_order_acquire);
+    }
+
+    // Bump only on semantic transitions (STW window or region lock — each call site annotates phase).
+    void BumpEpoch()
+    {
+        __atomic_fetch_add(&metadata.epoch, 1, std::memory_order_acq_rel);
+    }
+
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
@@ -673,6 +686,9 @@ public:
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
+        // Phase: STW / region write-lock (ReclaimRegion, ReleaseRegion, CollectRegion).
+        // Blueprint: free/return-to-allocator ⇒ epoch bump (E9 constructive fix).
+        BumpEpoch();
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -683,6 +699,9 @@ public:
 
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
+        // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state / PrepareForwardable).
+        // Blueprint: route install/remove ⇒ epoch bump.
+        BumpEpoch();
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
@@ -718,10 +737,13 @@ public:
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
+        // Phase: STW (PrepareFromRegionList). Blueprint: Assemble into ghost-from + route clear.
+        BumpEpoch();
         metadata.routeState = FORWARDABLE;
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
+        // Clear route without second BumpEpoch (SetRouteInfo would bump again).
         metadata.routeInfo.SetRouteInfo(0);
         if (GetLiveByteCount() > 0) {
             SetInGhostRegion(1);
@@ -764,6 +786,8 @@ public:
 
     void DispelGhostFromRegion()
     {
+        // Phase: STW (PrepareFromRegionList / PostTrace dispel). Blueprint: route/ghost teardown.
+        BumpEpoch();
         metadata.routeState = NORMAL;
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
@@ -791,6 +815,9 @@ public:
     }
     void ClearLiveInfo()
     {
+        // Phase: STW GC (Assemble*GarbageCandidates / ClearAllLiveInfo / young prepare).
+        // Blueprint: ClearLiveInfo ⇒ epoch bump (snapshot semantics flip).
+        BumpEpoch();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
@@ -1101,6 +1128,8 @@ private:
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
+        // Monotonic region semantic generation (EPOCH_DESIGN_0729). Not reset on reuse.
+        uint64_t epoch = 0;
 
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -1312,6 +1341,9 @@ private:
         metadata.liveInfo = nullptr;
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
+        // Blueprint: free + region re-alloc reuse ⇒ epoch bump (all prior carriers expire).
+        BumpEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetMarkedRegionFlag(0);
