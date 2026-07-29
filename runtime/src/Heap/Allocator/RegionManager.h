@@ -499,6 +499,12 @@ public:
                      static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                      static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
             }
+#ifndef MRT_REGION_EPOCH_TEST
+            CHECK_DETAIL(false,
+                         "RouteObject identity expired before route lookup: region=%p seen=%llu now=%llu",
+                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()));
+#endif
             return nullptr;
         }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
@@ -517,6 +523,14 @@ public:
                          static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
+#ifndef MRT_REGION_EPOCH_TEST
+                CHECK_DETAIL(false,
+                             "RouteObject route carrier expired before geometry read: region=%p seen=%llu "
+                             "now=%llu route=%llu",
+                             fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                             static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
+                             static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()));
+#endif
                 return nullptr;
             }
             BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
@@ -538,6 +552,14 @@ public:
                          static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
+#ifndef MRT_REGION_EPOCH_TEST
+                CHECK_DETAIL(false,
+                             "RouteObject route carrier expired after geometry read: region=%p seen=%llu "
+                             "now=%llu route=%llu",
+                             fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                             static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
+                             static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()));
+#endif
                 return nullptr;
             }
             return toAddr;
