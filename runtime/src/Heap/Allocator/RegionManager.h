@@ -362,7 +362,7 @@ public:
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
 
-    void ReclaimGarbageRegions()
+    __attribute__((used)) void ReclaimGarbageRegions()
     {
         RegionInfo* garbage = TakeReclaimableGarbageRegion();
         while (garbage != nullptr) {
@@ -636,7 +636,9 @@ public:
     {
         size_t retainedRegions = 0;
         size_t retainedBytes = 0;
-        ghostFromRegionList.VisitAllGhostRegions([this, &retainedRegions, &retainedBytes](RegionInfo* region) {
+        RegionInfo* region = ghostFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextGhostRegion();
             DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
                  region->GetRegionEnd());
             if (region->IsGhostFromRegion() && region->IsGarbageRegion()) {
@@ -647,7 +649,8 @@ public:
             if (TryTakeGarbageRegionAfterDispel(region)) {
                 ReclaimRegion(region);
             }
-        });
+            region = next;
+        }
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
 
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
@@ -674,6 +677,7 @@ public:
     }
 
 private:
+    __attribute__((always_inline, visibility("hidden")))
     RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr)
     {
         std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
@@ -696,6 +700,7 @@ private:
         return candidate;
     }
 
+    __attribute__((always_inline, visibility("hidden")))
     bool TryTakeGarbageRegionAfterDispel(RegionInfo* target)
     {
         std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
@@ -711,7 +716,7 @@ private:
         return false;
     }
 
-    size_t GetGatedGarbageBytes()
+    __attribute__((always_inline, visibility("hidden"))) size_t GetGatedGarbageBytes()
     {
         std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
         size_t bytes = 0;
