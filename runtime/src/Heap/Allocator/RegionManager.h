@@ -48,11 +48,8 @@ struct YoungAccountingStats {
     size_t gcOrdinal = 0;
     size_t accountedBytes = 0;
     size_t actualBytes = 0;
-    size_t actualObjects = 0;
-    size_t actualLe64 = 0;
-    size_t actualLe256 = 0;
-    size_t actualLe1024 = 0;
-    size_t actualGt1024 = 0;
+    size_t heapBaselineBytes = 0;
+    size_t heapCurrentBytes = 0;
     size_t newRegionEvents = 0;
     size_t newRegionBytes = 0;
     size_t reusedGarbageEvents = 0;
@@ -423,10 +420,10 @@ public:
         return youngAllocatedBytes.load(std::memory_order_relaxed);
     }
 
-    __attribute__((visibility("hidden"))) void RecordYoungActualAllocation(size_t bytes);
     __attribute__((visibility("hidden"))) YoungAccountingStats SnapshotYoungAccounting();
     __attribute__((visibility("hidden")))
     void ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const;
+    __attribute__((visibility("hidden"))) void SetYoungAccountingHeapBaseline();
 
     size_t GetSurvivedSize() const
     {
@@ -866,12 +863,7 @@ private:
     void RecordYoungRegionAccounting(YoungAccountingSource source, RegionInfo* region);
     std::atomic<size_t> youngAccountingOrdinal = { 1 };
     std::atomic<size_t> youngDiagnosticAccountedBytes = { 0 };
-    std::atomic<size_t> youngDiagnosticActualBytes = { 0 };
-    std::atomic<size_t> youngDiagnosticActualObjects = { 0 };
-    std::atomic<size_t> youngDiagnosticActualLe64 = { 0 };
-    std::atomic<size_t> youngDiagnosticActualLe256 = { 0 };
-    std::atomic<size_t> youngDiagnosticActualLe1024 = { 0 };
-    std::atomic<size_t> youngDiagnosticActualGt1024 = { 0 };
+    std::atomic<size_t> youngDiagnosticHeapBaseline = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
     std::atomic<size_t> youngDiagnosticReusedGarbageEvents = { 0 };

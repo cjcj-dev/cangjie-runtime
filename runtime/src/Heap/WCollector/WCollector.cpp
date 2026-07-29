@@ -1261,6 +1261,7 @@ void WCollector::DoYoungGarbageCollection()
         minorTotalRuns, stats.candidateRegions, stats.candidateBytes, stats.reclaimedRegions, stats.reclaimedBytes,
         pauseUs);
     manager.ReportYoungAccounting(accountingStats, "minor");
+    manager.SetYoungAccountingHeapBaseline();
 }
 
 void WCollector::DoGarbageCollection()
@@ -1314,6 +1315,7 @@ void WCollector::DoGarbageCollection()
         YoungAccountingStats concurrentStats = manager.SnapshotYoungAccounting();
         manager.ReportYoungAccounting(accountingStats, "major");
         manager.ReportYoungAccounting(concurrentStats, "major_concurrent_discarded");
+        manager.SetYoungAccountingHeapBaseline();
         minorRunsSinceMajor = 0;
     }
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();

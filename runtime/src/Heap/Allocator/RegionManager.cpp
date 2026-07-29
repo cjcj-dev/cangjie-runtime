@@ -701,32 +701,15 @@ void RegionManager::RecordYoungRegionAccounting(YoungAccountingSource source, Re
          ordinal, sourceName, delta, region->GetUnitIdx());
 }
 
-void RegionManager::RecordYoungActualAllocation(size_t bytes)
-{
-    youngDiagnosticActualBytes.fetch_add(bytes, std::memory_order_relaxed);
-    youngDiagnosticActualObjects.fetch_add(1, std::memory_order_relaxed);
-    if (bytes <= 64) {
-        youngDiagnosticActualLe64.fetch_add(1, std::memory_order_relaxed);
-    } else if (bytes <= 256) {
-        youngDiagnosticActualLe256.fetch_add(1, std::memory_order_relaxed);
-    } else if (bytes <= 1024) {
-        youngDiagnosticActualLe1024.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        youngDiagnosticActualGt1024.fetch_add(1, std::memory_order_relaxed);
-    }
-}
-
 YoungAccountingStats RegionManager::SnapshotYoungAccounting()
 {
     YoungAccountingStats stats;
     stats.gcOrdinal = youngAccountingOrdinal.fetch_add(1, std::memory_order_relaxed);
     stats.accountedBytes = youngDiagnosticAccountedBytes.exchange(0, std::memory_order_relaxed);
-    stats.actualBytes = youngDiagnosticActualBytes.exchange(0, std::memory_order_relaxed);
-    stats.actualObjects = youngDiagnosticActualObjects.exchange(0, std::memory_order_relaxed);
-    stats.actualLe64 = youngDiagnosticActualLe64.exchange(0, std::memory_order_relaxed);
-    stats.actualLe256 = youngDiagnosticActualLe256.exchange(0, std::memory_order_relaxed);
-    stats.actualLe1024 = youngDiagnosticActualLe1024.exchange(0, std::memory_order_relaxed);
-    stats.actualGt1024 = youngDiagnosticActualGt1024.exchange(0, std::memory_order_relaxed);
+    stats.heapBaselineBytes = youngDiagnosticHeapBaseline.load(std::memory_order_relaxed);
+    stats.heapCurrentBytes = GetAllocatedSize();
+    stats.actualBytes = stats.heapCurrentBytes >= stats.heapBaselineBytes ?
+        stats.heapCurrentBytes - stats.heapBaselineBytes : 0;
     stats.newRegionEvents = youngDiagnosticNewRegionEvents.exchange(0, std::memory_order_relaxed);
     stats.newRegionBytes = youngDiagnosticNewRegionBytes.exchange(0, std::memory_order_relaxed);
     stats.reusedGarbageEvents = youngDiagnosticReusedGarbageEvents.exchange(0, std::memory_order_relaxed);
@@ -736,15 +719,20 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
     return stats;
 }
 
+void RegionManager::SetYoungAccountingHeapBaseline()
+{
+    youngDiagnosticHeapBaseline.store(GetAllocatedSize(), std::memory_order_relaxed);
+}
+
 void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const
 {
     VLOG(REPORT,
-         "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_bytes=%zu actual_bytes=%zu actual_objects=%zu "
-         "actual_size_hist_le64=%zu le256=%zu le1024=%zu gt1024=%zu "
+         "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_bytes=%zu actual_bytes=%zu "
+         "heap_baseline_bytes=%zu heap_current_bytes=%zu "
          "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
          "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
-         stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.actualBytes, stats.actualObjects,
-         stats.actualLe64, stats.actualLe256, stats.actualLe1024, stats.actualGt1024,
+         stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.actualBytes,
+         stats.heapBaselineBytes, stats.heapCurrentBytes,
          stats.newRegionEvents, stats.newRegionBytes, stats.reusedGarbageEvents, stats.reusedGarbageBytes,
          stats.reusedFreeEvents, stats.reusedFreeBytes);
 }
