@@ -829,7 +829,7 @@ public:
         // Phase: POST_TRACE PrepareForwardTable, after InvalidateOldTaggedRefsBeforeDispel's local STW; no region lock.
         // R2 validity-end: route teardown (not Forward complete).
         BumpEpoch();
-        metadata.routeState = NORMAL;
+        SetRouteState(NORMAL);
         // Teardown ends the carrier lifetime by publishing absence, not an epoch sentinel.
         metadata.routeInfo.ClearRouteInfo();
         size_t nUnit = GetGhostRegionUnitCount();
