@@ -86,8 +86,7 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
         // Slot must sit in a non-ghost region (holder not evacuated).
         RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(addr));
         if (slotRegion == nullptr || slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() ||
-            slotRegion->IsFreeRegion() ||
-            slotRegion->IsGarbageRegion()) {
+            slotRegion->IsFreeRegion() || slotRegion->IsGarbageRegion()) {
             e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
             continue;
         }

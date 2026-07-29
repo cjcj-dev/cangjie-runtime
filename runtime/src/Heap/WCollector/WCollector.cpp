@@ -1135,10 +1135,10 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
             region->UnlockReadFromRegion();
             return toVersion;
         } else {
-            return FindToVersion(obj);
+            return GetForwardPointer(obj, region, expectedEpoch);
         }
     } else if (region->IsCompacted()) {
-        return FindToVersion(obj);
+        return GetForwardPointer(obj, region, expectedEpoch);
     }
     return nullptr;
 }
