@@ -5,18 +5,18 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Unit probes for Region Epoch (EPOCH_DESIGN_0729 §4), merged k6 (domain split)
-// × k7 (seqlock route carrier) × k9 (overlay-preserving reuse) union:
+// × k7 (seqlock route carrier) × k8 (reclaim teardown) union:
 // 1) teardown interleaving yields one complete old route followed by empty
 // 2) an empty carrier is rejected with the mismatch counter incremented
 // 3) UINT64_MAX is a legal install epoch, independent of carrier presence
 // 4) ClearGhostRegionBit bumps identity (and snapshot), publishes carrier absence
 // 5) ClearLiveInfo ends only the snapshot lifetime; identity and route survive
-// 6) region reuse preserves the ghost lineage and route while expiring snapshots
+// 6) region reuse turns identity over; a stale caller view is rejected
 // 7) retained snapshot binds its coverage boundary (allocation frontier)
 // 8) a stale EMPTY snapshot is detected via snapshot epoch
 // 9) large-region promotion preserves a valid flag-shaped retained snapshot
-// 10) GARBAGE/reclaim/reuse preserve ghost lookup for stale head and subordinate
-//     addresses until dispel, which is the unique overlay teardown
+// 10) reclaim invalidates ghost lookup and route metadata for stale object
+//     addresses (head and subordinate, order independent)
 // Note: k6's post-geometry-read probe was retired with its product window —
 // an acquired by-value snapshot cannot change under the reader (k7 protocol).
 
@@ -236,7 +236,7 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
 
 bool ProbeRegionReuseRouteEpoch(RegionManager& manager)
 {
-    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     if (region == nullptr) {
         std::printf("EPOCH_PROBE reuse_route result=FAIL reason=take-region\n");
         return false;
@@ -246,63 +246,20 @@ bool ProbeRegionReuseRouteEpoch(RegionManager& manager)
     region->AddLiveByteCount(16);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
-    region->SetRouteState(RegionInfo::RouteState::ROUTED);
-    region->PreserveRetainedLiveInfo();
     const uint64_t expected = region->GetIdentityEpoch();
-    const uint64_t snapshotBefore = region->GetSnapshotEpoch();
-    const MAddress staleHead = region->GetRegionStart();
-    const MAddress staleSubordinate = staleHead + RegionInfo::UNIT_SIZE;
-    const bool ghostBefore = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
-        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
-    const bool snapshotValidBefore = region->IsRetainedSnapshotValid();
-
-    region->SetRegionType(RegionInfo::RegionType::GARBAGE_REGION);
     manager.ReclaimRegion(region);
-    const bool ghostAfterReclaim = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
-        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
-
-    // Taking one unit from the reclaimed two-unit free-tree node exercises both the
-    // allocated head and CartesianTree::UpdateNode refresh of the remaining subordinate.
     RegionInfo* reused = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     const bool sameRegion = reused == region;
-    const bool identityPreserved = sameRegion && region->GetIdentityEpoch() == expected;
-    const bool snapshotExpired = sameRegion && region->GetSnapshotEpoch() != snapshotBefore &&
-        !region->IsRetainedSnapshotValid();
-    const bool ghostAfterReuse = sameRegion && RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
-        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
-    RouteInfo routeAfterReuse = region->AcquireRouteInfo();
-    manager.ResetRouteEpochMismatchCount();
-    BaseObject* routedAfterReuse = sameRegion ? manager.RouteObject(
-        reinterpret_cast<BaseObject*>(staleHead), region, expected) : nullptr;
-    const size_t mismatchBeforeDispel = manager.GetRouteEpochMismatchCount();
-
-    if (sameRegion) {
-        region->DispelGhostFromRegion();
-    }
-    const bool ghostAfterDispel = RegionInfo::GetGhostFromRegionAt(staleHead) == nullptr &&
-        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == nullptr;
-    const bool routeAfterDispelAbsent = !region->AcquireRouteInfo().IsInstalled();
-    manager.ResetRouteEpochMismatchCount();
-    BaseObject* routedAfterDispel = sameRegion ? manager.RouteObject(
-        reinterpret_cast<BaseObject*>(staleHead), region, expected) : nullptr;
-    const size_t mismatchAfterDispel = manager.GetRouteEpochMismatchCount();
-    const bool pass = ghostBefore && snapshotValidBefore && ghostAfterReclaim && sameRegion &&
-        identityPreserved && snapshotExpired && ghostAfterReuse && routeAfterReuse.IsInstalled() &&
-        routeAfterReuse.GetInstallEpoch() == expected &&
-        routedAfterReuse == reinterpret_cast<BaseObject*>(staleHead) && mismatchBeforeDispel == 0 &&
-        ghostAfterDispel && routeAfterDispelAbsent && routedAfterDispel == nullptr && mismatchAfterDispel > 0;
+    BaseObject* stale = sameRegion ? manager.RouteObject(
+        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected) : nullptr;
+    const bool identityChanged = sameRegion && region->GetIdentityEpoch() != expected;
+    const bool pass = sameRegion && identityChanged && stale == nullptr;
     std::printf(
-        "EPOCH_PROBE reuse_route result=%s ghost_before=%d snapshot_valid_before=%d "
-        "ghost_after_reclaim=%d same_region=%d identity_preserved=%d snapshot_expired=%d "
-        "ghost_after_reuse=%d route_present=%d route_consumed=%d mismatch_before_dispel=%zu "
-        "ghost_after_dispel=%d route_absent_after_dispel=%d route_null_after_dispel=%d "
-        "mismatch_after_dispel=%zu\n",
-        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, snapshotValidBefore ? 1 : 0,
-        ghostAfterReclaim ? 1 : 0, sameRegion ? 1 : 0, identityPreserved ? 1 : 0,
-        snapshotExpired ? 1 : 0, ghostAfterReuse ? 1 : 0, routeAfterReuse.IsInstalled() ? 1 : 0,
-        routedAfterReuse == reinterpret_cast<BaseObject*>(staleHead) ? 1 : 0, mismatchBeforeDispel,
-        ghostAfterDispel ? 1 : 0, routeAfterDispelAbsent ? 1 : 0, routedAfterDispel == nullptr ? 1 : 0,
-        mismatchAfterDispel);
+        "EPOCH_PROBE reuse_route result=%s same_region=%d expected=%llu actual=%llu "
+        "identity_changed=%d stale_null=%d\n",
+        pass ? "PASS" : "FAIL", sameRegion ? 1 : 0, static_cast<unsigned long long>(expected),
+        static_cast<unsigned long long>(sameRegion ? region->GetIdentityEpoch() : 0),
+        identityChanged ? 1 : 0, stale == nullptr ? 1 : 0);
     if (reused != nullptr) {
         manager.ReclaimRegion(reused);
     }
@@ -397,6 +354,41 @@ bool ProbeLargePromotion(RegionManager& manager)
     return pass;
 }
 
+bool ProbeReclaimGhostTeardown(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE reclaim_ghost result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    const MAddress staleHead = region->GetRegionStart();
+    const MAddress staleSubordinate = staleHead + RegionInfo::UNIT_SIZE;
+    const bool ghostBefore = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
+        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
+    manager.ReclaimRegion(region);
+
+    const bool headCleared = RegionInfo::GetGhostFromRegionAt(staleHead) == nullptr;
+    const bool subordinateCleared = RegionInfo::GetGhostFromRegionAt(staleSubordinate) == nullptr;
+    // k7 protocol: teardown publishes carrier absence, not an epoch sentinel.
+    const bool routeCleared = !region->AcquireRouteInfo().IsInstalled() &&
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL;
+    const bool pass = ghostBefore && headCleared && subordinateCleared && routeCleared;
+    std::printf(
+        "EPOCH_PROBE reclaim_ghost result=%s ghost_before=%d head_null=%d subordinate_null=%d "
+        "route_absent=%d route_normal=%d\n",
+        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, headCleared ? 1 : 0, subordinateCleared ? 1 : 0,
+        region->AcquireRouteInfo().IsInstalled() ? 0 : 1,
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL ? 1 : 0);
+    return pass;
+}
+
 } // namespace
 } // namespace MapleRuntime
 
@@ -415,13 +407,15 @@ int main()
     const bool boundary = MapleRuntime::ProbeRetainedCoveredBoundary(manager);
     const bool staleEmpty = MapleRuntime::ProbeStaleEmpty(manager);
     const bool largePromotion = MapleRuntime::ProbeLargePromotion(manager);
+    const bool reclaimGhost = MapleRuntime::ProbeReclaimGhostTeardown(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
     std::printf(
         "EPOCH_PROBE summary route=%s empty=%s max_epoch=%s clear_ghost=%s snapshot=%s "
-        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s\n",
+        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s reclaim_ghost=%s\n",
         route ? "PASS" : "FAIL", empty ? "PASS" : "FAIL", maxEpoch ? "PASS" : "FAIL",
         clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL", reuseRoute ? "PASS" : "FAIL",
-        boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL");
+        boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL",
+        reclaimGhost ? "PASS" : "FAIL");
     return route && empty && maxEpoch && clearGhost && snapshot && reuseRoute && boundary &&
-        staleEmpty && largePromotion ? 0 : 1;
+        staleEmpty && largePromotion && reclaimGhost ? 0 : 1;
 }
