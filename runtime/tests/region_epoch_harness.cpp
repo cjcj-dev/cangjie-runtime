@@ -82,7 +82,7 @@ bool ProbeRouteRecordInterleave(RegionManager& manager)
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, lateExpected);
     const size_t lateMismatchCount = manager.GetRouteEpochMismatchCount();
     const bool pass = before.IsInstalled() && oldRoute == reinterpret_cast<BaseObject*>(region->GetRegionStart()) &&
-        interleaveMismatchCount == 0 && !afterTeardown.IsInstalled() && late == nullptr && lateMismatchCount > 0;
+        interleaveMismatchCount == 0 && !afterTeardown.IsInstalled() && late == nullptr && lateMismatchCount == 0;
     std::printf(
         "EPOCH_PROBE route_interleave result=%s expected=%llu before_present=%d full_old=%d "
         "after_empty=%d interleave_mismatch_count=%zu late_null=%d late_mismatch_count=%zu\n",
