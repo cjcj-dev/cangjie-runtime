@@ -577,7 +577,6 @@ void WCollector::BulkForwardHolderRefs()
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
-    FixEdgeSet::Instance().ResetSkipCounts();
 
     auto fixOne = [this, &rewritten](BaseObject* holder, RefField<>& field) {
         RefField<> before(field);
@@ -602,16 +601,12 @@ void WCollector::BulkForwardHolderRefs()
     Heap::GetHeap().VisitAllExportRoots(fixRoot);
 
     // Index-only walk: each entry is a field slot address registered at store time.
-    // Epoch stamps reject stale entries (E9 free/garbage kept as parallel observe).
     FixEdgeSet::Instance().VisitAndClear(
         [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
 
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
-    const size_t epochSkip = FixEdgeSet::Instance().EpochSkipCount();
-    const size_t e9Skip = FixEdgeSet::Instance().E9GateSkipCount();
-    VLOG(REPORT,
-         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu epoch_skip=%zu e9_gate_skip=%zu",
-         static_cast<size_t>(pauseUs), rewritten, fixSetSize, epochSkip, e9Skip);
+    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu",
+         static_cast<size_t>(pauseUs), rewritten, fixSetSize);
 }
 
 void WCollector::PostTrace()
