@@ -517,6 +517,23 @@ public:
                 return nullptr;
             }
             BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
+            // Seqlock-style final read: teardown can run without STW while GetRoute
+            // consumes geometry. Never publish an address from a changed carrier.
+            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
+                         !fromRegionInfo->RouteEpochMatches(expectedEpoch) ||
+                         !fromRegionInfo->IsGhostFromRegion())) {
+                size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
+                         "route_epoch=%llu state=%u n=%zu",
+                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
+                         static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
+                }
+                return nullptr;
+            }
             return toAddr;
         }
         return nullptr;
