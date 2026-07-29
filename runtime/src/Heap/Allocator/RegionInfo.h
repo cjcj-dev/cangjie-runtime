@@ -128,7 +128,7 @@ public:
     }
 
     // Bump only on validity-end (STW or region lock — each call site annotates phase).
-    // ⛔ Do not bump on Assemble/Forward complete (LIE-1: voids live FixEdgeSet stamps).
+    // ⛔ Do not bump on Assemble/Forward complete: they are semantic advances, not validity-end events.
     void BumpEpoch()
     {
         __atomic_fetch_add(&metadata.epoch, 1, std::memory_order_acq_rel);
