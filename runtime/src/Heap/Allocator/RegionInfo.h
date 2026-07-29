@@ -768,7 +768,10 @@ public:
         return reinterpret_cast<BaseObject*>(toAddr);
     }
 
-    uint64_t GetRouteInstallEpoch() const { return AcquireRouteInfo().GetInstallEpoch(); }
+    __attribute__((always_inline, visibility("hidden"))) uint64_t GetRouteInstallEpoch() const
+    {
+        return AcquireRouteInfo().GetInstallEpoch();
+    }
 
     // True iff one self-consistent acquired record is present and carries the stamp.
     bool RouteEpochMatches(uint64_t expectedInstallEpoch) const
