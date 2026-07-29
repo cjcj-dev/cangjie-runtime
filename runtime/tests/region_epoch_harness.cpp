@@ -131,7 +131,7 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
 
 bool ProbeReclaimGhostTeardown(RegionManager& manager)
 {
-    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     if (region == nullptr) {
         std::printf("EPOCH_PROBE reclaim_ghost result=FAIL reason=take-region\n");
         return false;
