@@ -876,7 +876,10 @@ void WCollector::BulkForwardHolderRefs()
          "invalid_to_not_heap=%zu invalid_to_region=%zu invalid_to_bounds=%zu "
          "invalid_to_region_missing=%zu invalid_to_region_free=%zu invalid_to_region_garbage=%zu "
          "invalid_to_region_from=%zu invalid_to_region_role=%zu ghost_overlay_passed_active_gate=%zu "
-         "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu",
+         "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu "
+         "COPY_DST_FACT=%zu COPY_DST_NO_FACT=%zu COPY_DST_STALE_TARGET=%zu "
+         "COPY_DST_CONST_DOMAIN_FACT=%zu COPY_DST_CONST_DOMAIN_STALE_TARGET=%zu "
+         "COPY_DST_CONST_POOL_DOMAIN_FACT=%zu COPY_DST_CONST_POOL_DOMAIN_STALE_TARGET=%zu",
          static_cast<size_t>(pauseUs), rewritten, interiorRewritten, skippedNoFact, fixSetSize, factTableSize,
          FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered(),
          relocationDiagnosticSize, missBuckets.b1LegitIdentity, missBuckets.b2LegitOther,
@@ -884,7 +887,12 @@ void WCollector::BulkForwardHolderRefs()
          missBuckets.invalidToRegion, missBuckets.invalidToBounds, missBuckets.invalidToRegionMissing,
          missBuckets.invalidToRegionFree, missBuckets.invalidToRegionGarbage, missBuckets.invalidToRegionFrom,
          missBuckets.invalidToRegionRole, missBuckets.ghostOverlayPassedActiveGate,
-         missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange);
+         missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange,
+         FixEdgeSet::Instance().CopyDstFactCount(), FixEdgeSet::Instance().CopyDstNoFactCount(),
+         FixEdgeSet::Instance().CopyDstStaleTargetCount(), FixEdgeSet::Instance().CopyDstConstDomainFactCount(),
+         FixEdgeSet::Instance().CopyDstConstDomainStaleTargetCount(),
+         FixEdgeSet::Instance().CopyDstConstPoolDomainFactCount(),
+         FixEdgeSet::Instance().CopyDstConstPoolDomainStaleTargetCount());
     // B1 and B2 misses have proven legitimate producers; B3 (survivor in a from-region
     // with no copy fact and no identity record) does not — each one is a reference this
     // pass left pointing into reclaimed space, so validator runs fail on it. The
