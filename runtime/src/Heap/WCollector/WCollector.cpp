@@ -557,12 +557,15 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // Fact carrier (copy-time): object header FORWARDED, or region COMPACTED
-    // (payload published before routeState=COMPACTED). ROUTED alone is plan-only
-    // (region address map before CopyObject) — never treat as fact (r1segv D5).
-    // ⛔ FindLatestVersion (returns from when to==null). ⛔ bare GetRoute.
-    const bool hasCopyFact =
-        (st == RegionInfo::RouteState::COMPACTED) || target->IsForwarded();
+    // Fact carrier (copy-time), not geometry plan:
+    //   COMPACTED  — payload published before routeState=COMPACTED
+    //   FORWARDED  — region-level: ForwardRegion finished all survivors (may have
+    //                zeroed from-headers; still a published fact, fwdrootfix)
+    //   ROUTED+obj FORWARDED — per-object copy done under region plan
+    // ROUTED alone = plan only (r1segv D5 GetRoute SEGV) → loud skip.
+    // ⛔ FindLatestVersion (returns from when to==null). ⛔ bare GetRoute call.
+    const bool hasCopyFact = (st == RegionInfo::RouteState::COMPACTED) ||
+        (st == RegionInfo::RouteState::FORWARDED) || target->IsForwarded();
     if (!hasCopyFact) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
