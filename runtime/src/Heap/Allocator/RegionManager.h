@@ -28,7 +28,7 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 #ifdef MRT_REGION_EPOCH_TEST
-void RouteEpochAfterGeometryReadForTest(RegionInfo* region);
+void RouteRecordAfterAcquireForTest(RegionInfo* region);
 #endif
 
 struct YoungCollectionStats {
@@ -502,45 +502,28 @@ public:
             return nullptr;
         }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            // Route installation is a semantic advance and does not bump region epoch.
-            // Consumption requires the caller view, current region identity and route
-            // installation stamp to still describe the same lifetime.
+            RouteInfo routeInfo = fromRegionInfo->AcquireRouteInfo();
+            // Presence comes from the acquired record, while epoch still verifies
+            // that its installation belongs to the caller-held region identity.
             if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
-                         !fromRegionInfo->RouteEpochMatches(expectedEpoch))) {
+                         !routeInfo.IsInstalled() || routeInfo.GetInstallEpoch() != expectedEpoch)) {
                 size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
                     VLOG(REPORT,
                          "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
-                         "route_epoch=%llu state=%u n=%zu",
+                         "route_present=%u route_epoch=%llu state=%u n=%zu",
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
                          static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
-                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
+                         static_cast<unsigned>(routeInfo.IsInstalled()),
+                         static_cast<unsigned long long>(routeInfo.GetInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
                 return nullptr;
             }
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
 #ifdef MRT_REGION_EPOCH_TEST
-            RouteEpochAfterGeometryReadForTest(fromRegionInfo);
+            RouteRecordAfterAcquireForTest(fromRegionInfo);
 #endif
-            // Seqlock-style final read: teardown can run without STW while GetRoute
-            // consumes geometry. Never publish an address from a changed carrier.
-            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
-                         !fromRegionInfo->RouteEpochMatches(expectedEpoch) ||
-                         !fromRegionInfo->IsGhostFromRegion())) {
-                size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if ((n & (n - 1)) == 0) {
-                    VLOG(REPORT,
-                         "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
-                         "route_epoch=%llu state=%u n=%zu",
-                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
-                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
-                         static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
-                }
-                return nullptr;
-            }
-            return toAddr;
+            return fromRegionInfo->GetRoute(fromObj, routeInfo);
         }
         return nullptr;
     }
