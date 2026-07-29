@@ -39,8 +39,11 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     }
     // Establish a real from/ghost route lifetime, then retain the caller's view.
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
     const uint64_t expected = region->GetEpoch();
     const bool matchBefore = region->RouteEpochMatches(expected);
 
@@ -80,6 +83,8 @@ bool ProbeClearGhostRouteEpoch(RegionManager& manager)
         return false;
     }
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
     const uint64_t before = region->GetEpoch();
