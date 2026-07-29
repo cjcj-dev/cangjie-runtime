@@ -146,6 +146,8 @@ void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    // E8: mirror WriteReference :140 — static root may hold plain→from (P7).
+    FixEdgeSet::Instance().MaybeAdd(nullptr, &field, ref);
 }
 
 void TraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
