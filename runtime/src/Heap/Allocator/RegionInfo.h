@@ -830,8 +830,8 @@ public:
         // R2 validity-end: route teardown (not Forward complete).
         BumpEpoch();
         metadata.routeState = NORMAL;
-        // Teardown ends the carrier lifetime; do not restamp cleared geometry as current.
-        metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
+        // Teardown ends the carrier lifetime by publishing absence, not an epoch sentinel.
+        metadata.routeInfo.ClearRouteInfo();
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
