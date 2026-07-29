@@ -1180,9 +1180,15 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
-    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    CHECK_DETAIL(region != nullptr, "forward object %p has no ghost-from region", obj);
-    return ForwardObjectExclusive(obj, region, region->GetEpoch());
+    size_t size = RegionSpace::GetAllocSize(*obj);
+    BaseObject* toObj = fwdTable.RouteObject(obj);
+    CHECK_DETAIL(toObj != nullptr, "invalid object route");
+    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
+    CopyObject(*obj, *toObj, size);
+    toObj->SetStateCode(ObjectState::NORMAL);
+    std::atomic_thread_fence(std::memory_order_release);
+    obj->UnlockObject(ObjectState::FORWARDED);
+    return toObj;
 }
 
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclusive(
