@@ -11,6 +11,8 @@ extern "C" MRT_EXPORT ObjRef CJ_MCC_OnFinalizerCreated(ObjRef ref);
 __asm__(".global _CJ_MCC_OnFinalizerCreated\n\t.set _CJ_MCC_OnFinalizerCreated, _MCC_OnFinalizerCreated");
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
 __asm__(".global _CJ_MCC_WriteRefField\n\t.set _CJ_MCC_WriteRefField, _MCC_WriteRefField");
+extern "C" MRT_EXPORT void CJ_MCC_FixEdgeMaybe(void* holder, void* slot, void* newRef);
+__asm__(".global _CJ_MCC_FixEdgeMaybe\n\t.set _CJ_MCC_FixEdgeMaybe, _MCC_FixEdgeMaybe");
 extern "C" MRT_EXPORT void CJ_MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src,
                                                    size_t srcLen);
 __asm__(".global _CJ_MCC_WriteStructField\n\t.set _CJ_MCC_WriteStructField, _MCC_WriteStructField");
