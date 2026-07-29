@@ -33,9 +33,11 @@
 #endif
 
 namespace MapleRuntime {
-extern std::atomic<size_t> retainedDispelNoGhostCount __attribute__((visibility("hidden")));
-extern std::atomic<size_t> retainedDispelPartialGhostCount __attribute__((visibility("hidden")));
-extern std::atomic<size_t> retainedSnapshotRestampCount __attribute__((visibility("hidden")));
+namespace {
+static std::atomic<size_t> retainedDispelNoGhostCount{ 0 };
+static std::atomic<size_t> retainedDispelPartialGhostCount{ 0 };
+static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
+}
 
 template<typename T>
 class BitField {
