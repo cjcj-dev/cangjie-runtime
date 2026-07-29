@@ -795,7 +795,7 @@ public:
             UnitMetadata& mdata = array[i].GetMetadata();
             CHECK(static_cast<UnitRole>(mdata.unitRole) == UnitRole::SUBORDINATE_UNIT);
             CHECK(mdata.ownerRegion == this);
-            CHECK(mdata.inGhostFromRegion == 0);
+            CHECK(mdata.regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) == 0);
 
             array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
             mdata.ownerRegion0 = this;
