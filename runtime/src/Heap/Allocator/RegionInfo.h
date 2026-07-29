@@ -775,7 +775,7 @@ public:
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
         // Phase: STW (PrepareFromRegionList). R2: Assemble is semantic advance — no BumpEpoch.
-        metadata.routeState = FORWARDABLE;
+        SetRouteState(FORWARDABLE);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
