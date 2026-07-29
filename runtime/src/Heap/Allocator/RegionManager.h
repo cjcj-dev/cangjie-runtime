@@ -288,10 +288,11 @@ public:
             region = fromRegionList.TakeHeadRegion();
         }
 #else
-        // R2 validity-end: bulk GARBAGE declaration (LIE-3) before type flip.
+        // GARBAGE ends the retained snapshot, but the ghost route remains in service
+        // until route teardown or the region is actually returned to the allocator.
         // Plain loop (no lambda) so nm -D export surface stays free of std::function glue.
         for (RegionInfo* r = fromRegionList.GetHeadRegion(); r != nullptr; r = r->GetNextRegion()) {
-            r->BumpEpoch();
+            r->BumpSnapshotEpoch();
         }
         garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
@@ -308,9 +309,9 @@ public:
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
 
         region->LockWriteRegion();
-        // Phase: GC under region write-lock. R2 validity-end: GARBAGE declaration (LIE-3).
-        // OHOS reclaim path also bumps via InitFreeUnits; non-OHOS stays GARBAGE until reclaim.
-        region->BumpEpoch();
+        // GARBAGE invalidates the snapshot domain only. OHOS advances identity later in
+        // InitFreeUnits; non-OHOS keeps the installed route valid until actual reclaim.
+        region->BumpSnapshotEpoch();
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
         ReclaimRegion(region);
@@ -488,24 +489,34 @@ public:
     {
         // The caller captures expectedEpoch when it establishes that fromObj belongs
         // to this from/ghost region. Teardown between that recognition and routing is stale.
-        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
+        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
             size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
                      "route_epoch=%llu state=%u n=%zu",
                      fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                     static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                     static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
                      static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                      static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
             }
+#ifndef MRT_REGION_EPOCH_TEST
+            CHECK_DETAIL(false,
+                         "RouteObject identity expired before route lookup: region=%p seen=%llu now=%llu",
+                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()));
+#endif
             return nullptr;
         }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
+            // Merge synthesis (k6 domain split × k7 seqlock snapshot):
+            // identity domain gates consumption (ruling A: routes bind to identityEpoch);
+            // presence and installation stamp come from the acquired IMMUTABLE by-value
+            // snapshot. k6's post-geometry recheck window is structurally superseded —
+            // a local snapshot cannot change under the reader, and the install-stamp
+            // check below already pins the route to the caller-held identity.
             RouteInfo routeInfo = fromRegionInfo->AcquireRouteInfo();
-            // Presence comes from the acquired record, while epoch still verifies
-            // that its installation belongs to the caller-held region identity.
-            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
+            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() ||
                          !routeInfo.IsInstalled() || routeInfo.GetInstallEpoch() != expectedEpoch)) {
                 size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
@@ -513,11 +524,19 @@ public:
                          "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
                          "route_present=%u route_epoch=%llu state=%u n=%zu",
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
                          static_cast<unsigned>(routeInfo.IsInstalled()),
                          static_cast<unsigned long long>(routeInfo.GetInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
+#ifndef MRT_REGION_EPOCH_TEST
+                CHECK_DETAIL(false,
+                             "RouteObject route carrier expired before geometry read: region=%p seen=%llu "
+                             "now=%llu route=%llu",
+                             fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                             static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
+                             static_cast<unsigned long long>(routeInfo.GetInstallEpoch()));
+#endif
                 return nullptr;
             }
 #ifdef MRT_REGION_EPOCH_TEST
@@ -532,7 +551,7 @@ public:
     // through the three-argument overload above.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetEpoch());
+        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetIdentityEpoch());
     }
 
     BaseObject* RouteObject(BaseObject* fromObj)
@@ -542,7 +561,7 @@ public:
             return nullptr;
         }
 
-        const uint64_t expectedEpoch = fromRegionInfo->GetEpoch();
+        const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
     }
 

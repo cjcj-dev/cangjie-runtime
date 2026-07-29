@@ -33,6 +33,12 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+static std::atomic<size_t> retainedDispelNoGhostCount{ 0 };
+static std::atomic<size_t> retainedDispelPartialGhostCount{ 0 };
+static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
+}
+
 template<typename T>
 class BitField {
 public:
@@ -120,18 +126,31 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
-    // Region epoch (EPOCH_DESIGN_0729 R2): monotonic u64; bump only on validity-end events.
-    // Carriers stamp GetEpoch() at production; consumers reject on mismatch (definitional expiry).
-    uint64_t GetEpoch() const
+    // Region identity epoch: routes and reuse guards expire only when the address identity
+    // or route carrier lifetime ends. ClearLiveInfo must not advance this domain.
+    uint64_t GetIdentityEpoch() const
     {
-        return __atomic_load_n(&metadata.epoch, std::memory_order_acquire);
+        return __atomic_load_n(&metadata.identityEpoch, std::memory_order_acquire);
     }
 
-    // Bump only on validity-end (STW or region lock — each call site annotates phase).
-    // ⛔ Do not bump on Assemble/Forward complete: they are semantic advances, not validity-end events.
-    void BumpEpoch()
+    // Retained snapshots have a second validity domain. Every identity transition also
+    // ends old snapshot validity, while ClearLiveInfo advances only this counter.
+    uint64_t GetSnapshotEpoch() const
     {
-        __atomic_fetch_add(&metadata.epoch, 1, std::memory_order_acq_rel);
+        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
+    }
+
+    void BumpSnapshotEpoch()
+    {
+        __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
+    }
+
+    // Publish snapshot expiry before identity expiry. Once this returns, all carriers from
+    // the old identity are definitionally stale in both domains.
+    void BumpIdentityEpoch()
+    {
+        BumpSnapshotEpoch();
+        __atomic_fetch_add(&metadata.identityEpoch, 1, std::memory_order_acq_rel);
     }
 
 #ifdef MRT_REGION_EPOCH_TEST
@@ -183,11 +202,16 @@ public:
 
     RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
 
+    uint64_t GetRetainedLiveInfoEpoch() const { return metadata.retainedLiveInfoEpoch; }
+
+    MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
+
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();
-        // Stamp region epoch at snapshot build (EPOCH_DESIGN_0729 §2).
-        metadata.retainedLiveInfoEpoch = GetEpoch();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        // Exclusive allocation boundary: objects allocated after this point are implicitly live.
+        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
                 metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
@@ -205,13 +229,27 @@ public:
             : RetainedLiveInfoState::SNAPSHOT_VALID;
     }
 
-    // SNAPSHOT_VALID ⇔ state==SNAPSHOT_VALID && retained epoch matches region epoch.
+    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
+    {
+        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfo = GetLiveInfo();
+            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        CHECK(coveredUpToOverride == GetRegionAllocPtr());
+        PreserveRetainedLiveInfo();
+    }
+
+    // VALID and EMPTY are both snapshot results and share the same epoch validity protocol.
     bool IsRetainedSnapshotValid() const
     {
-        if (metadata.retainedLiveInfoState != RetainedLiveInfoState::SNAPSHOT_VALID) {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return false;
         }
-        return metadata.retainedLiveInfoEpoch == GetEpoch();
+        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
 
     LiveInfo* GetOrAllocLiveInfo()
@@ -705,7 +743,7 @@ public:
     {
         // Phase: STW / region write-lock (ReclaimRegion, ReleaseRegion).
         // R2 validity-end: reclaim/free (E9 constructive).
-        BumpEpoch();
+        BumpIdentityEpoch();
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -714,12 +752,12 @@ public:
         }
     }
 
-    // Install route geometry; stamp installEpoch with current region epoch.
-    // ⛔ R2: install is semantic advance — no region BumpEpoch (only route teardown bumps).
+    // Install route geometry in the identity domain. Installation is a semantic advance,
+    // so it does not advance either epoch.
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
         // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state).
-        metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
+        metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetIdentityEpoch());
     }
 
     __attribute__((always_inline, visibility("hidden"))) RouteInfo AcquireRouteInfo() const
@@ -785,7 +823,8 @@ public:
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(!IsGhostFromRegion());
-        // Phase: STW (PrepareFromRegionList). R2: Assemble is semantic advance — no BumpEpoch.
+        // Phase: STW (PrepareFromRegionList). Assemble is a semantic advance,
+        // not identity expiry — no epoch bump in either domain.
         SetRouteState(FORWARDABLE);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
@@ -821,13 +860,21 @@ public:
         if (IsGhostFromRegion()) {
             // POST_TRACE AddRawPointerObject path; no STW or region lock is held.
             // Clearing the unique route guard ends this carrier lifetime.
-            BumpEpoch();
+            uint64_t oldSnapshotEpoch = GetSnapshotEpoch();
+            bool restampRetainedSnapshot =
+                metadata.retainedLiveInfoState != RetainedLiveInfoState::NEVER_EXAMINED &&
+                metadata.retainedLiveInfoEpoch == oldSnapshotEpoch;
+            BumpIdentityEpoch();
+            // Teardown publishes carrier absence (seqlock protocol); no epoch sentinel values.
             metadata.routeInfo.ClearRouteInfo();
             size_t nUnit = GetUnitCount();
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
                 array[i].SetInGhostRegion(0);
+            }
+            if (restampRetainedSnapshot) {
+                metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             }
         }
     }
@@ -839,15 +886,62 @@ public:
     {
         // Phase: POST_TRACE PrepareForwardTable, after InvalidateOldTaggedRefsBeforeDispel's local STW; no region lock.
         // R2 validity-end: route teardown (not Forward complete).
-        BumpEpoch();
-        SetRouteState(NORMAL);
-        // Teardown ends the carrier lifetime by publishing absence, not an epoch sentinel.
-        metadata.routeInfo.ClearRouteInfo();
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+        size_t ghostUnitCount = 0;
+        for (size_t i = 0; i < nUnit; ++i) {
+            if (array[i].GetMetadata().inGhostFromRegion != 0) {
+                ++ghostUnitCount;
+            }
+        }
+        if (ghostUnitCount == 0) {
+            // The historical overlay is already undiscoverable. Do not let its stale list
+            // entry bump the epoch of a re-used current region identity.
+            size_t n = retainedDispelNoGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] no_ghost_skip region=%p identity_epoch=%llu units=%zu n=%zu",
+                     this, static_cast<unsigned long long>(GetIdentityEpoch()), nUnit, n);
+            }
+            return;
+        }
+        if (ghostUnitCount != nUnit) {
+            // ClearGhostRegionBit uses the current extent, so a re-used smaller region can
+            // leave a partial historical overlay. Dispel the entire saved extent below.
+            size_t n = retainedDispelPartialGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] partial_ghost region=%p present=%zu units=%zu n=%zu",
+                     this, ghostUnitCount, nUnit, n);
+            }
+        }
+        uint64_t oldSnapshotEpoch = GetSnapshotEpoch();
+        bool restampRetainedSnapshot =
+            metadata.retainedLiveInfoState != RetainedLiveInfoState::NEVER_EXAMINED &&
+            metadata.retainedLiveInfoEpoch == oldSnapshotEpoch;
+        BumpIdentityEpoch();
+        SetRouteState(NORMAL);
+        // Teardown ends the carrier lifetime by publishing absence (seqlock protocol);
+        // do not restamp cleared geometry as current, no epoch sentinel values.
+        metadata.routeInfo.ClearRouteInfo();
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
+        }
+        if (restampRetainedSnapshot) {
+            // Route teardown ends RouteInfo validity, but it does not change the retained
+            // bitmap or coveredUpTo truth. Re-endorse only the snapshot stamped immediately
+            // before this bump; never make the invalidated route geometry valid again.
+            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+            size_t n = retainedSnapshotRestampCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] retained_snapshot_restamp region=%p old_epoch=%llu "
+                     "new_epoch=%llu state=%u n=%zu",
+                     this, static_cast<unsigned long long>(oldSnapshotEpoch),
+                     static_cast<unsigned long long>(GetSnapshotEpoch()),
+                     static_cast<unsigned>(metadata.retainedLiveInfoState), n);
+            }
         }
     }
 
@@ -874,7 +968,7 @@ public:
     {
         // Phase: STW GC (Assemble*GarbageCandidates / ClearAllLiveInfo / young prepare).
         // R2 validity-end: ClearLiveInfo (snapshot semantics flip).
-        BumpEpoch();
+        BumpSnapshotEpoch();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
@@ -884,6 +978,7 @@ public:
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1183,13 +1278,15 @@ private:
 
         LiveInfo* retainedLiveInfo = nullptr;
         RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
-        // Region epoch when retained snapshot was built (SNAPSHOT_VALID ⇔ match GetEpoch()).
+        // Region epoch and exclusive allocation boundary when the retained snapshot was built.
         uint64_t retainedLiveInfoEpoch = 0;
+        MAddress retainedLiveInfoCoveredUpTo = 0;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
-        // Monotonic region semantic generation (EPOCH_DESIGN_0729). Not reset on reuse.
-        uint64_t epoch = 0;
+        // Independent validity domains; neither counter is reset on reuse.
+        uint64_t identityEpoch = 0;
+        uint64_t snapshotEpoch = 0;
 
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -1402,9 +1499,10 @@ private:
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
         // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
         // R2 validity-end: region re-alloc reuse (all prior carriers expire).
-        BumpEpoch();
+        BumpIdentityEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetMarkedRegionFlag(0);
