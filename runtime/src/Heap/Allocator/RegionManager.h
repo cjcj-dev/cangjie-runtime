@@ -423,8 +423,9 @@ public:
         return youngAllocatedBytes.load(std::memory_order_relaxed);
     }
 
-    void RecordYoungActualAllocation(size_t bytes);
-    YoungAccountingStats SnapshotYoungAccounting();
+    __attribute__((visibility("hidden"))) void RecordYoungActualAllocation(size_t bytes);
+    __attribute__((visibility("hidden"))) YoungAccountingStats SnapshotYoungAccounting();
+    __attribute__((visibility("hidden")))
     void ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const;
 
     size_t GetSurvivedSize() const
@@ -861,6 +862,7 @@ private:
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
 
     std::atomic<size_t> youngAllocatedBytes = { 0 };
+    __attribute__((visibility("hidden")))
     void RecordYoungRegionAccounting(YoungAccountingSource source, RegionInfo* region);
     std::atomic<size_t> youngAccountingOrdinal = { 1 };
     std::atomic<size_t> youngDiagnosticAccountedBytes = { 0 };
