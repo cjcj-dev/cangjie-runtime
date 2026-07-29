@@ -485,15 +485,16 @@ public:
     {
         // The caller captures expectedEpoch when it establishes that fromObj belongs
         // to this from/ghost region. Teardown between that recognition and routing is stale.
-        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch())) {
+        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
             size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
-                     "route_epoch=%llu n=%zu",
+                     "route_epoch=%llu state=%u n=%zu",
                      fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
                      static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
-                     static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()), n);
+                     static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
+                     static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
             }
             return nullptr;
         }
@@ -507,10 +508,11 @@ public:
                 if ((n & (n - 1)) == 0) {
                     VLOG(REPORT,
                          "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
-                         "route_epoch=%llu n=%zu",
+                         "route_epoch=%llu state=%u n=%zu",
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
                          static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
-                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()), n);
+                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
+                         static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
                 return nullptr;
             }

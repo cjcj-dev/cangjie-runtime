@@ -40,13 +40,21 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     BaseObject* stale = manager.RouteObject(
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected);
     const size_t mismatchCount = manager.GetRouteEpochMismatchCount();
-    const bool pass = matchBefore && stale == nullptr && mismatchCount > 0 && afterTeardown != expected;
+    // Close the lookup->epoch-capture interleaving too: after teardown all three
+    // epochs equal again, but the actual ghost/route state makes consumption invalid.
+    const uint64_t lateExpected = region->GetEpoch();
+    manager.ResetRouteEpochMismatchCount();
+    BaseObject* late = manager.RouteObject(
+        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, lateExpected);
+    const size_t lateMismatchCount = manager.GetRouteEpochMismatchCount();
+    const bool pass = matchBefore && stale == nullptr && mismatchCount > 0 && afterTeardown != expected &&
+        late == nullptr && lateMismatchCount > 0;
     std::printf(
         "EPOCH_PROBE route result=%s expected=%llu after_teardown=%llu match_before=%d "
-        "stale_null=%d mismatch_count=%zu\n",
+        "stale_null=%d mismatch_count=%zu late_null=%d late_mismatch_count=%zu\n",
         pass ? "PASS" : "FAIL", static_cast<unsigned long long>(expected),
         static_cast<unsigned long long>(afterTeardown), matchBefore ? 1 : 0,
-        stale == nullptr ? 1 : 0, mismatchCount);
+        stale == nullptr ? 1 : 0, mismatchCount, late == nullptr ? 1 : 0, lateMismatchCount);
     manager.ReclaimRegion(region);
     return pass;
 }
