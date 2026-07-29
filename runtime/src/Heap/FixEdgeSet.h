@@ -35,8 +35,10 @@ public:
     // slotAddr = absolute address of RefField<> storage (edge key).
     void Add(MAddress slotAddr);
 
-    // Register when newRef is already From/GhostFrom (I5). holder may be null
-    // (static root). Skips stores into from/ghost holders (slot would evacuate).
+    // Register when newRef is already From/GhostFrom (I5), or — when GC phase is
+    // active (phase > INIT, slow-path barriers only) — any cross-region heap ref
+    // store (E6 (i)-narrow). Idle does not widen. holder may be null (static root).
+    // Skips stores into from/ghost holders (slot would evacuate).
     void MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef);
 
     // STW-only: visit each registered slot once (best-effort unique via sort+unique).
@@ -44,6 +46,10 @@ public:
     void VisitAndClear(const SlotVisitor& visitor);
 
     size_t SizeApprox() const { return count.load(std::memory_order_relaxed); }
+
+    // E6 observability (relaxed; never used as a silent-skip gate).
+    size_t CrossRegionRegistered() const { return crossRegionRegistered.load(std::memory_order_relaxed); }
+    size_t FromTargetRegistered() const { return fromTargetRegistered.load(std::memory_order_relaxed); }
 
 private:
     FixEdgeSet() = default;
@@ -58,6 +64,8 @@ private:
     std::mutex mutex;
     std::vector<MAddress> slots;
     std::atomic<size_t> count{ 0 };
+    std::atomic<size_t> crossRegionRegistered{ 0 };
+    std::atomic<size_t> fromTargetRegistered{ 0 };
 };
 } // namespace MapleRuntime
 

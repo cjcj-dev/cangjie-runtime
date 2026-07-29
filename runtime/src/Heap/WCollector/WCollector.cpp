@@ -605,8 +605,10 @@ void WCollector::BulkForwardHolderRefs()
         [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
 
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
-    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu",
-         static_cast<size_t>(pauseUs), rewritten, fixSetSize);
+    VLOG(REPORT,
+         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu fromTarget=%zu crossRegion=%zu",
+         static_cast<size_t>(pauseUs), rewritten, fixSetSize,
+         FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered());
 }
 
 void WCollector::PostTrace()
@@ -852,6 +854,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
         if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+            // E6 (ii) residual: to-space / never-censused regions only. Full scan
+            // is correct (no silent skip). Counter for coverage; sample region.
+            static std::atomic<size_t> neverExaminedRescanLines{ 0 };
+            size_t n = neverExaminedRescanLines.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[E6-remset] NEVER_EXAMINED rescan line region=%p start=%#zx state=NEVER n=%zu",
+                     region, region->GetRegionStart(), n);
+            }
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
         } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
             return false;
