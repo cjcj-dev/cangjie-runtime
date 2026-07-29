@@ -720,7 +720,7 @@ public:
 
     // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): geometry read under installEpoch.
     // Residual readers cache GetRouteInstallEpoch() and re-check before call;
-    // teardown restamps installEpoch ⇒ definitional fail for stale caches.
+    // teardown writes INVALID_EPOCH ⇒ definitional fail for every cleared carrier.
     // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
     // Signature matches pre-epoch export surface (single arg).
     BaseObject* GetRoute(BaseObject* fromObj)
