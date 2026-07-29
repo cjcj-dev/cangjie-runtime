@@ -718,23 +718,33 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
     }
 
-    // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): geometry read under installEpoch.
-    // Residual readers cache GetRouteInstallEpoch() and re-check before call;
-    // teardown writes INVALID_EPOCH ⇒ definitional fail for every cleared carrier.
+    RouteInfo AcquireRouteInfo() const { return metadata.routeInfo.AcquireRouteInfo(); }
+
+    // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): consume one acquired route snapshot.
+    // Presence is carried by the snapshot version, independently of installEpoch.
     // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
     // Signature matches pre-epoch export surface (single arg).
     BaseObject* GetRoute(BaseObject* fromObj)
     {
+        RouteInfo routeInfo = AcquireRouteInfo();
+        if (!routeInfo.IsInstalled()) {
+            return nullptr;
+        }
+        return GetRoute(fromObj, routeInfo);
+    }
+
+    BaseObject* GetRoute(BaseObject* fromObj, RouteInfo& routeInfo)
+    {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
-        if (UNLIKELY(preLiveBytes >= metadata.routeInfo.GetToRegion1UsedBytes() &&
-                     metadata.routeInfo.GetToRegion2Idx() == RouteInfo::INVALID_VALUE)) {
+        if (UNLIKELY(preLiveBytes >= routeInfo.GetToRegion1UsedBytes() &&
+                     routeInfo.GetToRegion2Idx() == RouteInfo::INVALID_VALUE)) {
             size_t offset = GetAddressOffset(fromAddress);
             LiveInfo* ghostLiveInfo = metadata.liveInfo0;
             bool survived = ghostLiveInfo != nullptr && ghostLiveInfo->IsSurvivedObject(offset);
             size_t bitmapLiveBytes = ghostLiveInfo == nullptr ? 0 : ghostLiveInfo->GetBitmapLiveBytes();
             size_t recomputedLiveBytes = ghostLiveInfo == nullptr ? 0 : ghostLiveInfo->RecomputeBitmapLiveBytes();
-            const char* producer = (bitmapLiveBytes != metadata.routeInfo.GetToRegion1UsedBytes() ||
+            const char* producer = (bitmapLiveBytes != routeInfo.GetToRegion1UsedBytes() ||
                 recomputedLiveBytes != bitmapLiveBytes) ? "bitmap-liveByteCount-snapshot-mismatch" :
                 !survived ? "old-tagged-ref-or-root-to-non-survivor" : "cross-generation-or-route-plan-mismatch";
             CHECK_E(true,
@@ -743,20 +753,20 @@ public:
                 "currentLiveByteCount=%zu toRegion1UsedBytes=%zu toRegion2Idx=%u ghostLiveInfo=%p",
                 producer, this, GetUnitIdx(), static_cast<unsigned>(GetRouteState()), fromObj, offset,
                 static_cast<unsigned>(survived), static_cast<size_t>(preLiveBytes), bitmapLiveBytes,
-                recomputedLiveBytes, GetLiveByteCount(), metadata.routeInfo.GetToRegion1UsedBytes(),
-                metadata.routeInfo.GetToRegion2Idx(), ghostLiveInfo);
+                recomputedLiveBytes, GetLiveByteCount(), routeInfo.GetToRegion1UsedBytes(),
+                routeInfo.GetToRegion2Idx(), ghostLiveInfo);
         }
-        MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
+        MAddress toAddr = routeInfo.GetRoute(preLiveBytes);
         return reinterpret_cast<BaseObject*>(toAddr);
     }
 
-    uint64_t GetRouteInstallEpoch() const { return metadata.routeInfo.GetInstallEpoch(); }
+    uint64_t GetRouteInstallEpoch() const { return AcquireRouteInfo().GetInstallEpoch(); }
 
-    // True iff reader-held install stamp still matches a live route carrier.
+    // True iff one self-consistent acquired record is present and carries the stamp.
     bool RouteEpochMatches(uint64_t expectedInstallEpoch) const
     {
-        uint64_t installEpoch = metadata.routeInfo.GetInstallEpoch();
-        return installEpoch != RouteInfo::INVALID_EPOCH && expectedInstallEpoch == installEpoch;
+        RouteInfo routeInfo = AcquireRouteInfo();
+        return routeInfo.IsInstalled() && expectedInstallEpoch == routeInfo.GetInstallEpoch();
     }
 
     void PrepareForwardableRegion()
