@@ -481,10 +481,10 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
-    BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo, uint64_t expectedEpoch)
+    ALWAYS_INLINE BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo, uint64_t expectedEpoch)
     {
-        auto rejectEpochMismatch = [fromRegionInfo, expectedEpoch]() -> BaseObject* {
-            size_t n = RouteEpochMismatchCounter().fetch_add(1, std::memory_order_relaxed) + 1;
+        auto rejectEpochMismatch = [this, fromRegionInfo, expectedEpoch]() -> BaseObject* {
+            size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
@@ -533,14 +533,14 @@ public:
         return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
     }
 
-    static size_t GetRouteEpochMismatchCount()
+    size_t GetRouteEpochMismatchCount() const
     {
-        return RouteEpochMismatchCounter().load(std::memory_order_relaxed);
+        return routeEpochMismatchCount.load(std::memory_order_relaxed);
     }
 
-    static void ResetRouteEpochMismatchCount()
+    void ResetRouteEpochMismatchCount()
     {
-        RouteEpochMismatchCounter().store(0, std::memory_order_relaxed);
+        routeEpochMismatchCount.store(0, std::memory_order_relaxed);
     }
 
     bool RouteRegion(RegionInfo* fromRegionInfo)
@@ -604,12 +604,6 @@ public:
     }
 
 private:
-    static std::atomic<size_t>& RouteEpochMismatchCounter()
-    {
-        static std::atomic<size_t> count{ 0 };
-        return count;
-    }
-
     // Acquire a region list mutex which the collector also takes while the world is stopped.
     // Waiting for it in a saferegion is required so that a contended mutator cannot stall
     // StopTheWorld (MutatorManager.cpp:485-490), but the mutex must never be owned while the
@@ -708,6 +702,7 @@ private:
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
 
     std::atomic<size_t> youngAllocatedBytes = { 0 };
+    std::atomic<size_t> routeEpochMismatchCount = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };

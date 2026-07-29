@@ -1143,7 +1143,13 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
+BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
+{
+    return ForwardObjectImpl(obj, ghostFromRegion, ghostFromRegion->GetEpoch());
+}
+
+__attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
+    BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
     do {

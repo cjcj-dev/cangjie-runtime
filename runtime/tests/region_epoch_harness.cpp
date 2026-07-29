@@ -36,10 +36,10 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     // Real route teardown: bump region epoch, restamp RouteInfo, and clear ghost state.
     region->DispelGhostFromRegion();
     const uint64_t afterTeardown = region->GetRouteInstallEpoch();
-    RegionManager::ResetRouteEpochMismatchCount();
+    manager.ResetRouteEpochMismatchCount();
     BaseObject* stale = manager.RouteObject(
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected);
-    const size_t mismatchCount = RegionManager::GetRouteEpochMismatchCount();
+    const size_t mismatchCount = manager.GetRouteEpochMismatchCount();
     const bool pass = matchBefore && stale == nullptr && mismatchCount > 0 && afterTeardown != expected;
     std::printf(
         "EPOCH_PROBE route result=%s expected=%llu after_teardown=%llu match_before=%d "

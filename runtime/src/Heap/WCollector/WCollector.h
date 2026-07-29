@@ -129,6 +129,13 @@ public:
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
     // this is called when caller assures from-object/from-region still exists.
+    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
+    {
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        return space.GetRegionManager().RouteObject(fromObj, region);
+    }
+
+    ALWAYS_INLINE
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region, uint64_t expectedEpoch)
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -147,6 +154,8 @@ public:
     }
 
 protected:
+    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
+    __attribute__((visibility("hidden")))
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
 
