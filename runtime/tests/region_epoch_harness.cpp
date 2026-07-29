@@ -82,7 +82,7 @@ bool ProbeRetainedCoveredBoundary(RegionManager& manager)
         std::printf("EPOCH_PROBE boundary result=FAIL reason=alloc-old\n");
         return false;
     }
-    if (!region->MarkObject(oldObject)) {
+    if (!region->MarkObject(oldObject, AllocatorUtils::ALLOC_ALIGNMENT)) {
         region->AddLiveByteCount(AllocatorUtils::ALLOC_ALIGNMENT);
     }
     region->PreserveRetainedLiveInfo();
@@ -137,7 +137,7 @@ bool ProbeLargePromotion(RegionManager& manager)
         std::printf("EPOCH_PROBE large_promotion result=FAIL reason=alloc\n");
         return false;
     }
-    if (!region->MarkObject(object)) {
+    if (!region->MarkObject(object, AllocatorUtils::ALLOC_ALIGNMENT)) {
         region->AddLiveByteCount(AllocatorUtils::ALLOC_ALIGNMENT);
     }
     manager.PromoteAllRegions();
