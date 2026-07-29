@@ -6,7 +6,7 @@
 
 #include "ForwardFactTable.h"
 
-#include "Base/Log.h"
+#include "Base/LogFile.h"
 
 namespace MapleRuntime {
 ForwardFactTable& ForwardFactTable::Instance() noexcept
@@ -23,12 +23,12 @@ void ForwardFactTable::Record(BaseObject* from, BaseObject* to)
     std::lock_guard<std::mutex> lg(mutex);
     // First writer wins (object lock makes double-copy impossible for same from;
     // keep emplace so a spurious second Record cannot flip to-address).
-    auto [it, inserted] = table.emplace(from, to);
-    if (inserted) {
+    auto result = table.emplace(from, to);
+    if (result.second) {
         count.fetch_add(1, std::memory_order_relaxed);
-    } else if (it->second != to) {
+    } else if (result.first->second != to) {
         // Partial/aborted path must not rewrite: keep first complete mapping.
-        VLOG(REPORT, "[ForwardFactTable] reject rewrite from=%p old_to=%p new_to=%p", from, it->second, to);
+        VLOG(REPORT, "[ForwardFactTable] reject rewrite from=%p old_to=%p new_to=%p", from, result.first->second, to);
     }
 }
 
