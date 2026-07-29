@@ -583,7 +583,7 @@ public:
     static bool InGhostFromRegion(BaseObject* obj)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(reinterpret_cast<uintptr_t>(obj));
-        return unit->GetMetadata().inGhostFromRegion != 0;
+        return unit->GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) != 0;
     }
 
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
