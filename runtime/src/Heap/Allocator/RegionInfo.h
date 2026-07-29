@@ -722,13 +722,16 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
     }
 
-    RouteInfo AcquireRouteInfo() const { return metadata.routeInfo.AcquireRouteInfo(); }
+    __attribute__((always_inline, visibility("hidden"))) RouteInfo AcquireRouteInfo() const
+    {
+        return metadata.routeInfo.AcquireRouteInfo();
+    }
 
     // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): consume one acquired route snapshot.
     // Presence is carried by the snapshot version, independently of installEpoch.
     // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
     // Signature matches pre-epoch export surface (single arg).
-    BaseObject* GetRoute(BaseObject* fromObj)
+    __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
     {
         RouteInfo routeInfo = AcquireRouteInfo();
         if (!routeInfo.IsInstalled()) {
@@ -737,7 +740,8 @@ public:
         return GetRoute(fromObj, routeInfo);
     }
 
-    BaseObject* GetRoute(BaseObject* fromObj, RouteInfo& routeInfo)
+    __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
+        BaseObject* fromObj, RouteInfo& routeInfo)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
