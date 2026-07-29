@@ -558,7 +558,23 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (toObj == nullptr || toObj == target) {
         return;
     }
-    if (!Heap::IsHeapAddress(toObj) || !toObj->IsValidObject()) {
+    // GetRoute returns a computed address — may sit past to-region's current
+    // allocPtr (unmapped/uncommitted). IsHeapAddress is range-only and can pass
+    // for such addresses; IsValidObject then SEGV. Gate with owning to-region
+    // bounds before any object header touch (r1segv early SEGV root cause).
+    if (!Heap::IsHeapAddress(toObj)) {
+        return;
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(toObj));
+    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion() ||
+        toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
+        return;
+    }
+    const MAddress toAddr = reinterpret_cast<MAddress>(toObj);
+    if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
+        return;
+    }
+    if (!toObj->IsValidObject()) {
         return;
     }
     // Success shape of TryUpdateRefFieldImpl: plain to (WCollector.cpp:102-111).
