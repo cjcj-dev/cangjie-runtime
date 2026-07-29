@@ -229,16 +229,17 @@ struct LiveInfo {
 
 struct RouteInfo {
     static constexpr uint32_t INVALID_VALUE = std::numeric_limits<uint32_t>::max();
+    static constexpr uint64_t INVALID_EPOCH = std::numeric_limits<uint64_t>::max();
     uintptr_t toRegion1StartAddress = 0;
     uint64_t toRegion1UsedBytes = 0;
     uint32_t toRegion2Idx = 0;
     // Region epoch at route install (EPOCH_DESIGN_0729 §2). Readers pass expected.
-    uint64_t installEpoch = 0;
+    uint64_t installEpoch = INVALID_EPOCH;
 
     uintptr_t GetRoute(uint64_t preLiveBytes);
 
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = INVALID_VALUE,
-                      uint64_t epoch = 0)
+                      uint64_t epoch = INVALID_EPOCH)
     {
         toRegion1StartAddress = to1;
         toRegion1UsedBytes = to1used;
