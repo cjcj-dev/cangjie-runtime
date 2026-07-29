@@ -171,6 +171,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             } else {
                 DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
             }
+            // E4/P6: successful untag leaves plain→target; if target is already
+            // From/GhostFrom, register so BulkForward can close the edge (I5).
+            FixEdgeSet::Instance().MaybeAdd(obj, &field, target);
             return true;
         }
     }
