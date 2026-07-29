@@ -288,10 +288,11 @@ public:
             region = fromRegionList.TakeHeadRegion();
         }
 #else
-        // R2 validity-end: bulk GARBAGE declaration (LIE-3) before type flip.
+        // GARBAGE ends the retained snapshot, but the ghost route remains in service
+        // until route teardown or the region is actually returned to the allocator.
         // Plain loop (no lambda) so nm -D export surface stays free of std::function glue.
         for (RegionInfo* r = fromRegionList.GetHeadRegion(); r != nullptr; r = r->GetNextRegion()) {
-            r->BumpIdentityEpoch();
+            r->BumpSnapshotEpoch();
         }
         garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
@@ -308,9 +309,9 @@ public:
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
 
         region->LockWriteRegion();
-        // Phase: GC under region write-lock. R2 validity-end: GARBAGE declaration (LIE-3).
-        // OHOS reclaim path also bumps via InitFreeUnits; non-OHOS stays GARBAGE until reclaim.
-        region->BumpIdentityEpoch();
+        // GARBAGE invalidates the snapshot domain only. OHOS advances identity later in
+        // InitFreeUnits; non-OHOS keeps the installed route valid until actual reclaim.
+        region->BumpSnapshotEpoch();
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
         ReclaimRegion(region);
