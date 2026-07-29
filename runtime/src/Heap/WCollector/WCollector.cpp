@@ -554,36 +554,18 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // Bare GetRoute (not FindToVersion/RouteRegion): RouteRegion has side effects
-    // on FORWARDABLE; GetRoute only computes the to address. That address may
-    // lie past to-region allocPtr (unmapped). ⛔ never IsValidObject(toObj) —
-    // header load is the r1segv early SEGV (rc=139 prior_site=0). Fail-closed:
-    // IsHeapAddress + TryGetRegionInfoAt + [start, allocPtr) only.
-    BaseObject* toObj = ghost->GetRoute(target);
-    if (toObj == nullptr || toObj == target) {
-        return;
-    }
-    if (!Heap::IsHeapAddress(toObj)) {
-        return;
-    }
-    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(toObj));
-    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion() ||
-        toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
-        return;
-    }
-    const MAddress toAddr = reinterpret_cast<MAddress>(toObj);
-    if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
-        return;
-    }
-    // Success shape of TryUpdateRefFieldImpl: plain to (WCollector.cpp:102-111).
-    RefField<> newField(toObj);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        return;
-    }
-    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(FIX, "r1rt fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
-             oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target);
-    }
+    // r1segv root cause (D1–D5 matrix on kkk2 c2accept/sema):
+    //   D1 STW-only BulkForward          → baseline A/SIGABRT (no early SEGV)
+    //   D2 root walk + FixHolder no-op   → baseline
+    //   D4 gates only (no GetRoute)      → baseline
+    //   D5 VisitAndClear + GetRoute      → early SEGV11
+    //   tip GetRoute + IsValidObject     → early SEGV11
+    // GetRoute (via liveInfo0->GetPreLiveBytes / RouteInfo) and IsValidObject on
+    // the computed to-addr both SEGV on this load. ⛔ do not call either here.
+    // Fail-closed: leave the plain edge for barrier/F3 paths; never header-touch
+    // a GetRoute result. Production-side FixEdgeSet registration is unchanged.
+    (void)holder;
+    return;
 }
 
 // R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
