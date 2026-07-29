@@ -697,7 +697,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     RequestForRegion(size);
 
 #if !defined(__OHOS__)
-    RegionInfo* head = garbageRegionList.TakeHeadRegion();
+    size_t gatedBytes = 0;
+    RegionInfo* head = TakeReclaimableGarbageRegion(&gatedBytes);
     if (head != nullptr) {
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
@@ -718,6 +719,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             ReclaimRegion(head);
         }
     }
+#else
+    size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
     RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
@@ -758,6 +761,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         }
     }
 
+    if (gatedBytes > 0) {
+        static std::atomic<size_t> supplyGatedPressureCount { 0 };
+        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((n & (n - 1)) == 0) {
+            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
+        }
+    }
     return nullptr;
 }
 
