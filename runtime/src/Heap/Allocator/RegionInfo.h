@@ -1491,7 +1491,9 @@ private:
     {
         SetUnitRole(UnitRole::FREE_UNITS);
         // End any prior ghost-route carrier before this unit is published for free/reuse.
-        // (k8 knife rebased onto k7 carrier protocol: absence publication, no sentinel.)
+        // (k8 knife rebased onto k7 carrier protocol: absence publication, no sentinel;
+        //  routeState normalized so all three teardown paths agree on carrier end state.)
+        SetRouteState(RouteState::NORMAL);
         metadata.routeInfo.ClearRouteInfo();
         SetInGhostRegion(0);
         metadata.allocPtr = GetRegionStart();
