@@ -524,7 +524,10 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 // After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
 // Predicate aligned with bulkfwd f04 (plain-only + route state + ghost live).
 // holder arg is diagnostic only — P-G walks slot addresses from FixEdgeSet.
-void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
+// r1route: consume copy-time fact via FindToVersion only (Collector.h:85).
+// ⛔ never GetRoute (geometry plan, r1segv D5) and ⛔ never IsValidObject(to).
+// ⛔ never FindLatestVersion (silent fallback returns from when to==null).
+void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact)
 {
     RefField<> oldField(field);
     // b316 A/B producers are plain (untagged) edges; leave tagged to F3/barriers.
@@ -535,8 +538,8 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!Heap::IsHeapAddress(target)) {
         return;
     }
-    // Only rewrite edges into ghost-from survivors with a published route.
-    // Avoid FindToVersion/RouteRegion side effects on FORWARDABLE regions.
+    // Only rewrite edges into ghost-from survivors with a published route state.
+    // FORWARDABLE still lacks copy-time fact — leave for barriers/F3.
     RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
     if (ghost == nullptr) {
         return;
@@ -554,18 +557,51 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // r1segv root cause (D1–D5 matrix on kkk2 c2accept/sema):
-    //   D1 STW-only BulkForward          → baseline A/SIGABRT (no early SEGV)
-    //   D2 root walk + FixHolder no-op   → baseline
-    //   D4 gates only (no GetRoute)      → baseline
-    //   D5 VisitAndClear + GetRoute      → early SEGV11
-    //   tip GetRoute + IsValidObject     → early SEGV11
-    // GetRoute (via liveInfo0->GetPreLiveBytes / RouteInfo) and IsValidObject on
-    // the computed to-addr both SEGV on this load. ⛔ do not call either here.
-    // Fail-closed: leave the plain edge for barrier/F3 paths; never header-touch
-    // a GetRoute result. Production-side FixEdgeSet registration is unchanged.
-    (void)holder;
-    return;
+    // Fact carrier: FindToVersion null-check form (not FindLatestVersion).
+    // COMPACTED / region-FORWARDED publish full route; ROUTED alone is plan-only
+    // until object header FORWARDED (copy completed) — treat as no fact.
+    if (st == RegionInfo::RouteState::ROUTED && !target->IsForwarded()) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            static std::atomic<size_t> skipSample{ 0 };
+            size_t n = skipSample.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=ROUTED n=%zu",
+                     holder, &field, target, n);
+            }
+        }
+        return;
+    }
+    BaseObject* toObj = FindToVersion(target);
+    if (toObj == nullptr || toObj == target) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            static std::atomic<size_t> skipSampleNull{ 0 };
+            size_t n = skipSampleNull.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=null_or_self n=%zu",
+                     holder, &field, target, n);
+            }
+        }
+        return;
+    }
+    if (!Heap::IsHeapAddress(toObj)) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+        }
+        return;
+    }
+    // ⛔ no IsValidObject(toObj): header touch SEGVed on uncommitted pages (r1segv).
+    RefField<> newField(toObj);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(FIX, "r1route fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
+             oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target);
+    }
 }
 
 // R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
@@ -576,11 +612,12 @@ void WCollector::BulkForwardHolderRefs()
     ScopedStopTheWorld stw("bulk forward holder refs");
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
+    size_t skippedNoFact = 0;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
 
-    auto fixOne = [this, &rewritten](BaseObject* holder, RefField<>& field) {
+    auto fixOne = [this, &rewritten, &skippedNoFact](BaseObject* holder, RefField<>& field) {
         RefField<> before(field);
-        FixHolderForwardRefField(holder, field);
+        FixHolderForwardRefField(holder, field, &skippedNoFact);
         if (RefField<>(field).GetFieldValue() != before.GetFieldValue()) {
             ++rewritten;
         }
@@ -606,8 +643,9 @@ void WCollector::BulkForwardHolderRefs()
 
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
     VLOG(REPORT,
-         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu fromTarget=%zu crossRegion=%zu",
-         static_cast<size_t>(pauseUs), rewritten, fixSetSize,
+         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu skipped_no_fact=%zu fixset=%zu "
+         "fromTarget=%zu crossRegion=%zu",
+         static_cast<size_t>(pauseUs), rewritten, skippedNoFact, fixSetSize,
          FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered());
 }
 
