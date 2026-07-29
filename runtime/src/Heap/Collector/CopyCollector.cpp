@@ -42,7 +42,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     // R2.1: copy-time fact — both addresses in hand, payload committed. All
     // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
     // Aborted paths never reach this point (no half entry).
-    ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj);
+    ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

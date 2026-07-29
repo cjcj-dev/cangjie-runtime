@@ -530,7 +530,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 // ⛔ GetRoute/RouteObject/FindToVersion (r1segv D5) and ⛔ IsValidObject(to).
 // ⛔ FindLatestVersion (silent fallback returns from when to==null).
 void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact,
-                                          BulkMissBuckets* missBuckets)
+                                          size_t* interiorRewritten, BulkMissBuckets* missBuckets)
 {
     RefField<> oldField(field);
     // b316 A/B producers are plain (untagged) edges; leave tagged to F3/barriers.
@@ -564,6 +564,12 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     // not yet copied under this major — loud skip is correct (not silent).
     // ⛔ no FindToVersion/GetRoute/RouteObject (geometry plan SEGV after ForwardRegion).
     BaseObject* toObj = ForwardFactTable::Instance().Lookup(target);
+    size_t interiorOffset = 0;
+    bool isInterior = false;
+    if (toObj == nullptr &&
+        ForwardFactTable::Instance().LookupContaining(target, toObj, interiorOffset)) {
+        isInterior = true;
+    }
     if (toObj == nullptr || toObj == target) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
@@ -584,9 +590,9 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
                         if (entry.identity) {
                             ++missBuckets->b1LegitIdentity;
                         } else {
-                            // The address is strictly inside a copied object, so
-                            // it is not a BaseObject relocation key. Rewriting it
-                            // with the containing object's base fact would be wrong.
+                            // A moved copy should already have matched the product
+                            // containing lookup. Keep any residual diagnostic-only
+                            // range loud and fail-closed (for example, identity).
                             ++missBuckets->b2LegitOther;
                             ++missBuckets->b2InteriorNonObjectBase;
                             static std::atomic<size_t> containedSample{ 0 };
@@ -678,8 +684,11 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         return;
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p)", holder, &field,
-             oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target);
+        if (isInterior && interiorRewritten != nullptr) {
+            ++(*interiorRewritten);
+        }
+        DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p interior_offset=%zu)", holder,
+             &field, oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target, interiorOffset);
     }
 }
 
@@ -691,15 +700,17 @@ void WCollector::BulkForwardHolderRefs()
     ScopedStopTheWorld stw("bulk forward holder refs");
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
+    size_t interiorRewritten = 0;
     size_t skippedNoFact = 0;
     BulkMissBuckets missBuckets;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
     const size_t factTableSize = ForwardFactTable::Instance().SizeApprox();
     const size_t relocationDiagnosticSize = RelocationDiagnosticTable::Instance().Size();
 
-    auto fixOne = [this, &rewritten, &skippedNoFact, &missBuckets](BaseObject* holder, RefField<>& field) {
+    auto fixOne = [this, &rewritten, &interiorRewritten, &skippedNoFact, &missBuckets](BaseObject* holder,
+                                                                                     RefField<>& field) {
         RefField<> before(field);
-        FixHolderForwardRefField(holder, field, &skippedNoFact, &missBuckets);
+        FixHolderForwardRefField(holder, field, &skippedNoFact, &interiorRewritten, &missBuckets);
         if (RefField<>(field).GetFieldValue() != before.GetFieldValue()) {
             ++rewritten;
         }
@@ -732,12 +743,12 @@ void WCollector::BulkForwardHolderRefs()
     const size_t bucketTotal = missBuckets.b1LegitIdentity + missBuckets.b2LegitOther +
         missBuckets.b3RealLoss + missBuckets.unclassified;
     VLOG(REPORT,
-         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu skipped_no_fact=%zu fixset=%zu "
+         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu interior_rewritten=%zu skipped_no_fact=%zu fixset=%zu "
          "facttable=%zu fromTarget=%zu crossRegion=%zu relocation_diag=%zu "
          "MISSBUCKET_B1=%zu_B2=%zu_B3=%zu_UNCLASSIFIED=%zu_of_%zu "
          "invalid_to_not_heap=%zu invalid_to_region=%zu invalid_to_bounds=%zu "
          "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu",
-         static_cast<size_t>(pauseUs), rewritten, skippedNoFact, fixSetSize, factTableSize,
+         static_cast<size_t>(pauseUs), rewritten, interiorRewritten, skippedNoFact, fixSetSize, factTableSize,
          FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered(),
          relocationDiagnosticSize, missBuckets.b1LegitIdentity, missBuckets.b2LegitOther,
          missBuckets.b3RealLoss, missBuckets.unclassified, bucketTotal, missBuckets.invalidToNotHeap,

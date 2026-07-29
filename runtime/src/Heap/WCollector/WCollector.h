@@ -225,6 +225,7 @@ private:
     // index only (P-G). No VisitAllObjects / ForEachObj holder walk (H1).
     // skippedNoFact: loud skip when ForwardFactTable miss (r1route2 R2.1).
     void FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact = nullptr,
+                                  size_t* interiorRewritten = nullptr,
                                   BulkMissBuckets* missBuckets = nullptr);
     void BulkForwardHolderRefs();
     void PreforwardConcurrencyModelRoots();

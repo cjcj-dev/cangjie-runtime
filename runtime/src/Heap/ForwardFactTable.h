@@ -9,8 +9,8 @@
 
 #include <atomic>
 #include <cstddef>
+#include <map>
 #include <mutex>
-#include <unordered_map>
 
 #include "Common/TypeDef.h"
 
@@ -28,14 +28,24 @@ namespace MapleRuntime {
 // lock ensures one copy per from-object; distinct keys may insert concurrently.
 class ForwardFactTable {
 public:
+    struct Entry {
+        BaseObject* to;
+        size_t size;
+    };
+
     static ForwardFactTable& Instance() noexcept;
 
     // Copy-time only. Never write a half entry: call only after CopyObject body
     // has both addresses (and before from header is zeroed/unlocked as FORWARDED).
-    void Record(BaseObject* from, BaseObject* to);
+    void Record(BaseObject* from, BaseObject* to, size_t size);
 
     // STW BulkForward consumer. Returns nullptr if no copy-time fact for from.
     BaseObject* Lookup(BaseObject* from) const;
+
+    // STW BulkForward consumer for a strict interior address. The source-base
+    // key and copy-time Record point are unchanged; size only bounds the copy
+    // fact's address domain. Exact bases remain the Lookup path above.
+    bool LookupContaining(BaseObject* address, BaseObject*& to, size_t& offset) const;
 
     // End of BulkForward (with FixEdgeSet VisitAndClear). Drops all entries.
     void Clear();
@@ -49,7 +59,7 @@ private:
     ForwardFactTable& operator=(const ForwardFactTable&) = delete;
 
     mutable std::mutex mutex;
-    std::unordered_map<BaseObject*, BaseObject*> table;
+    std::map<BaseObject*, Entry> table;
     std::atomic<size_t> count{ 0 };
 };
 } // namespace MapleRuntime
