@@ -483,7 +483,9 @@ public:
 
     ALWAYS_INLINE BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo, uint64_t expectedEpoch)
     {
-        auto rejectEpochMismatch = [this, fromRegionInfo, expectedEpoch]() -> BaseObject* {
+        // The caller captures expectedEpoch when it establishes that fromObj belongs
+        // to this from/ghost region. Teardown between that recognition and routing is stale.
+        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch())) {
             size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
@@ -494,12 +496,6 @@ public:
                      static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()), n);
             }
             return nullptr;
-        };
-
-        // The caller captures expectedEpoch when it establishes that fromObj belongs
-        // to this from/ghost region. Teardown between that recognition and routing is stale.
-        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch())) {
-            return rejectEpochMismatch();
         }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
             // Route installation is a semantic advance and does not bump region epoch.
@@ -507,7 +503,16 @@ public:
             // installation stamp to still describe the same lifetime.
             if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
                          !fromRegionInfo->RouteEpochMatches(expectedEpoch))) {
-                return rejectEpochMismatch();
+                size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
+                         "route_epoch=%llu n=%zu",
+                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                         static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()), n);
+                }
+                return nullptr;
             }
             BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
             return toAddr;
