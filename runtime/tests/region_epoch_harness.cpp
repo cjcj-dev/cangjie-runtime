@@ -5,8 +5,9 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Unit probes for Region Epoch (EPOCH_DESIGN_0729 §4):
-// 1) route teardown: GetRoute after BumpEpoch/dispel-style install mismatch fails
-// 2) retained LiveInfo snapshot becomes invalid after its region epoch changes
+// 1) route teardown during GetRoute geometry consumption is rejected
+// 2) ClearGhostRegionBit bumps and invalidates its route carrier
+// 3) retained LiveInfo snapshot becomes invalid after its region epoch changes
 
 #include <atomic>
 #include <cstdint>
