@@ -8,6 +8,7 @@
 // 1) route teardown during GetRoute geometry consumption is rejected
 // 2) ClearGhostRegionBit bumps and invalidates its route carrier
 // 3) retained LiveInfo snapshot becomes invalid after its region epoch changes
+// 4) reclaim invalidates ghost lookup and route metadata for stale object addresses
 
 #include <atomic>
 #include <cstdint>
@@ -128,6 +129,40 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
     return pass;
 }
 
+bool ProbeReclaimGhostTeardown(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE reclaim_ghost result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    const MAddress staleHead = region->GetRegionStart();
+    const MAddress staleSubordinate = staleHead + RegionInfo::UNIT_SIZE;
+    const bool ghostBefore = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
+        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
+    manager.ReclaimRegion(region);
+
+    const bool headCleared = RegionInfo::GetGhostFromRegionAt(staleHead) == nullptr;
+    const bool subordinateCleared = RegionInfo::GetGhostFromRegionAt(staleSubordinate) == nullptr;
+    const bool routeCleared = region->GetRouteInstallEpoch() == RouteInfo::INVALID_EPOCH &&
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL;
+    const bool pass = ghostBefore && headCleared && subordinateCleared && routeCleared;
+    std::printf(
+        "EPOCH_PROBE reclaim_ghost result=%s ghost_before=%d head_null=%d subordinate_null=%d "
+        "route_sentinel=%d route_normal=%d\n",
+        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, headCleared ? 1 : 0, subordinateCleared ? 1 : 0,
+        region->GetRouteInstallEpoch() == RouteInfo::INVALID_EPOCH ? 1 : 0,
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL ? 1 : 0);
+    return pass;
+}
+
 } // namespace
 } // namespace MapleRuntime
 
@@ -140,8 +175,10 @@ int main()
     const bool route = MapleRuntime::ProbeRouteEpochMismatch(manager);
     const bool clearGhost = MapleRuntime::ProbeClearGhostRouteEpoch(manager);
     const bool snapshot = MapleRuntime::ProbeRetainedSnapshotEpoch(manager);
+    const bool reclaimGhost = MapleRuntime::ProbeReclaimGhostTeardown(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
-    std::printf("EPOCH_PROBE summary route=%s clear_ghost=%s snapshot=%s\n", route ? "PASS" : "FAIL",
-                clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL");
-    return route && clearGhost && snapshot ? 0 : 1;
+    std::printf("EPOCH_PROBE summary route=%s clear_ghost=%s snapshot=%s reclaim_ghost=%s\n",
+                route ? "PASS" : "FAIL", clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL",
+                reclaimGhost ? "PASS" : "FAIL");
+    return route && clearGhost && snapshot && reclaimGhost ? 0 : 1;
 }
