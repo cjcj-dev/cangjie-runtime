@@ -318,5 +318,6 @@ struct RouteInfo {
     uint32_t GetToRegion2Idx() const { return __atomic_load_n(&toRegion2Idx, __ATOMIC_RELAXED); }
     uint64_t GetInstallEpoch() const { return __atomic_load_n(&installEpoch, __ATOMIC_RELAXED); }
 };
+static_assert(sizeof(RouteInfo) == 32, "route publication state must fit the existing RouteInfo layout");
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H
