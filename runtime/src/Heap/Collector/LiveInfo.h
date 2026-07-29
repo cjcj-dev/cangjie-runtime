@@ -281,7 +281,7 @@ struct RouteInfo {
         __atomic_store_n(&version, nextGeneration, __ATOMIC_RELEASE);
     }
 
-    RouteInfo AcquireRouteInfo() const
+    __attribute__((always_inline, visibility("hidden"))) RouteInfo AcquireRouteInfo() const
     {
         RouteInfo snapshot;
         for (uint32_t attempt = 0; attempt < READ_RETRY_LIMIT; ++attempt) {
