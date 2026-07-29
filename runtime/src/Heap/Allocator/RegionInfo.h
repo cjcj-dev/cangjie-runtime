@@ -589,7 +589,7 @@ public:
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (unit->GetMetadata().inGhostFromRegion == 0) {
+        if (unit->GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
         }
         if (LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT) {
