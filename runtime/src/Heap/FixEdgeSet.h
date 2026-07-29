@@ -26,16 +26,15 @@ class BaseObject;
 //
 // Lifetime: entry established on runtime heap-ref store (or Trace plain→from);
 // invalidated by Clear() at end of BulkForward (same major, after ForwardFromSpace).
-// Epoch stamps (EPOCH_DESIGN_0729 §2): target (+slot) region epoch at registration;
-// consumer rejects on mismatch (definitional expiry; E9 free/garbage kept as parallel observe).
+// Epoch stamps (EPOCH_DESIGN_0729 R2): slot-region epoch at registration only;
+// ⛔ no target-region stamp/compare (LIE-1). Consumer rejects on slot-epoch mismatch
+// (definitional expiry; E9 free/garbage kept as parallel observe — same intercept set).
 // No cross-major retention. Mutator Add vs STW Visit/Clear: STW excludes mutators.
 class FixEdgeSet {
 public:
     struct Entry {
         MAddress slotAddr = 0;
-        uint64_t targetEpoch = 0;
         uint64_t slotEpoch = 0;
-        bool hasTargetEpoch = false;
         bool hasSlotEpoch = false;
     };
 
@@ -43,14 +42,14 @@ public:
 
     // Register a heap ref slot that was just written (or Trace-observed).
     // slotAddr = absolute address of RefField<> storage (edge key).
-    void Add(MAddress slotAddr, uint64_t targetEpoch, bool hasTargetEpoch, uint64_t slotEpoch, bool hasSlotEpoch);
+    void Add(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch);
 
     // Register when newRef is already From/GhostFrom (I5). holder may be null
     // (static root). Skips stores into from/ghost holders (slot would evacuate).
     void MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef);
 
     // STW-only: visit each registered slot once (best-effort unique via sort+unique).
-    // Epoch-mismatch and E9 free/garbage skips are counted before visitor.
+    // Slot-epoch mismatch and E9 free/garbage skips are counted before visitor.
     using SlotVisitor = std::function<void(RefField<>& field)>;
     void VisitAndClear(const SlotVisitor& visitor);
 

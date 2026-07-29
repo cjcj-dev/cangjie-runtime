@@ -46,7 +46,7 @@ bool ProbeReuseEpochSkip(RegionManager& manager)
     ProbeSlot slot;
     // Use a heap address for the slot if possible; otherwise exercise Add+Visit path via MaybeAdd
     // with synthetic stamp by calling Add directly.
-    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(&slot.field), e0, true, e0, true);
+    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(&slot.field), e0, true);
 
     // Bump again as free/reuse would.
     region->BumpEpoch();
@@ -69,7 +69,7 @@ bool ProbeReuseEpochSkip(RegionManager& manager)
     auto* heapField = reinterpret_cast<RefField<>*>(alloc);
     const uint64_t stamp = region->GetEpoch();
     FixEdgeSet::Instance().ResetSkipCounts();
-    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(heapField), stamp, true, stamp, true);
+    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(heapField), stamp, true);
     // free/reuse bump invalidates stamp
     region->BumpEpoch();
     size_t visited2 = 0;
@@ -91,21 +91,23 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
         std::printf("EPOCH_PROBE route result=FAIL reason=take-region\n");
         return false;
     }
-    // Install a dummy route stamped with current epoch after Bump inside SetRouteInfo.
+    // Install a dummy route stamped with current region epoch (no Bump on install, R2).
     region->SetRouteInfo(region->GetRegionStart(), 16);
     const uint64_t install = region->GetRouteInstallEpoch();
-    // Simulate consumer holding stale expected epoch.
+    // Stale expected epoch must fail before ghost live access.
     BaseObject* bogus = reinterpret_cast<BaseObject*>(region->GetRegionStart());
-    BaseObject* ok = region->GetRoute(bogus, install);
     BaseObject* stale = region->GetRoute(bogus, install - 1);
-    // Without ghost liveInfo0 GetRoute may CHECK_E on preLiveBytes path — only call when
-    // install epoch mismatches first (stale path returns before ghost live access).
-    const bool pass = (stale == nullptr) && (install > 0);
+    // Simulate route-teardown validity-end (DispelGhost bumps + restamps installEpoch).
+    region->BumpEpoch();
+    region->SetRouteInfo(0);
+    const uint64_t afterTeardown = region->GetRouteInstallEpoch();
+    BaseObject* after = region->GetRoute(bogus, install);
+    const bool pass = (stale == nullptr) && (after == nullptr) && (afterTeardown != install);
     std::printf(
-        "EPOCH_PROBE route result=%s install=%llu ok_null=%d stale_null=%d\n",
-        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(install), ok == nullptr ? 1 : 0,
-        stale == nullptr ? 1 : 0);
-    (void)ok;
+        "EPOCH_PROBE route result=%s install=%llu after_teardown=%llu stale_null=%d after_null=%d\n",
+        pass ? "PASS" : "FAIL", static_cast<unsigned long long>(install),
+        static_cast<unsigned long long>(afterTeardown), stale == nullptr ? 1 : 0,
+        after == nullptr ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }

@@ -120,14 +120,15 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
-    // Region epoch (EPOCH_DESIGN_0729 §1): monotonic u64 lifetime of region semantics.
+    // Region epoch (EPOCH_DESIGN_0729 R2): monotonic u64; bump only on validity-end events.
     // Carriers stamp GetEpoch() at production; consumers reject on mismatch (definitional expiry).
     uint64_t GetEpoch() const
     {
         return __atomic_load_n(&metadata.epoch, std::memory_order_acquire);
     }
 
-    // Bump only on semantic transitions (STW window or region lock — each call site annotates phase).
+    // Bump only on validity-end (STW or region lock — each call site annotates phase).
+    // ⛔ Do not bump on Assemble/Forward complete (LIE-1: voids live FixEdgeSet stamps).
     void BumpEpoch()
     {
         __atomic_fetch_add(&metadata.epoch, 1, std::memory_order_acq_rel);
@@ -698,8 +699,8 @@ public:
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
-        // Phase: STW / region write-lock (ReclaimRegion, ReleaseRegion, CollectRegion).
-        // Blueprint: free/return-to-allocator ⇒ epoch bump (E9 constructive fix).
+        // Phase: STW / region write-lock (ReclaimRegion, ReleaseRegion).
+        // R2 validity-end: reclaim/free (E9 constructive).
         BumpEpoch();
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
@@ -709,19 +710,17 @@ public:
         }
     }
 
+    // Install route geometry; stamp installEpoch with current region epoch.
+    // ⛔ R2: install is semantic advance — no region BumpEpoch (only route teardown bumps).
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
-        // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state / PrepareForwardable).
-        // Blueprint: route install/remove ⇒ epoch bump; stamp install epoch after bump.
-        BumpEpoch();
+        // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state).
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
     }
 
-    // GetRoute family (EPOCH_DESIGN_0729 §2): expectedEpoch is the install-time stamp the
-    // reader observed; mismatch with RouteInfo::installEpoch ⇒ definitional fail (nullptr).
-    // Region.epoch may bump after install (Forward complete) while route remains valid for
-    // residual readers until dispel/free; carriers (FixEdgeSet) use region.epoch separately.
-    // ⛔ FixHolder must not call GetRoute (r1segv); that ruling is unchanged.
+    // GetRoute family (EPOCH_DESIGN_0729 R2/R2.1): expectedEpoch is install stamp.
+    // Mismatch ⇒ definitional fail (nullptr). Guards non-FixHolder readers only.
+    // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
     BaseObject* GetRoute(BaseObject* fromObj, uint64_t expectedEpoch)
     {
         const uint64_t installEpoch = metadata.routeInfo.GetInstallEpoch();
@@ -762,7 +761,7 @@ public:
         return reinterpret_cast<BaseObject*>(toAddr);
     }
 
-    // Reader convenience: expected = current install stamp (fails if region.epoch already bumped).
+    // Reader convenience: expected = current install stamp.
     BaseObject* GetRoute(BaseObject* fromObj)
     {
         return GetRoute(fromObj, metadata.routeInfo.GetInstallEpoch());
@@ -775,13 +774,12 @@ public:
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
-        // Phase: STW (PrepareFromRegionList). Blueprint: Assemble into ghost-from + route clear.
-        BumpEpoch();
+        // Phase: STW (PrepareFromRegionList). R2: Assemble is semantic advance — no BumpEpoch.
         metadata.routeState = FORWARDABLE;
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
-        // Clear route without second BumpEpoch (SetRouteInfo would bump again).
+        // Clear prior route stamp without region bump (install path is non-bumping).
         metadata.routeInfo.SetRouteInfo(0);
         if (GetLiveByteCount() > 0) {
             SetInGhostRegion(1);
@@ -824,9 +822,12 @@ public:
 
     void DispelGhostFromRegion()
     {
-        // Phase: STW (PrepareFromRegionList / PostTrace dispel). Blueprint: route/ghost teardown.
+        // Phase: STW (PrepareFromRegionList / PostTrace dispel).
+        // R2 validity-end: route teardown (not Forward complete).
         BumpEpoch();
         metadata.routeState = NORMAL;
+        // Invalidate prior installEpoch so GetRoute(stale) fails definitionally.
+        metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, GetEpoch());
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -854,7 +855,7 @@ public:
     void ClearLiveInfo()
     {
         // Phase: STW GC (Assemble*GarbageCandidates / ClearAllLiveInfo / young prepare).
-        // Blueprint: ClearLiveInfo ⇒ epoch bump (snapshot semantics flip).
+        // R2 validity-end: ClearLiveInfo (snapshot semantics flip).
         BumpEpoch();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
@@ -1384,7 +1385,7 @@ private:
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
-        // Blueprint: free + region re-alloc reuse ⇒ epoch bump (all prior carriers expire).
+        // R2 validity-end: region re-alloc reuse (all prior carriers expire).
         BumpEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);

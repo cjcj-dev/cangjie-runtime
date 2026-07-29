@@ -1314,9 +1314,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     CHECK(forwarded);
     {
-        // Phase: GC forward worker after live objects copied (region exclusive via RouteState).
-        // Blueprint: ForwardFromSpace complete for this region ⇒ epoch bump (route/plan void).
-        region->BumpEpoch();
+        // R2: Forward complete is semantic advance — no BumpEpoch here (LIE-1).
+        // Validity ends at CollectRegion→GARBAGE (below) / later reclaim/reuse.
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         CollectRegion(region);
     }

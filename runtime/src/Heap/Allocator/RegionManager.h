@@ -277,12 +277,15 @@ public:
     {
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim from-regions directly to dirtyTree.
+        // ReclaimRegion→InitFreeUnits bumps epoch (R2 reclaim/free).
         RegionInfo* region = fromRegionList.TakeHeadRegion();
         while (region != nullptr) {
             ReclaimRegion(region);
             region = fromRegionList.TakeHeadRegion();
         }
 #else
+        // R2 validity-end: bulk GARBAGE declaration (LIE-3) before type flip.
+        fromRegionList.VisitAllRegions([](RegionInfo* r) { r->BumpEpoch(); });
         garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
     }
@@ -298,6 +301,9 @@ public:
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
 
         region->LockWriteRegion();
+        // Phase: GC under region write-lock. R2 validity-end: GARBAGE declaration (LIE-3).
+        // OHOS reclaim path also bumps via InitFreeUnits; non-OHOS stays GARBAGE until reclaim.
+        region->BumpEpoch();
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
         ReclaimRegion(region);
@@ -474,7 +480,7 @@ public:
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            // Pass install epoch as expected; GetRoute also checks region.epoch match.
+            // Pass install epoch as expected (GetRoute epoch gate for non-FixHolder readers).
             BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj, fromRegionInfo->GetRouteInstallEpoch());
             return toAddr;
         }

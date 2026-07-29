@@ -19,16 +19,13 @@ FixEdgeSet& FixEdgeSet::Instance() noexcept
     return instance;
 }
 
-void FixEdgeSet::Add(MAddress slotAddr, uint64_t targetEpoch, bool hasTargetEpoch, uint64_t slotEpoch,
-                     bool hasSlotEpoch)
+void FixEdgeSet::Add(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch)
 {
     if (slotAddr == 0) {
         return;
     }
     Entry e;
     e.slotAddr = slotAddr;
-    e.targetEpoch = targetEpoch;
-    e.hasTargetEpoch = hasTargetEpoch;
     e.slotEpoch = slotEpoch;
     e.hasSlotEpoch = hasSlotEpoch;
     std::lock_guard<std::mutex> lg(mutex);
@@ -64,25 +61,23 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
         slotRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(slot));
     }
 
-    auto stampAndAdd = [&](RegionInfo* targetRegion) {
-        const uint64_t tEpoch = targetRegion != nullptr ? targetRegion->GetEpoch() : 0;
-        const bool hasT = targetRegion != nullptr;
+    auto stampAndAdd = [&]() {
+        // R2: stamp slot-region epoch only (E9 constructive). ⛔ no target stamp.
         const uint64_t sEpoch = slotRegion != nullptr ? slotRegion->GetEpoch() : 0;
         const bool hasS = slotRegion != nullptr;
-        Add(reinterpret_cast<MAddress>(slot), tEpoch, hasT, sEpoch, hasS);
+        Add(reinterpret_cast<MAddress>(slot), sEpoch, hasS);
     };
 
     // I5: only edges whose target is already From or GhostFrom need bulk fix.
     // plainsrc P11 (Idle plain→then-from) is covered by Trace I4 complement when
     // the holder is scanned; unreached holders need compiler dual-track (r1cc).
     if (RegionInfo::InGhostFromRegion(newRef)) {
-        RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(newRef));
-        stampAndAdd(ghost);
+        stampAndAdd();
         return;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
     if (region != nullptr && region->IsFromRegion()) {
-        stampAndAdd(region);
+        stampAndAdd();
     }
 }
 
@@ -111,7 +106,7 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
         if (slotRegion == nullptr) {
             continue;
         }
-        // Epoch check first (definitional expiry). Parallel E9 free/garbage gates retained
+        // Slot-epoch first (definitional expiry). Parallel E9 free/garbage gates retained
         // for observation: epoch_skip vs e9_gate should cover the same set when complete.
         if (e.hasSlotEpoch && slotRegion->GetEpoch() != e.slotEpoch) {
             epochSkipCount.fetch_add(1, std::memory_order_relaxed);
@@ -130,29 +125,6 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
             slotRegion->IsGarbageRegion()) {
             e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
             continue;
-        }
-        // Target epoch: re-read field target region if stamped.
-        if (e.hasTargetEpoch) {
-            auto* field = reinterpret_cast<RefField<>*>(addr);
-            BaseObject* target = field->GetTargetObject();
-            if (target != nullptr && Heap::IsHeapAddress(target)) {
-                RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion == nullptr) {
-                    targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
-                }
-                if (targetRegion != nullptr && targetRegion->GetEpoch() != e.targetEpoch) {
-                    epochSkipCount.fetch_add(1, std::memory_order_relaxed);
-                    static std::atomic<size_t> tSample{ 0 };
-                    size_t n = tSample.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if ((n & (n - 1)) == 0) {
-                        VLOG(REPORT,
-                             "[FixEdgeSet] epoch_skip target region=%p epoch_seen=%llu epoch_now=%llu n=%zu",
-                             targetRegion, static_cast<unsigned long long>(e.targetEpoch),
-                             static_cast<unsigned long long>(targetRegion->GetEpoch()), n);
-                    }
-                    continue;
-                }
-            }
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.
         auto* field = reinterpret_cast<RefField<>*>(addr);
