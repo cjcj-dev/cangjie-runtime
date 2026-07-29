@@ -590,7 +590,13 @@ public:
 
     bool RouteRegion(RegionInfo* fromRegionInfo)
     {
-        CHECK(fromRegionInfo->IsGhostFromRegion());
+        // A non-ghost region is simply not routable — a defined negative answer for
+        // probing consumers (TryForward family calls this directly; post-k8 reuse
+        // retires carriers routinely). The old hard CHECK assumed every caller
+        // pre-established ghost lineage, which the R1 probing pattern never promised.
+        if (UNLIKELY(!fromRegionInfo->IsGhostFromRegion())) {
+            return false;
+        }
         do {
             RegionInfo::RouteState oldState = fromRegionInfo->GetRouteState();
             if (oldState == RegionInfo::RouteState::ROUTED || oldState == RegionInfo::RouteState::FORWARDED) {
