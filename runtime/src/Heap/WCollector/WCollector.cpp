@@ -577,6 +577,7 @@ void WCollector::BulkForwardHolderRefs()
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
+    FixEdgeSet::Instance().ResetE9GateSkipCount();
 
     auto fixOne = [this, &rewritten](BaseObject* holder, RefField<>& field) {
         RefField<> before(field);
@@ -605,8 +606,9 @@ void WCollector::BulkForwardHolderRefs()
         [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
 
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
-    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu",
-         static_cast<size_t>(pauseUs), rewritten, fixSetSize);
+    const size_t e9Skip = FixEdgeSet::Instance().E9GateSkipCount();
+    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu e9_gate_skip=%zu",
+         static_cast<size_t>(pauseUs), rewritten, fixSetSize, e9Skip);
 }
 
 void WCollector::PostTrace()

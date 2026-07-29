@@ -88,6 +88,7 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
         if (slotRegion == nullptr || slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() ||
             slotRegion->IsFreeRegion() ||
             slotRegion->IsGarbageRegion()) {
+            e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.

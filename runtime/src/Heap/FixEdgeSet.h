@@ -44,6 +44,8 @@ public:
     void VisitAndClear(const SlotVisitor& visitor);
 
     size_t SizeApprox() const { return count.load(std::memory_order_relaxed); }
+    size_t E9GateSkipCount() const { return e9GateSkipCount.load(std::memory_order_relaxed); }
+    void ResetE9GateSkipCount() { e9GateSkipCount.store(0, std::memory_order_relaxed); }
 
 private:
     FixEdgeSet() = default;
@@ -58,6 +60,7 @@ private:
     std::mutex mutex;
     std::vector<MAddress> slots;
     std::atomic<size_t> count{ 0 };
+    std::atomic<size_t> e9GateSkipCount{ 0 };
 };
 } // namespace MapleRuntime
 
