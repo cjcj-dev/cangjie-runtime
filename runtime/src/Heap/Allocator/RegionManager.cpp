@@ -28,6 +28,9 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+std::atomic<size_t> retainedDispelNoGhostCount __attribute__((visibility("hidden"))) = { 0 };
+std::atomic<size_t> retainedDispelPartialGhostCount __attribute__((visibility("hidden"))) = { 0 };
+std::atomic<size_t> retainedSnapshotRestampCount __attribute__((visibility("hidden"))) = { 0 };
 
 static void ClearStickyLogForUnavailableRegion(RegionInfo* region)
 {

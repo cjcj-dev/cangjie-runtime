@@ -33,6 +33,10 @@
 #endif
 
 namespace MapleRuntime {
+extern std::atomic<size_t> retainedDispelNoGhostCount __attribute__((visibility("hidden")));
+extern std::atomic<size_t> retainedDispelPartialGhostCount __attribute__((visibility("hidden")));
+extern std::atomic<size_t> retainedSnapshotRestampCount __attribute__((visibility("hidden")));
+
 template<typename T>
 class BitField {
 public:
@@ -183,20 +187,13 @@ public:
 
     MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
 
-    void PreserveRetainedLiveInfo(MAddress coveredUpToOverride = 0)
+    void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();
         // Stamp region epoch at snapshot build (EPOCH_DESIGN_0729 §2).
         metadata.retainedLiveInfoEpoch = GetEpoch();
         // Exclusive allocation boundary: objects allocated after this point are implicitly live.
-        metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride == 0
-            ? GetRegionAllocPtr()
-            : coveredUpToOverride;
-        if (coveredUpToOverride != 0 && coveredUpToOverride == GetRegionStart()) {
-            CHECK(GetLiveByteCount() == 0);
-            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
-            return;
-        }
+        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
                 metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
@@ -212,6 +209,20 @@ public:
         metadata.retainedLiveInfoState = metadata.retainedLiveInfo == nullptr
             ? RetainedLiveInfoState::SNAPSHOT_EMPTY
             : RetainedLiveInfoState::SNAPSHOT_VALID;
+    }
+
+    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
+    {
+        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfo = GetLiveInfo();
+            metadata.retainedLiveInfoEpoch = GetEpoch();
+            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        CHECK(coveredUpToOverride == GetRegionAllocPtr());
+        PreserveRetainedLiveInfo();
     }
 
     // VALID and EMPTY are both snapshot results and share the same epoch validity protocol.
@@ -838,8 +849,7 @@ public:
         if (ghostUnitCount == 0) {
             // The historical overlay is already undiscoverable. Do not let its stale list
             // entry bump the epoch of a re-used current region identity.
-            static std::atomic<size_t> dispelNoGhostCount{ 0 };
-            size_t n = dispelNoGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            size_t n = retainedDispelNoGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[DispelGhostFromRegion] no_ghost_skip region=%p epoch=%llu units=%zu n=%zu",
@@ -850,8 +860,7 @@ public:
         if (ghostUnitCount != nUnit) {
             // ClearGhostRegionBit uses the current extent, so a re-used smaller region can
             // leave a partial historical overlay. Dispel the entire saved extent below.
-            static std::atomic<size_t> dispelPartialGhostCount{ 0 };
-            size_t n = dispelPartialGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            size_t n = retainedDispelPartialGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[DispelGhostFromRegion] partial_ghost region=%p present=%zu units=%zu n=%zu",
@@ -874,7 +883,6 @@ public:
             // bitmap or coveredUpTo truth. Re-endorse only the snapshot stamped immediately
             // before this bump; never make the invalidated route geometry valid again.
             metadata.retainedLiveInfoEpoch = GetEpoch();
-            static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
             size_t n = retainedSnapshotRestampCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
