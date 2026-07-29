@@ -49,6 +49,28 @@ public:
     size_t E9GateSkipCount() const { return e9GateSkipCount.load(std::memory_order_relaxed); }
     void ResetE9GateSkipCount() { e9GateSkipCount.store(0, std::memory_order_relaxed); }
 
+    // Observe-only census for registered slots whose holders moved. These
+    // counters never select a rewrite or change a slot.
+    size_t CopyDstFactCount() const { return copyDstFactCount.load(std::memory_order_relaxed); }
+    size_t CopyDstNoFactCount() const { return copyDstNoFactCount.load(std::memory_order_relaxed); }
+    size_t CopyDstStaleTargetCount() const { return copyDstStaleTargetCount.load(std::memory_order_relaxed); }
+    size_t CopyDstConstDomainFactCount() const
+    {
+        return copyDstConstDomainFactCount.load(std::memory_order_relaxed);
+    }
+    size_t CopyDstConstDomainStaleTargetCount() const
+    {
+        return copyDstConstDomainStaleTargetCount.load(std::memory_order_relaxed);
+    }
+    size_t CopyDstConstPoolDomainFactCount() const
+    {
+        return copyDstConstPoolDomainFactCount.load(std::memory_order_relaxed);
+    }
+    size_t CopyDstConstPoolDomainStaleTargetCount() const
+    {
+        return copyDstConstPoolDomainStaleTargetCount.load(std::memory_order_relaxed);
+    }
+
     // E6 observability (relaxed; never used as a silent-skip gate).
     size_t CrossRegionRegistered() const { return crossRegionRegistered.load(std::memory_order_relaxed); }
     size_t FromTargetRegistered() const { return fromTargetRegistered.load(std::memory_order_relaxed); }
@@ -67,6 +89,13 @@ private:
     std::vector<MAddress> slots;
     std::atomic<size_t> count{ 0 };
     std::atomic<size_t> e9GateSkipCount{ 0 };
+    std::atomic<size_t> copyDstFactCount{ 0 };
+    std::atomic<size_t> copyDstNoFactCount{ 0 };
+    std::atomic<size_t> copyDstStaleTargetCount{ 0 };
+    std::atomic<size_t> copyDstConstDomainFactCount{ 0 };
+    std::atomic<size_t> copyDstConstDomainStaleTargetCount{ 0 };
+    std::atomic<size_t> copyDstConstPoolDomainFactCount{ 0 };
+    std::atomic<size_t> copyDstConstPoolDomainStaleTargetCount{ 0 };
     std::atomic<size_t> crossRegionRegistered{ 0 };
     std::atomic<size_t> fromTargetRegistered{ 0 };
 };
