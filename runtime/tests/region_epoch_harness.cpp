@@ -143,21 +143,20 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
         region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
         region->RouteEpochMatches(identityBefore);
     region->ClearLiveInfo();
-    BaseObject* routed = manager.RouteObject(
-        reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, identityBefore);
     const bool afterClear = !region->IsRetainedSnapshotValid();
     const bool pass = beforeClear && afterClear && region->GetIdentityEpoch() == identityBefore &&
         region->GetSnapshotEpoch() != snapshotBefore && region->RouteEpochMatches(identityBefore) &&
-        routed != nullptr;
+        region->IsGhostFromRegion();
     std::printf(
         "EPOCH_PROBE snapshot result=%s identity_before=%llu identity_after=%llu "
-        "snapshot_before=%llu snapshot_after=%llu route_match_after=%d route_nonnull=%d "
+        "snapshot_before=%llu snapshot_after=%llu route_match_after=%d ghost_after=%d "
         "snapshot_invalid_after=%d\n",
         pass ? "PASS" : "FAIL", static_cast<unsigned long long>(identityBefore),
         static_cast<unsigned long long>(region->GetIdentityEpoch()),
         static_cast<unsigned long long>(snapshotBefore),
         static_cast<unsigned long long>(region->GetSnapshotEpoch()),
-        region->RouteEpochMatches(identityBefore) ? 1 : 0, routed != nullptr ? 1 : 0, afterClear ? 1 : 0);
+        region->RouteEpochMatches(identityBefore) ? 1 : 0, region->IsGhostFromRegion() ? 1 : 0,
+        afterClear ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }
