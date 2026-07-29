@@ -14,12 +14,14 @@
 namespace MapleRuntime {
 uintptr_t RouteInfo::GetRoute(uint64_t preLiveBytes)
 {
-    if (preLiveBytes < toRegion1UsedBytes) {
-        return toRegion1StartAddress + preLiveBytes;
+    uint64_t toRegion1Used = GetToRegion1UsedBytes();
+    if (preLiveBytes < toRegion1Used) {
+        return GetToRegion1StartAddress() + preLiveBytes;
     } else { // object is routed to to-region2
-        CHECK(toRegion2Idx != INVALID_VALUE);
-        RegionInfo* toRegion2 = reinterpret_cast<RegionInfo*>(RegionInfo::GetRegionInfo(toRegion2Idx));
-        return toRegion2->GetRegionStart() + (preLiveBytes - toRegion1UsedBytes);
+        uint32_t toRegion2 = GetToRegion2Idx();
+        CHECK(toRegion2 != INVALID_VALUE);
+        RegionInfo* toRegion2Info = reinterpret_cast<RegionInfo*>(RegionInfo::GetRegionInfo(toRegion2));
+        return toRegion2Info->GetRegionStart() + (preLiveBytes - toRegion1Used);
     }
 }
 } // namespace MapleRuntime
