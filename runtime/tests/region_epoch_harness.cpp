@@ -5,7 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 // Unit probes for Region Epoch (EPOCH_DESIGN_0729 §4), merged k6 (domain split)
-// × k7 (seqlock route carrier) union:
+// × k7 (seqlock route carrier) × k8 (reclaim teardown) union:
 // 1) teardown interleaving yields one complete old route followed by empty
 // 2) an empty carrier is rejected with the mismatch counter incremented
 // 3) UINT64_MAX is a legal install epoch, independent of carrier presence
@@ -15,6 +15,8 @@
 // 7) retained snapshot binds its coverage boundary (allocation frontier)
 // 8) a stale EMPTY snapshot is detected via snapshot epoch
 // 9) large-region promotion preserves a valid flag-shaped retained snapshot
+// 10) reclaim invalidates ghost lookup and route metadata for stale object
+//     addresses (head and subordinate, order independent)
 // Note: k6's post-geometry-read probe was retired with its product window —
 // an acquired by-value snapshot cannot change under the reader (k7 protocol).
 
@@ -352,6 +354,41 @@ bool ProbeLargePromotion(RegionManager& manager)
     return pass;
 }
 
+bool ProbeReclaimGhostTeardown(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(2, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE reclaim_ghost result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->GetOrAllocLiveInfo();
+    region->AddLiveByteCount(16);
+    region->PrepareForwardableRegion();
+    region->SetRouteInfo(region->GetRegionStart(), 16);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    const MAddress staleHead = region->GetRegionStart();
+    const MAddress staleSubordinate = staleHead + RegionInfo::UNIT_SIZE;
+    const bool ghostBefore = RegionInfo::GetGhostFromRegionAt(staleHead) == region &&
+        RegionInfo::GetGhostFromRegionAt(staleSubordinate) == region;
+    manager.ReclaimRegion(region);
+
+    const bool headCleared = RegionInfo::GetGhostFromRegionAt(staleHead) == nullptr;
+    const bool subordinateCleared = RegionInfo::GetGhostFromRegionAt(staleSubordinate) == nullptr;
+    // k7 protocol: teardown publishes carrier absence, not an epoch sentinel.
+    const bool routeCleared = !region->AcquireRouteInfo().IsInstalled() &&
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL;
+    const bool pass = ghostBefore && headCleared && subordinateCleared && routeCleared;
+    std::printf(
+        "EPOCH_PROBE reclaim_ghost result=%s ghost_before=%d head_null=%d subordinate_null=%d "
+        "route_absent=%d route_normal=%d\n",
+        pass ? "PASS" : "FAIL", ghostBefore ? 1 : 0, headCleared ? 1 : 0, subordinateCleared ? 1 : 0,
+        region->AcquireRouteInfo().IsInstalled() ? 0 : 1,
+        region->GetRouteState() == RegionInfo::RouteState::NORMAL ? 1 : 0);
+    return pass;
+}
+
 } // namespace
 } // namespace MapleRuntime
 
@@ -370,13 +407,15 @@ int main()
     const bool boundary = MapleRuntime::ProbeRetainedCoveredBoundary(manager);
     const bool staleEmpty = MapleRuntime::ProbeStaleEmpty(manager);
     const bool largePromotion = MapleRuntime::ProbeLargePromotion(manager);
+    const bool reclaimGhost = MapleRuntime::ProbeReclaimGhostTeardown(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
     std::printf(
         "EPOCH_PROBE summary route=%s empty=%s max_epoch=%s clear_ghost=%s snapshot=%s "
-        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s\n",
+        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s reclaim_ghost=%s\n",
         route ? "PASS" : "FAIL", empty ? "PASS" : "FAIL", maxEpoch ? "PASS" : "FAIL",
         clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL", reuseRoute ? "PASS" : "FAIL",
-        boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL");
+        boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL",
+        reclaimGhost ? "PASS" : "FAIL");
     return route && empty && maxEpoch && clearGhost && snapshot && reuseRoute && boundary &&
-        staleEmpty && largePromotion ? 0 : 1;
+        staleEmpty && largePromotion && reclaimGhost ? 0 : 1;
 }
