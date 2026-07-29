@@ -816,8 +816,8 @@ public:
         // R2 validity-end: route teardown (not Forward complete).
         BumpEpoch();
         metadata.routeState = NORMAL;
-        // Invalidate prior installEpoch so GetRoute(stale) fails definitionally.
-        metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, GetEpoch());
+        // Teardown ends the carrier lifetime; do not restamp cleared geometry as current.
+        metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, RouteInfo::INVALID_EPOCH);
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
