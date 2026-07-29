@@ -126,8 +126,8 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
-    // Ghost-lineage epoch: routes bind to the historical overlay lineage, which survives
-    // region reclaim and reuse. Only carrier teardown advances this domain.
+    // Region identity epoch: routes and reuse guards expire only when the address identity
+    // or route carrier lifetime ends. ClearLiveInfo must not advance this domain.
     uint64_t GetIdentityEpoch() const
     {
         return __atomic_load_n(&metadata.identityEpoch, std::memory_order_acquire);
@@ -753,9 +753,8 @@ public:
     void InitFreeUnits()
     {
         // Phase: STW / region write-lock (ReclaimRegion, ReleaseRegion).
-        // Reclaim expires retained snapshots, but the ghost lineage and route overlay stay
-        // valid through reuse until DispelGhostFromRegion/ClearGhostRegionBit tears them down.
-        BumpSnapshotEpoch();
+        // R2 validity-end: reclaim/free (E9 constructive).
+        BumpIdentityEpoch();
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -871,7 +870,7 @@ public:
     {
         if (IsGhostFromRegion()) {
             // POST_TRACE AddRawPointerObject path; no STW or region lock is held.
-            // Clearing the unique route guard ends this ghost lineage; reuse alone does not.
+            // Clearing the unique route guard ends this carrier lifetime.
             uint64_t oldSnapshotEpoch = GetSnapshotEpoch();
             bool restampRetainedSnapshot =
                 metadata.retainedLiveInfoState != RetainedLiveInfoState::NEVER_EXAMINED &&
@@ -897,7 +896,7 @@ public:
     void DispelGhostFromRegion()
     {
         // Phase: POST_TRACE PrepareForwardTable, after InvalidateOldTaggedRefsBeforeDispel's local STW; no region lock.
-        // This is a ghost-lineage validity end; reclaim/reuse and Forward complete are not.
+        // R2 validity-end: route teardown (not Forward complete).
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -1512,9 +1511,9 @@ private:
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         metadata.retainedLiveInfoCoveredUpTo = 0;
-        // Reinitialization expires the current retained snapshot, but preserves the historical
-        // ghost-lineage epoch and overlay until their explicit teardown.
-        BumpSnapshotEpoch();
+        // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
+        // R2 validity-end: region re-alloc reuse (all prior carriers expire).
+        BumpIdentityEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetMarkedRegionFlag(0);
