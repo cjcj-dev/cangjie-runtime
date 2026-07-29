@@ -840,7 +840,10 @@ public:
         }
     }
 
-    bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
+    bool IsGhostFromRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) != 0;
+    }
 
     // the interface can only be used to clear live info after gc.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
