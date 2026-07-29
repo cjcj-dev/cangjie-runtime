@@ -752,10 +752,11 @@ public:
 
     uint64_t GetRouteInstallEpoch() const { return metadata.routeInfo.GetInstallEpoch(); }
 
-    // True iff reader-held install stamp still matches (route not torn down / restamped).
+    // True iff reader-held install stamp still matches a live route carrier.
     bool RouteEpochMatches(uint64_t expectedInstallEpoch) const
     {
-        return expectedInstallEpoch == metadata.routeInfo.GetInstallEpoch();
+        uint64_t installEpoch = metadata.routeInfo.GetInstallEpoch();
+        return installEpoch != RouteInfo::INVALID_EPOCH && expectedInstallEpoch == installEpoch;
     }
 
     void PrepareForwardableRegion()
