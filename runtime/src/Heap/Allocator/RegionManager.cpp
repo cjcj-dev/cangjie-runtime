@@ -567,8 +567,24 @@ void RegionManager::PromoteAllRegions()
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         regionAddr = region->GetRegionEnd();
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
-            if (region->GetLiveInfo() != nullptr) {
-                region->PreserveRetainedLiveInfo();
+            size_t liveBytes = region->GetLiveByteCount();
+            if (liveBytes > 0) {
+                region->PreserveRetainedLiveInfo(region->GetRegionAllocPtr());
+            } else if (region->GetRawPointerObjectCount() > 0) {
+                // A post-trace raw pin is neither an EMPTY proof nor an all-live region.
+                // Keep the existing conservative NEVER walk until pinned-object snapshot
+                // supplementation is available (RULING_GCFIX_SIXKNIVES_0729).
+                static std::atomic<size_t> promoRawNeverCount{ 0 };
+                size_t n = promoRawNeverCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[PromoteAllRegions] retained_raw_never region=%p raw_count=%d n=%zu",
+                         region, region->GetRawPointerObjectCount(), n);
+                }
+            } else {
+                // Valid zero-live regions survived because they were allocated after tracing.
+                // Make the whole allocation range the implicit-live side of the snapshot.
+                region->PreserveRetainedLiveInfo(region->GetRegionStart());
             }
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -589,8 +605,11 @@ size_t RegionManager::ExemptFromRegions()
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     double exempt = exemptedRegionThreshold;
-    rawPointerPinnedRegionList.VisitAllRegions(
-        [](RegionInfo* region) { region->PreserveRetainedLiveInfo(); });
+    rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
+        if (region->GetLiveByteCount() > 0) {
+            region->PreserveRetainedLiveInfo();
+        }
+    });
     auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
         size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
         size_t liveBytes = fromRegion->GetLiveByteCount();
@@ -612,7 +631,9 @@ size_t RegionManager::ExemptFromRegions()
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
-            del->PreserveRetainedLiveInfo();
+            if (liveBytes > 0) {
+                del->PreserveRetainedLiveInfo();
+            }
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
