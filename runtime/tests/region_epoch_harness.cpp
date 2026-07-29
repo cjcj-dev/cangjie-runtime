@@ -157,6 +157,9 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
         static_cast<unsigned long long>(region->GetSnapshotEpoch()),
         region->RouteEpochMatches(identityBefore) ? 1 : 0, region->IsGhostFromRegion() ? 1 : 0,
         afterClear ? 1 : 0);
+    // Reclaim preserves the historical ghost overlay by design. End the route lifetime
+    // through its production teardown path before returning this region to the free tree.
+    region->ClearGhostRegionBit();
     manager.ReclaimRegion(region);
     return pass;
 }
