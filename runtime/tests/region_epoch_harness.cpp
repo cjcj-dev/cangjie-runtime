@@ -15,9 +15,23 @@
 #include "Allocator/RegionSpace.h"
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace {
+
+BaseObject* AllocateTestObject(RegionInfo* region)
+{
+    TypeInfo* objectType = TypeInfoManager::GetTypeInfoManager().GetObjectTypeInfo();
+    size_t objectSize = MRT_ALIGN(objectType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
+    MAddress address = region->Alloc(objectSize);
+    if (address == 0) {
+        return nullptr;
+    }
+    BaseObject* object = reinterpret_cast<BaseObject*>(address);
+    object->SetClassInfo(objectType);
+    return object;
+}
 
 bool ProbeRouteEpochMismatch(RegionManager& manager)
 {
@@ -28,6 +42,7 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     }
     // Establish a real from/ghost route lifetime, then retain the caller's view.
     region->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    region->AddLiveByteCount(TYPEINFO_PTR_SIZE);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
     const uint64_t expected = region->GetEpoch();
@@ -59,24 +74,91 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     return pass;
 }
 
-bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
+bool ProbeRetainedCoveredBoundary(RegionManager& manager)
 {
     RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
     if (region == nullptr) {
-        std::printf("EPOCH_PROBE snapshot result=FAIL reason=take-region\n");
+        std::printf("EPOCH_PROBE boundary result=FAIL reason=take-region\n");
         return false;
     }
-    // Force SNAPSHOT_VALID-like state via Preserve when empty → SNAPSHOT_EMPTY;
-    // for VALID path we only check IsRetainedSnapshotValid after ClearLiveInfo bumps.
+    BaseObject* oldObject = AllocateTestObject(region);
+    if (oldObject == nullptr) {
+        manager.ReclaimRegion(region);
+        std::printf("EPOCH_PROBE boundary result=FAIL reason=alloc-old\n");
+        return false;
+    }
+    size_t oldSize = oldObject->GetSize();
+    if (!region->MarkObject(oldObject)) {
+        region->AddLiveByteCount(oldSize);
+    }
     region->PreserveRetainedLiveInfo();
-    const bool beforeClear = region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY ||
-        region->IsRetainedSnapshotValid() ||
-        region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED;
-    region->ClearLiveInfo();
-    const bool afterClear = !region->IsRetainedSnapshotValid();
-    const bool pass = beforeClear && afterClear;
-    std::printf("EPOCH_PROBE snapshot result=%s after_clear_invalid=%d\n", pass ? "PASS" : "FAIL",
-                afterClear ? 1 : 0);
+    MAddress coveredUpTo = region->GetRetainedLiveInfoCoveredUpTo();
+    BaseObject* newObject = AllocateTestObject(region);
+    LiveInfo* retained = region->GetRetainedLiveInfo();
+    bool oldBitmapLive = retained != nullptr && retained->IsSurvivedObject(0);
+    bool newBitmapDead = newObject != nullptr && retained != nullptr &&
+        !retained->IsSurvivedObject(reinterpret_cast<MAddress>(newObject) - region->GetRegionStart());
+    bool newImplicitLive = newObject != nullptr && reinterpret_cast<MAddress>(newObject) >= coveredUpTo;
+    bool pass = region->IsRetainedSnapshotValid() && coveredUpTo == reinterpret_cast<MAddress>(newObject) &&
+        oldBitmapLive && newBitmapDead && newImplicitLive;
+    std::printf(
+        "EPOCH_PROBE boundary result=%s covered_up_to=%#zx new_object=%#zx old_bitmap_live=%d "
+        "new_bitmap_dead=%d new_implicit_live=%d\n",
+        pass ? "PASS" : "FAIL", coveredUpTo, reinterpret_cast<MAddress>(newObject),
+        oldBitmapLive ? 1 : 0, newBitmapDead ? 1 : 0, newImplicitLive ? 1 : 0);
+    manager.ReclaimRegion(region);
+    return pass;
+}
+
+bool ProbeStaleEmpty(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE stale_empty result=FAIL reason=take-region\n");
+        return false;
+    }
+    region->PreserveRetainedLiveInfo();
+    bool wasEmpty = region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY;
+    bool validBefore = region->IsRetainedSnapshotValid();
+    region->BumpEpoch();
+    bool staleDetected = !region->IsRetainedSnapshotValid();
+    bool pass = wasEmpty && validBefore && staleDetected;
+    std::printf(
+        "EPOCH_PROBE stale_empty result=%s was_empty=%d valid_before=%d stale_detected=%d\n",
+        pass ? "PASS" : "FAIL", wasEmpty ? 1 : 0, validBefore ? 1 : 0, staleDetected ? 1 : 0);
+    manager.ReclaimRegion(region);
+    return pass;
+}
+
+bool ProbeLargePromotion(RegionManager& manager)
+{
+    RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    if (region == nullptr) {
+        std::printf("EPOCH_PROBE large_promotion result=FAIL reason=take-region\n");
+        return false;
+    }
+    BaseObject* object = AllocateTestObject(region);
+    if (object == nullptr) {
+        manager.ReclaimRegion(region);
+        std::printf("EPOCH_PROBE large_promotion result=FAIL reason=alloc\n");
+        return false;
+    }
+    if (!region->MarkObject(object)) {
+        region->AddLiveByteCount(object->GetSize());
+    }
+    manager.PromoteAllRegions();
+    bool snapshotValid = region->GetRetainedLiveInfoState() ==
+            RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
+        region->IsRetainedSnapshotValid();
+    bool largeFlagLive = region->IsSurvivedObject(0);
+    bool covered = region->GetRetainedLiveInfoCoveredUpTo() == region->GetRegionAllocPtr();
+    bool bitmapShape = region->GetRetainedLiveInfo() == nullptr;
+    bool pass = snapshotValid && largeFlagLive && covered && bitmapShape;
+    std::printf(
+        "EPOCH_PROBE large_promotion result=%s snapshot_valid=%d large_flag_live=%d "
+        "covered=%d bitmap_shape=%d\n",
+        pass ? "PASS" : "FAIL", snapshotValid ? 1 : 0, largeFlagLive ? 1 : 0,
+        covered ? 1 : 0, bitmapShape ? 1 : 0);
     manager.ReclaimRegion(region);
     return pass;
 }
@@ -91,9 +173,12 @@ int main()
         reinterpret_cast<MapleRuntime::RegionSpace&>(MapleRuntime::Heap::GetHeap().GetAllocator());
     MapleRuntime::RegionManager& manager = allocator.GetRegionManager();
     const bool route = MapleRuntime::ProbeRouteEpochMismatch(manager);
-    const bool snapshot = MapleRuntime::ProbeRetainedSnapshotEpoch(manager);
+    const bool boundary = MapleRuntime::ProbeRetainedCoveredBoundary(manager);
+    const bool staleEmpty = MapleRuntime::ProbeStaleEmpty(manager);
+    const bool largePromotion = MapleRuntime::ProbeLargePromotion(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
-    std::printf("EPOCH_PROBE summary route=%s snapshot=%s\n", route ? "PASS" : "FAIL",
-                snapshot ? "PASS" : "FAIL");
-    return route && snapshot ? 0 : 1;
+    std::printf("EPOCH_PROBE summary route=%s boundary=%s stale_empty=%s large_promotion=%s\n",
+                route ? "PASS" : "FAIL", boundary ? "PASS" : "FAIL",
+                staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL");
+    return route && boundary && staleEmpty && largePromotion ? 0 : 1;
 }
