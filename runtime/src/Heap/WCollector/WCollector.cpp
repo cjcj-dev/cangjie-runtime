@@ -855,32 +855,49 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
         if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
-        } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
-            return false;
         } else {
-            // SNAPSHOT_VALID ⇔ state + retained epoch == region epoch (r1epoch constructive).
+            // VALID and EMPTY are one snapshot protocol: neither may bypass the epoch check.
             if (!region->IsRetainedSnapshotValid()) {
-                static std::atomic<size_t> snapEpochSkip{ 0 };
-                size_t n = snapEpochSkip.fetch_add(1, std::memory_order_relaxed) + 1;
+                static std::atomic<size_t> retainedEpochMismatchCount{ 0 };
+                size_t n = retainedEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
                     VLOG(REPORT,
-                         "[RescanRememberedSet] retained_epoch_skip region=%p state=%u n=%zu",
-                         region, static_cast<unsigned>(retainedState), n);
+                         "[RescanRememberedSet] retained_epoch_mismatch region=%p state=%u "
+                         "snapshot_epoch=%llu region_epoch=%llu covered_up_to=%#zx n=%zu",
+                         region, static_cast<unsigned>(retainedState),
+                         static_cast<unsigned long long>(region->GetRetainedLiveInfoEpoch()),
+                         static_cast<unsigned long long>(region->GetEpoch()),
+                         region->GetRetainedLiveInfoCoveredUpTo(), n);
                 }
-                // Stale snapshot: fall back to full walk (safe overscan), not silent skip.
-                region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
-            } else if (region->IsLargeRegion()) {
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                CHECK_DETAIL(false, "retained snapshot epoch mismatch in validator build");
+#else
+                if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+                    CHECK_DETAIL(false, "retained snapshot epoch mismatch in validator mode");
+                }
+#endif
+                // A mismatched bitmap may already belong to a released arena. Stable-state
+                // mismatches are producer bugs; the only admitted transient is region teardown.
+                return false;
+            }
+            if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                return false;
+            }
+            uintptr_t coveredUpTo = region->GetRetainedLiveInfoCoveredUpTo();
+            uintptr_t allocPtr = region->GetRegionAllocPtr();
+            CHECK(coveredUpTo >= region->GetRegionStart() && coveredUpTo <= allocPtr);
+            if (region->IsLargeRegion()) {
                 scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));
             } else if (region->IsSmallRegion()) {
-                CHECK(retainedLiveInfo != nullptr);
+                CHECK(retainedLiveInfo != nullptr || coveredUpTo == region->GetRegionStart());
                 uintptr_t position = region->GetRegionStart();
                 size_t offset = 0;
-                uintptr_t allocPtr = region->GetRegionAllocPtr();
                 while (position < allocPtr) {
                     BaseObject* object = reinterpret_cast<BaseObject*>(position);
                     size_t allocSize = RegionSpace::GetAllocSize(*object);
                     position += allocSize;
-                    if (retainedLiveInfo->IsSurvivedObject(offset)) {
+                    if (reinterpret_cast<uintptr_t>(object) >= coveredUpTo ||
+                        retainedLiveInfo->IsSurvivedObject(offset)) {
                         scanObject(object);
                     }
                     offset += allocSize;
