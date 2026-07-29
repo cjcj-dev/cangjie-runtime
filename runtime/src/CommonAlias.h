@@ -12,6 +12,9 @@ extern "C" MRT_EXPORT ObjRef CJ_MCC_OnFinalizerCreated(ObjRef ref) __attribute__
 extern "C" MRT_EXPORT void CJ_MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
     __attribute__((alias("MCC_WriteRefField")));
 
+extern "C" MRT_EXPORT void CJ_MCC_FixEdgeMaybe(void* holder, void* slot, void* newRef)
+    __attribute__((alias("MCC_FixEdgeMaybe")));
+
 extern "C" MRT_EXPORT void CJ_MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen,
                                                    MAddress src, size_t srcLen)
     __attribute__((alias("MCC_WriteStructField")));
