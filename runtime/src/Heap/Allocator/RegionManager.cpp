@@ -708,6 +708,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     if (num <= GetInactiveUnitCount()) {
         uintptr_t addr = inactiveZone.fetch_add(size);
         if (addr < regionHeapEnd - size) {
+            // Virgin first service reaches InitRegionInfo's bump before publication. No prior
+            // carrier exists to invalidate, so this shared-helper bump is semantically a no-op.
             region = RegionInfo::InitRegionAt(addr, num, type);
             ClearStickyLogForUnavailableRegion(region);
             size_t idx = region->GetUnitIdx();
