@@ -178,10 +178,20 @@ public:
             metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
             return;
         }
-        CHECK(metadata.retainedLiveInfo != nullptr || GetLiveByteCount() == 0);
-        metadata.retainedLiveInfoState = metadata.retainedLiveInfo == nullptr
-            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
-            : RetainedLiveInfoState::SNAPSHOT_VALID;
+        // E6 (ii) / T9: LiveInfo present → SNAPSHOT_VALID (remset filters survivors).
+        if (metadata.retainedLiveInfo != nullptr) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        // No LiveInfo + zero live bytes: empty region → EMPTY; non-empty alloc
+        // (e.g. to-space after Forward never marked) → NEVER_EXAMINED so remset
+        // full-scans. ⛔ Do not treat missing bitmap as death (RUNTIME_MAP §4).
+        CHECK(GetLiveByteCount() == 0);
+        if (GetRegionAllocPtr() <= GetRegionStart()) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
+        } else {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        }
     }
 
     LiveInfo* GetOrAllocLiveInfo()
