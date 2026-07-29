@@ -15,22 +15,17 @@
 #include "Allocator/RegionSpace.h"
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
-#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace {
 
 BaseObject* AllocateTestObject(RegionInfo* region)
 {
-    TypeInfo* objectType = TypeInfoManager::GetTypeInfoManager().GetObjectTypeInfo();
-    size_t objectSize = MRT_ALIGN(objectType->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
-    MAddress address = region->Alloc(objectSize);
+    MAddress address = region->Alloc(AllocatorUtils::ALLOC_ALIGNMENT);
     if (address == 0) {
         return nullptr;
     }
-    BaseObject* object = reinterpret_cast<BaseObject*>(address);
-    object->SetClassInfo(objectType);
-    return object;
+    return reinterpret_cast<BaseObject*>(address);
 }
 
 bool ProbeRouteEpochMismatch(RegionManager& manager)
@@ -87,9 +82,8 @@ bool ProbeRetainedCoveredBoundary(RegionManager& manager)
         std::printf("EPOCH_PROBE boundary result=FAIL reason=alloc-old\n");
         return false;
     }
-    size_t oldSize = oldObject->GetSize();
     if (!region->MarkObject(oldObject)) {
-        region->AddLiveByteCount(oldSize);
+        region->AddLiveByteCount(AllocatorUtils::ALLOC_ALIGNMENT);
     }
     region->PreserveRetainedLiveInfo();
     MAddress coveredUpTo = region->GetRetainedLiveInfoCoveredUpTo();
@@ -144,7 +138,7 @@ bool ProbeLargePromotion(RegionManager& manager)
         return false;
     }
     if (!region->MarkObject(object)) {
-        region->AddLiveByteCount(object->GetSize());
+        region->AddLiveByteCount(AllocatorUtils::ALLOC_ALIGNMENT);
     }
     manager.PromoteAllRegions();
     bool snapshotValid = region->GetRetainedLiveInfoState() ==
