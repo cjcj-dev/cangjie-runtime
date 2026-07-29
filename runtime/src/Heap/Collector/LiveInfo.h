@@ -229,26 +229,94 @@ struct LiveInfo {
 
 struct RouteInfo {
     static constexpr uint32_t INVALID_VALUE = std::numeric_limits<uint32_t>::max();
-    static constexpr uint64_t INVALID_EPOCH = std::numeric_limits<uint64_t>::max();
+    // version layout: [present:1][generation:30][writing:1]. Presence is
+    // independent of installEpoch, so every uint64_t epoch remains valid.
+    static constexpr uint32_t WRITING = 1U;
+    static constexpr uint32_t GENERATION_STEP = 2U;
+    static constexpr uint32_t GENERATION_MASK = 0x7FFFFFFEU;
+    static constexpr uint32_t PRESENT = 0x80000000U;
+    static constexpr uint32_t READ_RETRY_LIMIT = 4U;
+
+    static_assert(__atomic_always_lock_free(sizeof(uint32_t), nullptr), "route version must be lock-free");
+    static_assert(__atomic_always_lock_free(sizeof(uint64_t), nullptr), "route u64 payload must be lock-free");
+    static_assert(__atomic_always_lock_free(sizeof(uintptr_t), nullptr), "route address must be lock-free");
+
     uintptr_t toRegion1StartAddress = 0;
     uint64_t toRegion1UsedBytes = 0;
     uint32_t toRegion2Idx = 0;
-    // Region epoch at route install (EPOCH_DESIGN_0729 §2). Readers pass expected.
-    uint64_t installEpoch = INVALID_EPOCH;
+    // Occupies the former four-byte padding, keeping sizeof(RouteInfo) unchanged.
+    uint32_t version = 0;
+    // Region epoch at route install (EPOCH_DESIGN_0729 §2). Every u64 value is legal.
+    uint64_t installEpoch = 0;
 
     uintptr_t GetRoute(uint64_t preLiveBytes);
 
-    void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = INVALID_VALUE,
-                      uint64_t epoch = INVALID_EPOCH)
+    void SetRouteInfo(uintptr_t to1, uint64_t to1used, uint32_t to2, uint64_t epoch)
     {
-        toRegion1StartAddress = to1;
-        toRegion1UsedBytes = to1used;
-        toRegion2Idx = to2;
-        installEpoch = epoch;
+        uint32_t oldVersion = __atomic_fetch_or(&version, WRITING, __ATOMIC_ACQ_REL);
+        CHECK_DETAIL((oldVersion & WRITING) == 0, "concurrent route install writers");
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        __atomic_store_n(&toRegion1StartAddress, to1, __ATOMIC_RELAXED);
+        __atomic_store_n(&toRegion1UsedBytes, to1used, __ATOMIC_RELAXED);
+        __atomic_store_n(&toRegion2Idx, to2, __ATOMIC_RELAXED);
+        __atomic_store_n(&installEpoch, epoch, __ATOMIC_RELAXED);
+        uint32_t nextGeneration = ((oldVersion & GENERATION_MASK) + GENERATION_STEP) & GENERATION_MASK;
+        __atomic_store_n(&version, nextGeneration | PRESENT, __ATOMIC_RELEASE);
     }
-    uint64_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
-    uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
-    uint64_t GetInstallEpoch() const { return installEpoch; }
+
+    void ClearRouteInfo()
+    {
+        uint32_t oldVersion = __atomic_fetch_or(&version, WRITING, __ATOMIC_ACQ_REL);
+        if ((oldVersion & WRITING) != 0) {
+            // Route teardown producers may converge on the same carrier. The
+            // writer which changed the version to odd owns the identical clear.
+            return;
+        }
+        __atomic_thread_fence(__ATOMIC_RELEASE);
+        __atomic_store_n(&toRegion1StartAddress, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&toRegion1UsedBytes, 0, __ATOMIC_RELAXED);
+        __atomic_store_n(&toRegion2Idx, INVALID_VALUE, __ATOMIC_RELAXED);
+        __atomic_store_n(&installEpoch, 0, __ATOMIC_RELAXED);
+        uint32_t nextGeneration = ((oldVersion & GENERATION_MASK) + GENERATION_STEP) & GENERATION_MASK;
+        __atomic_store_n(&version, nextGeneration, __ATOMIC_RELEASE);
+    }
+
+    RouteInfo AcquireRouteInfo() const
+    {
+        RouteInfo snapshot;
+        for (uint32_t attempt = 0; attempt < READ_RETRY_LIMIT; ++attempt) {
+            uint32_t before = __atomic_load_n(&version, __ATOMIC_ACQUIRE);
+            if ((before & WRITING) != 0) {
+                continue;
+            }
+            if ((before & PRESENT) == 0) {
+                return snapshot;
+            }
+            snapshot.toRegion1StartAddress = __atomic_load_n(&toRegion1StartAddress, __ATOMIC_RELAXED);
+            snapshot.toRegion1UsedBytes = __atomic_load_n(&toRegion1UsedBytes, __ATOMIC_RELAXED);
+            snapshot.toRegion2Idx = __atomic_load_n(&toRegion2Idx, __ATOMIC_RELAXED);
+            snapshot.installEpoch = __atomic_load_n(&installEpoch, __ATOMIC_RELAXED);
+            __atomic_thread_fence(__ATOMIC_ACQUIRE);
+            uint32_t after = __atomic_load_n(&version, __ATOMIC_RELAXED);
+            if (before == after) {
+                snapshot.version = PRESENT;
+                return snapshot;
+            }
+        }
+        return snapshot;
+    }
+
+    bool IsInstalled() const { return (__atomic_load_n(&version, __ATOMIC_RELAXED) & PRESENT) != 0; }
+    uintptr_t GetToRegion1StartAddress() const
+    {
+        return __atomic_load_n(&toRegion1StartAddress, __ATOMIC_RELAXED);
+    }
+    uint64_t GetToRegion1UsedBytes() const
+    {
+        return __atomic_load_n(&toRegion1UsedBytes, __ATOMIC_RELAXED);
+    }
+    uint32_t GetToRegion2Idx() const { return __atomic_load_n(&toRegion2Idx, __ATOMIC_RELAXED); }
+    uint64_t GetInstallEpoch() const { return __atomic_load_n(&installEpoch, __ATOMIC_RELAXED); }
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H
