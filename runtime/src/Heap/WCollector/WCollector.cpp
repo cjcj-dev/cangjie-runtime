@@ -753,6 +753,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         };
         LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
+        // Scanning must follow the last collection decision for this region. Only a region that no
+        // collection has ever examined may be scanned without liveness filtering.
         if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
         } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
