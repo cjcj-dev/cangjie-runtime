@@ -40,6 +40,7 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
     // Slot must remain at the same absolute address until BulkForward. If the
     // holder is itself in from/ghost, evacuation moves the field — skip (roots
     // and to-space holders only). Static roots: holder == nullptr.
+    RegionInfo* holderRegion = nullptr;
     if (holder != nullptr) {
         if (!Heap::IsHeapAddress(holder)) {
             return;
@@ -47,23 +48,42 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
         if (RegionInfo::InGhostFromRegion(holder)) {
             return;
         }
-        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
-        if (hr != nullptr && hr->IsFromRegion()) {
+        holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(holder));
+        if (holderRegion != nullptr && holderRegion->IsFromRegion()) {
             return;
         }
     }
 
-    // I5: only edges whose target is already From or GhostFrom need bulk fix.
+    // I5: target already From or GhostFrom → always register (bulk fix needs it).
     // plainsrc P11 (Idle plain→then-from) is covered by Trace I4 complement when
     // the holder is scanned; unreached holders need compiler dual-track (r1cc).
     if (RegionInfo::InGhostFromRegion(newRef)) {
+        fromTargetRegistered.fetch_add(1, std::memory_order_relaxed);
         Add(reinterpret_cast<MAddress>(slot));
         return;
     }
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
-    if (region != nullptr && region->IsFromRegion()) {
+    RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
+    if (targetRegion != nullptr && targetRegion->IsFromRegion()) {
+        fromTargetRegistered.fetch_add(1, std::memory_order_relaxed);
         Add(reinterpret_cast<MAddress>(slot));
+        return;
     }
+    // E6 (i)-narrow: only while GC phase is active (phase > INIT ⇒ mutator already
+    // on slow-path barriers). Idle keeps I5-only (no FixSet inflation). Register
+    // every cross-region heap ref store so live holders that later miss I4 still
+    // enter the set (closes T1 black-allocation / concurrent-phase escape).
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    if (phase <= GCPhase::GC_PHASE_INIT) {
+        return;
+    }
+    if (holder == nullptr || holderRegion == nullptr || targetRegion == nullptr) {
+        return;
+    }
+    if (holderRegion == targetRegion) {
+        return;
+    }
+    crossRegionRegistered.fetch_add(1, std::memory_order_relaxed);
+    Add(reinterpret_cast<MAddress>(slot));
 }
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)

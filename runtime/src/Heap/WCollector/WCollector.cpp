@@ -11,6 +11,8 @@
 #include <csignal>
 
 #include "Heap/FixEdgeSet.h"
+#include "Heap/ForwardFactTable.h"
+#include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
@@ -29,6 +31,13 @@ struct UntagRefFieldBreadcrumb {
 };
 
 thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+
+constexpr bool IsInvalidCopyDestinationState(bool missing, bool free, bool garbage, bool from, bool invalidRole)
+{
+    return missing || free || garbage || from || invalidRole;
+}
+static_assert(IsInvalidCopyDestinationState(false, false, true, false, false),
+              "garbage copy destinations must remain fail-closed");
 } // namespace
 
 void PrintUntagRefFieldBreadcrumb() noexcept
@@ -528,7 +537,11 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 // After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
 // Predicate aligned with bulkfwd f04 (plain-only + route state + ghost live).
 // holder arg is diagnostic only — P-G walks slot addresses from FixEdgeSet.
-void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
+// r1route2 R2.1: consume ForwardFactTable only (copy-time side table).
+// ⛔ GetRoute/RouteObject/FindToVersion (r1segv D5) and ⛔ IsValidObject(to).
+// ⛔ FindLatestVersion (silent fallback returns from when to==null).
+void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact,
+                                          size_t* interiorRewritten, BulkMissBuckets* missBuckets)
 {
     RefField<> oldField(field);
     // b316 A/B producers are plain (untagged) edges; leave tagged to F3/barriers.
@@ -539,8 +552,8 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!Heap::IsHeapAddress(target)) {
         return;
     }
-    // Only rewrite edges into ghost-from survivors with a published route.
-    // Avoid FindToVersion/RouteRegion side effects on FORWARDABLE regions.
+    // Only rewrite edges into ghost-from survivors with a published route state.
+    // FORWARDABLE still lacks copy-time fact — leave for barriers/F3.
     RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
     if (ghost == nullptr) {
         return;
@@ -558,18 +571,148 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field)
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // r1segv root cause (D1–D5 matrix on kkk2 c2accept/sema):
-    //   D1 STW-only BulkForward          → baseline A/SIGABRT (no early SEGV)
-    //   D2 root walk + FixHolder no-op   → baseline
-    //   D4 gates only (no GetRoute)      → baseline
-    //   D5 VisitAndClear + GetRoute      → early SEGV11
-    //   tip GetRoute + IsValidObject     → early SEGV11
-    // GetRoute (via liveInfo0->GetPreLiveBytes / RouteInfo) and IsValidObject on
-    // the computed to-addr both SEGV on this load. ⛔ do not call either here.
-    // Fail-closed: leave the plain edge for barrier/F3 paths; never header-touch
-    // a GetRoute result. Production-side FixEdgeSet registration is unchanged.
-    (void)holder;
-    return;
+    // R2.1 sole fact source: copy-time side table. Miss = dead or not-from or
+    // not yet copied under this major — loud skip is correct (not silent).
+    // ⛔ no FindToVersion/GetRoute/RouteObject (geometry plan SEGV after ForwardRegion).
+    BaseObject* toObj = ForwardFactTable::Instance().Lookup(target);
+    size_t interiorOffset = 0;
+    bool isInterior = false;
+    if (toObj == nullptr &&
+        ForwardFactTable::Instance().LookupContaining(target, toObj, interiorOffset)) {
+        isInterior = true;
+    }
+    if (toObj == nullptr || toObj == target) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                RelocationDiagnosticTable::Entry entry{ false, nullptr, nullptr, 0, nullptr };
+                if (RelocationDiagnosticTable::Instance().Lookup(target, entry)) {
+                    if (entry.identity) {
+                        ++missBuckets->b1LegitIdentity;
+                    } else {
+                        ++missBuckets->b3RealLoss;
+                        ++missBuckets->b3Types[entry.typeInfo];
+                        ++missBuckets->b3RegionTypes[static_cast<unsigned>(ghost->GetRegionType())];
+                        ++missBuckets->b3RouteStates[static_cast<unsigned>(st)];
+                    }
+                } else {
+                    size_t containingOffset = 0;
+                    if (RelocationDiagnosticTable::Instance().LookupContaining(target, entry, containingOffset)) {
+                        if (entry.identity) {
+                            ++missBuckets->b1LegitIdentity;
+                        } else {
+                            // A moved copy should already have matched the product
+                            // containing lookup. Keep any residual diagnostic-only
+                            // range loud and fail-closed (for example, identity).
+                            ++missBuckets->b2LegitOther;
+                            ++missBuckets->b2InteriorNonObjectBase;
+                            static std::atomic<size_t> containedSample{ 0 };
+                            size_t sample = containedSample.fetch_add(1, std::memory_order_relaxed) + 1;
+                            if ((sample & (sample - 1)) == 0) {
+                                VLOG(REPORT,
+                                     "[MISSBUCKET_B2_INTERIOR] target=%p source=%p to=%p offset=%zu "
+                                     "size=%zu type_info=%p type=%s region_type=%u route_state=%u n=%zu",
+                                     target, entry.from, entry.to, containingOffset, entry.size, entry.typeInfo,
+                                     entry.typeInfo == nullptr ? "<null>" : entry.typeInfo->GetName(),
+                                     static_cast<unsigned>(ghost->GetRegionType()), static_cast<unsigned>(st), sample);
+                            }
+                        }
+                    } else {
+                        ++missBuckets->unclassified;
+                        ++missBuckets->unclassifiedNoCopyRange;
+                    }
+                }
+            }
+            static std::atomic<size_t> skipSample{ 0 };
+            size_t n = skipSample.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=%u reason=no_table_fact n=%zu",
+                     holder, &field, target, static_cast<unsigned>(st), n);
+            }
+        }
+        return;
+    }
+    if (!Heap::IsHeapAddress(toObj)) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToNotHeap;
+            }
+            static std::atomic<size_t> skipSampleBad{ 0 };
+            size_t n = skipSampleBad.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_not_heap n=%zu",
+                     holder, &field, target, toObj, n);
+            }
+        }
+        return;
+    }
+    // Fail-closed current-state and bounds only (no IsValidObject): r1segv early
+    // SEGV was a header touch on uncommitted to pages. Ghost and route describe
+    // historical/planning state and must not reject a current copy destination.
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(toObj));
+    const bool toRegionMissing = toRegion == nullptr;
+    const bool toFree = toRegion != nullptr && toRegion->IsFreeRegion();
+    const bool toGarbage = toRegion != nullptr && toRegion->IsGarbageRegion();
+    const bool toFrom = toRegion != nullptr && toRegion->IsFromRegion();
+    const bool toInvalidRole = toRegion != nullptr && !toFree && !toRegion->IsValidRegion();
+    if (IsInvalidCopyDestinationState(toRegionMissing, toFree, toGarbage, toFrom, toInvalidRole)) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToRegion;
+                missBuckets->invalidToRegionMissing += static_cast<size_t>(toRegionMissing);
+                missBuckets->invalidToRegionFree += static_cast<size_t>(toFree);
+                missBuckets->invalidToRegionGarbage += static_cast<size_t>(toGarbage);
+                missBuckets->invalidToRegionFrom += static_cast<size_t>(toFrom);
+                missBuckets->invalidToRegionRole += static_cast<size_t>(toInvalidRole);
+            }
+            static std::atomic<size_t> skipSampleReg{ 0 };
+            size_t n = skipSampleReg.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_region_bad n=%zu",
+                     holder, &field, target, toObj, n);
+            }
+        }
+        return;
+    }
+    const MAddress toAddr = reinterpret_cast<MAddress>(toObj);
+    if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+            if (missBuckets != nullptr) {
+                ++missBuckets->unclassified;
+                ++missBuckets->invalidToBounds;
+            }
+            static std::atomic<size_t> skipSampleBnd{ 0 };
+            size_t n = skipSampleBnd.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p to=%p reason=to_oob n=%zu",
+                     holder, &field, target, toObj, n);
+            }
+        }
+        return;
+    }
+    if (toRegion->IsGhostFromRegion() && missBuckets != nullptr) {
+        ++missBuckets->ghostOverlayPassedActiveGate;
+    }
+    RefField<> newField(toObj);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (isInterior && interiorRewritten != nullptr) {
+            ++(*interiorRewritten);
+        }
+        DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p interior_offset=%zu)", holder,
+             &field, oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target, interiorOffset);
+    }
 }
 
 // R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
@@ -580,12 +723,18 @@ void WCollector::BulkForwardHolderRefs()
     ScopedStopTheWorld stw("bulk forward holder refs");
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
+    size_t interiorRewritten = 0;
+    size_t skippedNoFact = 0;
+    BulkMissBuckets missBuckets;
     const size_t fixSetSize = FixEdgeSet::Instance().SizeApprox();
     FixEdgeSet::Instance().ResetE9GateSkipCount();
+    const size_t factTableSize = ForwardFactTable::Instance().SizeApprox();
+    const size_t relocationDiagnosticSize = RelocationDiagnosticTable::Instance().Size();
 
-    auto fixOne = [this, &rewritten](BaseObject* holder, RefField<>& field) {
+    auto fixOne = [this, &rewritten, &interiorRewritten, &skippedNoFact, &missBuckets](BaseObject* holder,
+                                                                                     RefField<>& field) {
         RefField<> before(field);
-        FixHolderForwardRefField(holder, field);
+        FixHolderForwardRefField(holder, field, &skippedNoFact, &interiorRewritten, &missBuckets);
         if (RefField<>(field).GetFieldValue() != before.GetFieldValue()) {
             ++rewritten;
         }
@@ -609,10 +758,44 @@ void WCollector::BulkForwardHolderRefs()
     FixEdgeSet::Instance().VisitAndClear(
         [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
 
+    // R2.1: fact table lifetime ends with BulkForward (same major STW bracket).
+    ForwardFactTable::Instance().Clear();
+    // r1missbucket diagnostic lifetime matches the product fact window.
+    RelocationDiagnosticTable::Instance().Clear();
+
     const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
     const size_t e9Skip = FixEdgeSet::Instance().E9GateSkipCount();
-    VLOG(REPORT, "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu fixset=%zu e9_gate_skip=%zu",
-         static_cast<size_t>(pauseUs), rewritten, fixSetSize, e9Skip);
+    VLOG(REPORT, "[BulkForwardHolderRefs] e9_gate_skip=%zu", e9Skip);
+    const size_t bucketTotal = missBuckets.b1LegitIdentity + missBuckets.b2LegitOther +
+        missBuckets.b3RealLoss + missBuckets.unclassified;
+    VLOG(REPORT,
+         "[BulkForwardHolderRefs] pause=%zu us rewritten=%zu interior_rewritten=%zu skipped_no_fact=%zu fixset=%zu "
+         "facttable=%zu fromTarget=%zu crossRegion=%zu relocation_diag=%zu "
+         "MISSBUCKET_B1=%zu_B2=%zu_B3=%zu_UNCLASSIFIED=%zu_of_%zu "
+         "invalid_to_not_heap=%zu invalid_to_region=%zu invalid_to_bounds=%zu "
+         "invalid_to_region_missing=%zu invalid_to_region_free=%zu invalid_to_region_garbage=%zu "
+         "invalid_to_region_from=%zu invalid_to_region_role=%zu ghost_overlay_passed_active_gate=%zu "
+         "b2_interior_non_object_base=%zu unclassified_no_copy_range=%zu",
+         static_cast<size_t>(pauseUs), rewritten, interiorRewritten, skippedNoFact, fixSetSize, factTableSize,
+         FixEdgeSet::Instance().FromTargetRegistered(), FixEdgeSet::Instance().CrossRegionRegistered(),
+         relocationDiagnosticSize, missBuckets.b1LegitIdentity, missBuckets.b2LegitOther,
+         missBuckets.b3RealLoss, missBuckets.unclassified, bucketTotal, missBuckets.invalidToNotHeap,
+         missBuckets.invalidToRegion, missBuckets.invalidToBounds, missBuckets.invalidToRegionMissing,
+         missBuckets.invalidToRegionFree, missBuckets.invalidToRegionGarbage, missBuckets.invalidToRegionFrom,
+         missBuckets.invalidToRegionRole, missBuckets.ghostOverlayPassedActiveGate,
+         missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange);
+    for (const auto& type : missBuckets.b3Types) {
+        VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
+             type.first == nullptr ? "<null>" : type.first->GetName(), type.second);
+    }
+    for (const auto& regionType : missBuckets.b3RegionTypes) {
+        VLOG(REPORT, "[MISSBUCKET_B3_REGION] region_type=%u count=%zu stage=BulkForward", regionType.first,
+             regionType.second);
+    }
+    for (const auto& routeState : missBuckets.b3RouteStates) {
+        VLOG(REPORT, "[MISSBUCKET_B3_ROUTE] route_state=%u count=%zu stage=BulkForward", routeState.first,
+             routeState.second);
+    }
 }
 
 void WCollector::PostTrace()
@@ -858,6 +1041,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
         if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+            // E6 (ii) residual: to-space / never-censused regions only. Full scan
+            // is correct (no silent skip). Counter for coverage; sample region.
+            static std::atomic<size_t> neverExaminedRescanLines{ 0 };
+            size_t n = neverExaminedRescanLines.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[E6-remset] NEVER_EXAMINED rescan line region=%p start=%#zx state=NEVER n=%zu",
+                     region, region->GetRegionStart(), n);
+            }
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
         } else {
             // VALID and EMPTY are one snapshot protocol: neither may bypass the epoch check.

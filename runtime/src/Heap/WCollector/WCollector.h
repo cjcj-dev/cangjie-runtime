@@ -203,6 +203,27 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    struct BulkMissBuckets {
+        size_t b1LegitIdentity = 0;
+        size_t b2LegitOther = 0;
+        size_t b3RealLoss = 0;
+        size_t unclassified = 0;
+        size_t invalidToNotHeap = 0;
+        size_t invalidToRegion = 0;
+        size_t invalidToBounds = 0;
+        size_t invalidToRegionMissing = 0;
+        size_t invalidToRegionFree = 0;
+        size_t invalidToRegionGarbage = 0;
+        size_t invalidToRegionFrom = 0;
+        size_t invalidToRegionRole = 0;
+        size_t ghostOverlayPassedActiveGate = 0;
+        size_t b2InteriorNonObjectBase = 0;
+        size_t unclassifiedNoCopyRange = 0;
+        std::unordered_map<TypeInfo*, size_t> b3Types;
+        std::unordered_map<unsigned, size_t> b3RegionTypes;
+        std::unordered_map<unsigned, size_t> b3RouteStates;
+    };
+
     BaseObject* ResolveMinorReference(RefField<>& field) const;
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
@@ -220,7 +241,10 @@ private:
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
     // R1: after ForwardFromSpace, rewrite plain→ghost-from edges via FixEdgeSet
     // index only (P-G). No VisitAllObjects / ForEachObj holder walk (H1).
-    void FixHolderForwardRefField(BaseObject* holder, RefField<>& field);
+    // skippedNoFact: loud skip when ForwardFactTable miss (r1route2 R2.1).
+    void FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact = nullptr,
+                                  size_t* interiorRewritten = nullptr,
+                                  BulkMissBuckets* missBuckets = nullptr);
     void BulkForwardHolderRefs();
     void PreforwardConcurrencyModelRoots();
     void PostTrace();

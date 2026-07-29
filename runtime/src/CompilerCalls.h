@@ -33,6 +33,8 @@ extern "C" ObjRef MCC_NewFinalizer(const TypeInfo* classInfo, MSize size);
 extern "C" ObjRef MCC_OnFinalizerCreated(ObjRef ref);
 extern "C" ObjRef MCC_NewPinnedObject(const TypeInfo* classInfo, MSize size, bool isFinalizer);
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field);
+// R1 C-1: compiler fast-path register after plain store (REPORT-r1c2impl §5).
+extern "C" void MCC_FixEdgeMaybe(void* holder, void* slot, void* newRef);
 extern "C" void MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                      GCTib gctib);
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field);

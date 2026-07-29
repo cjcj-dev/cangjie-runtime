@@ -29,6 +29,7 @@
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/FixEdgeSet.h"
 #include "Heap/Heap.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
@@ -305,6 +306,15 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         return;
     }
     Heap::GetBarrier().WriteReference(obj, *field, ref);
+}
+
+// R1 C-1 export: phase≤8 compiler fast path calls CJ_MCC_FixEdgeMaybe after store.
+// Predicate is FixEdgeSet::MaybeAdd (I5) — do not alter here (r1cons owns E6).
+extern "C" void MCC_FixEdgeMaybe(void* holder, void* slot, void* newRef)
+{
+    FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<BaseObject*>(holder),
+                                    reinterpret_cast<RefField<>*>(slot),
+                                    reinterpret_cast<BaseObject*>(newRef));
 }
 
 extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen,

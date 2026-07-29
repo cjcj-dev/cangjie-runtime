@@ -563,6 +563,10 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
 
 void RegionManager::PromoteAllRegions()
 {
+    // E6 (ii): every post-major valid region must pass through Preserve so remset
+    // consumers get SNAPSHOT_VALID/EMPTY when a census exists (T9 universalised).
+    // Regions without LiveInfo are classified inside PreserveRetainedLiveInfo
+    // (empty→EMPTY; to-space unmarked survivors→NEVER full-scan, never silent skip).
     for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         regionAddr = region->GetRegionEnd();
