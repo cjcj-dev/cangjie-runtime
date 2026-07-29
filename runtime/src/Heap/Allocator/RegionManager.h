@@ -27,6 +27,9 @@
 namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
+#ifdef MRT_REGION_EPOCH_TEST
+void RouteEpochAfterGeometryReadForTest(RegionInfo* region);
+#endif
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -517,6 +520,9 @@ public:
                 return nullptr;
             }
             BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
+#ifdef MRT_REGION_EPOCH_TEST
+            RouteEpochAfterGeometryReadForTest(fromRegionInfo);
+#endif
             // Seqlock-style final read: teardown can run without STW while GetRoute
             // consumes geometry. Never publish an address from a changed carrier.
             if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
