@@ -7,10 +7,15 @@
 #include "FixEdgeSet.h"
 
 #include <algorithm>
+#include <cstring>
+#include <map>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/GcStats.h"
+#include "Heap/ForwardFactTable.h"
 #include "Heap/Heap.h"
+#include "Heap/RelocationDiagnosticTable.h"
 
 namespace MapleRuntime {
 FixEdgeSet& FixEdgeSet::Instance() noexcept
@@ -88,31 +93,144 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
 {
+    struct CopyDstTypeCount {
+        size_t fact{ 0 };
+        size_t staleTarget{ 0 };
+    };
+
     std::vector<MAddress> local;
     {
         std::lock_guard<std::mutex> lg(mutex);
         local.swap(slots);
         count.store(0, std::memory_order_relaxed);
     }
+    copyDstFactCount.store(0, std::memory_order_relaxed);
+    copyDstNoFactCount.store(0, std::memory_order_relaxed);
+    copyDstStaleTargetCount.store(0, std::memory_order_relaxed);
+    copyDstConstDomainFactCount.store(0, std::memory_order_relaxed);
+    copyDstConstDomainStaleTargetCount.store(0, std::memory_order_relaxed);
+    copyDstConstPoolDomainFactCount.store(0, std::memory_order_relaxed);
+    copyDstConstPoolDomainStaleTargetCount.store(0, std::memory_order_relaxed);
     if (local.empty()) {
         return;
     }
     std::sort(local.begin(), local.end());
     local.erase(std::unique(local.begin(), local.end()), local.end());
+    std::map<TypeInfo*, CopyDstTypeCount> copyDstTypeCounts;
+    const size_t gcOrdinal = g_gcCount + 1;
     for (MAddress addr : local) {
         if (addr == 0 || !Heap::IsHeapAddress(addr)) {
             continue;
         }
         // Slot must sit in a non-ghost region (holder not evacuated).
         RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(addr));
-        if (slotRegion == nullptr || slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() ||
-            slotRegion->IsFreeRegion() || slotRegion->IsGarbageRegion()) {
+        if (slotRegion == nullptr) {
+            e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        if (slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion()) {
+            BaseObject* toSlot = nullptr;
+            size_t offset = 0;
+            if (!ForwardFactTable::Instance().LookupContaining(reinterpret_cast<BaseObject*>(addr), toSlot, offset)) {
+                copyDstNoFactCount.fetch_add(1, std::memory_order_relaxed);
+                static std::atomic<size_t> noFactSample{ 0 };
+                const size_t n = noFactSample.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    VLOG(REPORT, "[COPY_DST_NO_FACT] from_slot=%p gc_ordinal=%zu n=%zu",
+                         reinterpret_cast<void*>(addr), gcOrdinal, n);
+                }
+                e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
+                continue;
+            }
+
+            BaseObject* fromHolder = reinterpret_cast<BaseObject*>(addr - offset);
+            BaseObject* toHolder = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(toSlot) - offset);
+            RelocationDiagnosticTable::Entry relocation{ false, nullptr, nullptr, 0, nullptr };
+            size_t diagnosticOffset = 0;
+            TypeInfo* holderType = nullptr;
+            if (RelocationDiagnosticTable::Instance().LookupContaining(
+                    reinterpret_cast<BaseObject*>(addr), relocation, diagnosticOffset) &&
+                relocation.from == fromHolder && relocation.to == toHolder && diagnosticOffset == offset) {
+                holderType = relocation.typeInfo;
+            }
+            const char* holderTypeName = holderType == nullptr ? "<unknown>" : holderType->GetName();
+            if (holderTypeName == nullptr) {
+                holderTypeName = "<null-name>";
+            }
+
+            RefField<> toField(*reinterpret_cast<RefField<>*>(toSlot));
+            BaseObject* target = toField.GetTargetObject();
+            bool staleTarget = false;
+            if (Heap::IsHeapAddress(target)) {
+                staleTarget = RegionInfo::InGhostFromRegion(target);
+                if (!staleTarget) {
+                    RegionInfo* targetRegion =
+                        RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+                    staleTarget = targetRegion != nullptr && targetRegion->IsFromRegion();
+                }
+            }
+
+            copyDstFactCount.fetch_add(1, std::memory_order_relaxed);
+            CopyDstTypeCount& typeCount = copyDstTypeCounts[holderType];
+            ++typeCount.fact;
+            const bool isConstPoolDomainEntries = std::strstr(holderTypeName, "RawArray") != nullptr &&
+                std::strstr(holderTypeName, "HashMapEntry") != nullptr &&
+                std::strstr(holderTypeName, "ConstPoolDomain") != nullptr;
+            const bool isConstDomainEntries = !isConstPoolDomainEntries &&
+                std::strstr(holderTypeName, "RawArray") != nullptr &&
+                std::strstr(holderTypeName, "HashMapEntry") != nullptr &&
+                std::strstr(holderTypeName, "ConstDomain") != nullptr;
+            if (isConstDomainEntries) {
+                copyDstConstDomainFactCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (isConstPoolDomainEntries) {
+                copyDstConstPoolDomainFactCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (staleTarget) {
+                copyDstStaleTargetCount.fetch_add(1, std::memory_order_relaxed);
+                ++typeCount.staleTarget;
+                if (isConstDomainEntries) {
+                    copyDstConstDomainStaleTargetCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (isConstPoolDomainEntries) {
+                    copyDstConstPoolDomainStaleTargetCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                static std::atomic<size_t> staleSample{ 0 };
+                const size_t staleN = staleSample.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((staleN & (staleN - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[COPY_DST_STALE_TARGET] from_slot=%p to_slot=%p offset=%zu from_holder=%p "
+                         "to_holder=%p holder_type_info=%p holder_type=%s target=%p gc_ordinal=%zu n=%zu",
+                         reinterpret_cast<void*>(addr), toSlot, offset, fromHolder, toHolder, holderType,
+                         holderTypeName, target, gcOrdinal, staleN);
+                }
+            }
+            static std::atomic<size_t> factSample{ 0 };
+            const size_t factN = factSample.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((factN & (factN - 1)) == 0) {
+                VLOG(REPORT,
+                     "[COPY_DST_FACT] from_slot=%p to_slot=%p offset=%zu from_holder=%p to_holder=%p "
+                     "holder_type_info=%p holder_type=%s target=%p stale_target=%d gc_ordinal=%zu n=%zu",
+                     reinterpret_cast<void*>(addr), toSlot, offset, fromHolder, toHolder, holderType, holderTypeName,
+                     target, static_cast<int>(staleTarget), gcOrdinal, factN);
+            }
+            e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        if (slotRegion->IsFreeRegion() || slotRegion->IsGarbageRegion()) {
             e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.
         auto* field = reinterpret_cast<RefField<>*>(addr);
         visitor(*field);
+    }
+    for (const auto& typeCount : copyDstTypeCounts) {
+        const char* typeName = typeCount.first == nullptr ? "<unknown>" : typeCount.first->GetName();
+        VLOG(REPORT,
+             "[COPY_DST_TYPE] holder_type_info=%p holder_type=%s fact=%zu stale_target=%zu gc_ordinal=%zu",
+             typeCount.first, typeName == nullptr ? "<null-name>" : typeName, typeCount.second.fact,
+             typeCount.second.staleTarget, gcOrdinal);
     }
 }
 } // namespace MapleRuntime
