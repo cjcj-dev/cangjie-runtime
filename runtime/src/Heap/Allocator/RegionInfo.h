@@ -826,15 +826,64 @@ public:
     {
         // Phase: STW (PrepareFromRegionList / PostTrace dispel).
         // R2 validity-end: route teardown (not Forward complete).
+        size_t nUnit = GetGhostRegionUnitCount();
+        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
+        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+        size_t ghostUnitCount = 0;
+        for (size_t i = 0; i < nUnit; ++i) {
+            if (array[i].GetMetadata().inGhostFromRegion != 0) {
+                ++ghostUnitCount;
+            }
+        }
+        if (ghostUnitCount == 0) {
+            // The historical overlay is already undiscoverable. Do not let its stale list
+            // entry bump the epoch of a re-used current region identity.
+            static std::atomic<size_t> dispelNoGhostCount{ 0 };
+            size_t n = dispelNoGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] no_ghost_skip region=%p epoch=%llu units=%zu n=%zu",
+                     this, static_cast<unsigned long long>(GetEpoch()), nUnit, n);
+            }
+            return;
+        }
+        if (ghostUnitCount != nUnit) {
+            // ClearGhostRegionBit uses the current extent, so a re-used smaller region can
+            // leave a partial historical overlay. Dispel the entire saved extent below.
+            static std::atomic<size_t> dispelPartialGhostCount{ 0 };
+            size_t n = dispelPartialGhostCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] partial_ghost region=%p present=%zu units=%zu n=%zu",
+                     this, ghostUnitCount, nUnit, n);
+            }
+        }
+        uint64_t oldEpoch = GetEpoch();
+        bool restampRetainedSnapshot =
+            metadata.retainedLiveInfoState != RetainedLiveInfoState::NEVER_EXAMINED &&
+            metadata.retainedLiveInfoEpoch == oldEpoch;
         BumpEpoch();
         metadata.routeState = NORMAL;
         // Invalidate prior installEpoch so GetRoute(stale) fails definitionally.
         metadata.routeInfo.SetRouteInfo(0, 0, RouteInfo::INVALID_VALUE, GetEpoch());
-        size_t nUnit = GetGhostRegionUnitCount();
-        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
-        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
+        }
+        if (restampRetainedSnapshot) {
+            // Route teardown ends RouteInfo validity, but it does not change the retained
+            // bitmap or coveredUpTo truth. Re-endorse only the snapshot stamped immediately
+            // before this bump; never make the invalidated route geometry valid again.
+            metadata.retainedLiveInfoEpoch = GetEpoch();
+            static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
+            size_t n = retainedSnapshotRestampCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[DispelGhostFromRegion] retained_snapshot_restamp region=%p old_epoch=%llu "
+                     "new_epoch=%llu state=%u n=%zu",
+                     this, static_cast<unsigned long long>(oldEpoch),
+                     static_cast<unsigned long long>(GetEpoch()),
+                     static_cast<unsigned>(metadata.retainedLiveInfoState), n);
+            }
         }
     }
 
