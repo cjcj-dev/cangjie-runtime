@@ -779,8 +779,8 @@ public:
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
-        // Clear prior route stamp without region bump (install path is non-bumping).
-        metadata.routeInfo.SetRouteInfo(0);
+        // Publish an empty carrier without consuming an epoch value.
+        metadata.routeInfo.ClearRouteInfo();
         if (GetLiveByteCount() > 0) {
             SetInGhostRegion(1);
         }
