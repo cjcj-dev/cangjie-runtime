@@ -487,9 +487,9 @@ public:
 
     ALWAYS_INLINE BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo, uint64_t expectedEpoch)
     {
-        // The caller captures expectedEpoch when it establishes that fromObj belongs
-        // to this from/ghost region. Teardown between that recognition and routing is stale.
-        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
+        // The caller captures expectedEpoch when it establishes its view of this region.
+        // Identity turnover between that recognition and routing is genuine staleness — loud.
+        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch())) {
             size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
@@ -506,6 +506,19 @@ public:
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
                          static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()));
 #endif
+            return nullptr;
+        }
+        // Absent ghost guard with a CURRENT identity is a defined negative answer, not
+        // staleness: seen==now proves no teardown intervened since capture, so the caller
+        // never established ghost lineage — it is probing (R1 bulk-fix consumption pattern,
+        // routine post-k8 where reuse retires carriers). Defined miss: count + nullptr.
+        if (UNLIKELY(!fromRegionInfo->IsGhostFromRegion())) {
+            size_t n = routeNotGhostProbeCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT, "[RouteObject] not_ghost_probe_miss region=%p identity=%llu state=%u n=%zu",
+                     fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                     static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
+            }
             return nullptr;
         }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
@@ -735,6 +748,8 @@ private:
 
     std::atomic<size_t> youngAllocatedBytes = { 0 };
     std::atomic<size_t> routeEpochMismatchCount = { 0 };
+    // Probe misses on non-ghost regions with current identity (defined negative answers).
+    std::atomic<size_t> routeNotGhostProbeCount = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };
