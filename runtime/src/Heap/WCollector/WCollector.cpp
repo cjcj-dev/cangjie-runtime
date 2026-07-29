@@ -98,6 +98,10 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
             toObj = FindToVersion(fromObj);
         }
         if (toObj == nullptr) {
+            CHECK_DETAIL(!forward,
+                         "TryForwardRefField: route carrier unavailable for tagged from-object %p; "
+                         "terminate instead of retrying the unchanged field",
+                         fromObj);
             return false;
         }
         RefField<> tmpField(toObj);
