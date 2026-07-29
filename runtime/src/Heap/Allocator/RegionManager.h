@@ -291,7 +291,7 @@ public:
         // R2 validity-end: bulk GARBAGE declaration (LIE-3) before type flip.
         // Plain loop (no lambda) so nm -D export surface stays free of std::function glue.
         for (RegionInfo* r = fromRegionList.GetHeadRegion(); r != nullptr; r = r->GetNextRegion()) {
-            r->BumpEpoch();
+            r->BumpIdentityEpoch();
         }
         garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
@@ -310,7 +310,7 @@ public:
         region->LockWriteRegion();
         // Phase: GC under region write-lock. R2 validity-end: GARBAGE declaration (LIE-3).
         // OHOS reclaim path also bumps via InitFreeUnits; non-OHOS stays GARBAGE until reclaim.
-        region->BumpEpoch();
+        region->BumpIdentityEpoch();
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
         ReclaimRegion(region);
@@ -488,14 +488,14 @@ public:
     {
         // The caller captures expectedEpoch when it establishes that fromObj belongs
         // to this from/ghost region. Teardown between that recognition and routing is stale.
-        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
+        if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() || !fromRegionInfo->IsGhostFromRegion())) {
             size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
                      "route_epoch=%llu state=%u n=%zu",
                      fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                     static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                     static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
                      static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                      static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
             }
@@ -505,7 +505,7 @@ public:
             // Route installation is a semantic advance and does not bump region epoch.
             // Consumption requires the caller view, current region identity and route
             // installation stamp to still describe the same lifetime.
-            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
+            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() ||
                          !fromRegionInfo->RouteEpochMatches(expectedEpoch))) {
                 size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
@@ -513,7 +513,7 @@ public:
                          "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
                          "route_epoch=%llu state=%u n=%zu",
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
                          static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
@@ -525,7 +525,7 @@ public:
 #endif
             // Seqlock-style final read: teardown can run without STW while GetRoute
             // consumes geometry. Never publish an address from a changed carrier.
-            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetEpoch() ||
+            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() ||
                          !fromRegionInfo->RouteEpochMatches(expectedEpoch) ||
                          !fromRegionInfo->IsGhostFromRegion())) {
                 size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -534,7 +534,7 @@ public:
                          "[RouteObject] epoch_mismatch region=%p epoch_seen=%llu epoch_now=%llu "
                          "route_epoch=%llu state=%u n=%zu",
                          fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
-                         static_cast<unsigned long long>(fromRegionInfo->GetEpoch()),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
                          static_cast<unsigned long long>(fromRegionInfo->GetRouteInstallEpoch()),
                          static_cast<unsigned>(fromRegionInfo->GetRouteState()), n);
                 }
@@ -549,7 +549,7 @@ public:
     // through the three-argument overload above.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetEpoch());
+        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetIdentityEpoch());
     }
 
     BaseObject* RouteObject(BaseObject* fromObj)
@@ -559,7 +559,7 @@ public:
             return nullptr;
         }
 
-        const uint64_t expectedEpoch = fromRegionInfo->GetEpoch();
+        const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
     }
 

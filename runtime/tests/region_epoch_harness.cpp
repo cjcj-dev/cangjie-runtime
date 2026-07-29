@@ -54,7 +54,7 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
-    const uint64_t expected = region->GetEpoch();
+    const uint64_t expected = region->GetIdentityEpoch();
     const bool matchBefore = region->RouteEpochMatches(expected);
 
     // Deterministically tear down after GetRoute has consumed geometry but before
@@ -65,7 +65,7 @@ bool ProbeRouteEpochMismatch(RegionManager& manager)
         reinterpret_cast<BaseObject*>(region->GetRegionStart()), region, expected);
     const size_t geometryMismatchCount = manager.GetRouteEpochMismatchCount();
     const uint64_t afterTeardown = region->GetRouteInstallEpoch();
-    const uint64_t lateExpected = region->GetEpoch();
+    const uint64_t lateExpected = region->GetIdentityEpoch();
     const bool lateMatch = region->RouteEpochMatches(lateExpected);
     manager.ResetRouteEpochMismatchCount();
     BaseObject* late = manager.RouteObject(
@@ -97,9 +97,9 @@ bool ProbeClearGhostRouteEpoch(RegionManager& manager)
     region->AddLiveByteCount(16);
     region->PrepareForwardableRegion();
     region->SetRouteInfo(region->GetRegionStart(), 16);
-    const uint64_t before = region->GetEpoch();
+    const uint64_t before = region->GetIdentityEpoch();
     region->ClearGhostRegionBit();
-    const uint64_t after = region->GetEpoch();
+    const uint64_t after = region->GetIdentityEpoch();
     const uint64_t routeEpoch = region->GetRouteInstallEpoch();
     const bool matchAfter = region->RouteEpochMatches(after);
     const bool pass = after != before && routeEpoch == RouteInfo::INVALID_EPOCH && !matchAfter &&
@@ -181,7 +181,7 @@ bool ProbeStaleEmpty(RegionManager& manager)
     region->PreserveRetainedLiveInfo();
     bool wasEmpty = region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY;
     bool validBefore = region->IsRetainedSnapshotValid();
-    region->BumpEpoch();
+    region->BumpSnapshotEpoch();
     bool staleDetected = !region->IsRetainedSnapshotValid();
     bool pass = wasEmpty && validBefore && staleDetected;
     std::printf(

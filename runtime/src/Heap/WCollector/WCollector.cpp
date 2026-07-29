@@ -866,7 +866,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                          "snapshot_epoch=%llu region_epoch=%llu covered_up_to=%#zx n=%zu",
                          region, static_cast<unsigned>(retainedState),
                          static_cast<unsigned long long>(region->GetRetainedLiveInfoEpoch()),
-                         static_cast<unsigned long long>(region->GetEpoch()),
+                         static_cast<unsigned long long>(region->GetSnapshotEpoch()),
                          region->GetRetainedLiveInfoCoveredUpTo(), n);
                 }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -1144,7 +1144,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     if (region == nullptr) {
         return nullptr;
     }
-    const uint64_t expectedEpoch = region->GetEpoch();
+    const uint64_t expectedEpoch = region->GetIdentityEpoch();
 
     if (fwdTable.RouteRegion(region)) {
         if (region->TryLockReadFromRegion()) {
@@ -1162,7 +1162,7 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
 {
-    return ForwardObjectImpl(obj, ghostFromRegion, ghostFromRegion->GetEpoch());
+    return ForwardObjectImpl(obj, ghostFromRegion, ghostFromRegion->GetIdentityEpoch());
 }
 
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(

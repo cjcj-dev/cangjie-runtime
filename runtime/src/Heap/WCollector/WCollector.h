@@ -148,7 +148,7 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
-        const uint64_t expectedEpoch = fromRegionInfo->GetEpoch();
+        const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         return space.GetRegionManager().RouteObject(obj, fromRegionInfo, expectedEpoch);
     }
