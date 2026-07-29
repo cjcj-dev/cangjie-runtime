@@ -557,18 +557,21 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     if (!ghostLive->IsSurvivedObject(offset)) {
         return;
     }
-    // Fact carrier: FindToVersion null-check form (not FindLatestVersion).
-    // COMPACTED / region-FORWARDED publish full route; ROUTED alone is plan-only
-    // until object header FORWARDED (copy completed) — treat as no fact.
-    if (st == RegionInfo::RouteState::ROUTED && !target->IsForwarded()) {
+    // Fact carrier (copy-time): object header FORWARDED, or region COMPACTED
+    // (payload published before routeState=COMPACTED). ROUTED alone is plan-only
+    // (region address map before CopyObject) — never treat as fact (r1segv D5).
+    // ⛔ FindLatestVersion (returns from when to==null). ⛔ bare GetRoute.
+    const bool hasCopyFact =
+        (st == RegionInfo::RouteState::COMPACTED) || target->IsForwarded();
+    if (!hasCopyFact) {
         if (skippedNoFact != nullptr) {
             ++(*skippedNoFact);
             static std::atomic<size_t> skipSample{ 0 };
             size_t n = skipSample.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
-                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=ROUTED n=%zu",
-                     holder, &field, target, n);
+                     "[FixHolder] skipped_no_fact holder=%p slot=%p target=%p st=%u n=%zu",
+                     holder, &field, target, static_cast<unsigned>(st), n);
             }
         }
         return;
@@ -593,7 +596,24 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         }
         return;
     }
-    // ⛔ no IsValidObject(toObj): header touch SEGVed on uncommitted pages (r1segv).
+    // Fail-closed bounds only (no IsValidObject): r1segv early SEGV was header
+    // touch on uncommitted to pages. Reject free/garbage/ghost/from to-region
+    // and addresses past to-region allocPtr.
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(toObj));
+    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion() ||
+        toRegion->IsGhostFromRegion() || toRegion->IsFromRegion()) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+        }
+        return;
+    }
+    const MAddress toAddr = reinterpret_cast<MAddress>(toObj);
+    if (toAddr < toRegion->GetRegionStart() || toAddr >= toRegion->GetRegionAllocPtr()) {
+        if (skippedNoFact != nullptr) {
+            ++(*skippedNoFact);
+        }
+        return;
+    }
     RefField<> newField(toObj);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
