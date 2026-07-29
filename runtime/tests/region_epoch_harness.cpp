@@ -21,10 +21,6 @@
 namespace MapleRuntime {
 namespace {
 
-struct ProbeSlot {
-    RefField<> field;
-};
-
 bool ProbeReuseEpochSkip(RegionManager& manager)
 {
     RegionInfo* region = manager.TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
@@ -41,36 +37,20 @@ bool ProbeReuseEpochSkip(RegionManager& manager)
         return false;
     }
 
-    // Simulate FixEdgeSet entry stamped at e0, then region free/reuse bumps past e0.
-    FixEdgeSet::Instance().ResetSkipCounts();
-    ProbeSlot slot;
-    // Use a heap address for the slot if possible; otherwise exercise Add+Visit path via MaybeAdd
-    // with synthetic stamp by calling Add directly.
-    FixEdgeSet::Instance().AddWithEpoch(reinterpret_cast<MAddress>(&slot.field), e0, true);
-
-    // Bump again as free/reuse would.
-    region->BumpEpoch();
-
-    size_t visited = 0;
-    FixEdgeSet::Instance().VisitAndClear([&visited](RefField<>&) { ++visited; });
-    const size_t epochSkip = FixEdgeSet::Instance().EpochSkipCount();
-    // Slot may not be a heap address → VisitAndClear drops before epoch check.
-    // Re-run with a real heap slot allocated in the region.
+    // Real path: Add() stamps current slot-region epoch; free/reuse Bump invalidates.
     uintptr_t alloc = region->Alloc(sizeof(void*));
     if (alloc == 0) {
-        // Still validate bump monotonicity.
         std::printf(
-            "EPOCH_PROBE reuse result=PASS partial=bump-only e0=%llu e1=%llu e_now=%llu visited=%zu epoch_skip=%zu\n",
+            "EPOCH_PROBE reuse result=PASS partial=bump-only e0=%llu e1=%llu e_now=%llu\n",
             static_cast<unsigned long long>(e0), static_cast<unsigned long long>(e1),
-            static_cast<unsigned long long>(region->GetEpoch()), visited, epochSkip);
+            static_cast<unsigned long long>(region->GetEpoch()));
         manager.ReclaimRegion(region);
         return true;
     }
     auto* heapField = reinterpret_cast<RefField<>*>(alloc);
     const uint64_t stamp = region->GetEpoch();
     FixEdgeSet::Instance().ResetSkipCounts();
-    FixEdgeSet::Instance().AddWithEpoch(reinterpret_cast<MAddress>(heapField), stamp, true);
-    // free/reuse bump invalidates stamp
+    FixEdgeSet::Instance().Add(reinterpret_cast<MAddress>(heapField));
     region->BumpEpoch();
     size_t visited2 = 0;
     FixEdgeSet::Instance().VisitAndClear([&visited2](RefField<>&) { ++visited2; });

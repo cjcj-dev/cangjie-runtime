@@ -7,30 +7,31 @@
 #include "FixEdgeSet.h"
 
 #include <algorithm>
+#include <utility>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
+namespace {
+// epochPacked: 0 = unstamped; else region.epoch + 1.
+inline MAddress PackEpoch(uint64_t epoch, bool has)
+{
+    if (!has) {
+        return 0;
+    }
+    return static_cast<MAddress>(epoch + 1);
+}
+inline bool UnpackHasEpoch(MAddress packed) { return packed != 0; }
+inline uint64_t UnpackEpoch(MAddress packed) { return static_cast<uint64_t>(packed) - 1; }
+} // namespace
+
 FixEdgeSet& FixEdgeSet::Instance() noexcept
 {
     static FixEdgeSet instance;
     return instance;
-}
-
-void FixEdgeSet::AddWithEpoch(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch)
-{
-    if (slotAddr == 0) {
-        return;
-    }
-    Entry e;
-    e.slotAddr = slotAddr;
-    e.slotEpoch = slotEpoch;
-    e.hasSlotEpoch = hasSlotEpoch;
-    std::lock_guard<std::mutex> lg(mutex);
-    slots.push_back(e);
-    count.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FixEdgeSet::Add(MAddress slotAddr)
@@ -39,16 +40,17 @@ void FixEdgeSet::Add(MAddress slotAddr)
         return;
     }
     // R2: stamp slot-region epoch only (E9 constructive). ⛔ no target stamp.
-    uint64_t sEpoch = 0;
-    bool hasS = false;
+    MAddress epochPacked = 0;
     if (Heap::IsHeapAddress(slotAddr)) {
         RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(slotAddr));
         if (slotRegion != nullptr) {
-            sEpoch = slotRegion->GetEpoch();
-            hasS = true;
+            epochPacked = PackEpoch(slotRegion->GetEpoch(), true);
         }
     }
-    AddWithEpoch(slotAddr, sEpoch, hasS);
+    std::lock_guard<std::mutex> lg(mutex);
+    slots.push_back(slotAddr);
+    slots.push_back(epochPacked);
+    count.fetch_add(1, std::memory_order_relaxed);
 }
 
 void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef)
@@ -90,7 +92,7 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
 {
-    std::vector<Entry> local;
+    std::vector<MAddress> local;
     {
         std::lock_guard<std::mutex> lg(mutex);
         local.swap(slots);
@@ -99,13 +101,24 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
     if (local.empty()) {
         return;
     }
-    std::sort(local.begin(), local.end(),
-              [](const Entry& a, const Entry& b) { return a.slotAddr < b.slotAddr; });
-    local.erase(std::unique(local.begin(), local.end(),
-                            [](const Entry& a, const Entry& b) { return a.slotAddr == b.slotAddr; }),
-                local.end());
-    for (const Entry& e : local) {
-        const MAddress addr = e.slotAddr;
+    // Collapse to (slot, epochPacked) pairs, unique by slot (keep first stamp).
+    std::vector<std::pair<MAddress, MAddress>> pairs;
+    pairs.reserve(local.size() / 2);
+    for (size_t i = 0; i + 1 < local.size(); i += 2) {
+        pairs.emplace_back(local[i], local[i + 1]);
+    }
+    std::sort(pairs.begin(), pairs.end(),
+              [](const std::pair<MAddress, MAddress>& a, const std::pair<MAddress, MAddress>& b) {
+                  return a.first < b.first;
+              });
+    pairs.erase(std::unique(pairs.begin(), pairs.end(),
+                            [](const std::pair<MAddress, MAddress>& a, const std::pair<MAddress, MAddress>& b) {
+                                return a.first == b.first;
+                            }),
+                pairs.end());
+    for (const auto& p : pairs) {
+        const MAddress addr = p.first;
+        const MAddress epochPacked = p.second;
         if (addr == 0 || !Heap::IsHeapAddress(addr)) {
             continue;
         }
@@ -115,14 +128,14 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
         }
         // Slot-epoch first (definitional expiry). Parallel E9 free/garbage gates retained
         // for observation: epoch_skip vs e9_gate should cover the same set when complete.
-        if (e.hasSlotEpoch && slotRegion->GetEpoch() != e.slotEpoch) {
+        if (UnpackHasEpoch(epochPacked) && slotRegion->GetEpoch() != UnpackEpoch(epochPacked)) {
             epochSkipCount.fetch_add(1, std::memory_order_relaxed);
             static std::atomic<size_t> sample{ 0 };
             size_t n = sample.fetch_add(1, std::memory_order_relaxed) + 1;
             if ((n & (n - 1)) == 0) {
                 VLOG(REPORT,
                      "[FixEdgeSet] epoch_skip slot region=%p epoch_seen=%llu epoch_now=%llu n=%zu",
-                     slotRegion, static_cast<unsigned long long>(e.slotEpoch),
+                     slotRegion, static_cast<unsigned long long>(UnpackEpoch(epochPacked)),
                      static_cast<unsigned long long>(slotRegion->GetEpoch()), n);
             }
             continue;

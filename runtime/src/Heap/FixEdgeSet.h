@@ -29,25 +29,18 @@ class BaseObject;
 // Epoch stamps (EPOCH_DESIGN_0729 R2): slot-region epoch at registration only;
 // ⛔ no target-region stamp/compare (LIE-1). Consumer rejects on slot-epoch mismatch
 // (definitional expiry; E9 free/garbage kept as parallel observe — same intercept set).
+// Storage: vector<MAddress> of (slot, epochPacked) pairs to keep export surface
+// identical to pre-epoch FixEdgeSet::Add(MAddress). epochPacked=0 ⇒ no stamp;
+// else epoch+1 (so region epoch 0 is representable).
 // No cross-major retention. Mutator Add vs STW Visit/Clear: STW excludes mutators.
-// Public Add(MAddress) signature preserved (export surface / mutator ABI unchanged).
 class FixEdgeSet {
 public:
-    struct Entry {
-        MAddress slotAddr = 0;
-        uint64_t slotEpoch = 0;
-        bool hasSlotEpoch = false;
-    };
-
     static FixEdgeSet& Instance() noexcept;
 
     // Register a heap ref slot that was just written (or Trace-observed).
     // slotAddr = absolute address of RefField<> storage (edge key).
     // Stamps slot-region epoch internally when the address is a heap region.
     void Add(MAddress slotAddr);
-
-    // Test/harness: register with explicit slot epoch (not on export path).
-    void AddWithEpoch(MAddress slotAddr, uint64_t slotEpoch, bool hasSlotEpoch);
 
     // Register when newRef is already From/GhostFrom (I5). holder may be null
     // (static root). Skips stores into from/ghost holders (slot would evacuate).
@@ -78,7 +71,8 @@ private:
     static constexpr size_t LOCAL_CAP = 256;
 
     std::mutex mutex;
-    std::vector<Entry> slots;
+    // Pairs: [slot0, epochPacked0, slot1, epochPacked1, ...]
+    std::vector<MAddress> slots;
     std::atomic<size_t> count{ 0 };
     std::atomic<size_t> epochSkipCount{ 0 };
     std::atomic<size_t> e9GateSkipCount{ 0 };
