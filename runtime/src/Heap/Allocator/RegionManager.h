@@ -280,11 +280,16 @@ public:
     void CollectFromSpaceGarbage()
     {
 #if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path: reclaim from-regions directly to dirtyTree.
-        // ReclaimRegion→InitFreeUnits bumps epoch (R2 reclaim/free).
+        // OHOS keeps the low-fragmentation path for ordinary regions. A ghost carrier
+        // remains in the garbage list until PrepareFromRegionList dispels it.
         RegionInfo* region = fromRegionList.TakeHeadRegion();
         while (region != nullptr) {
-            ReclaimRegion(region);
+            if (region->IsGhostFromRegion()) {
+                region->BumpSnapshotEpoch();
+                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            } else {
+                ReclaimRegion(region);
+            }
             region = fromRegionList.TakeHeadRegion();
         }
 #else
@@ -313,8 +318,12 @@ public:
         // InitFreeUnits; non-OHOS keeps the installed route valid until actual reclaim.
         region->BumpSnapshotEpoch();
 #if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
-        ReclaimRegion(region);
+        // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
+        if (region->IsGhostFromRegion()) {
+            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+        } else {
+            ReclaimRegion(region);
+        }
 #else
         garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
@@ -353,12 +362,12 @@ public:
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
 
-    void ReclaimGarbageRegions()
+    __attribute__((used)) void ReclaimGarbageRegions()
     {
-        RegionInfo* garbage = garbageRegionList.TakeHeadRegion();
+        RegionInfo* garbage = TakeReclaimableGarbageRegion();
         while (garbage != nullptr) {
             ReclaimRegion(garbage);
-            garbage = garbageRegionList.TakeHeadRegion();
+            garbage = TakeReclaimableGarbageRegion();
         }
     }
 
@@ -625,11 +634,31 @@ public:
 
     void PrepareFromRegionList()
     {
+        size_t retainedRegions = 0;
+        size_t retainedBytes = 0;
+        RegionInfo* region = ghostFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextGhostRegion();
+            if (region->IsGhostFromRegion() && region->IsGarbageRegion()) {
+                ++retainedRegions;
+                retainedBytes += region->GetGhostRegionSize();
+            }
+            region = next;
+        }
         ghostFromRegionList.VisitAllGhostRegions([](RegionInfo* region) {
             DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
                  region->GetRegionEnd());
             region->DispelGhostFromRegion();
         });
+        region = ghostFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextGhostRegion();
+            if (TryTakeGarbageRegionAfterDispel(region)) {
+                ReclaimRegion(region);
+            }
+            region = next;
+        }
+        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
 
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
@@ -655,6 +684,58 @@ public:
     }
 
 private:
+    __attribute__((always_inline, visibility("hidden")))
+    RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr)
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        RegionInfo* candidate = nullptr;
+        size_t bytes = 0;
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region->IsGhostFromRegion()) {
+                bytes += region->GetGhostRegionSize();
+            } else if (candidate == nullptr) {
+                candidate = region;
+            }
+        }
+        if (candidate != nullptr) {
+            RemoveRegionLocked(&garbageRegionList, candidate);
+        }
+        if (gatedBytes != nullptr) {
+            *gatedBytes = bytes;
+        }
+        return candidate;
+    }
+
+    __attribute__((always_inline, visibility("hidden")))
+    bool TryTakeGarbageRegionAfterDispel(RegionInfo* target)
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region == target) {
+                CHECK(region->IsGarbageRegion());
+                CHECK(!region->IsGhostFromRegion());
+                RemoveRegionLocked(&garbageRegionList, region);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    __attribute__((always_inline, visibility("hidden"))) size_t GetGatedGarbageBytes()
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        size_t bytes = 0;
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region->IsGhostFromRegion()) {
+                bytes += region->GetGhostRegionSize();
+            }
+        }
+        return bytes;
+    }
+
     // Acquire a region list mutex which the collector also takes while the world is stopped.
     // Waiting for it in a saferegion is required so that a contended mutator cannot stall
     // StopTheWorld (MutatorManager.cpp:485-490), but the mutex must never be owned while the
