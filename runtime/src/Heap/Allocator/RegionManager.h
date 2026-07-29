@@ -474,7 +474,8 @@ public:
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
+            // Pass install epoch as expected; GetRoute also checks region.epoch match.
+            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj, fromRegionInfo->GetRouteInstallEpoch());
             return toAddr;
         }
         return nullptr;
@@ -489,7 +490,7 @@ public:
 
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
+            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj, fromRegionInfo->GetRouteInstallEpoch());
             return toAddr;
         }
         return nullptr;

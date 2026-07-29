@@ -7,6 +7,7 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <atomic>
 #include <list>
 #include <map>
 #include <set>
@@ -180,6 +181,8 @@ public:
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();
+        // Stamp region epoch at snapshot build (EPOCH_DESIGN_0729 §2).
+        metadata.retainedLiveInfoEpoch = GetEpoch();
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
                 metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_EMPTY;
@@ -195,6 +198,15 @@ public:
         metadata.retainedLiveInfoState = metadata.retainedLiveInfo == nullptr
             ? RetainedLiveInfoState::SNAPSHOT_EMPTY
             : RetainedLiveInfoState::SNAPSHOT_VALID;
+    }
+
+    // SNAPSHOT_VALID ⇔ state==SNAPSHOT_VALID && retained epoch matches region epoch.
+    bool IsRetainedSnapshotValid() const
+    {
+        if (metadata.retainedLiveInfoState != RetainedLiveInfoState::SNAPSHOT_VALID) {
+            return false;
+        }
+        return metadata.retainedLiveInfoEpoch == GetEpoch();
     }
 
     LiveInfo* GetOrAllocLiveInfo()
@@ -700,13 +712,31 @@ public:
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
         // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state / PrepareForwardable).
-        // Blueprint: route install/remove ⇒ epoch bump.
+        // Blueprint: route install/remove ⇒ epoch bump; stamp install epoch after bump.
         BumpEpoch();
-        metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
+        metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetEpoch());
     }
 
-    BaseObject* GetRoute(BaseObject* fromObj)
+    // GetRoute family (EPOCH_DESIGN_0729 §2): expectedEpoch is the install-time stamp the
+    // reader observed; mismatch with RouteInfo::installEpoch ⇒ definitional fail (nullptr).
+    // Region.epoch may bump after install (Forward complete) while route remains valid for
+    // residual readers until dispel/free; carriers (FixEdgeSet) use region.epoch separately.
+    // ⛔ FixHolder must not call GetRoute (r1segv); that ruling is unchanged.
+    BaseObject* GetRoute(BaseObject* fromObj, uint64_t expectedEpoch)
     {
+        const uint64_t installEpoch = metadata.routeInfo.GetInstallEpoch();
+        if (expectedEpoch != installEpoch) {
+            static std::atomic<size_t> routeEpochSkip{ 0 };
+            size_t n = routeEpochSkip.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[GetRoute] epoch_skip region=%p epoch_seen=%llu epoch_route=%llu epoch_now=%llu n=%zu",
+                     this, static_cast<unsigned long long>(expectedEpoch),
+                     static_cast<unsigned long long>(installEpoch),
+                     static_cast<unsigned long long>(GetEpoch()), n);
+            }
+            return nullptr;
+        }
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         if (UNLIKELY(preLiveBytes >= metadata.routeInfo.GetToRegion1UsedBytes() &&
@@ -731,6 +761,14 @@ public:
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         return reinterpret_cast<BaseObject*>(toAddr);
     }
+
+    // Reader convenience: expected = current install stamp (fails if region.epoch already bumped).
+    BaseObject* GetRoute(BaseObject* fromObj)
+    {
+        return GetRoute(fromObj, metadata.routeInfo.GetInstallEpoch());
+    }
+
+    uint64_t GetRouteInstallEpoch() const { return metadata.routeInfo.GetInstallEpoch(); }
 
     void PrepareForwardableRegion()
     {
@@ -826,6 +864,7 @@ public:
         }
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
@@ -1125,6 +1164,8 @@ private:
 
         LiveInfo* retainedLiveInfo = nullptr;
         RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        // Region epoch when retained snapshot was built (SNAPSHOT_VALID ⇔ match GetEpoch()).
+        uint64_t retainedLiveInfoEpoch = 0;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
@@ -1341,6 +1382,7 @@ private:
         metadata.liveInfo = nullptr;
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
         // Phase: allocator TakeRegion / InitFreeRegion (free-manager lock or STW reclaim).
         // Blueprint: free + region re-alloc reuse ⇒ epoch bump (all prior carriers expire).
         BumpEpoch();

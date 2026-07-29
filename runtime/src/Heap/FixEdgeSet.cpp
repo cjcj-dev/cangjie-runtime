@@ -19,13 +19,20 @@ FixEdgeSet& FixEdgeSet::Instance() noexcept
     return instance;
 }
 
-void FixEdgeSet::Add(MAddress slotAddr)
+void FixEdgeSet::Add(MAddress slotAddr, uint64_t targetEpoch, bool hasTargetEpoch, uint64_t slotEpoch,
+                     bool hasSlotEpoch)
 {
     if (slotAddr == 0) {
         return;
     }
+    Entry e;
+    e.slotAddr = slotAddr;
+    e.targetEpoch = targetEpoch;
+    e.hasTargetEpoch = hasTargetEpoch;
+    e.slotEpoch = slotEpoch;
+    e.hasSlotEpoch = hasSlotEpoch;
     std::lock_guard<std::mutex> lg(mutex);
-    slots.push_back(slotAddr);
+    slots.push_back(e);
     count.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -40,6 +47,7 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
     // Slot must remain at the same absolute address until BulkForward. If the
     // holder is itself in from/ghost, evacuation moves the field — skip (roots
     // and to-space holders only). Static roots: holder == nullptr.
+    RegionInfo* slotRegion = nullptr;
     if (holder != nullptr) {
         if (!Heap::IsHeapAddress(holder)) {
             return;
@@ -51,23 +59,36 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
         if (hr != nullptr && hr->IsFromRegion()) {
             return;
         }
+        slotRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(slot));
+    } else {
+        slotRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(slot));
     }
+
+    auto stampAndAdd = [&](RegionInfo* targetRegion) {
+        const uint64_t tEpoch = targetRegion != nullptr ? targetRegion->GetEpoch() : 0;
+        const bool hasT = targetRegion != nullptr;
+        const uint64_t sEpoch = slotRegion != nullptr ? slotRegion->GetEpoch() : 0;
+        const bool hasS = slotRegion != nullptr;
+        Add(reinterpret_cast<MAddress>(slot), tEpoch, hasT, sEpoch, hasS);
+    };
+
     // I5: only edges whose target is already From or GhostFrom need bulk fix.
     // plainsrc P11 (Idle plain→then-from) is covered by Trace I4 complement when
     // the holder is scanned; unreached holders need compiler dual-track (r1cc).
     if (RegionInfo::InGhostFromRegion(newRef)) {
-        Add(reinterpret_cast<MAddress>(slot));
+        RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<uintptr_t>(newRef));
+        stampAndAdd(ghost);
         return;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
     if (region != nullptr && region->IsFromRegion()) {
-        Add(reinterpret_cast<MAddress>(slot));
+        stampAndAdd(region);
     }
 }
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
 {
-    std::vector<MAddress> local;
+    std::vector<Entry> local;
     {
         std::lock_guard<std::mutex> lg(mutex);
         local.swap(slots);
@@ -76,17 +97,62 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
     if (local.empty()) {
         return;
     }
-    std::sort(local.begin(), local.end());
-    local.erase(std::unique(local.begin(), local.end()), local.end());
-    for (MAddress addr : local) {
+    std::sort(local.begin(), local.end(),
+              [](const Entry& a, const Entry& b) { return a.slotAddr < b.slotAddr; });
+    local.erase(std::unique(local.begin(), local.end(),
+                            [](const Entry& a, const Entry& b) { return a.slotAddr == b.slotAddr; }),
+                local.end());
+    for (const Entry& e : local) {
+        const MAddress addr = e.slotAddr;
         if (addr == 0 || !Heap::IsHeapAddress(addr)) {
             continue;
         }
-        // Slot must sit in a non-ghost region (holder not evacuated).
         RegionInfo* slotRegion = RegionInfo::TryGetRegionInfoAt(static_cast<uintptr_t>(addr));
-        if (slotRegion == nullptr || slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() ||
-            slotRegion->IsFreeRegion() || slotRegion->IsGarbageRegion()) {
+        if (slotRegion == nullptr) {
             continue;
+        }
+        // Epoch check first (definitional expiry). Parallel E9 free/garbage gates retained
+        // for observation: epoch_skip vs e9_gate should cover the same set when complete.
+        if (e.hasSlotEpoch && slotRegion->GetEpoch() != e.slotEpoch) {
+            epochSkipCount.fetch_add(1, std::memory_order_relaxed);
+            static std::atomic<size_t> sample{ 0 };
+            size_t n = sample.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FixEdgeSet] epoch_skip slot region=%p epoch_seen=%llu epoch_now=%llu n=%zu",
+                     slotRegion, static_cast<unsigned long long>(e.slotEpoch),
+                     static_cast<unsigned long long>(slotRegion->GetEpoch()), n);
+            }
+            continue;
+        }
+        // E9 hard gate (parallel observe): free/garbage/from/ghost slot regions.
+        if (slotRegion->IsGhostFromRegion() || slotRegion->IsFromRegion() || slotRegion->IsFreeRegion() ||
+            slotRegion->IsGarbageRegion()) {
+            e9GateSkipCount.fetch_add(1, std::memory_order_relaxed);
+            continue;
+        }
+        // Target epoch: re-read field target region if stamped.
+        if (e.hasTargetEpoch) {
+            auto* field = reinterpret_cast<RefField<>*>(addr);
+            BaseObject* target = field->GetTargetObject();
+            if (target != nullptr && Heap::IsHeapAddress(target)) {
+                RegionInfo* targetRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion == nullptr) {
+                    targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(target));
+                }
+                if (targetRegion != nullptr && targetRegion->GetEpoch() != e.targetEpoch) {
+                    epochSkipCount.fetch_add(1, std::memory_order_relaxed);
+                    static std::atomic<size_t> tSample{ 0 };
+                    size_t n = tSample.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if ((n & (n - 1)) == 0) {
+                        VLOG(REPORT,
+                             "[FixEdgeSet] epoch_skip target region=%p epoch_seen=%llu epoch_now=%llu n=%zu",
+                             targetRegion, static_cast<unsigned long long>(e.targetEpoch),
+                             static_cast<unsigned long long>(targetRegion->GetEpoch()), n);
+                    }
+                    continue;
+                }
+            }
         }
         // P-G: touch only indexed field addresses — no object walk / GetSize.
         auto* field = reinterpret_cast<RefField<>*>(addr);

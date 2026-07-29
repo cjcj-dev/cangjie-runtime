@@ -232,17 +232,22 @@ struct RouteInfo {
     uintptr_t toRegion1StartAddress = 0;
     uint64_t toRegion1UsedBytes = 0;
     uint32_t toRegion2Idx = 0;
+    // Region epoch at route install (EPOCH_DESIGN_0729 §2). Readers pass expected.
+    uint64_t installEpoch = 0;
 
     uintptr_t GetRoute(uint64_t preLiveBytes);
 
-    void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = INVALID_VALUE)
+    void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = INVALID_VALUE,
+                      uint64_t epoch = 0)
     {
         toRegion1StartAddress = to1;
         toRegion1UsedBytes = to1used;
         toRegion2Idx = to2;
+        installEpoch = epoch;
     }
     uint64_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
     uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
+    uint64_t GetInstallEpoch() const { return installEpoch; }
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H

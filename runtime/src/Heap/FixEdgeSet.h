@@ -26,24 +26,44 @@ class BaseObject;
 //
 // Lifetime: entry established on runtime heap-ref store (or Trace plain→from);
 // invalidated by Clear() at end of BulkForward (same major, after ForwardFromSpace).
+// Epoch stamps (EPOCH_DESIGN_0729 §2): target (+slot) region epoch at registration;
+// consumer rejects on mismatch (definitional expiry; E9 free/garbage kept as parallel observe).
 // No cross-major retention. Mutator Add vs STW Visit/Clear: STW excludes mutators.
 class FixEdgeSet {
 public:
+    struct Entry {
+        MAddress slotAddr = 0;
+        uint64_t targetEpoch = 0;
+        uint64_t slotEpoch = 0;
+        bool hasTargetEpoch = false;
+        bool hasSlotEpoch = false;
+    };
+
     static FixEdgeSet& Instance() noexcept;
 
     // Register a heap ref slot that was just written (or Trace-observed).
     // slotAddr = absolute address of RefField<> storage (edge key).
-    void Add(MAddress slotAddr);
+    void Add(MAddress slotAddr, uint64_t targetEpoch, bool hasTargetEpoch, uint64_t slotEpoch, bool hasSlotEpoch);
 
     // Register when newRef is already From/GhostFrom (I5). holder may be null
     // (static root). Skips stores into from/ghost holders (slot would evacuate).
     void MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef);
 
     // STW-only: visit each registered slot once (best-effort unique via sort+unique).
+    // Epoch-mismatch and E9 free/garbage skips are counted before visitor.
     using SlotVisitor = std::function<void(RefField<>& field)>;
     void VisitAndClear(const SlotVisitor& visitor);
 
     size_t SizeApprox() const { return count.load(std::memory_order_relaxed); }
+
+    // Observability (relaxed; loud skips, never silent).
+    size_t EpochSkipCount() const { return epochSkipCount.load(std::memory_order_relaxed); }
+    size_t E9GateSkipCount() const { return e9GateSkipCount.load(std::memory_order_relaxed); }
+    void ResetSkipCounts()
+    {
+        epochSkipCount.store(0, std::memory_order_relaxed);
+        e9GateSkipCount.store(0, std::memory_order_relaxed);
+    }
 
 private:
     FixEdgeSet() = default;
@@ -51,13 +71,13 @@ private:
     FixEdgeSet(const FixEdgeSet&) = delete;
     FixEdgeSet& operator=(const FixEdgeSet&) = delete;
 
-    void FlushLocked();
-
     static constexpr size_t LOCAL_CAP = 256;
 
     std::mutex mutex;
-    std::vector<MAddress> slots;
+    std::vector<Entry> slots;
     std::atomic<size_t> count{ 0 };
+    std::atomic<size_t> epochSkipCount{ 0 };
+    std::atomic<size_t> e9GateSkipCount{ 0 };
 };
 } // namespace MapleRuntime
 
