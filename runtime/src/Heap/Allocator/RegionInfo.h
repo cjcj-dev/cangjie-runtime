@@ -1490,6 +1490,10 @@ private:
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
         SetUnitRole(UnitRole::FREE_UNITS);
+        // End any prior ghost-route carrier before this unit is published for free/reuse.
+        // (k8 knife rebased onto k7 carrier protocol: absence publication, no sentinel.)
+        metadata.routeInfo.ClearRouteInfo();
+        SetInGhostRegion(0);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
