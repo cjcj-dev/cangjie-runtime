@@ -32,6 +32,23 @@ struct UntagRefFieldBreadcrumb {
 
 thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
 
+struct MinorYieldState {
+    std::unordered_set<BaseObject*> stackRootSeeds;
+    std::unordered_set<BaseObject*> staticRootSeeds;
+    std::unordered_set<BaseObject*> otherRootSeeds;
+    std::unordered_set<BaseObject*> rememberedRealSeeds;
+    std::unordered_set<BaseObject*> neverExaminedSeeds;
+    std::unordered_set<BaseObject*> snapshotConservativeSeeds;
+    size_t stackRootHits = 0;
+    size_t staticRootHits = 0;
+    size_t otherRootHits = 0;
+    size_t rememberedRealHits = 0;
+    size_t neverExaminedHits = 0;
+    size_t snapshotConservativeHits = 0;
+};
+
+thread_local MinorYieldState minorYieldState;
+
 constexpr bool IsInvalidCopyDestinationState(bool missing, bool free, bool garbage, bool from, bool invalidRole)
 {
     return missing || free || garbage || from || invalidRole;
@@ -946,7 +963,12 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     return object;
 }
 
-void WCollector::VisitMinorRoots(const std::function<void(BaseObject*, MinorRootKind)>& visitor)
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
+{
+    VisitMinorRootsWithKind([&visitor](BaseObject* object, MinorRootKind) { visitor(object); });
+}
+
+void WCollector::VisitMinorRootsWithKind(const std::function<void(BaseObject*, MinorRootKind)>& visitor)
 {
     RootVisitor stackRootVisitor = [this, &visitor](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
@@ -997,16 +1019,16 @@ void WCollector::RecordMinorRootSeed(BaseObject* object, MinorRootKind kind)
     }
     switch (kind) {
         case MinorRootKind::STACK:
-            ++minorStackRootHits;
-            minorStackRootSeeds.insert(object);
+            ++minorYieldState.stackRootHits;
+            minorYieldState.stackRootSeeds.insert(object);
             return;
         case MinorRootKind::STATIC:
-            ++minorStaticRootHits;
-            minorStaticRootSeeds.insert(object);
+            ++minorYieldState.staticRootHits;
+            minorYieldState.staticRootSeeds.insert(object);
             return;
         case MinorRootKind::OTHER:
-            ++minorOtherRootHits;
-            minorOtherRootSeeds.insert(object);
+            ++minorYieldState.otherRootHits;
+            minorYieldState.otherRootSeeds.insert(object);
             return;
     }
 }
@@ -1022,16 +1044,16 @@ void WCollector::RecordMinorSeed(BaseObject* object, MinorRememberedSource sourc
     }
     switch (source) {
         case MinorRememberedSource::REAL_EDGE:
-            ++minorRememberedRealHits;
-            minorRememberedRealSeeds.insert(object);
+            ++minorYieldState.rememberedRealHits;
+            minorYieldState.rememberedRealSeeds.insert(object);
             return;
         case MinorRememberedSource::NEVER_EXAMINED:
-            ++minorNeverExaminedHits;
-            minorNeverExaminedSeeds.insert(object);
+            ++minorYieldState.neverExaminedHits;
+            minorYieldState.neverExaminedSeeds.insert(object);
             return;
         case MinorRememberedSource::SNAPSHOT_CONSERVATIVE:
-            ++minorSnapshotConservativeHits;
-            minorSnapshotConservativeSeeds.insert(object);
+            ++minorYieldState.snapshotConservativeHits;
+            minorYieldState.snapshotConservativeSeeds.insert(object);
             return;
     }
 }
@@ -1176,7 +1198,7 @@ void WCollector::ValidateYoungMarking()
     };
     std::unordered_set<BaseObject*> reachable;
     std::vector<ValidationEdge> pending;
-    VisitMinorRoots([&pending](BaseObject* object, MinorRootKind) {
+    VisitMinorRoots([&pending](BaseObject* object) {
         if (Heap::IsHeapAddress(object)) {
             pending.push_back({ object, nullptr, 0 });
         }
@@ -1263,16 +1285,17 @@ void WCollector::MeasureYoungDisposition(YoungCollectionStats& stats) const
         return;
     }
 
-    std::unordered_set<BaseObject*> realSeeds = minorStackRootSeeds;
-    realSeeds.insert(minorStaticRootSeeds.begin(), minorStaticRootSeeds.end());
-    realSeeds.insert(minorOtherRootSeeds.begin(), minorOtherRootSeeds.end());
-    realSeeds.insert(minorRememberedRealSeeds.begin(), minorRememberedRealSeeds.end());
+    std::unordered_set<BaseObject*> realSeeds;
+    realSeeds.insert(minorYieldState.stackRootSeeds.begin(), minorYieldState.stackRootSeeds.end());
+    realSeeds.insert(minorYieldState.staticRootSeeds.begin(), minorYieldState.staticRootSeeds.end());
+    realSeeds.insert(minorYieldState.otherRootSeeds.begin(), minorYieldState.otherRootSeeds.end());
+    realSeeds.insert(minorYieldState.rememberedRealSeeds.begin(), minorYieldState.rememberedRealSeeds.end());
     std::unordered_set<BaseObject*> realAttributed;
     std::unordered_set<BaseObject*> neverExaminedAttributed;
     std::unordered_set<BaseObject*> snapshotConservativeAttributed;
     TraceAttributedYoungClosure(realSeeds, realAttributed);
-    TraceAttributedYoungClosure(minorNeverExaminedSeeds, neverExaminedAttributed);
-    TraceAttributedYoungClosure(minorSnapshotConservativeSeeds, snapshotConservativeAttributed);
+    TraceAttributedYoungClosure(minorYieldState.neverExaminedSeeds, neverExaminedAttributed);
+    TraceAttributedYoungClosure(minorYieldState.snapshotConservativeSeeds, snapshotConservativeAttributed);
 
     for (RegionInfo* region : minorCandidateRegions) {
         size_t allocatedBytes = region->GetRegionAllocatedSize();
@@ -1364,18 +1387,18 @@ void WCollector::DoYoungGarbageCollection()
     minorRescannedLines.clear();
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
-    minorStackRootSeeds.clear();
-    minorStaticRootSeeds.clear();
-    minorOtherRootSeeds.clear();
-    minorRememberedRealSeeds.clear();
-    minorNeverExaminedSeeds.clear();
-    minorSnapshotConservativeSeeds.clear();
-    minorStackRootHits = 0;
-    minorStaticRootHits = 0;
-    minorOtherRootHits = 0;
-    minorRememberedRealHits = 0;
-    minorNeverExaminedHits = 0;
-    minorSnapshotConservativeHits = 0;
+    minorYieldState.stackRootSeeds.clear();
+    minorYieldState.staticRootSeeds.clear();
+    minorYieldState.otherRootSeeds.clear();
+    minorYieldState.rememberedRealSeeds.clear();
+    minorYieldState.neverExaminedSeeds.clear();
+    minorYieldState.snapshotConservativeSeeds.clear();
+    minorYieldState.stackRootHits = 0;
+    minorYieldState.staticRootHits = 0;
+    minorYieldState.otherRootHits = 0;
+    minorYieldState.rememberedRealHits = 0;
+    minorYieldState.neverExaminedHits = 0;
+    minorYieldState.snapshotConservativeHits = 0;
     WorkStack workStack = NewWorkStack();
     WorkStack enumRoots = NewWorkStack();
     theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
@@ -1385,7 +1408,7 @@ void WCollector::DoYoungGarbageCollection()
         RecordMinorRootSeed(object, MinorRootKind::STACK);
         PushYoungObject(object, workStack);
     }
-    VisitMinorRoots([this, &workStack](BaseObject* object, MinorRootKind kind) {
+    VisitMinorRootsWithKind([this, &workStack](BaseObject* object, MinorRootKind kind) {
         RecordMinorRootSeed(object, kind);
         PushYoungObject(object, workStack);
     });
@@ -1496,10 +1519,12 @@ void WCollector::DoYoungGarbageCollection()
             "static_unique=%zu other_root_hits=%zu other_root_unique=%zu remembered_real_hits=%zu "
             "remembered_real_unique=%zu never_examined_hits=%zu never_examined_unique=%zu "
             "snapshot_conservative_hits=%zu snapshot_conservative_unique=%zu",
-            minorTotalRuns, minorStackRootHits, minorStackRootSeeds.size(), minorStaticRootHits,
-            minorStaticRootSeeds.size(), minorOtherRootHits, minorOtherRootSeeds.size(), minorRememberedRealHits,
-            minorRememberedRealSeeds.size(), minorNeverExaminedHits, minorNeverExaminedSeeds.size(),
-            minorSnapshotConservativeHits, minorSnapshotConservativeSeeds.size());
+            minorTotalRuns, minorYieldState.stackRootHits, minorYieldState.stackRootSeeds.size(),
+            minorYieldState.staticRootHits, minorYieldState.staticRootSeeds.size(), minorYieldState.otherRootHits,
+            minorYieldState.otherRootSeeds.size(), minorYieldState.rememberedRealHits,
+            minorYieldState.rememberedRealSeeds.size(), minorYieldState.neverExaminedHits,
+            minorYieldState.neverExaminedSeeds.size(), minorYieldState.snapshotConservativeHits,
+            minorYieldState.snapshotConservativeSeeds.size());
         size_t candidateListBytes = stats.candidateFullBytes + stats.candidateLargeBytes + stats.candidatePinnedBytes;
         size_t exitAccountedBytes = stats.retainedAgeZeroBytes + stats.promotedBytes +
             stats.releasedLargeBytes + stats.collectedRegionBytes;
