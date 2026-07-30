@@ -564,14 +564,25 @@ public:
             RouteRecordAfterAcquireForTest(fromRegionInfo);
 #endif
             BaseObject* to = fromRegionInfo->GetRoute(fromObj, routeInfo);
-            // Read-after-use probe for the capture-to-use window. The check above proves
-            // the region carried expectedEpoch at check time; it cannot prove the caller's
-            // view was still current when the caller formed it. A reader that samples the
-            // epoch after establishing its view (FindToVersion, the one/two-argument
-            // wrappers) holds the epoch for zero time, so a teardown plus reuse that lands
-            // entirely inside that window yields a self-consistent but wrong-generation
-            // route. Re-reading here does not close the window — it makes it countable, so
-            // "the guard never fires" can be told apart from "the guard cannot fire".
+            // Read-after-use probe. The check above proves the region carried
+            // expectedEpoch at check time; it cannot prove the caller's view was still
+            // current when the caller formed it. Readers that sample the epoch after
+            // establishing their view (FindToVersion, the one/two-argument wrappers) hold
+            // it for zero time.
+            //
+            // What that zero-length hold can actually produce is narrower than it looks.
+            // Review epochrev2 refuted the obvious story — teardown, reclaim, reallocate,
+            // reinstall inside the window — because those are mutually exclusive branches:
+            // TakeReclaimableGarbageRegion skips every ghost region, so a ghost cannot be
+            // recycled before dispel; and after dispel InitRegionInfo clears the route and
+            // bumps identity, while a route can only be installed on a FORWARDABLE region.
+            // So this counter is a one-sided lower bound on "identity moved under a
+            // successful check", not evidence of a generation mix-up.
+            //
+            // It is here because the alternative is worse: with no counter, a quiet path
+            // and an unreachable guard look identical — the ambiguity that left d2_hits=0
+            // unreadable. Structural changes wait for a non-zero reading plus a mechanism
+            // that survives review.
             if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch())) {
                 size_t n = routeEpochRaceAfterUseCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
