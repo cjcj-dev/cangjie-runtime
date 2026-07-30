@@ -47,6 +47,7 @@ void TsanReadMemoryRange(const void* addr, size_t size);
 void TsanCleanShadow(const void* addr, size_t size);
 
 void TsanNewRaceProc(void* processor);
+void TsanDeleteRaceProc(void* processor);
 void TsanNewRaceState(void* cjthread, void* parent, const void* pc);
 void TsanDeleteRaceState(void* thread);
 

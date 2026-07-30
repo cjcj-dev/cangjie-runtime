@@ -163,6 +163,11 @@ void TsanNewRaceProc(void* processor)
     g_procState.CreateThread(processor, REAL(__tsan_proc_create)());
 }
 
+void TsanDeleteRaceProc(void* processor)
+{
+    REAL(__tsan_proc_destroy)(g_procState.DeleteThread(processor));
+}
+
 extern "C" {
 MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 {
