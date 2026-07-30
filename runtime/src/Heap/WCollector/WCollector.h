@@ -239,6 +239,10 @@ private:
     void BulkForwardHolderRefs();
     // DO NOT MERGE: read-only count of plain slots still pointing at from/ghost after BulkForward.
     void CountUnregisteredPlainToFromAfterBulkForward();
+    // DO NOT MERGE: capture from-region address intervals before Forward; count
+    // survived slots still naming those intervals after UnbindPreviousLiveInfo.
+    void CaptureFromRegionIntervalsBeforeForward();
+    void CountPostUnbindIntoFrom();
     // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
     // Weak referents soft-clear when dead; strong slots keep hard validity checks.
     void NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent);

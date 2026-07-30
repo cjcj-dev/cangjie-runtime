@@ -7,9 +7,11 @@
 
 #include "WCollector.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
 #include <unistd.h>
+#include <vector>
 
 #include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
@@ -816,6 +818,147 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     }
 }
 
+// DO NOT MERGE: per-major from-region address intervals for post-Unbind slot count.
+// Captured before Forward; after Unbind region type/route may be gone, so only ranges.
+namespace {
+struct FromAddrInterval {
+    MAddress start = 0;
+    MAddress end = 0;
+};
+// Filled at CaptureFromRegionIntervalsBeforeForward; read at CountPostUnbindIntoFrom.
+// Single-threaded STW probe — no concurrent access.
+std::vector<FromAddrInterval> g_probeFromIntervals;
+
+bool AddrInFromIntervals(MAddress addr)
+{
+    if (g_probeFromIntervals.empty()) {
+        return false;
+    }
+    // Intervals sorted by start; find rightmost start <= addr.
+    size_t lo = 0;
+    size_t hi = g_probeFromIntervals.size();
+    while (lo < hi) {
+        size_t mid = lo + (hi - lo) / 2;
+        if (g_probeFromIntervals[mid].start <= addr) {
+            lo = mid + 1;
+        } else {
+            hi = mid;
+        }
+    }
+    if (lo == 0) {
+        return false;
+    }
+    const FromAddrInterval& iv = g_probeFromIntervals[lo - 1];
+    return addr >= iv.start && addr < iv.end;
+}
+} // namespace
+
+// DO NOT MERGE: after PrepareForwardTable / before ForwardFromSpace — snapshot every
+// from-region [start, end) so post-Unbind counting can use address ranges only.
+void WCollector::CaptureFromRegionIntervalsBeforeForward()
+{
+    g_probeFromIntervals.clear();
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    space.GetRegionManager().VisitFromRegions([](RegionInfo* region) {
+        if (region == nullptr) {
+            return;
+        }
+        MAddress start = region->GetRegionStart();
+        MAddress end = region->GetRegionEnd();
+        if (end > start) {
+            g_probeFromIntervals.push_back(FromAddrInterval{start, end});
+        }
+    });
+    std::sort(g_probeFromIntervals.begin(), g_probeFromIntervals.end(),
+              [](const FromAddrInterval& a, const FromAddrInterval& b) { return a.start < b.start; });
+    VLOG(REPORT, "[UNBINDCOUNT] captured fromIntervals=%zu", g_probeFromIntervals.size());
+}
+
+// DO NOT MERGE: after UnbindPreviousLiveInfo — count survived ref slots whose target
+// address still falls in this major's from intervals. Address-only: no target deref,
+// no FindToVersion / FindLatestVersion / GetAndTryTagObj / IsValidObject on targets.
+void WCollector::CountPostUnbindIntoFrom()
+{
+    MRT_PHASE_TIMER("CountPostUnbindIntoFrom");
+    ScopedStopTheWorld stw("count post-unbind into from intervals");
+    const uint64_t startNs = TimeUtil::NanoSeconds();
+    size_t postUnbindIntoFrom = 0;
+    size_t postUnbindIntoFromTagged = 0;
+    size_t postUnbindIntoFromPlain = 0;
+    size_t holdersScanned = 0;
+    size_t slotsScanned = 0;
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    space.ForEachObj(
+        [this, &postUnbindIntoFrom, &postUnbindIntoFromTagged, &postUnbindIntoFromPlain, &holdersScanned,
+         &slotsScanned](BaseObject* obj) {
+            if (obj == nullptr || !obj->IsValidObject()) {
+                return;
+            }
+            if (!IsSurvivedObject(obj)) {
+                return;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            ++holdersScanned;
+            ForEachRefSlot(obj, [obj, &postUnbindIntoFrom, &postUnbindIntoFromTagged, &postUnbindIntoFromPlain,
+                                 &slotsScanned](RefField<>& field) {
+                RefField<> oldField(field);
+                BaseObject* target = oldField.GetTargetObject();
+                if (!Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                ++slotsScanned;
+                MAddress taddr = reinterpret_cast<MAddress>(target);
+                if (!AddrInFromIntervals(taddr)) {
+                    return;
+                }
+                ++postUnbindIntoFrom;
+                const bool tagged = oldField.IsTagged();
+                if (tagged) {
+                    ++postUnbindIntoFromTagged;
+                } else {
+                    ++postUnbindIntoFromPlain;
+                }
+                size_t n = postUnbindIntoFrom;
+                if ((n & (n - 1)) == 0) {
+                    // Holder is survived; type name is cheap if TypeInfo present.
+                    const char* holderType = "<unknown>";
+                    TypeInfo* ti = obj->GetTypeInfo();
+                    if (ti != nullptr) {
+                        const char* name = ti->GetName();
+                        if (name != nullptr) {
+                            holderType = name;
+                        }
+                    }
+                    // Find which interval for the sample line.
+                    MAddress ivStart = 0;
+                    MAddress ivEnd = 0;
+                    for (const FromAddrInterval& iv : g_probeFromIntervals) {
+                        if (taddr >= iv.start && taddr < iv.end) {
+                            ivStart = iv.start;
+                            ivEnd = iv.end;
+                            break;
+                        }
+                    }
+                    VLOG(REPORT,
+                         "[UNBINDCOUNT] postUnbindIntoFrom n=%zu holder=%p type=%s slotOff=%zu "
+                         "target=%p interval=[%#zx,%#zx) tagged=%d",
+                         n, obj, holderType, static_cast<size_t>(BaseObject::FieldOffset(obj, &field)), target,
+                         static_cast<size_t>(ivStart), static_cast<size_t>(ivEnd), tagged ? 1 : 0);
+                }
+            });
+        },
+        false);
+    const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    VLOG(REPORT,
+         "[UNBINDCOUNT] postUnbindIntoFrom=%zu postUnbindIntoFromTagged=%zu "
+         "postUnbindIntoFromPlain=%zu holdersScanned=%zu slotsScanned=%zu fromIntervals=%zu "
+         "pause=%zu us",
+         postUnbindIntoFrom, postUnbindIntoFromTagged, postUnbindIntoFromPlain, holdersScanned, slotsScanned,
+         g_probeFromIntervals.size(), static_cast<size_t>(pauseUs));
+}
+
 // DO NOT MERGE: after BulkForwardHolderRefs, before FlipTagID — count plain→from/ghost
 // (EDGECOUNT) and tagged→from/ghost/garbage (TAGCOUNT) on the same survived walk.
 // Read-only: no rewrite, no FixEdgeSet mutation. Route lookup uses FindToVersion only
@@ -1520,6 +1663,10 @@ void WCollector::DoGarbageCollection()
 
     Preforward();
 
+    // DO NOT MERGE: snapshot from-region address intervals before Forward (Unbind
+    // may reclaim/reuse those regions; post-Unbind count uses ranges only).
+    CaptureFromRegionIntervalsBeforeForward();
+
     ForwardFromSpace();
 
     // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
@@ -1568,6 +1715,10 @@ void WCollector::DoGarbageCollection()
         minorRunsSinceMajor = 0;
     }
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+
+    // DO NOT MERGE: after Unbind — count survived slots still naming this major's
+    // from intervals (address-only; no target route/type lookup).
+    CountPostUnbindIntoFrom();
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)

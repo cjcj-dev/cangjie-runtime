@@ -450,6 +450,12 @@ public:
 
     inline size_t GetFromSpaceSize() const { return fromRegionList.GetAllocatedSize(); }
 
+    // DO NOT MERGE: read-only walk of current from-region list (address capture for probes).
+    void VisitFromRegions(const std::function<void(RegionInfo*)>& visitor)
+    {
+        fromRegionList.VisitAllRegions(visitor);
+    }
+
     inline size_t GetPinnedSpaceSize() const
     {
         return oldPinnedRegionList.GetAllocatedSize() + recentPinnedRegionList.GetAllocatedSize();
