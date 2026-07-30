@@ -115,8 +115,38 @@ void ExceptionManager::StackOverflow(uint32_t adjustedSize __attribute__((unused
     if (mutator == nullptr) {
         return;
     }
-    mutator->StackGuardExpand();
     ExceptionWrapper& eWrapper = mutator->GetExceptionWrapper();
+    // Expand/Recover are a pair: this function expands the guard on the way in, and
+    // BeginCatch recovers it once the handler is reached. Re-entering here with the pc
+    // still set means no Recover has run, because BeginCatch is the only clearer that
+    // pairs one (the other two, ClearInfo at the uncaught-exception dump and in
+    // Mutator::ResetMutator, clear the pc without recovering the guard).
+    //
+    // Continuing from that state is what produced the crash this guard exists for.
+    // CJThreadStackGuardExpand subtracts the reserved size from stackGuard with no
+    // idempotence check and no floor, so every unpaired turn walks the guard further
+    // down — from stackTopAddr + reserved at birth to stackTopAddr on the first turn,
+    // then below the allocated stack's lower boundary, where it guards nothing. The
+    // turns keep coming because ThrowImplicitException disables stack growth on entry
+    // and the failing re-entry prefix never reaches the restore that a completed throw
+    // performs, so the raiser's own stack check fails its grow and lands back here
+    // before the outer MRT_StackGrow call has returned — every prior turn's frames are
+    // still live when the next one starts.
+    //
+    // Observed end state, from the one usable SIGSEGV core: ~200 such turns below the
+    // fault, then a virtual call inside StackGuardExpand whose dispatch target had been
+    // overwritten with non-executable data. The core proves the recursion and the
+    // corrupted dispatch; which pointer went stale first it does not establish.
+    //
+    // Failing here is not a downgrade: the process was going to die either way. It dies
+    // with a message naming the condition instead of as an unexplained wild jump.
+    if (eWrapper.IsThrowingSOFE()) {
+        LOG(RTLOG_FATAL,
+            "stack overflow re-entered while one is already being thrown (first pc %p, this pc %p): "
+            "stack-overflow recovery did not run",
+            eWrapper.GetThrowingSOFFramePc(), ip);
+    }
+    mutator->StackGuardExpand();
     eWrapper.SetThrowingSOFFramePc(ip);
     eWrapper.SetFatalException(true);
     eWrapper.SetExceptionType(ExceptionWrapper::ExceptionType::STACK_OVERFLOW);
