@@ -38,6 +38,7 @@ public:
     bool IsEnabled() const { return enabled; }
     bool IsMinorEnabled() const { return minorEnabled; }
     bool IsMinorValidatorEnabled() const { return minorValidatorEnabled; }
+    bool IsMinorYieldBucketsEnabled() const { return minorYieldBucketsEnabled; }
     bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
     size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
     uint32_t GetMajorInterval() const { return majorInterval; }
@@ -60,6 +61,7 @@ private:
     bool enabled = false;
     bool minorEnabled = false;
     bool minorValidatorEnabled = false;
+    bool minorYieldBucketsEnabled = false;
     bool forceSlowPathEnabled = false;
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;

@@ -36,6 +36,35 @@ struct YoungCollectionStats {
     size_t candidateBytes = 0;
     size_t reclaimedRegions = 0;
     size_t reclaimedBytes = 0;
+
+    size_t reclaimedObjects = 0;
+    size_t reclaimedCandidateBytes = 0;
+    size_t liveRealEdgeObjects = 0;
+    size_t liveRealEdgeBytes = 0;
+    size_t retainedNeverExaminedObjects = 0;
+    size_t retainedNeverExaminedBytes = 0;
+    size_t retainedPinnedOrLargeObjects = 0;
+    size_t retainedPinnedOrLargeBytes = 0;
+    size_t retainedSnapshotConservativeObjects = 0;
+    size_t retainedSnapshotConservativeBytes = 0;
+    size_t retainedCoarseGrainCoresidentObjects = 0;
+    size_t retainedCoarseGrainCoresidentBytes = 0;
+    size_t unaccountedObjects = 0;
+    size_t unaccountedBytes = 0;
+    size_t layoutOverrunBytes = 0;
+
+    size_t decisionReclaimedRegions = 0;
+    size_t decisionReclaimedBytes = 0;
+    size_t decisionLiveRealEdgeRegions = 0;
+    size_t decisionLiveRealEdgeBytes = 0;
+    size_t decisionRetainedNeverExaminedRegions = 0;
+    size_t decisionRetainedNeverExaminedBytes = 0;
+    size_t decisionRetainedPinnedOrLargeRegions = 0;
+    size_t decisionRetainedPinnedOrLargeBytes = 0;
+    size_t decisionRetainedSnapshotConservativeRegions = 0;
+    size_t decisionRetainedSnapshotConservativeBytes = 0;
+    size_t decisionUnaccountedRegions = 0;
+    size_t decisionUnaccountedBytes = 0;
 };
 
 struct FreePinnedSlotLists {

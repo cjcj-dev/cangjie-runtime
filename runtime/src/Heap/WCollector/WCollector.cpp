@@ -946,37 +946,93 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     return object;
 }
 
-void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*, MinorRootKind)>& visitor)
 {
-    RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
+    RootVisitor stackRootVisitor = [this, &visitor](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        visitor(ResolveMinorReference(field));
+        visitor(ResolveMinorReference(field), MinorRootKind::STACK);
     };
-    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
+    RefFieldVisitor staticRootVisitor = [this, &visitor](RefField<>& field) {
+        visitor(ResolveMinorReference(field), MinorRootKind::STATIC);
+    };
+    RootVisitor otherRootVisitor = [this, &visitor](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        visitor(ResolveMinorReference(field), MinorRootKind::OTHER);
+    };
 
     MutatorManager::Instance().VisitAllMutators(
-        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
-    collectorResources.GetFinalizerProcessor().VisitGCRoots(rawRootVisitor);
-    collectorResources.GetFinalizerProcessor().VisitFinalizers(rawRootVisitor);
-    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+        [&stackRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(stackRootVisitor); });
+    Heap::GetHeap().VisitStaticRoots(staticRootVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&otherRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(otherRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(otherRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(otherRootVisitor);
 
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         for (BaseObject* object : resurrectedExportObjectes) {
-            visitor(object);
+            visitor(object, MinorRootKind::OTHER);
         }
         for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
-            visitor(object);
+            visitor(object, MinorRootKind::OTHER);
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
     for (const auto& entry : cycleRefWorkStack) {
-        visitor(entry.first);
+        visitor(entry.first, MinorRootKind::OTHER);
         for (BaseObject* object : entry.second) {
-            visitor(object);
+            visitor(object, MinorRootKind::OTHER);
         }
+    }
+}
+
+void WCollector::RecordMinorRootSeed(BaseObject* object, MinorRootKind kind)
+{
+    if (!StickyLog::Instance().IsMinorYieldBucketsEnabled() || !Heap::IsHeapAddress(object)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (!region->IsYoungRegion()) {
+        return;
+    }
+    switch (kind) {
+        case MinorRootKind::STACK:
+            ++minorStackRootHits;
+            minorStackRootSeeds.insert(object);
+            return;
+        case MinorRootKind::STATIC:
+            ++minorStaticRootHits;
+            minorStaticRootSeeds.insert(object);
+            return;
+        case MinorRootKind::OTHER:
+            ++minorOtherRootHits;
+            minorOtherRootSeeds.insert(object);
+            return;
+    }
+}
+
+void WCollector::RecordMinorSeed(BaseObject* object, MinorRememberedSource source)
+{
+    if (!StickyLog::Instance().IsMinorYieldBucketsEnabled() || !Heap::IsHeapAddress(object)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (!region->IsYoungRegion()) {
+        return;
+    }
+    switch (source) {
+        case MinorRememberedSource::REAL_EDGE:
+            ++minorRememberedRealHits;
+            minorRememberedRealSeeds.insert(object);
+            return;
+        case MinorRememberedSource::NEVER_EXAMINED:
+            ++minorNeverExaminedHits;
+            minorNeverExaminedSeeds.insert(object);
+            return;
+        case MinorRememberedSource::SNAPSHOT_CONSERVATIVE:
+            ++minorSnapshotConservativeHits;
+            minorSnapshotConservativeSeeds.insert(object);
+            return;
     }
 }
 
@@ -1020,20 +1076,22 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             return false;
         }
         bool retainLine = false;
-        auto scanObject = [this, &workStack, lineStart, lineEnd, &retainLine](BaseObject* object) {
+        auto scanObject = [this, &workStack, lineStart, lineEnd, &retainLine]
+                          (BaseObject* object, MinorRememberedSource source) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
             ForEachStrongRefSlot(object,
-                [this, &workStack, &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+                [this, &workStack, &retainLine, source](RefSlotKind, BaseObject* target, RefField<>& field) {
                     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
                         minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
                     }
                     if (Heap::IsHeapAddress(target) &&
                         RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                         retainLine = true;
+                        RecordMinorSeed(target, source);
                     }
                     PushYoungObject(target, workStack);
                 });
@@ -1050,7 +1108,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                      "[E6-remset] NEVER_EXAMINED rescan line region=%p start=%#zx state=NEVER n=%zu",
                      region, region->GetRegionStart(), n);
             }
-            region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
+            region->VisitAllObjects([&scanObject](BaseObject* object) {
+                scanObject(object, MinorRememberedSource::NEVER_EXAMINED);
+            });
         } else {
             // VALID and EMPTY are one snapshot protocol: neither may bypass the epoch check.
             if (!region->IsRetainedSnapshotValid()) {
@@ -1083,7 +1143,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             uintptr_t allocPtr = region->GetRegionAllocPtr();
             CHECK(coveredUpTo >= region->GetRegionStart() && coveredUpTo <= allocPtr);
             if (region->IsLargeRegion()) {
-                scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()));
+                MinorRememberedSource source = region->GetRegionStart() >= coveredUpTo ?
+                    MinorRememberedSource::SNAPSHOT_CONSERVATIVE : MinorRememberedSource::REAL_EDGE;
+                scanObject(reinterpret_cast<BaseObject*>(region->GetRegionStart()), source);
             } else if (region->IsSmallRegion()) {
                 CHECK(retainedLiveInfo != nullptr || coveredUpTo == region->GetRegionStart());
                 uintptr_t position = region->GetRegionStart();
@@ -1092,9 +1154,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                     BaseObject* object = reinterpret_cast<BaseObject*>(position);
                     size_t allocSize = RegionSpace::GetAllocSize(*object);
                     position += allocSize;
-                    if (reinterpret_cast<uintptr_t>(object) >= coveredUpTo ||
-                        retainedLiveInfo->IsSurvivedObject(offset)) {
-                        scanObject(object);
+                    if (reinterpret_cast<uintptr_t>(object) >= coveredUpTo) {
+                        scanObject(object, MinorRememberedSource::SNAPSHOT_CONSERVATIVE);
+                    } else if (retainedLiveInfo->IsSurvivedObject(offset)) {
+                        scanObject(object, MinorRememberedSource::REAL_EDGE);
                     }
                     offset += allocSize;
                 }
@@ -1113,7 +1176,7 @@ void WCollector::ValidateYoungMarking()
     };
     std::unordered_set<BaseObject*> reachable;
     std::vector<ValidationEdge> pending;
-    VisitMinorRoots([&pending](BaseObject* object) {
+    VisitMinorRoots([&pending](BaseObject* object, MinorRootKind) {
         if (Heap::IsHeapAddress(object)) {
             pending.push_back({ object, nullptr, 0 });
         }
@@ -1167,6 +1230,121 @@ void WCollector::ValidateYoungMarking()
     VLOG(REPORT, "[StickyMinor] validator reachable=%zu young=%zu failures=0", reachable.size(), youngReachable);
 }
 
+void WCollector::TraceAttributedYoungClosure(const std::unordered_set<BaseObject*>& seeds,
+                                              std::unordered_set<BaseObject*>& attributed) const
+{
+    std::vector<BaseObject*> pending(seeds.begin(), seeds.end());
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!Heap::IsHeapAddress(object)) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (!region->IsYoungRegion() || !region->IsMarkedObject(object) || !attributed.insert(object).second) {
+            continue;
+        }
+        object->ForEachRefField([this, &pending](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (!Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion->IsYoungRegion() && targetRegion->IsMarkedObject(target)) {
+                pending.push_back(target);
+            }
+        });
+    }
+}
+
+void WCollector::MeasureYoungDisposition(YoungCollectionStats& stats) const
+{
+    if (!StickyLog::Instance().IsMinorYieldBucketsEnabled()) {
+        return;
+    }
+
+    std::unordered_set<BaseObject*> realSeeds = minorStackRootSeeds;
+    realSeeds.insert(minorStaticRootSeeds.begin(), minorStaticRootSeeds.end());
+    realSeeds.insert(minorOtherRootSeeds.begin(), minorOtherRootSeeds.end());
+    realSeeds.insert(minorRememberedRealSeeds.begin(), minorRememberedRealSeeds.end());
+    std::unordered_set<BaseObject*> realAttributed;
+    std::unordered_set<BaseObject*> neverExaminedAttributed;
+    std::unordered_set<BaseObject*> snapshotConservativeAttributed;
+    TraceAttributedYoungClosure(realSeeds, realAttributed);
+    TraceAttributedYoungClosure(minorNeverExaminedSeeds, neverExaminedAttributed);
+    TraceAttributedYoungClosure(minorSnapshotConservativeSeeds, snapshotConservativeAttributed);
+
+    for (RegionInfo* region : minorCandidateRegions) {
+        size_t allocatedBytes = region->GetRegionAllocatedSize();
+        size_t objectCount = 0;
+        region->VisitAllObjects([&objectCount](BaseObject*) { ++objectCount; });
+        if (region->GetLiveByteCount() == 0) {
+            stats.reclaimedObjects += objectCount;
+            stats.reclaimedCandidateBytes += allocatedBytes;
+            ++stats.decisionReclaimedRegions;
+            stats.decisionReclaimedBytes += allocatedBytes;
+            continue;
+        }
+
+        if (region->IsLargeRegion() ||
+            region->GetRegionType() == RegionInfo::RegionType::RECENT_PINNED_REGION) {
+            stats.retainedPinnedOrLargeObjects += objectCount;
+            stats.retainedPinnedOrLargeBytes += allocatedBytes;
+            ++stats.decisionRetainedPinnedOrLargeRegions;
+            stats.decisionRetainedPinnedOrLargeBytes += allocatedBytes;
+            continue;
+        }
+
+        size_t remainingBytes = allocatedBytes;
+        bool hasRealEdge = false;
+        bool hasNeverExamined = false;
+        bool hasSnapshotConservative = false;
+        region->VisitAllObjects([&](BaseObject* object) {
+            size_t objectBytes = RegionSpace::GetAllocSize(*object);
+            size_t attributedBytes = std::min(objectBytes, remainingBytes);
+            if (objectBytes > remainingBytes) {
+                stats.layoutOverrunBytes += objectBytes - remainingBytes;
+            }
+            remainingBytes -= attributedBytes;
+
+            if (!region->IsMarkedObject(object)) {
+                ++stats.retainedCoarseGrainCoresidentObjects;
+                stats.retainedCoarseGrainCoresidentBytes += attributedBytes;
+            } else if (realAttributed.count(object) != 0) {
+                ++stats.liveRealEdgeObjects;
+                stats.liveRealEdgeBytes += attributedBytes;
+                hasRealEdge = true;
+            } else if (neverExaminedAttributed.count(object) != 0) {
+                ++stats.retainedNeverExaminedObjects;
+                stats.retainedNeverExaminedBytes += attributedBytes;
+                hasNeverExamined = true;
+            } else if (snapshotConservativeAttributed.count(object) != 0) {
+                ++stats.retainedSnapshotConservativeObjects;
+                stats.retainedSnapshotConservativeBytes += attributedBytes;
+                hasSnapshotConservative = true;
+            } else {
+                ++stats.unaccountedObjects;
+                stats.unaccountedBytes += attributedBytes;
+            }
+        });
+        stats.unaccountedBytes += remainingBytes;
+
+        if (hasRealEdge) {
+            ++stats.decisionLiveRealEdgeRegions;
+            stats.decisionLiveRealEdgeBytes += allocatedBytes;
+        } else if (hasNeverExamined) {
+            ++stats.decisionRetainedNeverExaminedRegions;
+            stats.decisionRetainedNeverExaminedBytes += allocatedBytes;
+        } else if (hasSnapshotConservative) {
+            ++stats.decisionRetainedSnapshotConservativeRegions;
+            stats.decisionRetainedSnapshotConservativeBytes += allocatedBytes;
+        } else {
+            ++stats.decisionUnaccountedRegions;
+            stats.decisionUnaccountedBytes += allocatedBytes;
+        }
+    }
+}
+
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
@@ -1186,21 +1364,38 @@ void WCollector::DoYoungGarbageCollection()
     minorRescannedLines.clear();
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
+    minorStackRootSeeds.clear();
+    minorStaticRootSeeds.clear();
+    minorOtherRootSeeds.clear();
+    minorRememberedRealSeeds.clear();
+    minorNeverExaminedSeeds.clear();
+    minorSnapshotConservativeSeeds.clear();
+    minorStackRootHits = 0;
+    minorStaticRootHits = 0;
+    minorOtherRootHits = 0;
+    minorRememberedRealHits = 0;
+    minorNeverExaminedHits = 0;
+    minorSnapshotConservativeHits = 0;
     WorkStack workStack = NewWorkStack();
     WorkStack enumRoots = NewWorkStack();
     theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
     while (!enumRoots.empty()) {
         BaseObject* object = enumRoots.back();
         enumRoots.pop_back();
+        RecordMinorRootSeed(object, MinorRootKind::STACK);
         PushYoungObject(object, workStack);
     }
-    VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
+    VisitMinorRoots([this, &workStack](BaseObject* object, MinorRootKind kind) {
+        RecordMinorRootSeed(object, kind);
+        PushYoungObject(object, workStack);
+    });
     RescanRememberedSet(workStack);
     TraceYoungClosure(workStack);
 
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
+    MeasureYoungDisposition(stats);
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();
@@ -1259,6 +1454,53 @@ void WCollector::DoYoungGarbageCollection()
         "[StickyMinor] run=%zu candidates=%zu candidateBytes=%zu reclaimedRegions=%zu reclaimedBytes=%zu pause=%zu us",
         minorTotalRuns, stats.candidateRegions, stats.candidateBytes, stats.reclaimedRegions, stats.reclaimedBytes,
         pauseUs);
+    if (StickyLog::Instance().IsMinorYieldBucketsEnabled()) {
+        size_t objectAccountedBytes = stats.reclaimedCandidateBytes + stats.liveRealEdgeBytes +
+            stats.retainedNeverExaminedBytes + stats.retainedPinnedOrLargeBytes +
+            stats.retainedSnapshotConservativeBytes + stats.retainedCoarseGrainCoresidentBytes +
+            stats.unaccountedBytes;
+        size_t decisionAccountedBytes = stats.decisionReclaimedBytes + stats.decisionLiveRealEdgeBytes +
+            stats.decisionRetainedNeverExaminedBytes + stats.decisionRetainedPinnedOrLargeBytes +
+            stats.decisionRetainedSnapshotConservativeBytes + stats.decisionUnaccountedBytes;
+        VLOG(REPORT,
+            "[StickyMinorYield] run=%zu view=object candidateBytes=%zu "
+            "RECLAIMED_count=%zu RECLAIMED_bytes=%zu LIVE_REAL_EDGE_count=%zu LIVE_REAL_EDGE_bytes=%zu "
+            "RETAINED_NEVER_EXAMINED_count=%zu RETAINED_NEVER_EXAMINED_bytes=%zu "
+            "RETAINED_PINNED_OR_LARGE_count=%zu RETAINED_PINNED_OR_LARGE_bytes=%zu "
+            "RETAINED_SNAPSHOT_CONSERVATIVE_count=%zu RETAINED_SNAPSHOT_CONSERVATIVE_bytes=%zu "
+            "RETAINED_COARSE_GRAIN_CORESIDENT_count=%zu RETAINED_COARSE_GRAIN_CORESIDENT_bytes=%zu "
+            "UNACCOUNTED_count=%zu UNACCOUNTED_bytes=%zu ACCOUNTED_bytes=%zu layoutOverrunBytes=%zu",
+            minorTotalRuns, stats.candidateBytes, stats.reclaimedObjects, stats.reclaimedCandidateBytes,
+            stats.liveRealEdgeObjects, stats.liveRealEdgeBytes, stats.retainedNeverExaminedObjects,
+            stats.retainedNeverExaminedBytes, stats.retainedPinnedOrLargeObjects,
+            stats.retainedPinnedOrLargeBytes, stats.retainedSnapshotConservativeObjects,
+            stats.retainedSnapshotConservativeBytes, stats.retainedCoarseGrainCoresidentObjects,
+            stats.retainedCoarseGrainCoresidentBytes, stats.unaccountedObjects, stats.unaccountedBytes,
+            objectAccountedBytes, stats.layoutOverrunBytes);
+        VLOG(REPORT,
+            "[StickyMinorYield] run=%zu view=region candidateBytes=%zu "
+            "RECLAIMED_count=%zu RECLAIMED_bytes=%zu LIVE_REAL_EDGE_count=%zu LIVE_REAL_EDGE_bytes=%zu "
+            "RETAINED_NEVER_EXAMINED_count=%zu RETAINED_NEVER_EXAMINED_bytes=%zu "
+            "RETAINED_PINNED_OR_LARGE_count=%zu RETAINED_PINNED_OR_LARGE_bytes=%zu "
+            "RETAINED_SNAPSHOT_CONSERVATIVE_count=%zu RETAINED_SNAPSHOT_CONSERVATIVE_bytes=%zu "
+            "UNACCOUNTED_count=%zu UNACCOUNTED_bytes=%zu ACCOUNTED_bytes=%zu",
+            minorTotalRuns, stats.candidateBytes, stats.decisionReclaimedRegions, stats.decisionReclaimedBytes,
+            stats.decisionLiveRealEdgeRegions, stats.decisionLiveRealEdgeBytes,
+            stats.decisionRetainedNeverExaminedRegions, stats.decisionRetainedNeverExaminedBytes,
+            stats.decisionRetainedPinnedOrLargeRegions, stats.decisionRetainedPinnedOrLargeBytes,
+            stats.decisionRetainedSnapshotConservativeRegions,
+            stats.decisionRetainedSnapshotConservativeBytes, stats.decisionUnaccountedRegions,
+            stats.decisionUnaccountedBytes, decisionAccountedBytes);
+        VLOG(REPORT,
+            "[StickyMinorYield] run=%zu view=sources stack_hits=%zu stack_unique=%zu static_hits=%zu "
+            "static_unique=%zu other_root_hits=%zu other_root_unique=%zu remembered_real_hits=%zu "
+            "remembered_real_unique=%zu never_examined_hits=%zu never_examined_unique=%zu "
+            "snapshot_conservative_hits=%zu snapshot_conservative_unique=%zu",
+            minorTotalRuns, minorStackRootHits, minorStackRootSeeds.size(), minorStaticRootHits,
+            minorStaticRootSeeds.size(), minorOtherRootHits, minorOtherRootSeeds.size(), minorRememberedRealHits,
+            minorRememberedRealSeeds.size(), minorNeverExaminedHits, minorNeverExaminedSeeds.size(),
+            minorSnapshotConservativeHits, minorSnapshotConservativeSeeds.size());
+    }
 }
 
 void WCollector::DoGarbageCollection()

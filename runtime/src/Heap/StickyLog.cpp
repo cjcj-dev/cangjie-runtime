@@ -58,6 +58,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
 {
     minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR");
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE");
+    minorYieldBucketsEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_YIELD_BUCKETS");
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH");
     youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);

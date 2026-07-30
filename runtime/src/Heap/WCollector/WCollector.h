@@ -203,6 +203,18 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    enum class MinorRootKind : uint8_t {
+        STACK,
+        STATIC,
+        OTHER,
+    };
+
+    enum class MinorRememberedSource : uint8_t {
+        REAL_EDGE,
+        NEVER_EXAMINED,
+        SNAPSHOT_CONSERVATIVE,
+    };
+
     struct BulkMissBuckets {
         size_t b1LegitIdentity = 0;
         size_t b2LegitOther = 0;
@@ -225,10 +237,15 @@ private:
     };
 
     BaseObject* ResolveMinorReference(RefField<>& field) const;
-    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
+    void VisitMinorRoots(const std::function<void(BaseObject*, MinorRootKind)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
     void RescanRememberedSet(WorkStack& workStack);
+    void RecordMinorSeed(BaseObject* object, MinorRememberedSource source);
+    void RecordMinorRootSeed(BaseObject* object, MinorRootKind kind);
+    void TraceAttributedYoungClosure(const std::unordered_set<BaseObject*>& seeds,
+                                     std::unordered_set<BaseObject*>& attributed) const;
+    void MeasureYoungDisposition(YoungCollectionStats& stats) const;
     void ValidateYoungMarking();
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
@@ -264,6 +281,18 @@ private:
     mutable std::unordered_set<MAddress> minorRescannedFields;
     mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;
     std::unordered_set<RegionInfo*> minorCandidateRegions;
+    std::unordered_set<BaseObject*> minorStackRootSeeds;
+    std::unordered_set<BaseObject*> minorStaticRootSeeds;
+    std::unordered_set<BaseObject*> minorOtherRootSeeds;
+    std::unordered_set<BaseObject*> minorRememberedRealSeeds;
+    std::unordered_set<BaseObject*> minorNeverExaminedSeeds;
+    std::unordered_set<BaseObject*> minorSnapshotConservativeSeeds;
+    size_t minorStackRootHits = 0;
+    size_t minorStaticRootHits = 0;
+    size_t minorOtherRootHits = 0;
+    size_t minorRememberedRealHits = 0;
+    size_t minorNeverExaminedHits = 0;
+    size_t minorSnapshotConservativeHits = 0;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
