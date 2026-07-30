@@ -1202,6 +1202,37 @@ void WCollector::DoYoungGarbageCollection()
         ValidateYoungMarking();
     }
 
+    size_t emptyRegions = 0;
+    size_t emptyBytes = 0;
+    size_t ghostGatedRegions = 0;
+    size_t ghostGatedBytes = 0;
+    size_t ageOneRegions = 0;
+    size_t ageOneBytes = 0;
+    size_t promotedRegionsBeforeCollection = 0;
+    size_t promotedBytes = 0;
+    for (RegionInfo* region : minorCandidateRegions) {
+        size_t allocatedBytes = region->GetRegionAllocatedSize();
+        if (region->GetLiveByteCount() == 0) {
+            ++emptyRegions;
+            emptyBytes += allocatedBytes;
+            if (region->IsGhostFromRegion()) {
+                ++ghostGatedRegions;
+                ghostGatedBytes += allocatedBytes;
+            }
+        } else if (region->GetYoungAge() == 0) {
+            ++ageOneRegions;
+            ageOneBytes += allocatedBytes;
+        } else {
+            ++promotedRegionsBeforeCollection;
+            promotedBytes += allocatedBytes;
+        }
+    }
+    VLOG(REPORT,
+         "[StickyMinorExit] empty_regions=%zu empty_bytes=%zu ghost_gated_regions=%zu ghost_gated_bytes=%zu "
+         "age_one_regions=%zu age_one_bytes=%zu promoted_regions=%zu promoted_bytes=%zu",
+         emptyRegions, emptyBytes, ghostGatedRegions, ghostGatedBytes, ageOneRegions, ageOneBytes,
+         promotedRegionsBeforeCollection, promotedBytes);
+
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();
     StickyLog& stickyLog = StickyLog::Instance();
