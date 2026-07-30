@@ -237,6 +237,10 @@ private:
                                   size_t* interiorRewritten = nullptr,
                                   BulkMissBuckets* missBuckets = nullptr);
     void BulkForwardHolderRefs();
+    // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
+    // Weak referents soft-clear when dead; strong slots keep hard validity checks.
+    void NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent);
+    void NormalizeTraceRegionObject(BaseObject* object);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();

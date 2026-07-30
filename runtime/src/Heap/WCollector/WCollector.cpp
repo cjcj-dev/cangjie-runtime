@@ -507,6 +507,98 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     }
 }
 
+void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent)
+{
+    // Soft path for post-FlipTagID repair of TRACE-born slots. Do not call
+    // GetAndTryTagObj / FindLatestVersion here: both hard-CHECK invalid targets,
+    // and slots may still name referents reclaimed by CollectLargeGarbage
+    // (or never registered in WeakRefBuffer because the WeakRef itself was
+    // allocated after its referent was scanned). Weak: clear; strong: skip.
+    RefField<> oldField(field);
+    BaseObject* raw = oldField.GetTargetObject();
+    if (!Heap::IsHeapAddress(raw)) {
+        return;
+    }
+
+    BaseObject* latest = nullptr;
+    if (IsCurrentPointer(oldField)) {
+        latest = raw;
+    } else if (IsOldPointer(oldField)) {
+        latest = FindToVersion(raw);
+        if (latest == nullptr) {
+            latest = raw;
+        }
+    } else {
+        // Untagged: may still be a from-object whose route is live until Unbind.
+        latest = FindToVersion(raw);
+        if (latest == nullptr) {
+            latest = raw;
+        }
+    }
+
+    auto clearWeak = [holder]() {
+        void** referentAddr =
+            reinterpret_cast<void**>(reinterpret_cast<uintptr_t>(holder) + TYPEINFO_PTR_SIZE);
+        DLOG(FIX, "normalize clear weak referent@%p (holder %p)", referentAddr, holder);
+        *referentAddr = nullptr;
+    };
+
+    if (!Heap::IsHeapAddress(latest)) {
+        if (isWeakReferent) {
+            clearWeak();
+            return;
+        }
+        DLOG(FIX, "normalize skip non-heap strong holder %p field@%p target %p", holder, &field, latest);
+        return;
+    }
+
+    // Probe region metadata before touching object headers: Free/Garbage means
+    // CollectLargeGarbage (or similar) already reclaimed the referent.
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+    bool regionDead = region == nullptr || !region->IsValidRegion() || region->IsFreeRegion() ||
+                      region->IsGarbageRegion();
+    bool headerValid = !regionDead && latest->IsValidObject();
+    // Weak: also drop unmarked/unresurrected referents (same intent as PostTraceBarrier
+    // mark-bit clear; covers TRACE-born WeakRefs never inserted into WeakRefBuffer).
+    // Strong: only require a valid header — match GetAndTryTagObj, not mark bits
+    // (TRACE-born targets may lack marks yet still be live).
+    if (!headerValid || (isWeakReferent && !IsSurvivedObject(latest))) {
+        if (isWeakReferent) {
+            clearWeak();
+            return;
+        }
+        // Strong: leave unrepaired rather than abort — post-Flip normalize is best-effort
+        // retag of live targets; dangling strong is a separate defect (not WEAK_MSG).
+        DLOG(FIX, "normalize skip invalid strong holder %p field@%p target %p", holder, &field, latest);
+        return;
+    }
+
+    RefField<> newField = GetAndTryTagRefField(latest);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(FIX, "normalize trace holder %p field@%p: %#zx => %#zx -> %p (weak=%d)", holder, &field,
+             oldField.GetFieldValue(), newField.GetFieldValue(), latest, isWeakReferent ? 1 : 0);
+    }
+}
+
+void WCollector::NormalizeTraceRegionObject(BaseObject* object)
+{
+    if (object == nullptr || !object->HasRefField()) {
+        return;
+    }
+    if (UNLIKELY(object->IsWeakRef())) {
+        RefField<>* referentField =
+            reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
+        NormalizeTraceRegionRefField(object, *referentField, true);
+        return;
+    }
+    ForEachRefSlot(object, [this, object](RefField<>& field) {
+        NormalizeTraceRegionRefField(object, field, false);
+    });
+}
+
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
     MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
@@ -828,8 +920,9 @@ void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
     TransitionToGCPhase(GC_PHASE_POST_TRACE, true);
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    space.GetRegionManager().HandleTraceRegions();
+    // Defer HandleTraceRegions until after ForwardFromSpace + FlipTagID so
+    // TRACE-born slots can be normalized while objects are still on the
+    // full/largeTrace region caches (see NormalizeTraceRegionObject).
     // clear weakRef List, set the referent as null
     WeakRefBuffer::Instance().ClearWeakRefBuffer();
     // clear satb buffer when gc finish tracing.
@@ -1341,6 +1434,21 @@ void WCollector::DoGarbageCollection()
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
 
+    // Normalize TRACE-born region slots after forward + tag flip, then merge the
+    // caches. Soft-clears dead weak referents; retags/repairs strong slots so
+    // UnbindPreviousLiveInfo cannot leave ABA-stale from-pointers in live
+    // objects (intent of 5d8fa1f2 without its hard weak GetAndTryTagObj CHECK).
+    {
+        ScopedStopTheWorld stw("normalize trace region references");
+        RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+        manager.VisitTraceRegionObjects([this](BaseObject* object) {
+            // Soft path for all slots: never GetAndTryTagObj hard-CHECK during
+            // post-Flip normalize (5d8fa1f2 WEAK_MSG was strong RawArray holders
+            // hitting a message that always said "weak object").
+            NormalizeTraceRegionObject(object);
+        });
+        manager.HandleTraceRegions();
+    }
     CollectSmallSpace();
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major promotion");
