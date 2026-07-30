@@ -677,28 +677,21 @@ void RegionManager::RecordYoungRegionAccounting(YoungAccountingSource source, Re
         return;
     }
     size_t delta = region->GetRegionSize();
-    size_t ordinal = youngAccountingOrdinal.load(std::memory_order_relaxed);
-    const char* sourceName = nullptr;
     switch (source) {
         case YoungAccountingSource::NEW_REGION:
-            sourceName = "new_region";
             youngDiagnosticNewRegionEvents.fetch_add(1, std::memory_order_relaxed);
             youngDiagnosticNewRegionBytes.fetch_add(delta, std::memory_order_relaxed);
             break;
         case YoungAccountingSource::REUSED_GARBAGE_REGION:
-            sourceName = "reused_garbage_region";
             youngDiagnosticReusedGarbageEvents.fetch_add(1, std::memory_order_relaxed);
             youngDiagnosticReusedGarbageBytes.fetch_add(delta, std::memory_order_relaxed);
             break;
         case YoungAccountingSource::REUSED_FREE_REGION:
-            sourceName = "reused_free_region";
             youngDiagnosticReusedFreeEvents.fetch_add(1, std::memory_order_relaxed);
             youngDiagnosticReusedFreeBytes.fetch_add(delta, std::memory_order_relaxed);
             break;
     }
     youngDiagnosticAccountedBytes.fetch_add(delta, std::memory_order_relaxed);
-    VLOG(REPORT, "[YoungAccountingEvent] gcOrdinal=%zu source=%s delta=%zu region_idx=%zu",
-         ordinal, sourceName, delta, region->GetUnitIdx());
 }
 
 YoungAccountingStats RegionManager::SnapshotYoungAccounting()
