@@ -1031,7 +1031,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
     const char* staleSnapshotValue = std::getenv("RESREV2_STALE_SNAPSHOT");
-    bool injectStaleSnapshot = staleSnapshotValue != nullptr && strcmp(staleSnapshotValue, "1") == 0;
+    static std::atomic<bool> staleSnapshotInjectionUsed{ false };
+    bool injectStaleSnapshot = staleSnapshotValue != nullptr && strcmp(staleSnapshotValue, "1") == 0 &&
+        !staleSnapshotInjectionUsed.exchange(true, std::memory_order_relaxed);
     std::unordered_set<RegionInfo*> injectedRegions;
     size_t injectedMismatchCount = 0;
     size_t conservativeObjectCount = 0;
