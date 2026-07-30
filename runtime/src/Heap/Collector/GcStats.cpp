@@ -8,6 +8,7 @@
 #include "GcStats.h"
 
 #include "Base/LogFile.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -70,5 +71,11 @@ void GCStats::Dump() const
 
     VLOG(REPORT, "allocated size: %s, heap size: %s, heap utilization: %.2f%%", Pretty(liveSize).Str(),
          Pretty(heapSize).Str(), utilization);
+    RegionManager& regionManager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    VLOG(REPORT,
+         "[RouteEpochCounters] reason=%s epochSampledAtUseCount=%zu routeEpochMismatchCount=%zu "
+         "routeEpochRaceAfterUseCount=%zu",
+         g_gcRequests[reason].name, regionManager.GetEpochSampledAtUseCount(),
+         regionManager.GetRouteEpochMismatchCount(), regionManager.GetRouteEpochRaceAfterUseCount());
 }
 } // namespace MapleRuntime
