@@ -903,8 +903,8 @@ private:
     std::mutex freePinnedSlotListMutex;
     FreePinnedSlotLists freePinnedSlotLists;
 
-    size_t GetAllocPointerBytes(size_t& regionCapacityBytes) const;
-    size_t GetRawPrivateBytes() const;
+    __attribute__((visibility("hidden"))) size_t GetAllocPointerBytes(size_t& regionCapacityBytes) const;
+    __attribute__((visibility("hidden"))) size_t GetRawPrivateBytes() const;
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_MANAGER_H
