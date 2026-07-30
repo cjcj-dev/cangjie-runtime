@@ -62,6 +62,12 @@ struct YoungAccountingStats {
     size_t rawPrivateBaselineBytes = 0;
     size_t rawPrivateCurrentBytes = 0;
     int64_t conservationErrorBytes = 0;
+    size_t validationObjectBytes = 0;
+    size_t validationBaselineBytes = 0;
+    size_t validationCurrentBytes = 0;
+    int64_t validationErrorBytes = 0;
+    uint64_t allocPointerScanNs = 0;
+    uint64_t validationScanNs = 0;
     size_t newRegionEvents = 0;
     size_t newRegionBytes = 0;
     size_t reusedGarbageEvents = 0;
@@ -879,6 +885,7 @@ private:
     size_t youngObjectBytesBaseline = 0;
     size_t youngRegionCapacityBaseline = 0;
     size_t youngRawPrivateBytesBaseline = 0;
+    size_t youngValidationObjectBaseline = 0;
     size_t youngPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
     std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
@@ -904,6 +911,7 @@ private:
     FreePinnedSlotLists freePinnedSlotLists;
 
     __attribute__((visibility("hidden"))) size_t GetAllocPointerBytes(size_t& regionCapacityBytes) const;
+    __attribute__((visibility("hidden"))) size_t GetValidationObjectBytes() const;
     __attribute__((visibility("hidden"))) size_t GetRawPrivateBytes() const;
 };
 } // namespace MapleRuntime

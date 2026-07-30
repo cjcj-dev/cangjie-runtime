@@ -26,6 +26,17 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+namespace {
+bool IsYoungAccountingValidationEnabled()
+{
+    static bool enabled = []() {
+        const char* value = std::getenv("MRT_STICKY_YOUNG_ACCOUNTING_VALIDATE");
+        return value != nullptr && strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+}
+
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 
@@ -705,7 +716,9 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
         stats.heapCurrentBytes - stats.heapBaselineBytes : 0;
     stats.objectBaselineBytes = youngObjectBytesBaseline;
     stats.regionCapacityBaselineBytes = youngRegionCapacityBaseline;
+    uint64_t scanStart = TimeUtil::NanoSeconds();
     stats.objectCurrentBytes = GetAllocPointerBytes(stats.regionCapacityCurrentBytes);
+    stats.allocPointerScanNs = TimeUtil::NanoSeconds() - scanStart;
     stats.objectAllocPointerBytes = stats.objectCurrentBytes >= stats.objectBaselineBytes ?
         stats.objectCurrentBytes - stats.objectBaselineBytes : 0;
     stats.tailBaselineBytes = stats.regionCapacityBaselineBytes - stats.objectBaselineBytes;
@@ -725,6 +738,17 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
     int64_t conservationReference = static_cast<int64_t>(stats.actualBytes) + rawPrivateDelta - tailDelta +
         static_cast<int64_t>(stats.pinnedSlotBytes);
     stats.conservationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) - conservationReference;
+    if (IsYoungAccountingValidationEnabled()) {
+        stats.validationBaselineBytes = youngValidationObjectBaseline;
+        scanStart = TimeUtil::NanoSeconds();
+        stats.validationCurrentBytes = GetValidationObjectBytes();
+        stats.validationScanNs = TimeUtil::NanoSeconds() - scanStart;
+        size_t validationAllocBytes = stats.validationCurrentBytes >= stats.validationBaselineBytes ?
+            stats.validationCurrentBytes - stats.validationBaselineBytes : 0;
+        stats.validationObjectBytes = validationAllocBytes + stats.pinnedSlotBytes;
+        stats.validationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) -
+            static_cast<int64_t>(stats.validationObjectBytes);
+    }
     stats.newRegionEvents = youngDiagnosticNewRegionEvents.exchange(0, std::memory_order_relaxed);
     stats.newRegionBytes = youngDiagnosticNewRegionBytes.exchange(0, std::memory_order_relaxed);
     stats.reusedGarbageEvents = youngDiagnosticReusedGarbageEvents.exchange(0, std::memory_order_relaxed);
@@ -739,6 +763,9 @@ void RegionManager::SetYoungAccountingHeapBaseline()
     youngDiagnosticHeapBaseline.store(GetAllocatedSize(), std::memory_order_relaxed);
     youngObjectBytesBaseline = GetAllocPointerBytes(youngRegionCapacityBaseline);
     youngRawPrivateBytesBaseline = GetRawPrivateBytes();
+    if (IsYoungAccountingValidationEnabled()) {
+        youngValidationObjectBaseline = GetValidationObjectBytes();
+    }
 }
 
 size_t RegionManager::GetAllocPointerBytes(size_t& regionCapacityBytes) const
@@ -762,6 +789,27 @@ size_t RegionManager::GetAllocPointerBytes(size_t& regionCapacityBytes) const
     return allocatedBytes;
 }
 
+size_t RegionManager::GetValidationObjectBytes() const
+{
+    size_t objectBytes = 0;
+    for (uintptr_t address = regionHeapStart; address < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
+        if (!region->IsValidRegion()) {
+            address += RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        MAddress regionEnd = region->GetRegionEnd();
+        MRT_ASSERT(regionEnd > address, "invalid region extent while validating young allocation bytes");
+        if (!region->IsGarbageRegion()) {
+            region->VisitAllObjects([&objectBytes](BaseObject* object) {
+                objectBytes += RegionSpace::GetAllocSize(*object);
+            });
+        }
+        address = regionEnd;
+    }
+    return objectBytes;
+}
+
 size_t RegionManager::GetRawPrivateBytes() const
 {
     size_t rawPrivateBytes = 0;
@@ -781,6 +829,8 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          "region_capacity_baseline_bytes=%zu region_capacity_current_bytes=%zu "
          "tail_baseline_bytes=%zu tail_current_bytes=%zu "
          "raw_private_baseline_bytes=%zu raw_private_current_bytes=%zu conservation_error_bytes=%lld "
+         "validation_object_bytes=%zu validation_baseline_bytes=%zu validation_current_bytes=%zu "
+         "validation_error_bytes=%lld alloc_pointer_scan_ns=%llu validation_scan_ns=%llu "
          "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
          "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
          stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.measuredObjectBytes,
@@ -790,6 +840,10 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          stats.tailBaselineBytes, stats.tailCurrentBytes,
          stats.rawPrivateBaselineBytes, stats.rawPrivateCurrentBytes,
          static_cast<long long>(stats.conservationErrorBytes),
+         stats.validationObjectBytes, stats.validationBaselineBytes, stats.validationCurrentBytes,
+         static_cast<long long>(stats.validationErrorBytes),
+         static_cast<unsigned long long>(stats.allocPointerScanNs),
+         static_cast<unsigned long long>(stats.validationScanNs),
          stats.newRegionEvents, stats.newRegionBytes, stats.reusedGarbageEvents, stats.reusedGarbageBytes,
          stats.reusedFreeEvents, stats.reusedFreeBytes);
 }
