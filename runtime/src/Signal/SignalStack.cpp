@@ -10,6 +10,7 @@
 
 #include <dlfcn.h>
 #include <pthread.h>
+#include <unistd.h>
 #include <csignal>
 #include <cstdlib>
 #include <climits>
@@ -21,6 +22,7 @@
 #include <type_traits>
 #include <utility>
 #include "Cangjie.h"
+#include "Base/SysCall.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -32,6 +34,61 @@ static decltype(&sigaction) g_linkedSignalAction;
 static decltype(&sigprocmask) g_linkedSignalProcmask;
 static pthread_key_t g_sigchainKey;
 static constexpr size_t SIGSET_SIZE = _NSIG / 8 / sizeof(long);
+
+// AS-safe helpers for the signal handler path (POSIX async-signal-safe only).
+namespace {
+void WriteAsSafe(const char* buf, size_t len)
+{
+    if (buf == nullptr || len == 0) {
+        return;
+    }
+    (void)write(STDERR_FILENO, buf, len);
+}
+
+void WriteAsSafeCStr(const char* str)
+{
+    if (str == nullptr) {
+        return;
+    }
+    size_t len = 0;
+    while (str[len] != '\0') {
+        ++len;
+    }
+    WriteAsSafe(str, len);
+}
+
+// Match FLOG(RTLOG_ERROR, "CJNative Handle signal: %d.") byte sequence exactly:
+// "<tid> E CJNative Handle signal: <n>.\n"
+void LogHandleSignalAsSafe(int signal)
+{
+    char buf[96];
+    int n = sprintf_s(buf, sizeof(buf), "%d E CJNative Handle signal: %d.\n",
+                      static_cast<int>(GetTid()), signal);
+    if (n > 0) {
+        WriteAsSafe(buf, static_cast<size_t>(n));
+    }
+}
+
+void LogSignalSlotExhaustedAsSafe(int signal)
+{
+    char buf[96];
+    int n = sprintf_s(buf, sizeof(buf), "%d E Signal Handler fail: SignalArgs slots exhausted sig=%d\n",
+                      static_cast<int>(GetTid()), signal);
+    if (n > 0) {
+        WriteAsSafe(buf, static_cast<size_t>(n));
+    }
+}
+
+void RaiseDefaultAsSafe(int signal)
+{
+    struct sigaction dfl = {};
+    dfl.sa_handler = SIG_DFL;
+    if (g_linkedSignalAction != nullptr) {
+        g_linkedSignalAction(signal, &dfl, nullptr);
+    }
+    raise(signal);
+}
+} // namespace
 
 void SigOrSet(sigset_t* dest, const sigset_t* left, const sigset_t* right)
 {
@@ -97,12 +154,46 @@ struct SignalArgs {
     bool isAsync;
 };
 
+// 2-deep static slots: nested signals take the second; exhausted → DFL+raise (no heap).
+static constexpr size_t kSigArgsSlotCount = 2;
+static SignalArgs g_sigArgsSlots[kSigArgsSlotCount];
+static volatile sig_atomic_t g_sigArgsInUse[kSigArgsSlotCount] = {0, 0};
+
+static SignalArgs* AcquireSignalArgs(int signal, siginfo_t* siginfo, void* ucontextRaw, bool isAsync)
+{
+    for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
+        if (g_sigArgsInUse[i] == 0) {
+            g_sigArgsInUse[i] = 1;
+            g_sigArgsSlots[i].signal = signal;
+            g_sigArgsSlots[i].siginfo = siginfo;
+            g_sigArgsSlots[i].ucontextRaw = ucontextRaw;
+            g_sigArgsSlots[i].isAsync = isAsync;
+            return &g_sigArgsSlots[i];
+        }
+    }
+    return nullptr;
+}
+
+static void ReleaseSignalArgs(SignalArgs* args)
+{
+    if (args == nullptr) {
+        return;
+    }
+    for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
+        if (args == &g_sigArgsSlots[i]) {
+            g_sigArgsInUse[i] = 0;
+            return;
+        }
+    }
+}
+
 void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
 {
-    FLOG(RTLOG_ERROR, "CJNative Handle signal: %d.", signal);
-    SignalArgs* args = new SignalArgs{signal, siginfo, ucontextRaw, false};
+    LogHandleSignalAsSafe(signal);
+    SignalArgs* args = AcquireSignalArgs(signal, siginfo, ucontextRaw, false);
     if (args == nullptr) {
-        FLOG(RTLOG_ERROR, "Signal Handler fail: failed to new SignalArgs");
+        LogSignalSlotExhaustedAsSafe(signal);
+        RaiseDefaultAsSafe(signal);
         return;
     }
     switch (signal) {
@@ -122,16 +213,16 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
                 if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(
                                     MapleRuntime::SignalStack::HandlerImpl),
                                     args) == NULL) {
-                    LOG(RTLOG_ERROR, "Signal Handler fail. as RunCJTask return null\n");
-                    delete args;
+                    WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
+                    ReleaseSignalArgs(args);
                 }
             }
             break;
         default:
             args->isAsync = true;
             if (RunCJTaskSignal(reinterpret_cast<CJTaskFunc>(MapleRuntime::SignalStack::HandlerImpl), args) == NULL) {
-                LOG(RTLOG_ERROR, "Signal Handler fail. as RunCJTask return null\n");
-                delete args;
+                WriteAsSafeCStr("Signal Handler fail. as RunCJTask return null\n");
+                ReleaseSignalArgs(args);
             }
     }
 }
@@ -143,7 +234,6 @@ void SignalStack::HandlerImpl(void* args)
     int signal = signalArgs->signal;
     siginfo_t* siginfo = signalArgs->siginfo;
     void* ucontextRaw = signalArgs->ucontextRaw;
-    ScopedEntryTrace trace("CJRT_SIGNAL_HANDLER");
     // Check if we are already handling a signal
     if (!GetHandlingSignal()) {
         std::vector<SignalAction>& handlerStack = SignalStack::stacks[signal].handlerStack;
@@ -166,7 +256,7 @@ void SignalStack::HandlerImpl(void* args)
             // Execute the signal handler
             if (handler.saSignalAction(signal, siginfo, ucontextRaw)) {
                 SetHandlingSignal(previous_value);
-                delete signalArgs;
+                ReleaseSignalArgs(signalArgs);
                 return;
             }
             g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
@@ -188,7 +278,7 @@ void SignalStack::HandlerImpl(void* args)
         g_linkedSignalProcmask(SIG_SETMASK, &mask, nullptr);
 #ifdef __APPLE__
         if (SignalStack::stacks[signal].sigAction.sa_sigaction == nullptr) {
-            LOG(RTLOG_ERROR, "Handle unexpected signal action.");
+            WriteAsSafeCStr("Handle unexpected signal action.\n");
             int retNum = signal + 128; // Signal base return number
             exit(retNum);
         }
@@ -199,15 +289,13 @@ void SignalStack::HandlerImpl(void* args)
         // Get the signal handler
         auto handler = SignalStack::stacks[signal].sigAction.sa_handler;
         if (handler == SIG_IGN) {
-            delete signalArgs;
+            ReleaseSignalArgs(signalArgs);
             return;
         } else if (handler == SIG_DFL) {
-            // Restore default signal handler and re-raise the signal
-            struct sigaction dfl = {};
-            dfl.sa_handler = SIG_DFL;
-            g_linkedSignalAction(signal, &dfl, nullptr);
-            raise(signal);
-            delete signalArgs;
+            // Restore default signal handler and re-raise the signal.
+            // Zero heap / zero mutex on this path before raise (AS-safe termination).
+            ReleaseSignalArgs(signalArgs);
+            RaiseDefaultAsSafe(signal);
             return;
         } else {
             g_linkedSignalProcmask(SIG_SETMASK, &mask, nullptr);
@@ -217,7 +305,7 @@ void SignalStack::HandlerImpl(void* args)
             handler(signal);
         }
     }
-    delete signalArgs;
+    ReleaseSignalArgs(signalArgs);
 }
 
 template <typename T>
