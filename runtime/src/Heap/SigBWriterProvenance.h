@@ -20,7 +20,8 @@ class TypeInfo;
 // gcsigb2 observe-only: exact-slot writer provenance for signature-B victim
 // instances (ConstAnalysisWrapper.resultsMap backing RawArrays). Never selects
 // or rewrites a reference; range checks are two comparisons on hot paths.
-class SigBWriterProvenance {
+// hidden: observe-only, must not add dynamic exports (nm -D gate).
+class __attribute__((visibility("hidden"))) SigBWriterProvenance {
 public:
     enum WriterKind : uint8_t {
         WRITER_NONE = 0,
