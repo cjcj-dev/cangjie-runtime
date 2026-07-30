@@ -14,7 +14,7 @@
 #include "securec.h"
 #include "basetime.h"
 #include "Base/Log.h"
-#if defined(CANGJIE_ASAN_SUPPORT)
+#if defined(CANGJIE_SANITIZER_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "StackManager.h"
@@ -876,6 +876,9 @@ void ScheduleProcessorFree(struct Schedule *schedule)
                 func(processor);
             }
         }
+#if defined(CANGJIE_TSAN_SUPPORT)
+        MapleRuntime::Sanitizer::TsanDeleteRaceProc(processor);
+#endif
     }
 
     // Release processor.
