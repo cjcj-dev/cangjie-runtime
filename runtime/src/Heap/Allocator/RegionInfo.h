@@ -777,40 +777,41 @@ public:
         return metadata.routeInfo.AcquireRouteInfo();
     }
 
-    static std::atomic<size_t>& RetiredRouteEntryCounter()
-    {
-        static std::atomic<size_t> counter{ 0 };
-        return counter;
-    }
-
-    // Retired entry point, kept only for the versioned export surface
+    // Deprecated entry point, kept for the versioned export surface
     // (_ZN12MapleRuntime10RegionInfo8GetRouteEPNS_10BaseObjectE@@CANGJIE).
     //
-    // It has no caller-held expected epoch, so it cannot tell a live route from one
-    // whose region was torn down after the caller formed its view. Every legitimate
-    // reader goes through RegionManager::RouteObject(fromObj, region, expectedEpoch),
-    // which checks identity epoch and install stamp together. Any call arriving here
-    // is a mis-wire; refuse it instead of returning an unvalidated address.
-    __attribute__((used)) BaseObject* GetRoute(BaseObject*)
+    // It has no caller-held expected epoch, so it cannot show that the route belongs to
+    // the generation the caller saw. Every in-tree reader goes through
+    // RegionManager::RouteObject(fromObj, region, expectedEpoch), which checks identity
+    // epoch and install stamp together.
+    //
+    // The behaviour is deliberately left as it was. The only reason this symbol exists
+    // is binary compatibility with callers we do not control, and returning nullptr
+    // where the old code returned a to-address is not a safe default for them: a caller
+    // reads "no route" as "not evacuated" and keeps using the from-address. Changing the
+    // answer would be a worse outcome than answering without an epoch. So: same answer,
+    // plus one async-signal-safe line on stderr saying the caller is on the epochless
+    // path. No formatting, no lock, no static storage — an external caller may be inside
+    // its own signal handler, where a locking logger self-deadlocks
+    // (reports/REPORT-gchang11.md), and a function-local static here would add a
+    // versioned dynamic export (review epochrev1 ISSUE-1).
+    __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
     {
-        // Warn once, async-signal-safely: fixed string, no formatting, no lock. An
-        // external caller reaching this through the versioned symbol may be inside its
-        // own signal handler or stop-the-world, where a locking logger self-deadlocks
-        // (reports/REPORT-gchang11.md). A warning must not be more dangerous than the
-        // condition it warns about.
-        if (RetiredRouteEntryCounter().fetch_add(1, std::memory_order_relaxed) == 0) {
 #ifndef _WIN64
-            static const char msg[] =
-                "E RegionInfo::GetRoute(fromObj) is retired: no caller-held epoch; use "
-                "RegionManager::RouteObject(fromObj, region, expectedEpoch)\n";
-            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+        // Not static: a function-local static in an inline member becomes a weak data
+        // export, which is exactly what ISSUE-1 flagged. A ~100-byte stack copy on a
+        // path that should never execute is the cheaper trade.
+        const char msg[] =
+            "E RegionInfo::GetRoute(fromObj) has no caller-held epoch; use "
+            "RegionManager::RouteObject(fromObj, region, expectedEpoch)\n";
+        (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
 #endif
+        RouteInfo routeInfo = AcquireRouteInfo();
+        if (!routeInfo.IsInstalled()) {
+            return nullptr;
         }
-        return nullptr;
+        return GetRoute(fromObj, routeInfo);
     }
-
-    // Retired-entry hit count, for gates that must prove the entry is unreached.
-    static size_t GetRetiredRouteEntryCalls() { return RetiredRouteEntryCounter().load(std::memory_order_relaxed); }
 
     __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
         BaseObject* fromObj, RouteInfo& routeInfo)
