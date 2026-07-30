@@ -776,17 +776,23 @@ public:
         return metadata.routeInfo.AcquireRouteInfo();
     }
 
-    // GetRoute (EPOCH_DESIGN_0729 R2/R2.1): consume one acquired route snapshot.
-    // Presence is carried by the snapshot version, independently of installEpoch.
-    // ⛔ FixHolder must not call GetRoute (r1segv / R2.1 ForwardTable); ruling unchanged.
-    // Signature matches pre-epoch export surface (single arg).
+    // Retired entry point, kept only for the versioned export surface
+    // (_ZN12MapleRuntime10RegionInfo8GetRouteEPNS_10BaseObjectE@@CANGJIE).
+    //
+    // It has no caller-held expected epoch, so it cannot tell a live route from one
+    // whose region was torn down after the caller formed its view. Every legitimate
+    // reader goes through RegionManager::RouteObject(fromObj, region, expectedEpoch),
+    // which checks identity epoch and install stamp together. Any call arriving here
+    // is a mis-wire; fail loudly instead of returning an unvalidated address.
     __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
     {
-        RouteInfo routeInfo = AcquireRouteInfo();
-        if (!routeInfo.IsInstalled()) {
-            return nullptr;
-        }
-        return GetRoute(fromObj, routeInfo);
+        static std::atomic<size_t> retiredEntryCalls{ 0 };
+        size_t n = retiredEntryCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR,
+            "RegionInfo::GetRoute(fromObj) is retired: no caller-held epoch, region=%p fromObj=%p n=%zu. "
+            "Use RegionManager::RouteObject(fromObj, region, expectedEpoch).",
+            this, fromObj, n);
+        return nullptr;
     }
 
     __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
@@ -822,11 +828,23 @@ public:
         return AcquireRouteInfo().GetInstallEpoch();
     }
 
-    // True iff one self-consistent acquired record is present and carries the stamp.
-    bool RouteEpochMatches(uint64_t expectedInstallEpoch) const
+    // True iff the region still carries the caller's identity and one self-consistent
+    // acquired route record installed under that same identity.
+    //
+    // Both halves are required: the install stamp alone would accept a route that was
+    // reinstalled after the caller's region view expired. This is the single definition
+    // of route-carrier validity — RegionManager::RouteObject consumes it rather than
+    // repeating the predicate inline.
+    bool RouteEpochMatches(uint64_t expectedEpoch) const
     {
         RouteInfo routeInfo = AcquireRouteInfo();
-        return routeInfo.IsInstalled() && expectedInstallEpoch == routeInfo.GetInstallEpoch();
+        return RouteEpochMatches(expectedEpoch, routeInfo);
+    }
+
+    bool RouteEpochMatches(uint64_t expectedEpoch, const RouteInfo& routeInfo) const
+    {
+        return expectedEpoch == GetIdentityEpoch() && routeInfo.IsInstalled() &&
+            expectedEpoch == routeInfo.GetInstallEpoch();
     }
 
     void PrepareForwardableRegion()

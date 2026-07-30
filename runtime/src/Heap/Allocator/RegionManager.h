@@ -538,8 +538,7 @@ public:
             // a local snapshot cannot change under the reader, and the install-stamp
             // check below already pins the route to the caller-held identity.
             RouteInfo routeInfo = fromRegionInfo->AcquireRouteInfo();
-            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch() ||
-                         !routeInfo.IsInstalled() || routeInfo.GetInstallEpoch() != expectedEpoch)) {
+            if (UNLIKELY(!fromRegionInfo->RouteEpochMatches(expectedEpoch, routeInfo))) {
                 size_t n = routeEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
                     VLOG(REPORT,
