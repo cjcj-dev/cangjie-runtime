@@ -816,9 +816,11 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     }
 }
 
-// DO NOT MERGE: after BulkForwardHolderRefs, before FlipTagID — count plain slots whose
-// targets still sit in from / ghost-from (unregistered edges that BulkForward missed).
-// Read-only: no rewrite, no FixEdgeSet mutation. STW cost is intentional for the probe.
+// DO NOT MERGE: after BulkForwardHolderRefs, before FlipTagID — count plain→from/ghost
+// (EDGECOUNT) and tagged→from/ghost/garbage (TAGCOUNT) on the same survived walk.
+// Read-only: no rewrite, no FixEdgeSet mutation. Route lookup uses FindToVersion only
+// (returns null; never FindLatestVersion / GetAndTryTagObj / IsValidObject assert paths).
+// STW cost is intentional for the probe.
 void WCollector::CountUnregisteredPlainToFromAfterBulkForward()
 {
     MRT_PHASE_TIMER("CountUnregisteredPlainToFromAfterBulkForward");
@@ -827,10 +829,15 @@ void WCollector::CountUnregisteredPlainToFromAfterBulkForward()
     size_t unregisteredPlainToFrom = 0;
     size_t holdersScanned = 0;
     size_t plainSlots = 0;
+    size_t taggedSlots = 0;
+    size_t taggedToFrom = 0;
+    size_t taggedToFromUnroutable = 0;
+    size_t taggedToGarbage = 0;
     // FixEdgeSet was VisitAndClear'd inside BulkForward — membership not available (未查).
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.ForEachObj(
-        [this, &unregisteredPlainToFrom, &holdersScanned, &plainSlots](BaseObject* obj) {
+        [this, &unregisteredPlainToFrom, &holdersScanned, &plainSlots, &taggedSlots, &taggedToFrom,
+         &taggedToFromUnroutable, &taggedToGarbage](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
@@ -841,13 +848,51 @@ void WCollector::CountUnregisteredPlainToFromAfterBulkForward()
                 return;
             }
             ++holdersScanned;
-            ForEachRefSlot(obj, [this, obj, &unregisteredPlainToFrom, &plainSlots](RefField<>& field) {
+            ForEachRefSlot(obj, [this, obj, &unregisteredPlainToFrom, &plainSlots, &taggedSlots, &taggedToFrom,
+                                 &taggedToFromUnroutable, &taggedToGarbage](RefField<>& field) {
                 RefField<> oldField(field);
-                if (oldField.IsTagged()) {
-                    return;
-                }
                 BaseObject* target = oldField.GetTargetObject();
                 if (!Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                if (oldField.IsTagged()) {
+                    ++taggedSlots;
+                    RegionInfo* region =
+                        RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    const bool isGarbageOrFree =
+                        region != nullptr && (region->IsGarbageRegion() || region->IsFreeRegion());
+                    if (isGarbageOrFree) {
+                        ++taggedToGarbage;
+                        size_t n = taggedToGarbage;
+                        if ((n & (n - 1)) == 0) {
+                            VLOG(REPORT,
+                                 "[TAGCOUNT] taggedToGarbage n=%zu holder=%p slot=%p target=%p "
+                                 "regionType=%u routable=-",
+                                 n, obj, &field, target,
+                                 static_cast<unsigned>(region->GetRegionType()));
+                        }
+                    }
+                    const bool isFrom = IsFromObject(target);
+                    const bool isGhost = IsGhostFromObject(target);
+                    if (!isFrom && !isGhost) {
+                        return;
+                    }
+                    ++taggedToFrom;
+                    // Read-only: FindToVersion → null when no to-version (no hard CHECK path).
+                    BaseObject* toVersion = FindToVersion(target);
+                    const bool routable = (toVersion != nullptr);
+                    if (!routable) {
+                        ++taggedToFromUnroutable;
+                    }
+                    size_t n = taggedToFrom;
+                    if ((n & (n - 1)) == 0) {
+                        const char* regionKind = isGhost ? "ghost-from" : "from";
+                        VLOG(REPORT,
+                             "[TAGCOUNT] taggedToFrom n=%zu holder=%p slot=%p target=%p "
+                             "region=%s routable=%d unroutable_total=%zu",
+                             n, obj, &field, target, regionKind, routable ? 1 : 0,
+                             taggedToFromUnroutable);
+                    }
                     return;
                 }
                 ++plainSlots;
@@ -872,6 +917,11 @@ void WCollector::CountUnregisteredPlainToFromAfterBulkForward()
     VLOG(REPORT,
          "[EDGECOUNT] unregisteredPlainToFrom=%zu holdersScanned=%zu plainSlots=%zu pause=%zu us",
          unregisteredPlainToFrom, holdersScanned, plainSlots, static_cast<size_t>(pauseUs));
+    VLOG(REPORT,
+         "[TAGCOUNT] taggedToFrom=%zu taggedToFromUnroutable=%zu taggedToGarbage=%zu "
+         "holdersScanned=%zu taggedSlots=%zu pause=%zu us",
+         taggedToFrom, taggedToFromUnroutable, taggedToGarbage, holdersScanned, taggedSlots,
+         static_cast<size_t>(pauseUs));
 }
 
 // R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
