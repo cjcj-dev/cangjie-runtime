@@ -7,11 +7,15 @@
 #include "StickyLog.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <vector>
+#if defined(__linux__) || defined(__OHOS__)
+#include <link.h>
+#endif
 
 #include "Allocator/MemMap.h"
 #include "Allocator/RegionInfo.h"
@@ -71,9 +75,9 @@ size_t ReadStickyPositiveInteger(const char* name, size_t defaultValue)
 // that symbol; scanning /proc/self/exe (not the runtime DSO) detects consumer code.
 // Missing consumer + fast minor ⇒ unreclaimed live young objects (L355 bare rc139).
 // StickyLog.cpp:ConfigureMinorFromEnvironment / Heap.cpp:190-193
-bool MainExecutableHasStickyConsumer()
+bool FileReferencesStickyConsumer(const char* path)
 {
-    FILE* file = std::fopen("/proc/self/exe", "rb");
+    FILE* file = std::fopen(path, "rb");
     if (file == nullptr) {
         return false;
     }
@@ -108,6 +112,70 @@ bool MainExecutableHasStickyConsumer()
     std::fclose(file);
     return found;
 }
+
+bool MainExecutableHasStickyConsumer() { return FileReferencesStickyConsumer("/proc/self/exe"); }
+
+// The barrier closure argument: a sticky minor is only sound when *every* participant that writes
+// managed reference fields logs the source line. The main executable is one participant; the managed
+// std shared objects are the other, and they are built separately from the program that loads them
+// (packaging installs a single sticky std closure, but a development tree can easily hold a stock
+// non-sticky one). Asking only about the main ELF therefore answers a narrower question than the one
+// that governs soundness -- exactly the shape of defect this campaign kept finding, so the predicate
+// is widened to its own subject rather than left to convention.
+#if defined(__linux__) || defined(__OHOS__)
+struct StdStickyScan {
+    bool sawManagedStd;
+    bool allSticky;
+    char firstOffender[PATH_MAX];
+};
+
+int InspectLoadedObject(struct dl_phdr_info* info, size_t, void* data)
+{
+    if (info == nullptr || info->dlpi_name == nullptr || info->dlpi_name[0] == '\0') {
+        return 0; // the main executable itself; MainExecutableHasStickyConsumer covers it
+    }
+    const char* slash = strrchr(info->dlpi_name, '/');
+    const char* base = slash == nullptr ? info->dlpi_name : slash + 1;
+    if (strncmp(base, "libcangjie-std", strlen("libcangjie-std")) != 0) {
+        return 0;
+    }
+    StdStickyScan* scan = static_cast<StdStickyScan*>(data);
+    scan->sawManagedStd = true;
+    if (FileReferencesStickyConsumer(info->dlpi_name)) {
+        return 0;
+    }
+    scan->allSticky = false;
+    if (scan->firstOffender[0] == '\0') {
+        (void)strncpy(scan->firstOffender, info->dlpi_name, sizeof(scan->firstOffender) - 1);
+    }
+    return 1; // one non-sticky participant is enough to decide
+}
+
+// Returns false only when a managed std object is loaded and demonstrably lacks the barrier. A
+// program that links std statically has no such object; the main-ELF scan already covers that shape.
+bool LoadedManagedStdIsSticky(const char** offender)
+{
+    StdStickyScan scan = {false, true, {0}};
+    (void)dl_iterate_phdr(InspectLoadedObject, &scan);
+    if (scan.allSticky) {
+        return true;
+    }
+    static char reported[PATH_MAX];
+    (void)strncpy(reported, scan.firstOffender, sizeof(reported) - 1);
+    *offender = reported;
+    return false;
+}
+#else
+bool LoadedManagedStdIsSticky(const char** offender)
+{
+    // No dl_iterate_phdr here. Say so instead of silently reporting a clean closure: on these
+    // platforms MainExecutableHasStickyConsumer already fails (there is no /proc/self/exe), so the
+    // sticky minor stays off and this arm is never the deciding one -- but a future port must not
+    // read a bare `true` as evidence that the std side was checked.
+    *offender = nullptr;
+    return true;
+}
+#endif
 } // namespace
 
 StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
@@ -139,6 +207,18 @@ void StickyLog::ConfigureMinorFromEnvironment()
             "(__cj_sticky_logged_base); disabling sticky minor to avoid incorrect young "
             "reclamation (use a sticky-lowered main binary, or MRT_STICKY_MINOR=0 / "
             "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
+    } else if (minorEnabled && !forceSlowPathEnabled) {
+        const char* offender = nullptr;
+        if (!LoadedManagedStdIsSticky(&offender)) {
+            minorEnabled = false;
+            mode = "auto-disabled(non-sticky std)";
+            LOG(RTLOG_WARNING,
+                "sticky minor on by default and the main executable logs its writes, but the loaded "
+                "managed std object %s has no sticky barrier consumer (__cj_sticky_logged_base); its "
+                "old-to-young writes would go unlogged, so disabling sticky minor (install the sticky "
+                "std closure, or MRT_STICKY_MINOR=0 / MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)",
+                offender == nullptr ? "<unnamed>" : offender);
+        }
     }
     LOG(RTLOG_INFO, "sticky minor: %s", mode);
 }
