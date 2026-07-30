@@ -1275,9 +1275,13 @@ void WCollector::DoGarbageCollection()
     StickyLog& stickyLog = StickyLog::Instance();
     if (gcReason == GC_REASON_YOUNG && stickyLog.IsMinorEnabled() &&
         minorRunsSinceMajor < stickyLog.GetMajorInterval()) {
+        GetGCStats().lastCollectionWasYoung = true;
         DoYoungGarbageCollection();
         return;
     }
+    // Reaching here means a full collection runs, even when the request said YOUNG
+    // (the majorInterval promotion above); the throttle clocks key off this record.
+    GetGCStats().lastCollectionWasYoung = false;
 
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major allocation rollover");

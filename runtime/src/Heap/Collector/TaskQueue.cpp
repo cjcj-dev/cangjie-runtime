@@ -37,10 +37,12 @@ bool GCExecutor::Execute(void* owner)
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             collectorProxy->RunGarbageCollection(taskIndex, gcReason);
             uint64_t finish = TimeUtil::NanoSeconds();
-            // A young collection throttles only later young collections; every other
-            // collection also covers the young generation, so it arms both clocks.
+            // The clocks follow what actually ran, not what was requested: every
+            // majorInterval-th GC_REASON_YOUNG request executes as a promoted full
+            // collection, and that full must arm the shared clock like any other —
+            // keying on gcReason here would let back-to-back fulls through.
             GCStats::SetPrevYoungGCFinishTime(finish);
-            if (gcReason != GC_REASON_YOUNG) {
+            if (!collectorProxy->GetCurrentCollector().GetGCStats().lastCollectionWasYoung) {
                 GCStats::SetPrevGCFinishTime(finish);
             }
             break;
