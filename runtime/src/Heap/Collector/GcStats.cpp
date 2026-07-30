@@ -17,6 +17,7 @@ size_t g_gcCollectedTotalBytes = 0;
 
 uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
 uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+uint64_t GCStats::prevYoungGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
 
 void GCStats::Init()
 {

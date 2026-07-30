@@ -39,8 +39,18 @@ public:
 
     static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime = timestamp; }
 
+    static uint64_t GetPrevYoungGCFinishTime() { return prevYoungGcFinishTime; }
+
+    static void SetPrevYoungGCFinishTime(uint64_t timestamp) { prevYoungGcFinishTime = timestamp; }
+
     static uint64_t prevGcStartTime;
     static uint64_t prevGcFinishTime;
+    // Young throttling keeps its own clock. prevGcFinishTime is written only by
+    // non-young collections, so a stream of minors can no longer keep resetting the
+    // shared clock and starving the heuristic/native full GC that would actually
+    // release memory. Non-young collections write both clocks: a full GC collects the
+    // young generation too, so a minor right after one has nothing to find.
+    static uint64_t prevYoungGcFinishTime;
 
     GCReason reason;
     bool isConcurrentMark;

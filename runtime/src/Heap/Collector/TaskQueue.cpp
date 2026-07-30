@@ -27,14 +27,22 @@ bool GCExecutor::Execute(void* owner)
             if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
                 GCStats::SetPrevGCStartTime(curTime);
                 collectorProxy->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
-                GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+                uint64_t finish = TimeUtil::NanoSeconds();
+                GCStats::SetPrevGCFinishTime(finish);
+                GCStats::SetPrevYoungGCFinishTime(finish);
             }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             collectorProxy->RunGarbageCollection(taskIndex, gcReason);
-            GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+            uint64_t finish = TimeUtil::NanoSeconds();
+            // A young collection throttles only later young collections; every other
+            // collection also covers the young generation, so it arms both clocks.
+            GCStats::SetPrevYoungGCFinishTime(finish);
+            if (gcReason != GC_REASON_YOUNG) {
+                GCStats::SetPrevGCFinishTime(finish);
+            }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {

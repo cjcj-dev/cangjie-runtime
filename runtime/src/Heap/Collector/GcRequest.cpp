@@ -31,6 +31,12 @@ inline bool GCRequest::IsFrequentAsyncGC() const
     return (now - GCStats::GetPrevGCFinishTime() < minIntervelNs);
 }
 
+inline bool GCRequest::IsFrequentYoungGC() const
+{
+    int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
+    return (now - GCStats::GetPrevYoungGCFinishTime() < minIntervelNs);
+}
+
 // heuristic gc is triggered by object allocation,
 // the heap stats should take into consideration.
 inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(); }
@@ -41,8 +47,9 @@ bool GCRequest::ShouldBeIgnored() const
         case GC_REASON_HEU:
             return IsFrequentHeuristicGC();
         case GC_REASON_NATIVE:
-        case GC_REASON_YOUNG:
             return IsFrequentAsyncGC();
+        case GC_REASON_YOUNG:
+            return IsFrequentYoungGC();
         case GC_REASON_OOM:
         case GC_REASON_FORCE:
             return IsFrequentGC();
