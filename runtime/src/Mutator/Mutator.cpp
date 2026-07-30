@@ -448,6 +448,36 @@ bool Mutator::IsStackAddr(uintptr_t addr)
     }
 }
 
+// DO NOT MERGE — stackprov table-source probe (diag(gc) only; gate expr/severity unchanged).
+// GcPhaseEnum / VisitStackRoots only consume RootMap (gcSlotRoot/gcRegRoot). StackPtr tables
+// are never walked on that path (see StackMap.h RootMap vs StackPtrMap).
+thread_local const char* g_stackprovRootTable = "gc";
+thread_local intptr_t g_stackprovSlotBias = 0;
+thread_local int g_stackprovRegNum = -1;
+thread_local uintptr_t g_stackprovFramePC = 0;
+thread_local uintptr_t g_stackprovSlotAddr = 0;
+
+static void StackprovDumpInvalidStackObj(BaseObject* obj, const char* where)
+{
+    uint8_t raw[32] = {};
+    for (size_t i = 0; i < sizeof(raw); ++i) {
+        raw[i] = reinterpret_cast<const uint8_t*>(obj)[i];
+    }
+    TypeInfo* tip = obj->GetTypeInfo();
+    LOG(RTLOG_ERROR,
+        "diag(gc) stackprov %s: table=%s slotBias=%zd reg=%d framePC=%p slot=%p obj=%p "
+        "tip=%p tipType=%d raw32="
+        "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x"
+        "%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x%02x",
+        where, g_stackprovRootTable, static_cast<ssize_t>(g_stackprovSlotBias), g_stackprovRegNum,
+        reinterpret_cast<void*>(g_stackprovFramePC), reinterpret_cast<void*>(g_stackprovSlotAddr),
+        obj, tip, tip != nullptr ? static_cast<int>(tip->GetType()) : -1,
+        raw[0], raw[1], raw[2], raw[3], raw[4], raw[5], raw[6], raw[7],
+        raw[8], raw[9], raw[10], raw[11], raw[12], raw[13], raw[14], raw[15],
+        raw[16], raw[17], raw[18], raw[19], raw[20], raw[21], raw[22], raw[23],
+        raw[24], raw[25], raw[26], raw[27], raw[28], raw[29], raw[30], raw[31]);
+}
+
 void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
 {
     // The pointer on the stack to be fixed has two sources:
@@ -459,13 +489,19 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
     //     so they need to be traced to ensure that all pointers are fixed.
     // These pointers will be collected in the <rootList>.
     std::stack<BaseObject**, std::deque<BaseObject**, StdContainerAllocator<BaseObject**, STACK_PTR>>> rootList;
+    // gcSlotRoot/gcRegRoot → traceAndFixPtrVisitor (may read object header).
+    // stackPtrSlotRoot/stackPtrRegRoot → fixPtrVisitor (offset fix only; no header read).
     StackPtrVisitor traceAndFixPtrVisitor = [&rootList, this](ObjectRef& oldStackAddr) {
+        g_stackprovRootTable = "gc";
+        g_stackprovSlotAddr = reinterpret_cast<uintptr_t>(&oldStackAddr);
         if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
             rootList.push(reinterpret_cast<BaseObject**>(&oldStackAddr));
         }
     };
     // The stack pointer does not require ref trace.
     StackPtrVisitor fixPtrVisitor = [&resSet, this](ObjectRef& oldStackAddr) {
+        g_stackprovRootTable = "stackPtr";
+        g_stackprovSlotAddr = reinterpret_cast<uintptr_t>(&oldStackAddr);
         if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
             resSet.insert(reinterpret_cast<BaseObject**>(&oldStackAddr));
         }
@@ -504,6 +540,12 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
                      "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) is not 8-byte aligned "
                      "(stateWord non-zero is not a managed-object proof)",
                      tip, obj, objSlot);
+        // Header-read path only for gc-table roots (traceAndFixPtrVisitor).
+        g_stackprovRootTable = "gc";
+        g_stackprovSlotAddr = reinterpret_cast<uintptr_t>(objSlot);
+        if (UNLIKELY(!tip->IsVaildType())) {
+            StackprovDumpInvalidStackObj(obj, "RecordStackPtrs");
+        }
         CHECK_DETAIL(tip->IsVaildType(),
                      "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) has invalid type kind",
                      tip, obj, objSlot);
@@ -644,6 +686,9 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
                  "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
                  "(stateWord non-zero is not a managed-object proof)",
                  tip, obj);
+    if (UNLIKELY(!tip->IsVaildType())) {
+        StackprovDumpInvalidStackObj(obj, "CheckAndPush");
+    }
     CHECK_DETAIL(tip->IsVaildType(),
                  "CheckAndPush: TypeInfo %p on stack object %p has invalid type kind", tip, obj);
     if (obj->HasRefField()) {
@@ -667,6 +712,11 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
     };
 
     RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor](ObjectRef& root) {
+        // RootMap path only — table is always gc (StackMap.h:45-86, TracingCollector.cpp:251).
+        g_stackprovRootTable = "gc";
+        g_stackprovSlotAddr = reinterpret_cast<uintptr_t>(&root);
+        g_stackprovSlotBias = 0;
+        g_stackprovRegNum = -1;
         BaseObject* obj = root.object;
         if (Heap::IsHeapAddress(obj)) {
             AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
