@@ -733,7 +733,9 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
     {
         std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
         stats.pinnedSlotBytes = youngPinnedSlotBytes;
+        stats.validationPinnedSlotBytes = youngValidationPinnedSlotBytes;
         youngPinnedSlotBytes = 0;
+        youngValidationPinnedSlotBytes = 0;
     }
     stats.measuredObjectBytes = stats.objectAllocPointerBytes + stats.pinnedSlotBytes;
     int64_t rawPrivateDelta = static_cast<int64_t>(stats.rawPrivateCurrentBytes) -
@@ -748,7 +750,7 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
         size_t validationAllocBytes = GetValidationObjectBytes();
         stats.validationScanNs = TimeUtil::NanoSeconds() - scanStart;
         stats.validationCurrentBytes = validationAllocBytes;
-        stats.validationObjectBytes = validationAllocBytes + stats.pinnedSlotBytes;
+        stats.validationObjectBytes = validationAllocBytes + stats.validationPinnedSlotBytes;
         stats.validationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) -
             static_cast<int64_t>(stats.validationObjectBytes);
     }
@@ -866,7 +868,7 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          "region_capacity_baseline_bytes=%zu region_capacity_current_bytes=%zu "
          "tail_baseline_bytes=%zu tail_current_bytes=%zu "
          "raw_private_baseline_bytes=%zu raw_private_current_bytes=%zu conservation_error_bytes=%lld "
-         "validation_object_bytes=%zu validation_baseline_bytes=%zu validation_current_bytes=%zu "
+         "validation_object_bytes=%zu validation_pinned_slot_bytes=%zu validation_current_bytes=%zu "
          "validation_error_bytes=%lld alloc_pointer_scan_ns=%llu validation_scan_ns=%llu "
          "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
          "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
@@ -877,7 +879,7 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          stats.tailBaselineBytes, stats.tailCurrentBytes,
          stats.rawPrivateBaselineBytes, stats.rawPrivateCurrentBytes,
          static_cast<long long>(stats.conservationErrorBytes),
-         stats.validationObjectBytes, stats.validationBaselineBytes, stats.validationCurrentBytes,
+         stats.validationObjectBytes, stats.validationPinnedSlotBytes, stats.validationCurrentBytes,
          static_cast<long long>(stats.validationErrorBytes),
          static_cast<unsigned long long>(stats.allocPointerScanNs),
          static_cast<unsigned long long>(stats.validationScanNs),
@@ -1586,6 +1588,9 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
     if (allocPtr != 0 && StickyLog::Instance().IsMinorEnabled()) {
         youngPinnedSlotBytes += size;
+        if (IsYoungAccountingValidationEnabled()) {
+            youngValidationPinnedSlotBytes += reinterpret_cast<BaseObject*>(allocPtr)->GetSize();
+        }
     }
     // For making bitmap comform with live object count, do not mark object repeated.
     if (allocPtr == 0 ||

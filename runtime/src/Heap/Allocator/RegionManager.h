@@ -63,7 +63,7 @@ struct YoungAccountingStats {
     size_t rawPrivateCurrentBytes = 0;
     int64_t conservationErrorBytes = 0;
     size_t validationObjectBytes = 0;
-    size_t validationBaselineBytes = 0;
+    size_t validationPinnedSlotBytes = 0;
     size_t validationCurrentBytes = 0;
     int64_t validationErrorBytes = 0;
     uint64_t allocPointerScanNs = 0;
@@ -886,6 +886,7 @@ private:
     size_t youngRegionCapacityBaseline = 0;
     size_t youngRawPrivateBytesBaseline = 0;
     size_t youngPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
+    size_t youngValidationPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
     struct YoungValidationBaseline {
         uint64_t identityEpoch = 0;
         MAddress allocPtr = 0;
