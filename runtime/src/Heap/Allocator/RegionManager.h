@@ -563,7 +563,27 @@ public:
 #ifdef MRT_REGION_EPOCH_TEST
             RouteRecordAfterAcquireForTest(fromRegionInfo);
 #endif
-            return fromRegionInfo->GetRoute(fromObj, routeInfo);
+            BaseObject* to = fromRegionInfo->GetRoute(fromObj, routeInfo);
+            // Read-after-use probe for the capture-to-use window. The check above proves
+            // the region carried expectedEpoch at check time; it cannot prove the caller's
+            // view was still current when the caller formed it. A reader that samples the
+            // epoch after establishing its view (FindToVersion, the one/two-argument
+            // wrappers) holds the epoch for zero time, so a teardown plus reuse that lands
+            // entirely inside that window yields a self-consistent but wrong-generation
+            // route. Re-reading here does not close the window — it makes it countable, so
+            // "the guard never fires" can be told apart from "the guard cannot fire".
+            if (UNLIKELY(expectedEpoch != fromRegionInfo->GetIdentityEpoch())) {
+                size_t n = routeEpochRaceAfterUseCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[RouteObject] epoch_changed_after_use region=%p epoch_at_check=%llu "
+                         "epoch_now=%llu fromObj=%p to=%p n=%zu",
+                         fromRegionInfo, static_cast<unsigned long long>(expectedEpoch),
+                         static_cast<unsigned long long>(fromRegionInfo->GetIdentityEpoch()),
+                         fromObj, to, n);
+                }
+            }
+            return to;
         }
         return nullptr;
     }
@@ -589,6 +609,11 @@ public:
     size_t GetRouteEpochMismatchCount() const
     {
         return routeEpochMismatchCount.load(std::memory_order_relaxed);
+    }
+
+    size_t GetRouteEpochRaceAfterUseCount() const
+    {
+        return routeEpochRaceAfterUseCount.load(std::memory_order_relaxed);
     }
 
     void ResetRouteEpochMismatchCount()
@@ -836,6 +861,9 @@ private:
     std::atomic<size_t> routeEpochMismatchCount = { 0 };
     // Probe misses on non-ghost regions with current identity (defined negative answers).
     std::atomic<size_t> routeNotGhostProbeCount = { 0 };
+    // Identity changed between the epoch check and the geometry read: evidence that a
+    // reader's captured epoch can go stale mid-call (see RouteObject read-after-use probe).
+    std::atomic<size_t> routeEpochRaceAfterUseCount = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };
