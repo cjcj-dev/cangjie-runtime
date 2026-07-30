@@ -16,6 +16,9 @@ uint64_t g_initHeuTriggerTimestamp = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_I
 uint64_t g_initNativeTriggerTimestamp = TimeUtil::NanoSeconds() - MIN_ASYNC_GC_INTERVAL_NS;
 } // namespace
 
+std::atomic<size_t> g_gcRequestIgnoredCount[GC_REASON_MAX] {};
+std::atomic<size_t> g_gcRequestAllowedCount[GC_REASON_MAX] {};
+
 inline bool GCRequest::IsFrequentGC() const
 {
     if (minIntervelNs == 0) {
@@ -43,19 +46,29 @@ inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(
 
 bool GCRequest::ShouldBeIgnored() const
 {
+    bool ignored = false;
     switch (reason) {
         case GC_REASON_HEU:
-            return IsFrequentHeuristicGC();
+            ignored = IsFrequentHeuristicGC();
+            break;
         case GC_REASON_NATIVE:
-            return IsFrequentAsyncGC();
+            ignored = IsFrequentAsyncGC();
+            break;
         case GC_REASON_YOUNG:
-            return IsFrequentYoungGC();
+            ignored = IsFrequentYoungGC();
+            break;
         case GC_REASON_OOM:
         case GC_REASON_FORCE:
-            return IsFrequentGC();
+            ignored = IsFrequentGC();
+            break;
         default:
-            return false;
+            break;
     }
+    if (reason < GC_REASON_MAX) {
+        auto& counter = ignored ? g_gcRequestIgnoredCount[reason] : g_gcRequestAllowedCount[reason];
+        counter.fetch_add(1, std::memory_order_relaxed);
+    }
+    return ignored;
 }
 
 GCRequest g_gcRequests[] = {

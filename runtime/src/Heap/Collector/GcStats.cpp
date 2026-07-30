@@ -71,5 +71,27 @@ void GCStats::Dump() const
 
     VLOG(REPORT, "allocated size: %s, heap size: %s, heap utilization: %.2f%%", Pretty(liveSize).Str(),
          Pretty(heapSize).Str(), utilization);
+    VLOG(REPORT,
+         "[GCRequestThrottle] user=%zu/%zu oom=%zu/%zu backup=%zu/%zu heuristic=%zu/%zu "
+         "native_alloc=%zu/%zu heuristic_sync=%zu/%zu native_alloc_sync=%zu/%zu force=%zu/%zu "
+         "young=%zu/%zu",
+         g_gcRequestIgnoredCount[GC_REASON_USER].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_USER].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_OOM].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_OOM].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_BACKUP].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_BACKUP].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_HEU].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_HEU].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_NATIVE].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_NATIVE].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_HEU_SYNC].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_HEU_SYNC].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_NATIVE_SYNC].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_NATIVE_SYNC].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_FORCE].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_FORCE].load(std::memory_order_relaxed),
+         g_gcRequestIgnoredCount[GC_REASON_YOUNG].load(std::memory_order_relaxed),
+         g_gcRequestAllowedCount[GC_REASON_YOUNG].load(std::memory_order_relaxed));
 }
 } // namespace MapleRuntime

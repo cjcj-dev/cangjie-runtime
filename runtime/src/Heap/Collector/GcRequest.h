@@ -8,6 +8,7 @@
 #ifndef MRT_GCREQUEST_H
 #define MRT_GCREQUEST_H
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 
@@ -61,5 +62,7 @@ struct GCRequest {
 
 // Defined in gcRequest.cpp
 extern GCRequest g_gcRequests[GC_REASON_MAX];
+extern std::atomic<size_t> g_gcRequestIgnoredCount[GC_REASON_MAX];
+extern std::atomic<size_t> g_gcRequestAllowedCount[GC_REASON_MAX];
 } // namespace MapleRuntime
 #endif // MRT_GCREQUEST_H
