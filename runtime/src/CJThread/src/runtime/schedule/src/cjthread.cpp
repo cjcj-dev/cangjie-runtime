@@ -44,26 +44,29 @@ __thread uintptr_t g_protectAddr __attribute__((tls_model("initial-exec"))) = 0;
 /* Space reserved for stack overflow check */
 uintptr_t g_cjthreadStackReservedSize = STACK_DEFAULT_REVERSED;
 
-/* The reserved size actually baked into cjthread stacks. Frozen by CAS at the first
- * stack init: stackGuard is written as stackTopAddr + reserved, and expand, recover and
- * the freelist reuse check must all move or verify the guard by that same amount, so
- * once any stack has been built with the value it can never change again —
- * CJThreadStackReversedSet is rejected from then on. (Its old guard was only the
- * calling thread's TLS schedule, which an unbound foreign thread passes at any time.)
- * 0 means "not frozen yet"; a real reserved size is never 0 because
- * CJThreadStackReversedSet rejects anything below STACK_DEFAULT_REVERSED. */
-static std::atomic<uintptr_t> g_cjthreadStackReservedFrozen{0};
+/* The reserved size actually baked into cjthread stacks, as one atomic word so that
+ * set-before-freeze and freeze linearize against each other: bit 0 is the frozen flag,
+ * the value lives in the upper bits. stackGuard is written as stackTopAddr + reserved,
+ * and expand, recover and the freelist reuse check must all move or verify the guard by
+ * that same amount, so the first stack init freezes the word and every later
+ * CJThreadStackReversedSet fails its CAS on the frozen bit. (Set's older guard was only
+ * the calling thread's TLS schedule, which an unbound foreign thread passes at any
+ * time; and a separate flag beside a plain global would let Set slip a new value in
+ * between the flag check and the freeze.) g_cjthreadStackReservedSize stays defined
+ * only because it is an exported data symbol — it mirrors successful Sets and is never
+ * read here. */
+static std::atomic<uintptr_t> g_cjthreadStackReservedState{STACK_DEFAULT_REVERSED << 1};
 
 static uintptr_t CJThreadStackReservedFreeze(void)
 {
-    uintptr_t frozen = g_cjthreadStackReservedFrozen.load(std::memory_order_acquire);
-    if (frozen == 0) {
-        uintptr_t expected = 0;
-        (void)g_cjthreadStackReservedFrozen.compare_exchange_strong(
-            expected, g_cjthreadStackReservedSize, std::memory_order_acq_rel);
-        frozen = g_cjthreadStackReservedFrozen.load(std::memory_order_acquire);
+    uintptr_t state = g_cjthreadStackReservedState.load(std::memory_order_acquire);
+    while ((state & 1) == 0) {
+        if (g_cjthreadStackReservedState.compare_exchange_weak(
+                state, state | 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            state |= 1;
+        }
     }
-    return frozen;
+    return state >> 1;
 }
 
 #if !defined(MRT_WINDOWS)
@@ -490,12 +493,13 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
     // Freelist reuse keeps the dead cjthread's stack fields and CJThreadInit below does
     // not reinitialize them, so this is the one point every reused stack passes through,
     // no matter which entry path will run the task. A guard away from its birth value
-    // means something moved it and no recover path put it back — the reserved overflow
-    // headroom this stack owes its next task is gone. The known mover is an unrecovered
-    // stack-overflow expansion, but whatever the cause, fail closed: running a task with
-    // a weakened overflow check turns this diagnosable state into a wild crash later,
+    // means the expand/recover bookkeeping broke somewhere: below birth (the known
+    // producer is an unrecovered stack-overflow expansion) the next task starts with
+    // reduced or no overflow headroom; above birth a recover ran unpaired and the
+    // threshold sits inside the reserved area. Either way, fail closed: running a task
+    // on broken guard accounting turns this diagnosable state into a wild crash later,
     // and repairing the pointer here would erase the only evidence while leaving the
-    // guard page unprotected.
+    // page protection out of sync.
     if (newCJThread != nullptr && newCJThread->stack.stackTopAddr != nullptr) {
         char *birthGuard = newCJThread->stack.stackTopAddr + CJThreadStackReservedFreeze();
         if (newCJThread->stack.stackGuard != birthGuard) {
@@ -1789,26 +1793,31 @@ int CJThreadStackReversedSet(uintptr_t size)
     if (schedule != nullptr) {
         return ERRNO_SCHD_IS_RUNNING;
     }
-    // The TLS check above only sees the calling thread; a thread with no bound schedule
-    // would pass it while stacks already exist elsewhere in the process. Once any stack
-    // has baked the reserved size into its guard, changing the global would desync
-    // every later expand/recover/reuse-check from it — reject process-wide.
-    if (g_cjthreadStackReservedFrozen.load(std::memory_order_acquire) != 0) {
-        return ERRNO_SCHD_IS_RUNNING;
-    }
 
     // The value cannot be smaller than the default value because space needs to be reserved
     // for stack overflow processing.
     if (size < STACK_DEFAULT_REVERSED) {
         return ERRNO_SCHD_CJTHREAD_ARG_INVALID;
     }
+
+    // The TLS check above only sees the calling thread; a thread with no bound schedule
+    // passes it while stacks may already exist elsewhere in the process. Every stack
+    // bakes the reserved size into its guard at init, which freezes the state word, so
+    // the CAS below fails once any stack exists — set and freeze cannot interleave.
+    uintptr_t state = g_cjthreadStackReservedState.load(std::memory_order_acquire);
+    do {
+        if ((state & 1) != 0) {
+            return ERRNO_SCHD_IS_RUNNING;
+        }
+    } while (!g_cjthreadStackReservedState.compare_exchange_weak(
+        state, size << 1, std::memory_order_acq_rel, std::memory_order_acquire));
     g_cjthreadStackReservedSize = size;
     return 0;
 }
 
 uintptr_t CJThreadStackReversedGet(void)
 {
-    return g_cjthreadStackReservedSize;
+    return g_cjthreadStackReservedState.load(std::memory_order_acquire) >> 1;
 }
 
 /* This function is used for the exception try catch mechanism of cangjie. After the stack
@@ -1816,6 +1825,12 @@ uintptr_t CJThreadStackReversedGet(void)
 void CJThreadStackGuardExpand(void)
 {
     struct CJThread *cjthread = CJThreadGet();
+    // Foreign and exclusive cjthreads own no stack: guard is null and there is no
+    // reserved headroom to hand out. Return rather than walk a null pointer — the
+    // protect threshold stays at its disabled (null) value.
+    if (cjthread->stack.stackTopAddr == nullptr) {
+        return;
+    }
     // The frozen value, not the settable global: recover and the reuse check must
     // undo/verify exactly what this expand did.
     cjthread->stack.stackGuard -= CJThreadStackReservedFreeze();
@@ -1827,6 +1842,9 @@ void CJThreadStackGuardExpand(void)
 void CJThreadStackGuardRecover(void)
 {
     struct CJThread *cjthread = CJThreadGet();
+    if (cjthread->stack.stackTopAddr == nullptr) {
+        return;
+    }
     cjthread->stack.stackGuard += CJThreadStackReservedFreeze();
     ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
 }
