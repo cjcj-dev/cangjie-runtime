@@ -11,6 +11,7 @@
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
+#include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
 FixEdgeSet& FixEdgeSet::Instance() noexcept
@@ -88,6 +89,11 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
 {
+    // R2.2: entries are bare slot addresses with no self-bound validity; the whole
+    // design leans on the [register, VisitAndClear] window closing inside one major's
+    // BulkForward STW. That precondition was prose until now — make it a checked one.
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(),
+               "FixEdgeSet slots are bare addresses and may only be consumed inside STW");
     std::vector<MAddress> local;
     {
         std::lock_guard<std::mutex> lg(mutex);

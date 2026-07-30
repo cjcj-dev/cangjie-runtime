@@ -770,6 +770,14 @@ public:
     {
         // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state).
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetIdentityEpoch());
+        // Consumers require expected == identity && expected == install, which only
+        // holds if install == identity held from the moment of installation. The stamp
+        // one line up makes that true by construction; read it back so a future stamp
+        // source or a torn seqlock publish fails here, at the single install point,
+        // instead of as a permanent fail-closed route miss at every consumer.
+        RouteInfo installed = AcquireRouteInfo();
+        CHECK_DETAIL(installed.IsInstalled() && installed.GetInstallEpoch() == GetIdentityEpoch(),
+                     "route install did not bind the current identity epoch on region %p", this);
     }
 
     __attribute__((always_inline, visibility("hidden"))) RouteInfo AcquireRouteInfo() const
@@ -884,6 +892,25 @@ public:
             if (restampRetainedSnapshot) {
                 metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             }
+            AssertGhostRouteTornDown("ClearGhostRegionBit", GetUnitCount());
+        }
+    }
+
+    // Ghost discoverability (the unit bits) and the route carrier (RouteInfo) answer the
+    // same lifetime question through two structures; every teardown must end both, or a
+    // reader that discovers the region through the surviving one consumes state the
+    // other already declared dead. Checked at the end of both teardown paths, over the
+    // same unit extent the teardown's own clearing loop walked — one extra O(units)
+    // pass per teardown.
+    void AssertGhostRouteTornDown(const char* who, size_t nUnit)
+    {
+        CHECK_DETAIL(!AcquireRouteInfo().IsInstalled(),
+                     "%s left an installed route carrier on region %p", who, this);
+        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
+        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+        for (size_t i = 0; i < nUnit; i++) {
+            CHECK_DETAIL(array[i].GetMetadata().inGhostFromRegion == 0,
+                         "%s left ghost unit %zu discoverable on region %p", who, i, this);
         }
     }
 
@@ -951,6 +978,7 @@ public:
                      static_cast<unsigned>(metadata.retainedLiveInfoState), n);
             }
         }
+        AssertGhostRouteTornDown("DispelGhostFromRegion", nUnit);
     }
 
     bool IsGhostFromRegion() const
