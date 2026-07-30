@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <atomic>
+
 #include "TsanInterface.h"
 
 #include "Base/Log.h"
@@ -21,15 +23,26 @@ using RaceStateHandle = void*;
 using RaceProcHandle = void*;
 
 static void* g_tsanRuntimeSync = nullptr;
-static bool g_initialized = false;
+static std::atomic<bool> g_initialized{false};
 static CJThreadRecorder<RaceProcHandle> g_procState{};
 
 void TsanInitialize()
 {
+    if (g_initialized.load(std::memory_order_acquire)) {
+        return;
+    }
+
     void* cjthread = CJThreadGetHandle();
-    CHECK_DETAIL(cjthread != nullptr, "init cjthread is null.");
+    // __tsan_init creates the process root state without consulting the current
+    // cjthread. A null or no-stack (foreign/exclusive) cjthread has no context slot
+    // to own that state, so leave initialization pending for the first owned-stack
+    // cjthread. No-stack cjthreads intentionally run with null race state: their TSAN
+    // tracking hooks are no-ops, while managed owned-stack cjthreads remain tracked.
+    if (cjthread == nullptr || CJThreadStackBaseAddrGet() == nullptr) {
+        return;
+    }
     CJThreadSetSanitizerContext(cjthread, REAL(__tsan_init)());
-    g_initialized = true;
+    g_initialized.store(true, std::memory_order_release);
 }
 
 void TsanFinalize()
@@ -171,7 +184,7 @@ void TsanDeleteRaceProc(void* processor)
 extern "C" {
 MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 {
-    if (g_initialized) {
+    if (g_initialized.load(std::memory_order_acquire)) {
         void* processor = ProcessorGetHandle();
         return g_procState.GetDataFromThread(processor);
     } else {
@@ -181,7 +194,7 @@ MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 
 MRT_EXPORT void* CJ_MCC_TsanGetThreadState(void)
 {
-    if (g_initialized) {
+    if (g_initialized.load(std::memory_order_acquire)) {
         return CJThreadGetCurRaceState();
     } else {
         return nullptr;
