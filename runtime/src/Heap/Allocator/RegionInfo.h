@@ -772,6 +772,9 @@ public:
 
     // Install route geometry in the identity domain. Installation is a semantic advance,
     // so it does not advance either epoch.
+    // hidden: the readback check below made this too large to inline everywhere, and an
+    // internal route installer has no business appearing on the export surface.
+    __attribute__((visibility("hidden")))
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
         // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state).
@@ -927,6 +930,7 @@ public:
     // extent). One extra O(units) pass per teardown. Unit bits are read through the
     // atomic bitfield accessor: teardown writers are monotone clearers, but this
     // checker runs on the no-lock path and must not invent its own weaker read.
+    __attribute__((visibility("hidden")))
     void AssertGhostRouteTornDown(const char* who, size_t nUnit)
     {
         CHECK_DETAIL(!AcquireRouteInfo().IsInstalled(),
