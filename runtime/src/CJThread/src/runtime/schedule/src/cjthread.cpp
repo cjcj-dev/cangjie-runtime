@@ -450,6 +450,17 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
     } else if (stackAttr->stackSizeAlign == schedule->schdCJThread.stackSize && coBuf == GLOBAL_BUF) {
         newCJThread = ScheduleGfreelistGet(&scheduleCJThread->gfreelist);
     }
+    if (newCJThread != nullptr &&
+        newCJThread->stack.stackGuard != newCJThread->stack.stackTopAddr + g_cjthreadStackReservedSize) {
+        // Freelist reuse keeps the dead cjthread's stack fields; CJThreadInit does not
+        // touch them. Every exit path is supposed to recover an expanded stack guard
+        // (Mutator::ResetMutator pairs the recover), but a guard inherited below its
+        // birth value silently weakens or disables the next task's stack-overflow
+        // check, so re-establish the birth invariant loudly instead of trusting it.
+        LOG_ERROR(ERRNO_SCHD_CJTHREAD_STATE_INVALID,
+                  "reused cjthread stack guard not at its birth value, restoring");
+        newCJThread->stack.stackGuard = newCJThread->stack.stackTopAddr + g_cjthreadStackReservedSize;
+    }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
         addToList = (coBuf != NO_BUF) ? true : false;
