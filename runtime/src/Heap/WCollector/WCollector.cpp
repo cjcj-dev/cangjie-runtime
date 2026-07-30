@@ -1183,6 +1183,7 @@ void WCollector::DoYoungGarbageCollection()
     minorCandidateRegions.clear();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    size_t triggerYoungBytes = manager.GetYoungAllocatedSize();
     minorRescannedLines.clear();
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
@@ -1228,9 +1229,10 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     VLOG(REPORT,
-         "[StickyMinorExit] empty_regions=%zu empty_bytes=%zu ghost_gated_regions=%zu ghost_gated_bytes=%zu "
+         "[StickyMinorExit] trigger_young_bytes=%zu empty_regions=%zu empty_bytes=%zu "
+         "ghost_gated_regions=%zu ghost_gated_bytes=%zu "
          "age_one_regions=%zu age_one_bytes=%zu promoted_regions=%zu promoted_bytes=%zu",
-         emptyRegions, emptyBytes, ghostGatedRegions, ghostGatedBytes, ageOneRegions, ageOneBytes,
+         triggerYoungBytes, emptyRegions, emptyBytes, ghostGatedRegions, ghostGatedBytes, ageOneRegions, ageOneBytes,
          promotedRegionsBeforeCollection, promotedBytes);
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
