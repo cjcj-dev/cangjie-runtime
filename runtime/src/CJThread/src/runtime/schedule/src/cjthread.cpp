@@ -10,6 +10,7 @@
 #include <csignal>
 #include <unistd.h>
 #include <cstdint>
+#include <atomic>
 #include "processor.h"
 #include "schedule_impl.h"
 #include "thread.h"
@@ -42,6 +43,28 @@ __thread uintptr_t g_protectAddr __attribute__((tls_model("initial-exec"))) = 0;
 
 /* Space reserved for stack overflow check */
 uintptr_t g_cjthreadStackReservedSize = STACK_DEFAULT_REVERSED;
+
+/* The reserved size actually baked into cjthread stacks. Frozen by CAS at the first
+ * stack init: stackGuard is written as stackTopAddr + reserved, and expand, recover and
+ * the freelist reuse check must all move or verify the guard by that same amount, so
+ * once any stack has been built with the value it can never change again —
+ * CJThreadStackReversedSet is rejected from then on. (Its old guard was only the
+ * calling thread's TLS schedule, which an unbound foreign thread passes at any time.)
+ * 0 means "not frozen yet"; a real reserved size is never 0 because
+ * CJThreadStackReversedSet rejects anything below STACK_DEFAULT_REVERSED. */
+static std::atomic<uintptr_t> g_cjthreadStackReservedFrozen{0};
+
+static uintptr_t CJThreadStackReservedFreeze(void)
+{
+    uintptr_t frozen = g_cjthreadStackReservedFrozen.load(std::memory_order_acquire);
+    if (frozen == 0) {
+        uintptr_t expected = 0;
+        (void)g_cjthreadStackReservedFrozen.compare_exchange_strong(
+            expected, g_cjthreadStackReservedSize, std::memory_order_acq_rel);
+        frozen = g_cjthreadStackReservedFrozen.load(std::memory_order_acquire);
+    }
+    return frozen;
+}
 
 #if !defined(MRT_WINDOWS)
 constexpr size_t HUGE_PAGE = 2UL * 1024 * 1024; // use mmap when stack size is beyond 2mb.
@@ -194,11 +217,25 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
 {
     cjthread->stack.totalSize = totalSize;
     cjthread->stack.stackTopAddr = stackAddr;
-
-    // Reserve a part of the stack size to handle stack overflow.
-    cjthread->stack.stackGuard = stackAddr + g_cjthreadStackReservedSize;
-    cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     cjthread->stack.stackSize = stackAttr->stackSizeAlign;
+
+    if (stackAddr == nullptr) {
+        // Foreign and exclusive cjthreads run on the OS thread's stack and own none of
+        // their own. Leave every derived address null instead of computing it from
+        // nullptr: the arithmetic is undefined, and its garbage results used to escape
+        // through the getters looking like real addresses.
+        cjthread->stack.stackGuard = nullptr;
+        cjthread->stack.stackBaseAddr = nullptr;
+        cjthread->stack.cjthreadStackBaseAddr = nullptr;
+        cjthread->stack.stackGrowCnt = stackAttr->stackGrow ? 0 : 1;
+        return;
+    }
+
+    // Reserve a part of the stack size to handle stack overflow. Freezing here pins the
+    // reserved size for the whole process lifetime, so expand/recover/the reuse check
+    // move the guard by the same amount this line used.
+    cjthread->stack.stackGuard = stackAddr + CJThreadStackReservedFreeze();
+    cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     // 16-byte-aligned. Note that the 64 KB lower stack address is not 0x0 - 0x100000000,
     // but 0x0 - 0xffffff, and the 16 bytes are aligned to 0x0 - 0xfffffff0. The stack
     // address must be 16-byte aligned. Otherwise, an error occurs.
@@ -449,6 +486,24 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
         newCJThread = ProcessorFreelistGet(ProcessorGet());
     } else if (stackAttr->stackSizeAlign == schedule->schdCJThread.stackSize && coBuf == GLOBAL_BUF) {
         newCJThread = ScheduleGfreelistGet(&scheduleCJThread->gfreelist);
+    }
+    // Freelist reuse keeps the dead cjthread's stack fields and CJThreadInit below does
+    // not reinitialize them, so this is the one point every reused stack passes through,
+    // no matter which entry path will run the task. A guard away from its birth value
+    // means something moved it and no recover path put it back — the reserved overflow
+    // headroom this stack owes its next task is gone. The known mover is an unrecovered
+    // stack-overflow expansion, but whatever the cause, fail closed: running a task with
+    // a weakened overflow check turns this diagnosable state into a wild crash later,
+    // and repairing the pointer here would erase the only evidence while leaving the
+    // guard page unprotected.
+    if (newCJThread != nullptr && newCJThread->stack.stackTopAddr != nullptr) {
+        char *birthGuard = newCJThread->stack.stackTopAddr + CJThreadStackReservedFreeze();
+        if (newCJThread->stack.stackGuard != birthGuard) {
+            LOG(RTLOG_FATAL,
+                "reused cjthread stack guard at %p, not its birth value %p (reserved %zu)",
+                newCJThread->stack.stackGuard, birthGuard,
+                static_cast<size_t>(CJThreadStackReservedFreeze()));
+        }
     }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
@@ -1734,6 +1789,13 @@ int CJThreadStackReversedSet(uintptr_t size)
     if (schedule != nullptr) {
         return ERRNO_SCHD_IS_RUNNING;
     }
+    // The TLS check above only sees the calling thread; a thread with no bound schedule
+    // would pass it while stacks already exist elsewhere in the process. Once any stack
+    // has baked the reserved size into its guard, changing the global would desync
+    // every later expand/recover/reuse-check from it — reject process-wide.
+    if (g_cjthreadStackReservedFrozen.load(std::memory_order_acquire) != 0) {
+        return ERRNO_SCHD_IS_RUNNING;
+    }
 
     // The value cannot be smaller than the default value because space needs to be reserved
     // for stack overflow processing.
@@ -1754,7 +1816,9 @@ uintptr_t CJThreadStackReversedGet(void)
 void CJThreadStackGuardExpand(void)
 {
     struct CJThread *cjthread = CJThreadGet();
-    cjthread->stack.stackGuard -= g_cjthreadStackReservedSize;
+    // The frozen value, not the settable global: recover and the reuse check must
+    // undo/verify exactly what this expand did.
+    cjthread->stack.stackGuard -= CJThreadStackReservedFreeze();
     ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
 }
 
@@ -1763,7 +1827,7 @@ void CJThreadStackGuardExpand(void)
 void CJThreadStackGuardRecover(void)
 {
     struct CJThread *cjthread = CJThreadGet();
-    cjthread->stack.stackGuard += g_cjthreadStackReservedSize;
+    cjthread->stack.stackGuard += CJThreadStackReservedFreeze();
     ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
 }
 

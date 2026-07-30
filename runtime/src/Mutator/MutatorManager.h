@@ -173,10 +173,6 @@ public:
     void BindMutator(Mutator& mutator) const;
     void UnbindMutator(Mutator& mutator) const;
 
-    // Fail closed if a cjthread arrives at task entry with a stack guard that a
-    // stack-overflow expansion left below its birth value.
-    void CheckStackGuardAtTaskEntry() const;
-
     // Create and initialize the local mutator, then register to mutatorlist.
     Mutator* CreateMutator();
 

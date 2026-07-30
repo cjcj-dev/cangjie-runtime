@@ -175,10 +175,12 @@ void Mutator::ResetMutator()
     // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
     // BeginCatch would have performed, or the guard stays expanded with nothing left to
     // say so. All three callers run on the mutator's own thread, so recovering here
-    // targets the right stack, but what it prevents differs by caller: for a reusable
-    // scheduler cjthread (TransitMutatorToExit) it keeps an expanded guard out of the
-    // freelist, and for the runtime and finalizer mutators it restores the current
-    // thread's protect boundary.
+    // targets the right stack. What it buys differs by caller: for a reusable scheduler
+    // cjthread (TransitMutatorToExit) it keeps an expanded guard out of the freelist,
+    // and for the runtime mutator it restores the current thread's protect boundary.
+    // (The finalizer mutator's setup path never initializes that boundary, and a
+    // finalizer whose exception was fatal aborts before reaching this Reset, so for it
+    // the recover is a correct pairing with nothing observable to restore.)
     if (exceptionWrapper.IsThrowingSOFE()) {
         StackGuardRecover();
     }
