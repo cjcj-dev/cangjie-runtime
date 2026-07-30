@@ -28,20 +28,28 @@ static CJThreadRecorder<RaceProcHandle> g_procState{};
 
 void TsanInitialize()
 {
-    if (g_initialized.load(std::memory_order_acquire)) {
-        return;
-    }
-
     void* cjthread = CJThreadGetHandle();
-    // __tsan_init creates the process root state without consulting the current
-    // cjthread. A null or no-stack (foreign/exclusive) cjthread has no context slot
-    // to own that state, so leave initialization pending for the first owned-stack
-    // cjthread. No-stack cjthreads intentionally run with null race state: their TSAN
-    // tracking hooks are no-ops, while managed owned-stack cjthreads remain tracked.
+    // __tsan_init returns a state that has to live in the calling cjthread's own
+    // sanitizer slot. A null current cjthread, or one with no stack of its own
+    // (foreign/exclusive), has no slot to put it in: those run with a null race state
+    // and their tracking hooks are no-ops by design, while managed owned-stack
+    // cjthreads stay tracked.
     if (cjthread == nullptr || CJThreadStackBaseAddrGet() == nullptr) {
         return;
     }
+    // Idempotent per slot, not per process. Every scheduler's thread0 still gets its
+    // own state the first time it initializes — that is the upstream behaviour, and a
+    // process-wide once would leave every scheduler after the first untracked. What
+    // repetition must not do is overwrite a state that is already there: that was the
+    // defect, where a sub-scheduler created from a tracked cjthread replaced its
+    // parent's state and leaked the old one. The slot belongs to one cjthread, which
+    // cannot race itself here.
+    if (CJThreadGetSanitizerContext(cjthread) != nullptr) {
+        return;
+    }
     CJThreadSetSanitizerContext(cjthread, REAL(__tsan_init)());
+    // One-way gate for the getters below: once any cjthread is tracked, TSAN is live.
+    // Concurrent stores of the same value are harmless.
     g_initialized.store(true, std::memory_order_release);
 }
 
