@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
 #include <unistd.h>
 
 #include "Base/SysCall.h"
@@ -1029,7 +1030,14 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 
 void WCollector::RescanRememberedSet(WorkStack& workStack)
 {
-    StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
+    const char* staleSnapshotValue = std::getenv("RESREV2_STALE_SNAPSHOT");
+    bool injectStaleSnapshot = staleSnapshotValue != nullptr && strcmp(staleSnapshotValue, "1") == 0;
+    std::unordered_set<RegionInfo*> injectedRegions;
+    size_t injectedMismatchCount = 0;
+    size_t conservativeObjectCount = 0;
+    StickyLog::Instance().RescanLoggedLines([this, &workStack, injectStaleSnapshot, &injectedRegions,
+                                               &injectedMismatchCount,
+                                               &conservativeObjectCount](MAddress lineStart, MAddress lineEnd) {
         if (StickyLog::Instance().IsMinorValidatorEnabled()) {
             minorRescannedLines.insert(lineStart);
         }
@@ -1070,8 +1078,18 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             }
             region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
         } else {
+            if (injectStaleSnapshot && injectedRegions.size() < 4 && injectedRegions.insert(region).second) {
+                uint64_t retainedEpoch = region->GetRetainedLiveInfoEpoch();
+                region->BumpSnapshotEpoch();
+                VLOG(REPORT,
+                     "[resrev2_stale_snapshot] region=%p retained_epoch=%llu snapshot_epoch=%llu state=%u",
+                     region, static_cast<unsigned long long>(retainedEpoch),
+                     static_cast<unsigned long long>(region->GetSnapshotEpoch()),
+                     static_cast<unsigned>(retainedState));
+            }
             // VALID and EMPTY are one snapshot protocol: neither may bypass the epoch check.
             if (!region->IsRetainedSnapshotValid()) {
+                ++injectedMismatchCount;
                 static std::atomic<size_t> retainedEpochMismatchCount{ 0 };
                 size_t n = retainedEpochMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
                 if ((n & (n - 1)) == 0) {
@@ -1098,7 +1116,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                 // NEVER_EXAMINED does above, and let retainLine decide as usual. Stable
                 // mismatches are still producer bugs (the validator tiers above abort);
                 // this only changes what a release build does about them: slow, not wrong.
-                region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
+                region->VisitAllObjects([&scanObject, &conservativeObjectCount](BaseObject* object) {
+                    ++conservativeObjectCount;
+                    scanObject(object);
+                });
                 return retainLine;
             }
             if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
@@ -1127,6 +1148,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         }
         return retainLine;
     });
+    if (injectStaleSnapshot) {
+        VLOG(REPORT,
+             "[resrev2_stale_snapshot_summary] injected_regions=%zu retained_epoch_mismatch=%zu "
+             "conservative_objects=%zu",
+             injectedRegions.size(), injectedMismatchCount, conservativeObjectCount);
+    }
 }
 
 void WCollector::ValidateYoungMarking()
