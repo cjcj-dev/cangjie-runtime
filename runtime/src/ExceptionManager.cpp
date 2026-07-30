@@ -278,6 +278,12 @@ void ExceptionManager::DumpException()
 #endif
         }
         CJErrorObject errObj = {clsName.Str(), exceptionMsg.Str(), exceptionStack.Str()};
+        // ClearInfo clears the throwing-SOF marker; pair the stack-guard Recover first,
+        // or the registered uncaught handler below runs with the guard still expanded
+        // and the marker that says so already gone.
+        if (eWrapper.IsThrowingSOFE()) {
+            Mutator::GetMutator()->StackGuardRecover();
+        }
         eWrapper.ClearInfo();
         Runtime::Current().GetExceptionManager().GetUncaughtExceptionHandler().uncaughtTask(summary, errObj);
 #endif

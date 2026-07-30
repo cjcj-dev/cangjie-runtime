@@ -172,6 +172,14 @@ void Mutator::ResetMutator()
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
     uwContext.Reset();
+    // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover
+    // that BeginCatch would have performed, or this mutator's cjthread goes back to
+    // the freelist with a permanently expanded guard and the marker that says so is
+    // gone. All ResetMutator callers run on the mutator's own thread, so recovering
+    // here targets the right stack.
+    if (exceptionWrapper.IsThrowingSOFE()) {
+        StackGuardRecover();
+    }
     exceptionWrapper.ClearInfo();
 }
 
