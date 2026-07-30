@@ -31,6 +31,8 @@
 namespace MapleRuntime {
 #define LOG(level, format...) ::MapleRuntime::Logger::GetLogger().FormatLog(level, true, format)
 #define FLOG(level, format...) ::MapleRuntime::Logger::GetLogger().FormatLog(level, false, format)
+#define MRT_STRINGIFY_IMPL(value) #value
+#define MRT_STRINGIFY(value) MRT_STRINGIFY_IMPL(value)
 
 void HiLogForCJThread(RTLogLevel level, const char* format, va_list args);
 
@@ -284,6 +286,7 @@ private:
 #define CHECK_DETAIL(x, format...) \
     do { \
         if (UNLIKELY(!(x))) { \
+            ::MapleRuntime::Logger::GetLogger().RecordFatalSite(#x, __FILE__, MRT_STRINGIFY(__LINE__)); \
             ::MapleRuntime::Logger::GetLogger().FormatLog(RTLOG_FAIL, true, "Check failed: %s", #x); \
             ::MapleRuntime::Logger::GetLogger().FormatLog(RTLOG_FATAL, true, format); \
         } \
@@ -392,6 +395,9 @@ public:
     MRT_EXPORT static Logger& GetLogger() noexcept;
     bool InitLog();
     MRT_EXPORT void FormatLog(RTLogLevel level, bool notInSigHandler, const char* format, ...) noexcept;
+    void RecordFatalSite(const char* condition, const char* file, const char* line) noexcept;
+    void RecordFatalSignal(int signal) noexcept;
+    void WriteFatalAttr(const char* record, size_t length) const noexcept;
     RTLogLevel GetMinimumLogLevel() const;
     void SetMinimumLogLevel(RTLogLevel level);
     static bool MaybeRotate(size_t curPos, size_t maxSize, FILE* file);
@@ -403,7 +409,11 @@ public:
     static void InvokeLogHandle(const char* msg);
 #endif
 private:
+    void InitFatalAttr();
+
     FILE* fd = nullptr;
+    int fatalAttrFd = -1;
+    std::atomic<bool> fatalSiteRecorded = { false };
     RTLogLevel minimumLogLevel;
     size_t maxFileSize;
     std::recursive_mutex logMutex;

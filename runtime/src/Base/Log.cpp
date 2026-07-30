@@ -7,6 +7,8 @@
 
 #include "Log.h"
 
+#include <cerrno>
+#include <fcntl.h>
 #include <sys/stat.h>
 #include <unistd.h>
 
@@ -20,6 +22,36 @@
 #include "Base/LogFile.h"
 namespace MapleRuntime {
 static ImmortalWrapper<Logger> g_loggerInstance;
+static_assert(ATOMIC_BOOL_LOCK_FREE == 2, "fatal attribution requires lock-free atomic bool");
+
+namespace {
+constexpr size_t FATAL_ATTR_BUFFER_SIZE = 512;
+
+size_t AppendFatalAttrText(char* buffer, size_t index, const char* text) noexcept
+{
+    if (text == nullptr) {
+        text = "(null)";
+    }
+    while (*text != '\0' && index < FATAL_ATTR_BUFFER_SIZE - 1) {
+        buffer[index++] = *text++;
+    }
+    return index;
+}
+
+size_t AppendFatalAttrNumber(char* buffer, size_t index, uint64_t value) noexcept
+{
+    char digits[20];
+    size_t digitCount = 0;
+    do {
+        digits[digitCount++] = static_cast<char>('0' + value % 10);
+        value /= 10;
+    } while (value != 0 && digitCount < sizeof(digits));
+    while (digitCount > 0 && index < FATAL_ATTR_BUFFER_SIZE - 1) {
+        buffer[index++] = digits[--digitCount];
+    }
+    return index;
+}
+} // namespace
 
 Logger& Logger::GetLogger() noexcept { return *g_loggerInstance; }
 
@@ -167,6 +199,64 @@ Logger::Logger()
 
     GetLogPath("MRT_LOG_PATH", filePath);
     minimumLogLevel = RTLOG_ERROR;
+    InitFatalAttr();
+}
+
+void Logger::InitFatalAttr()
+{
+    const char* basePath = std::getenv("MRT_FATAL_ATTR_PATH");
+    if ((basePath == nullptr || *basePath == '\0') && !filePath.IsEmpty()) {
+        basePath = filePath.Str();
+    }
+    if (basePath == nullptr || *basePath == '\0') {
+        return;
+    }
+    CString fatalAttrPath(basePath);
+    fatalAttrPath.Append(".fatal.");
+    fatalAttrPath.Append(CString(MapleRuntime::GetPid()));
+    fatalAttrFd = open(fatalAttrPath.Str(), O_WRONLY | O_CREAT | O_APPEND, S_IRUSR | S_IWUSR);
+}
+
+void Logger::WriteFatalAttr(const char* record, size_t length) const noexcept
+{
+    int savedErrno = errno;
+    (void)write(STDERR_FILENO, record, length);
+    if (fatalAttrFd >= 0 && fatalAttrFd != STDERR_FILENO) {
+        (void)write(fatalAttrFd, record, length);
+    }
+    errno = savedErrno;
+}
+
+void Logger::RecordFatalSite(const char* condition, const char* file, const char* line) noexcept
+{
+    fatalSiteRecorded.store(true, std::memory_order_relaxed);
+    char buffer[FATAL_ATTR_BUFFER_SIZE];
+    size_t index = 0;
+    index = AppendFatalAttrText(buffer, index, "CANGJIE_FATAL_SITE pid=");
+    index = AppendFatalAttrNumber(buffer, index, static_cast<uint64_t>(MapleRuntime::GetPid()));
+    index = AppendFatalAttrText(buffer, index, " condition=");
+    index = AppendFatalAttrText(buffer, index, condition);
+    index = AppendFatalAttrText(buffer, index, " file=");
+    index = AppendFatalAttrText(buffer, index, file);
+    index = AppendFatalAttrText(buffer, index, ":");
+    index = AppendFatalAttrText(buffer, index, line);
+    buffer[index++] = '\n';
+    WriteFatalAttr(buffer, index);
+}
+
+void Logger::RecordFatalSignal(int signal) noexcept
+{
+    char buffer[FATAL_ATTR_BUFFER_SIZE];
+    size_t index = 0;
+    index = AppendFatalAttrText(buffer, index, "CANGJIE_FATAL_SIGNAL pid=");
+    index = AppendFatalAttrNumber(buffer, index, static_cast<uint64_t>(MapleRuntime::GetPid()));
+    index = AppendFatalAttrText(buffer, index, " signal=");
+    index = AppendFatalAttrNumber(buffer, index, static_cast<uint64_t>(signal));
+    index = AppendFatalAttrText(buffer, index, " prior_site=");
+    index = AppendFatalAttrText(buffer, index,
+                                fatalSiteRecorded.load(std::memory_order_relaxed) ? "1" : "0");
+    buffer[index++] = '\n';
+    WriteFatalAttr(buffer, index);
 }
 
 bool Logger::InitLog()

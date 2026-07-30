@@ -1124,6 +1124,7 @@ public:
     }
 
     RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
+    uint16_t GetRegionStateBits() const { return metadata.regionStateBitField.GetAtomicValue(0, sizeof(uint16_t) * 8); }
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }

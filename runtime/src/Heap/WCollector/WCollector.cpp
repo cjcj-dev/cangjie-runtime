@@ -9,7 +9,15 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <unistd.h>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#include <execinfo.h>
+#endif
 
 #include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
@@ -41,6 +49,137 @@ constexpr bool IsInvalidCopyDestinationState(bool missing, bool free, bool garba
 }
 static_assert(IsInvalidCopyDestinationState(false, false, true, false, false),
               "garbage copy destinations must remain fail-closed");
+
+constexpr size_t B316_RECORD_SIZE = 2048;
+
+void WriteB316Record(const char* record, int formattedLength) noexcept
+{
+    if (formattedLength <= 0) {
+        return;
+    }
+    size_t length = static_cast<size_t>(formattedLength);
+    if (length >= B316_RECORD_SIZE) {
+        length = B316_RECORD_SIZE - 1;
+    }
+    Logger::GetLogger().WriteFatalAttr(record, length);
+}
+
+void RecordB316Region(const char* label, BaseObject* object) noexcept
+{
+    uintptr_t address = reinterpret_cast<uintptr_t>(object);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+    bool validRegion = region != nullptr && region->IsValidRegion();
+    uintptr_t regionStart = region == nullptr ? 0 : region->GetRegionStart();
+    uintptr_t regionEnd = region == nullptr ? 0 : region->GetRegionEnd();
+    uintptr_t allocPtr = region == nullptr ? 0 : region->GetRegionAllocPtr();
+    bool addressInRegion = region != nullptr && regionStart <= address && address < regionEnd;
+    size_t offset = addressInRegion ? address - regionStart : 0;
+    bool survived = validRegion && addressInRegion && region->IsSurvivedObject(offset);
+    bool marked = validRegion && addressInRegion && region->IsMarkedObject(offset);
+    bool resurrected = validRegion && addressInRegion && region->IsResurrectedObject(offset);
+    bool enqueued = validRegion && addressInRegion && region->IsEnqueuedObject(offset);
+    bool inGhostFrom = RegionInfo::InGhostFromRegion(object);
+    RegionInfo* ghostRegion = inGhostFrom ? RegionInfo::GetGhostFromRegionAt(address) : nullptr;
+    LiveInfo* ghostLiveInfo = ghostRegion == nullptr ? nullptr : ghostRegion->GetGhostLiveInfo();
+    bool ghostSurvived = ghostLiveInfo != nullptr && addressInRegion && ghostLiveInfo->IsSurvivedObject(offset);
+
+    unsigned char header[sizeof(StateWord)];
+    std::memcpy(header, object, sizeof(header));
+    bool headerAllZero = true;
+    char headerBytes[sizeof(header) * 2 + 1];
+    for (size_t i = 0; i < sizeof(header); ++i) {
+        headerAllZero = headerAllZero && header[i] == 0;
+        (void)std::snprintf(headerBytes + i * 2, sizeof(headerBytes) - i * 2, "%02x", header[i]);
+    }
+
+    // tip: isRetainedLiveInfoCandidate bit removed; report retained_state != NEVER_EXAMINED.
+    unsigned retainedCandidate = 0;
+    if (region != nullptr) {
+        retainedCandidate =
+            region->GetRetainedLiveInfoState() != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED ? 1u : 0u;
+    }
+
+    char record[B316_RECORD_SIZE];
+    int length = std::snprintf(record, sizeof(record),
+        "CANGJIE_FATAL_B316_REGION role=%s object=%p type_info=%p header_bytes=%s header_all_zero=%u "
+        "space=region region=%p region_type=%u unit_role=%u region_state=0x%04x route_state=%u "
+        "valid_region=%u free_region=%u garbage_region=%u region_start=%#zx region_end=%#zx alloc_ptr=%#zx "
+        "address_in_region=%u within_current_alloc=%u offset=%zu young=%u young_age=%u in_ghost_from=%u "
+        "trace_region=%u retained_candidate=%u live_info=%p retained_live_info=%p retained_state=%u "
+        "live_bytes=%u marked=%u resurrected=%u enqueued=%u survived=%u ghost_region=%p "
+        "ghost_route_state=%u ghost_live_info=%p ghost_survived=%u gc_phase=%u\n",
+        label, object, object->GetTypeInfo(), headerBytes, static_cast<unsigned>(headerAllZero), region,
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetRegionType()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetUnitRole()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetRegionStateBits()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetRouteState()), static_cast<unsigned>(validRegion),
+        region == nullptr ? 0 : static_cast<unsigned>(region->IsFreeRegion()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->IsGarbageRegion()), regionStart, regionEnd, allocPtr,
+        static_cast<unsigned>(addressInRegion), static_cast<unsigned>(addressInRegion && address < allocPtr), offset,
+        region == nullptr ? 0 : static_cast<unsigned>(region->IsYoungRegion()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetYoungAge()), static_cast<unsigned>(inGhostFrom),
+        region == nullptr ? 0 : static_cast<unsigned>(region->IsTraceRegion()),
+        retainedCandidate,
+        region == nullptr ? nullptr : region->GetLiveInfo(),
+        region == nullptr ? nullptr : region->GetRetainedLiveInfo(),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetRetainedLiveInfoState()),
+        region == nullptr ? 0 : static_cast<unsigned>(region->GetLiveByteCount()), static_cast<unsigned>(marked),
+        static_cast<unsigned>(resurrected), static_cast<unsigned>(enqueued), static_cast<unsigned>(survived), ghostRegion,
+        ghostRegion == nullptr ? 0 : static_cast<unsigned>(ghostRegion->GetRouteState()), ghostLiveInfo,
+        static_cast<unsigned>(ghostSurvived), static_cast<unsigned>(Heap::GetHeap().GetGCPhase()));
+    WriteB316Record(record, length);
+}
+
+void RecordB316Frames() noexcept
+{
+#if defined(__linux__)
+    void* frames[16];
+    int frameCount = backtrace(frames, static_cast<int>(sizeof(frames) / sizeof(frames[0])));
+    for (int i = 0; i < frameCount; ++i) {
+        Dl_info info{};
+        bool resolved = dladdr(frames[i], &info) != 0;
+        uintptr_t imageBase = resolved ? reinterpret_cast<uintptr_t>(info.dli_fbase) : 0;
+        uintptr_t pc = reinterpret_cast<uintptr_t>(frames[i]);
+        char record[B316_RECORD_SIZE];
+        int length = std::snprintf(record, sizeof(record),
+            "CANGJIE_FATAL_B316_FRAME index=%d pc=%#zx image_base=%#zx image_offset=%#zx image=%s symbol=%s\n",
+            i, pc, imageBase, imageBase == 0 ? 0 : pc - imageBase,
+            resolved && info.dli_fname != nullptr ? info.dli_fname : "(unresolved)",
+            resolved && info.dli_sname != nullptr ? info.dli_sname : "(unresolved)");
+        WriteB316Record(record, length);
+    }
+#endif
+}
+
+void RecordB316Identity(const char* sourceKind, BaseObject* holder, RefField<>& field, RefField<>& oldField,
+                        BaseObject* latest) noexcept
+{
+    const char* holderType = "(unknown)";
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        TypeInfo* ti = holder->GetTypeInfo();
+        if (ti != nullptr) {
+            const char* n = ti->GetName();
+            if (n != nullptr) {
+                holderType = n;
+            }
+        }
+    }
+    char record[B316_RECORD_SIZE];
+    int length = std::snprintf(record, sizeof(record),
+        "CANGJIE_FATAL_B316 source_kind=%s holder=%p holder_type=%s field=%p field_offset=%zd "
+        "raw_ref=%#zx latest=%p\n",
+        sourceKind != nullptr ? sourceKind : "?", holder, holderType, &field,
+        holder != nullptr ? BaseObject::FieldOffset(holder, &field) : static_cast<intptr_t>(-1),
+        oldField.GetFieldValue(), latest);
+    WriteB316Record(record, length);
+    if (latest != nullptr) {
+        RecordB316Region("target", latest);
+    }
+    if (holder != nullptr) {
+        RecordB316Region("holder", holder);
+    }
+    RecordB316Frames();
+}
 } // namespace
 
 void PrintUntagRefFieldBreadcrumb() noexcept
@@ -343,6 +482,9 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
+    }
+    if (UNLIKELY(!latest->IsValidObject())) {
+        RecordB316Identity(sourceKind, obj, field, oldField, latest);
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                  latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
