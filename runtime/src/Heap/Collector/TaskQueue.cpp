@@ -37,10 +37,11 @@ bool GCExecutor::Execute(void* owner)
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             collectorProxy->RunGarbageCollection(taskIndex, gcReason);
             uint64_t finish = TimeUtil::NanoSeconds();
-            // The clocks follow what actually ran, not what was requested: every
-            // majorInterval-th GC_REASON_YOUNG request executes as a promoted full
-            // collection, and that full must arm the shared clock like any other —
-            // keying on gcReason here would let back-to-back fulls through.
+            // The clocks follow what actually ran, not what was requested: after
+            // majorInterval completed minors, the next GC_REASON_YOUNG request executes
+            // as a promoted full collection, and that full must arm the shared clock
+            // like any other — keying on gcReason here would let back-to-back fulls
+            // through.
             GCStats::SetPrevYoungGCFinishTime(finish);
             if (!collectorProxy->GetCurrentCollector().GetGCStats().lastCollectionWasYoung) {
                 GCStats::SetPrevGCFinishTime(finish);

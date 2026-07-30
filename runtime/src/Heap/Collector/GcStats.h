@@ -46,20 +46,22 @@ public:
     static uint64_t prevGcStartTime;
     static uint64_t prevGcFinishTime;
     // Young throttling keeps its own clock. The shared prevGcFinishTime is armed only
-    // by collections that actually executed as full (lastCollectionWasYoung above —
-    // requests and executions differ), so a stream of minors no longer keeps resetting
-    // the clock that throttles heuristic/native full collections. Fulls arm both
-    // clocks: they cover the young generation as well, so an immediately following
-    // minor would mostly re-scan what was just collected.
+    // by collections that actually executed as full (lastCollectionWasYoung, an
+    // instance field below — requests and executions differ), so a stream of minors no
+    // longer keeps resetting the clock that throttles heuristic/native full
+    // collections. Fulls arm both clocks: they cover the young generation as well, so
+    // an immediately following minor would mostly re-scan what was just collected.
     static uint64_t prevYoungGcFinishTime;
 
     GCReason reason;
     bool isConcurrentMark;
     bool async;
     // What the finished collection actually did, as opposed to what the reason asked
-    // for: every majorInterval-th GC_REASON_YOUNG request is promoted to a full
-    // collection. The executor records the executed kind here so the throttle clocks
-    // can follow it — a promoted full must arm the shared clock like any other full.
+    // for: after majorInterval completed minors, the next GC_REASON_YOUNG request is
+    // promoted to a full collection. The collector records the executed kind here at
+    // the point where it makes that flow decision; the executor reads it afterwards so
+    // the throttle clocks can follow it — a promoted full must arm the shared clock
+    // like any other full.
     bool lastCollectionWasYoung = false;
 
     uint64_t gcStartTime;
