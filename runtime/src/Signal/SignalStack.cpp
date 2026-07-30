@@ -57,6 +57,24 @@ void WriteAsSafeCStr(const char* str)
     WriteAsSafe(str, len);
 }
 
+// Multi-byte probe markers (sigdiag2): distinguishable from compiler warning text.
+void SigMark(const char* tag)
+{
+    // format: \n#S<tag>#\n  e.g. #S1# #S2#
+    char buf[16];
+    buf[0] = '\n';
+    buf[1] = '#';
+    buf[2] = 'S';
+    size_t i = 0;
+    while (tag[i] != '\0' && i < 8) {
+        buf[3 + i] = tag[i];
+        ++i;
+    }
+    buf[3 + i] = '#';
+    buf[4 + i] = '\n';
+    WriteAsSafe(buf, 5 + i);
+}
+
 // Match FLOG(RTLOG_ERROR, "CJNative Handle signal: %d.") byte sequence exactly:
 // "<tid> E CJNative Handle signal: <n>.\n"
 void LogHandleSignalAsSafe(int signal)
@@ -190,7 +208,9 @@ static void ReleaseSignalArgs(SignalArgs* args)
 void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
 {
     LogHandleSignalAsSafe(signal);
+    SigMark("1"); // after LogHandleSignalAsSafe
     SignalArgs* args = AcquireSignalArgs(signal, siginfo, ucontextRaw, false);
+    SigMark("2"); // after AcquireSignalArgs
     if (args == nullptr) {
         LogSignalSlotExhaustedAsSafe(signal);
         RaiseDefaultAsSafe(signal);
@@ -200,7 +220,9 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
         case SIGSEGV:
         case SIGBUS:
         case SIGFPE:
+            SigMark("3"); // before HandlerImpl
             HandlerImpl(args);
+            SigMark("4"); // after HandlerImpl
             break;
         case SIGABRT:
         case SIGILL:
@@ -234,14 +256,17 @@ void SignalStack::HandlerImpl(void* args)
     int signal = signalArgs->signal;
     siginfo_t* siginfo = signalArgs->siginfo;
     void* ucontextRaw = signalArgs->ucontextRaw;
+    SigMark("a"); // HandlerImpl entry
     // Check if we are already handling a signal
     if (!GetHandlingSignal()) {
+        SigMark("b"); // not reentrant
         std::vector<SignalAction>& handlerStack = SignalStack::stacks[signal].handlerStack;
         for (auto it = handlerStack.rbegin(); it != handlerStack.rend(); ++it) {
             const SignalAction& handler = *it;
             if (handler.saSignalAction == nullptr) {
                 break;
             }
+            SigMark("c"); // before procmask+call
             // Save the previous signal mask
             sigset_t previous_mask;
             g_linkedSignalProcmask(SIG_SETMASK, &handler.scMask, &previous_mask);
@@ -253,20 +278,33 @@ void SignalStack::HandlerImpl(void* args)
                 // marke thread is handling a signal
                 SetHandlingSignal(true);
             }
+            SigMark("d"); // before saSignalAction
             // Execute the signal handler
             if (handler.saSignalAction(signal, siginfo, ucontextRaw)) {
+                SigMark("e"); // handler returned true
                 SetHandlingSignal(previous_value);
                 ReleaseSignalArgs(signalArgs);
                 return;
             }
+            SigMark("f"); // handler returned false
             g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
             SetHandlingSignal(previous_value);
         }
+        SigMark("g"); // after handler loop
+    } else {
+        SigMark("h"); // reentrant: skip handlerStack
     }
+    SigMark("i"); // fallthrough to DFL path
     int handlerFlags = SignalStack::stacks[signal].sigAction.sa_flags;
     ucontext_t* ucontext = static_cast<ucontext_t*>(ucontextRaw);
     // Combine the signal masks
     sigset_t mask;
+    if (ucontext == nullptr) {
+        SigMark("j"); // null ucontext
+        ReleaseSignalArgs(signalArgs);
+        RaiseDefaultAsSafe(signal);
+        return;
+    }
     SigOrSet(&mask, &ucontext->uc_sigmask, &SignalStack::stacks[signal].sigAction.sa_mask);
     // Add the current signal to the mask if SA_NODEFER is not set
     if (!(handlerFlags & SA_NODEFER)) {

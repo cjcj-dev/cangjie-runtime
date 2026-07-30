@@ -40,6 +40,12 @@ void WriteSigDiag(const char* buf, size_t len)
     (void)write(STDERR_FILENO, buf, len);
 }
 
+// AS-safe single-byte progress probe for second-fault localization (sigdiag2).
+void SigProg(char c)
+{
+    (void)write(STDERR_FILENO, &c, 1);
+}
+
 // FLOG-compatible ERROR line without logMutex: "<tid> E <msg>\n"
 void LogErrorAsSafe(const char* msg)
 {
@@ -119,6 +125,8 @@ static void CheckStackOverflow(const siginfo_t& info)
 
 static void CheckSuspendState()
 {
+    // B marks entry; if stuck in SUSPENSION_FOR_EXIT sleep, last letter stays B.
+    SigProg('b');
     ThreadLocalData* tlData = ThreadLocal::GetThreadLocalData();
     Mutator* mutator = tlData->mutator;
     if (mutator == nullptr) {
@@ -136,21 +144,31 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     // AS-safe path: key fields (tid/si_addr/pc/fa) via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
     // signal-context critical path (REPORT-gchang11 §5 D).
+    SigProg('D'); // PrintSignalHandlerStack entry
     PrintUntagRefFieldBreadcrumb();
+    SigProg('E'); // after PrintUntagRefFieldBreadcrumb
 
     ucontext_t* ucontext = static_cast<ucontext_t*>(context);
     uintptr_t sigPc = GetPCFromUContext(*ucontext);
+    SigProg('F'); // after GetPCFromUContext
     uintptr_t sigFa = GetFAFromUContext(*ucontext);
+    SigProg('G'); // after GetFAFromUContext
     const void* siAddr = (info != nullptr) ? info->si_addr : nullptr;
 
     char line[320];
+    int tid = static_cast<int>(GetTid());
+    SigProg('H'); // after GetTid
+    const char* sigName = SignalManager::GetSignalName(static_cast<uint8_t>(sig));
+    SigProg('I'); // after GetSignalName
     int n = sprintf_s(line, sizeof(line),
                       "%d E signal %s (%d) pc=0x%lx fa=0x%lx si_addr=%p\n",
-                      static_cast<int>(GetTid()), SignalManager::GetSignalName(static_cast<uint8_t>(sig)), sig,
+                      tid, sigName, sig,
                       static_cast<unsigned long>(sigPc), static_cast<unsigned long>(sigFa), siAddr);
+    SigProg('J'); // after sprintf_s
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
+    SigProg('K'); // after WriteSigDiag
     // PrintSignalStackTrace degraded: only pc/fa hex already emitted above (no unwind/heap).
 }
 
@@ -279,11 +297,15 @@ bool SignalManager::HandleUnexpectedSIGUSR1(int sig, siginfo_t* info, void* cont
 // Handle unexpected SIGSEGV
 bool SignalManager::HandleUnexpectedSigsegv(int sig, siginfo_t* info, void* context)
 {
+    SigProg('A'); // HandleUnexpectedSigsegv entry
     CheckSuspendState();
+    SigProg('B'); // after CheckSuspendState (not stuck in exit-suspend)
     // Do more functional things here.
     CheckStackOverflow(*info);
+    SigProg('C'); // after CheckStackOverflow
 
     PrintSignalHandlerStack(sig, info, context);
+    SigProg('L'); // after PrintSignalHandlerStack
     return false;
 }
 
