@@ -53,28 +53,48 @@ bool SigBWriterProvenance::IsConstAnalysisVictimType(TypeInfo* typeInfo) noexcep
     if (name == nullptr) {
         return false;
     }
-    // Runtime TypeInfo expands aliases: ConstDomain → State<ValueDomain<ConstValue>,
-    // FullStatePool<...>>; ConstPoolDomain → ...ActiveStatePool<...>. Match the
-    // expanded mangled form for resultsMap / resultsPoolMap entry RawArrays.
-    if (std::strstr(name, "RawArray") == nullptr || std::strstr(name, "HashMapEntry") == nullptr) {
+    // Victim surface for signature B (gcsigb): HashMap backing arrays of
+    // ConstAnalysisWrapper.resultsMap / resultsPoolMap.
+    // Runtime TypeInfo expands ConstDomain → State<ValueDomain<ConstValue>,
+    // FullStatePool|ActiveStatePool>. Also match:
+    //   - RawArray<HashMapEntry<Function, Results<...>>> (entries)
+    //   - RawArray<Int64> is too broad for primary filter; covered only when
+    //     an entries array is registered (same HashMap instance not needed —
+    //     we track exact slots that receive barrier/bulk writes).
+    if (std::strstr(name, "RawArray") == nullptr) {
         return false;
     }
-    if (std::strstr(name, "Function") == nullptr || std::strstr(name, "Results") == nullptr) {
-        return false;
+    // Primary: entries array of resultsMap / resultsPoolMap.
+    if (std::strstr(name, "HashMapEntry") != nullptr) {
+        // Expanded Results value type for const analysis maps.
+        if (std::strstr(name, "Results") != nullptr && std::strstr(name, "ConstValue") != nullptr) {
+            return true;
+        }
+        if (std::strstr(name, "Function") != nullptr &&
+            (std::strstr(name, "FullStatePool") != nullptr || std::strstr(name, "ActiveStatePool") != nullptr ||
+             std::strstr(name, "ConstDomain") != nullptr || std::strstr(name, "ConstPoolDomain") != nullptr)) {
+            return true;
+        }
+        // Literal alias names (if ever present unexpanded).
+        if (std::strstr(name, "ConstDomain") != nullptr || std::strstr(name, "ConstPoolDomain") != nullptr) {
+            return true;
+        }
     }
-    if (std::strstr(name, "ConstValue") == nullptr) {
-        return false;
-    }
-    if (std::strstr(name, "FullStatePool") != nullptr || std::strstr(name, "ActiveStatePool") != nullptr) {
-        return true;
-    }
-    // Literal alias names (if ever present unexpanded).
-    return std::strstr(name, "ConstDomain") != nullptr || std::strstr(name, "ConstPoolDomain") != nullptr;
+    return false;
 }
 
 void SigBWriterProvenance::MaybeRegister(BaseObject* obj, TypeInfo* typeInfo, size_t size) noexcept
 {
-    if (obj == nullptr || size == 0 || !IsConstAnalysisVictimType(typeInfo)) {
+    if (obj == nullptr || size == 0 || typeInfo == nullptr) {
+        return;
+    }
+    // Observe-only probe counter: any HashMapEntry RawArray allocation.
+    const char* name = typeInfo->GetName();
+    if (name != nullptr && std::strstr(name, "RawArray") != nullptr &&
+        std::strstr(name, "HashMapEntry") != nullptr) {
+        hashMapEntryAllocCount.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!IsConstAnalysisVictimType(typeInfo)) {
         return;
     }
     EnsureExitDumpRegistered();
@@ -267,6 +287,8 @@ void SigBWriterProvenance::DumpRegistry(int fd) const noexcept
     WriteDec(fd, copyHitCount.load(std::memory_order_relaxed));
     WriteText(fd, " relocates=");
     WriteDec(fd, relocateCount.load(std::memory_order_relaxed));
+    WriteText(fd, " hashmapentry_allocs=");
+    WriteDec(fd, hashMapEntryAllocCount.load(std::memory_order_relaxed));
     WriteText(fd, "\n");
 
     const size_t n = registrySize.load(std::memory_order_relaxed);
@@ -389,9 +411,11 @@ void SigBWriterProvenance::LogSummary() noexcept
 {
     EnsureExitDumpRegistered();
     VLOG(REPORT,
-         "[SIGB_WRITER] summary registry=%zu overflow=%zu write_hits=%zu copy_hits=%zu relocates=%zu",
+         "[SIGB_WRITER] summary registry=%zu overflow=%zu write_hits=%zu copy_hits=%zu relocates=%zu "
+         "hashmapentry_allocs=%zu",
          registrySize.load(std::memory_order_relaxed), overflowCount.load(std::memory_order_relaxed),
          writeHitCount.load(std::memory_order_relaxed), copyHitCount.load(std::memory_order_relaxed),
-         relocateCount.load(std::memory_order_relaxed));
+         relocateCount.load(std::memory_order_relaxed),
+         hashMapEntryAllocCount.load(std::memory_order_relaxed));
 }
 } // namespace MapleRuntime
