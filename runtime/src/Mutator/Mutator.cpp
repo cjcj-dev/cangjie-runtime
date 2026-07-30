@@ -178,9 +178,9 @@ void Mutator::ResetMutator()
     // targets the right stack. What it buys differs by caller: for a reusable scheduler
     // cjthread (TransitMutatorToExit) it keeps an expanded guard out of the freelist,
     // and for the runtime mutator it restores the current thread's protect boundary.
-    // (The finalizer mutator's setup path never initializes that boundary, and a
-    // finalizer whose exception was fatal aborts before reaching this Reset, so for it
-    // the recover is a correct pairing with nothing observable to restore.)
+    // (The finalizer mutator's setup path never arms that boundary — StackGuardRecover
+    // sees the null and leaves the threshold alone — and a finalizer whose exception
+    // was fatal aborts before reaching this Reset at all.)
     if (exceptionWrapper.IsThrowingSOFE()) {
         StackGuardRecover();
     }
@@ -320,6 +320,11 @@ void Mutator::StackGuardExpand() const
     // Expand stack boundary when StackOverflowError occurs
     if (!IsRuntimeThread()) {
         CJThreadStackGuardExpand();
+        // No own stack (foreign/exclusive): the expand above was a no-op and there is
+        // no guard page to unprotect — nullptr minus a page is not an address.
+        if (CJThreadStackAddrGet() == nullptr) {
+            return;
+        }
         if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
             void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
 #ifdef _WIN64
@@ -345,6 +350,9 @@ void Mutator::StackGuardRecover() const
     // Recover stack boundary when StackOverflowError has been caught
     if (!IsRuntimeThread()) {
         CJThreadStackGuardRecover();
+        if (CJThreadStackAddrGet() == nullptr) {
+            return;
+        }
         if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
             void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
 #ifdef _WIN64
@@ -361,6 +369,12 @@ void Mutator::StackGuardRecover() const
 #endif
         }
     } else {
+        // A runtime-thread mutator whose protect boundary was never armed (the
+        // finalizer mutator's setup path skips InitProtectStackAddr) has nothing to
+        // restore; null + reserved would install a bogus non-null threshold.
+        if (stackBoundAddr == nullptr) {
+            return;
+        }
         size_t reversedSize = Runtime::Current().GetConcurrencyModel().GetReservedStackSize();
         ThreadLocal::SetProtectAddr(
             reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
