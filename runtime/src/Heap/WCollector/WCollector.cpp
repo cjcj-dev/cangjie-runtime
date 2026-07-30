@@ -816,6 +816,64 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
     }
 }
 
+// DO NOT MERGE: after BulkForwardHolderRefs, before FlipTagID — count plain slots whose
+// targets still sit in from / ghost-from (unregistered edges that BulkForward missed).
+// Read-only: no rewrite, no FixEdgeSet mutation. STW cost is intentional for the probe.
+void WCollector::CountUnregisteredPlainToFromAfterBulkForward()
+{
+    MRT_PHASE_TIMER("CountUnregisteredPlainToFromAfterBulkForward");
+    ScopedStopTheWorld stw("count unregistered plain to from after bulkforward");
+    const uint64_t startNs = TimeUtil::NanoSeconds();
+    size_t unregisteredPlainToFrom = 0;
+    size_t holdersScanned = 0;
+    size_t plainSlots = 0;
+    // FixEdgeSet was VisitAndClear'd inside BulkForward — membership not available (未查).
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    space.ForEachObj(
+        [this, &unregisteredPlainToFrom, &holdersScanned, &plainSlots](BaseObject* obj) {
+            if (obj == nullptr || !obj->IsValidObject()) {
+                return;
+            }
+            if (!IsSurvivedObject(obj)) {
+                return;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            ++holdersScanned;
+            ForEachRefSlot(obj, [this, obj, &unregisteredPlainToFrom, &plainSlots](RefField<>& field) {
+                RefField<> oldField(field);
+                if (oldField.IsTagged()) {
+                    return;
+                }
+                BaseObject* target = oldField.GetTargetObject();
+                if (!Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                ++plainSlots;
+                const bool isFrom = IsFromObject(target);
+                const bool isGhost = IsGhostFromObject(target);
+                if (!isFrom && !isGhost) {
+                    return;
+                }
+                ++unregisteredPlainToFrom;
+                size_t n = unregisteredPlainToFrom;
+                if ((n & (n - 1)) == 0) {
+                    const char* regionKind = isGhost ? "ghost-from" : "from";
+                    VLOG(REPORT,
+                         "[EDGECOUNT] unregisteredPlainToFrom n=%zu holder=%p slot=%p target=%p "
+                         "region=%s fixset=未查(cleared)",
+                         n, obj, &field, target, regionKind);
+                }
+            });
+        },
+        false);
+    const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    VLOG(REPORT,
+         "[EDGECOUNT] unregisteredPlainToFrom=%zu holdersScanned=%zu plainSlots=%zu pause=%zu us",
+         unregisteredPlainToFrom, holdersScanned, plainSlots, static_cast<size_t>(pauseUs));
+}
+
 // R1 BulkForward: STW scan FixEdgeSet (index-only, P-G) + roots. ⛔ no ForEachObj /
 // VisitAllObjects (H1 bulkfwd SEGV path). Worst-case pause = O(|FixSet| + |Roots|) (H2).
 void WCollector::BulkForwardHolderRefs()
@@ -1417,6 +1475,9 @@ void WCollector::DoGarbageCollection()
     // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
     // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
     BulkForwardHolderRefs();
+
+    // DO NOT MERGE: read-only full-heap count after BulkForward, before FlipTagID.
+    CountUnregisteredPlainToFromAfterBulkForward();
 
     if (StickyLog::Instance().IsEnabled()) {
         ScopedStopTheWorld stw("advance sticky log epoch");

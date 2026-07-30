@@ -237,6 +237,8 @@ private:
                                   size_t* interiorRewritten = nullptr,
                                   BulkMissBuckets* missBuckets = nullptr);
     void BulkForwardHolderRefs();
+    // DO NOT MERGE: read-only count of plain slots still pointing at from/ghost after BulkForward.
+    void CountUnregisteredPlainToFromAfterBulkForward();
     // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
     // Weak referents soft-clear when dead; strong slots keep hard validity checks.
     void NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent);
