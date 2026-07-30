@@ -801,7 +801,8 @@ void WCollector::BulkForwardHolderRefs()
     // (r1missbucket's fact-hit invalid_to_region, later re-gated), so it stays a
     // counter until a design ruling classifies every current producer. Release keeps
     // all counters; the acceptance gate consumes the cumulative totals that
-    // GCStats::Dump reports and requires both to be zero.
+    // GCStats::Dump reports — B3 nonzero fails, unclassified nonzero blocks until
+    // classified.
     GCStats::b3RealLossTotal.fetch_add(missBuckets.b3RealLoss, std::memory_order_relaxed);
     GCStats::unclassifiedMissTotal.fetch_add(missBuckets.unclassified, std::memory_order_relaxed);
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {

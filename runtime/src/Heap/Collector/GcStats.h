@@ -42,10 +42,12 @@ public:
     static uint64_t prevGcStartTime;
     static uint64_t prevGcFinishTime;
 
-    // Cumulative BulkForwardHolderRefs miss totals with no legitimate producer.
-    // Written by WCollector after each pass, reported in Dump's REPORT tail so an
-    // acceptance gate can consume one process-lifetime number instead of scraping
-    // per-pass lines; the release acceptance criterion is both staying zero.
+    // Cumulative BulkForwardHolderRefs miss totals, written by WCollector after each
+    // pass and reported in Dump's REPORT tail so an acceptance gate can consume one
+    // process-lifetime number instead of scraping per-pass lines. The two criteria
+    // differ: b3RealLossTotal nonzero fails acceptance outright (no legitimate
+    // producer), unclassifiedMissTotal nonzero blocks until its producer is classified
+    // and ruled on — that aggregate has carried legitimate producers before.
     static std::atomic<size_t> b3RealLossTotal;
     static std::atomic<size_t> unclassifiedMissTotal;
 
