@@ -899,6 +899,21 @@ public:
                 metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             }
             AssertGhostRouteTornDown("ClearGhostRegionBit", nUnit);
+        } else if (UNLIKELY(AcquireRouteInfo().IsInstalled())) {
+            // Head bit already clear but a route carrier still installed: the same
+            // one-sided drift the Dispel early exit watches for, observed here because
+            // this caller may have just removed the region from the from-list — a
+            // region that never reaches the ghost list never reaches Dispel's sentinel,
+            // so deferral is not a guarantee on this path.
+            size_t m = ghostRouteOneSidedCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((m & (m - 1)) == 0) {
+                VLOG(REPORT,
+                     "[ClearGhostRegionBit] ghost_route_one_sided region=%p identity_epoch=%llu n=%zu",
+                     this, static_cast<unsigned long long>(GetIdentityEpoch()), m);
+            }
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+            CHECK_DETAIL(false, "route carrier installed with no ghost overlay on region %p", this);
+#endif
         }
     }
 
@@ -936,7 +951,7 @@ public:
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         size_t ghostUnitCount = 0;
         for (size_t i = 0; i < nUnit; ++i) {
-            if (array[i].GetMetadata().inGhostFromRegion != 0) {
+            if (array[i].GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) != 0) {
                 ++ghostUnitCount;
             }
         }
