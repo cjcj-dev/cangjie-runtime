@@ -599,15 +599,26 @@ public:
         return nullptr;
     }
 
-    // ABI-compatible wrapper. Internal GC readers carry caller-held expectedEpoch
-    // through the three-argument overload above.
+    // ABI-compatible wrappers. Internal GC readers carry a caller-held expectedEpoch
+    // into the three-argument overload above; these two sample the epoch themselves,
+    // right before use, so their check has no holding time and can only catch a
+    // turnover that happens between the sample and the geometry read.
+    //
+    // Both stay for the versioned export surface. The counters answer whether anything
+    // in-tree still reaches them: a reading of zero across the gate corpus is what would
+    // let us treat them as pure compatibility shims (and stop worrying about their weak
+    // form); a non-zero reading names the call sites to convert to the strong overload.
+    // Counting first, converting second — the previous two blocks both had a candidate
+    // that looked certain and did not survive contact with a counter.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
+        epochlessRouteWrapperCalls.fetch_add(1, std::memory_order_relaxed);
         return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetIdentityEpoch());
     }
 
     BaseObject* RouteObject(BaseObject* fromObj)
     {
+        epochlessRouteWrapperCalls.fetch_add(1, std::memory_order_relaxed);
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
         if (fromRegionInfo == nullptr) {
             return nullptr;
@@ -615,6 +626,11 @@ public:
 
         const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
+    }
+
+    size_t GetEpochlessRouteWrapperCalls() const
+    {
+        return epochlessRouteWrapperCalls.load(std::memory_order_relaxed);
     }
 
     size_t GetRouteEpochMismatchCount() const
@@ -875,6 +891,10 @@ private:
     // Identity changed between the epoch check and the geometry read: evidence that a
     // reader's captured epoch can go stale mid-call (see RouteObject read-after-use probe).
     std::atomic<size_t> routeEpochRaceAfterUseCount = { 0 };
+    // Calls that entered through a wrapper sampling the epoch itself instead of carrying
+    // a caller-held one. Zero across the gate corpus means the wrappers are reachable only
+    // from outside the tree.
+    std::atomic<size_t> epochlessRouteWrapperCalls = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
     std::atomic<uintptr_t> inactiveZone = { 0 };
