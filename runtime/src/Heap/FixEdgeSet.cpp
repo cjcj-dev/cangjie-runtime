@@ -118,6 +118,8 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
     local.erase(std::unique(local.begin(), local.end()), local.end());
     std::map<TypeInfo*, CopyDstTypeCount> copyDstTypeCounts;
     const size_t gcOrdinal = g_gcCount + 1;
+    size_t copyDstTaggedStaleTargetCount = 0;
+    size_t copyDstPlainStaleTargetCount = 0;
     for (MAddress addr : local) {
         if (addr == 0 || !Heap::IsHeapAddress(addr)) {
             continue;
@@ -191,6 +193,11 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
             }
             if (staleTarget) {
                 copyDstStaleTargetCount.fetch_add(1, std::memory_order_relaxed);
+                if (toField.IsTagged()) {
+                    ++copyDstTaggedStaleTargetCount;
+                } else {
+                    ++copyDstPlainStaleTargetCount;
+                }
                 ++typeCount.staleTarget;
                 if (isConstDomainEntries) {
                     copyDstConstDomainStaleTargetCount.fetch_add(1, std::memory_order_relaxed);
@@ -235,5 +242,7 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
              typeCount.first, typeName == nullptr ? "<null-name>" : typeName, typeCount.second.fact,
              typeCount.second.staleTarget, gcOrdinal);
     }
+    VLOG(REPORT, "[COPY_DST_STALE_TAG_SPLIT] tagged=%zu plain=%zu gc_ordinal=%zu",
+         copyDstTaggedStaleTargetCount, copyDstPlainStaleTargetCount, gcOrdinal);
 }
 } // namespace MapleRuntime
