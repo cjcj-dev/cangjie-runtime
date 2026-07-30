@@ -401,6 +401,11 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
     this->regionHeapStart = regionInfoAddr + metadataSize;
     this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
     this->inactiveZone = regionHeapStart;
+    if (IsYoungAccountingValidationEnabled()) {
+        youngValidationBaselines = new (std::nothrow) YoungValidationBaseline[nUnit]();
+        CHECK_DETAIL(youngValidationBaselines != nullptr, "allocate young validation baselines failed");
+        youngValidationBaselineCount = nUnit;
+    }
     SetMaxUnitCountForRegion();
     SetMaxUnitCountForPinnedRegion();
     SetLargeObjectThreshold();
@@ -800,11 +805,13 @@ size_t RegionManager::GetValidationObjectBytes() const
         MRT_ASSERT(regionEnd > address, "invalid region extent while validating young allocation bytes");
         if (!region->IsGarbageRegion()) {
             MAddress position = region->GetRegionStart();
-            auto baseline = youngValidationBaselines.find(region->GetUnitIdx());
-            if (baseline != youngValidationBaselines.end() &&
-                baseline->second.first == region->GetIdentityEpoch() &&
-                baseline->second.second >= position && baseline->second.second <= region->GetRegionAllocPtr()) {
-                position = baseline->second.second;
+            size_t unitIdx = region->GetUnitIdx();
+            if (unitIdx < youngValidationBaselineCount) {
+                const YoungValidationBaseline& baseline = youngValidationBaselines[unitIdx];
+                if (baseline.identityEpoch == region->GetIdentityEpoch() &&
+                    baseline.allocPtr >= position && baseline.allocPtr <= region->GetRegionAllocPtr()) {
+                    position = baseline.allocPtr;
+                }
             }
             MAddress allocPtr = region->GetRegionAllocPtr();
             while (position < allocPtr) {
@@ -822,7 +829,6 @@ size_t RegionManager::GetValidationObjectBytes() const
 
 void RegionManager::SetValidationObjectBaseline()
 {
-    youngValidationBaselines.clear();
     for (uintptr_t address = regionHeapStart; address < inactiveZone;) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
         if (!region->IsValidRegion()) {
@@ -832,8 +838,10 @@ void RegionManager::SetValidationObjectBaseline()
         MAddress regionEnd = region->GetRegionEnd();
         MRT_ASSERT(regionEnd > address, "invalid region extent while baselining young allocation bytes");
         if (!region->IsGarbageRegion()) {
-            youngValidationBaselines[region->GetUnitIdx()] =
-                std::make_pair(region->GetIdentityEpoch(), region->GetRegionAllocPtr());
+            size_t unitIdx = region->GetUnitIdx();
+            MRT_ASSERT(unitIdx < youngValidationBaselineCount, "young validation baseline index out of range");
+            youngValidationBaselines[unitIdx].identityEpoch = region->GetIdentityEpoch();
+            youngValidationBaselines[unitIdx].allocPtr = region->GetRegionAllocPtr();
         }
         address = regionEnd;
     }

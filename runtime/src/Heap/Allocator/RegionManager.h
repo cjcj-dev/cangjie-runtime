@@ -189,7 +189,7 @@ public:
 
     uintptr_t GetRegionHeapStart() const { return regionHeapStart; }
 
-    ~RegionManager() = default;
+    ~RegionManager() { delete[] youngValidationBaselines; }
 
     // take a region with *num* units for allocation
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false);
@@ -886,7 +886,12 @@ private:
     size_t youngRegionCapacityBaseline = 0;
     size_t youngRawPrivateBytesBaseline = 0;
     size_t youngPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
-    std::map<size_t, std::pair<uint64_t, MAddress>> youngValidationBaselines;
+    struct YoungValidationBaseline {
+        uint64_t identityEpoch = 0;
+        MAddress allocPtr = 0;
+    };
+    YoungValidationBaseline* youngValidationBaselines = nullptr;
+    size_t youngValidationBaselineCount = 0;
     std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
     std::atomic<size_t> youngDiagnosticReusedGarbageEvents = { 0 };
