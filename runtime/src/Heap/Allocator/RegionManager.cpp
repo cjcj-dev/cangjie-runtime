@@ -1500,7 +1500,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
-    if (allocPtr != 0) {
+    if (allocPtr != 0 && StickyLog::Instance().IsMinorEnabled()) {
         youngPinnedSlotBytes += size;
     }
     // For making bitmap comform with live object count, do not mark object repeated.
