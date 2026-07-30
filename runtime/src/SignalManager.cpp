@@ -144,15 +144,24 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     // AS-safe path: key fields (tid/si_addr/pc/fa) via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
     // signal-context critical path (REPORT-gchang11 §5 D).
+    // Emit once per OS signal delivery (HandlerImpl entry) so user-registered
+    // crashSignalHandler (_exit path) cannot suppress the pc line.
     SigProg('D'); // PrintSignalHandlerStack entry
     PrintUntagRefFieldBreadcrumb();
     SigProg('E'); // after PrintUntagRefFieldBreadcrumb
 
-    ucontext_t* ucontext = static_cast<ucontext_t*>(context);
-    uintptr_t sigPc = GetPCFromUContext(*ucontext);
-    SigProg('F'); // after GetPCFromUContext
-    uintptr_t sigFa = GetFAFromUContext(*ucontext);
-    SigProg('G'); // after GetFAFromUContext
+    uintptr_t sigPc = 0;
+    uintptr_t sigFa = 0;
+    if (context != nullptr) {
+        ucontext_t* ucontext = static_cast<ucontext_t*>(context);
+        sigPc = GetPCFromUContext(*ucontext);
+        SigProg('F'); // after GetPCFromUContext
+        sigFa = GetFAFromUContext(*ucontext);
+        SigProg('G'); // after GetFAFromUContext
+    } else {
+        SigProg('F');
+        SigProg('G');
+    }
     const void* siAddr = (info != nullptr) ? info->si_addr : nullptr;
 
     char line[320];
@@ -175,7 +184,7 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 bool SignalManager::HandleUnexpectedSignal(int sig, siginfo_t* info, void* context)
 {
     CheckSuspendState();
-    PrintSignalHandlerStack(sig, info, context);
+    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
 #ifdef COV_SIGNALHANDLE
     __gcov_dump();
 #endif
@@ -301,11 +310,12 @@ bool SignalManager::HandleUnexpectedSigsegv(int sig, siginfo_t* info, void* cont
     CheckSuspendState();
     SigProg('B'); // after CheckSuspendState (not stuck in exit-suspend)
     // Do more functional things here.
-    CheckStackOverflow(*info);
+    if (info != nullptr) {
+        CheckStackOverflow(*info);
+    }
     SigProg('C'); // after CheckStackOverflow
-
-    PrintSignalHandlerStack(sig, info, context);
-    SigProg('L'); // after PrintSignalHandlerStack
+    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
+    SigProg('L');
     return false;
 }
 
