@@ -88,11 +88,29 @@ void SigBWriterProvenance::MaybeRegister(BaseObject* obj, TypeInfo* typeInfo, si
     if (obj == nullptr || size == 0 || typeInfo == nullptr) {
         return;
     }
-    // Observe-only probe counter: any HashMapEntry RawArray allocation.
+    // Observe-only probe: any HashMapEntry RawArray allocation + sample names.
     const char* name = typeInfo->GetName();
     if (name != nullptr && std::strstr(name, "RawArray") != nullptr &&
         std::strstr(name, "HashMapEntry") != nullptr) {
         hashMapEntryAllocCount.fetch_add(1, std::memory_order_relaxed);
+        // Sample unique type names that mention Function / Results / ConstValue.
+        if (std::strstr(name, "Function") != nullptr || std::strstr(name, "Results") != nullptr ||
+            std::strstr(name, "ConstValue") != nullptr) {
+            size_t sc = typeNameSampleCount.load(std::memory_order_relaxed);
+            if (sc < SAMPLE_CAP) {
+                bool seen = false;
+                for (size_t i = 0; i < sc; ++i) {
+                    if (typeNameSamples[i] == name) {
+                        seen = true;
+                        break;
+                    }
+                }
+                if (!seen) {
+                    typeNameSamples[sc] = name;
+                    typeNameSampleCount.compare_exchange_strong(sc, sc + 1, std::memory_order_relaxed);
+                }
+            }
+        }
     }
     if (!IsConstAnalysisVictimType(typeInfo)) {
         return;
@@ -290,6 +308,12 @@ void SigBWriterProvenance::DumpRegistry(int fd) const noexcept
     WriteText(fd, " hashmapentry_allocs=");
     WriteDec(fd, hashMapEntryAllocCount.load(std::memory_order_relaxed));
     WriteText(fd, "\n");
+    const size_t sc = typeNameSampleCount.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < sc && i < SAMPLE_CAP; ++i) {
+        WriteText(fd, "[SIGB_TYPE_SAMPLE] ");
+        WriteText(fd, typeNameSamples[i] == nullptr ? "<null>" : typeNameSamples[i]);
+        WriteText(fd, "\n");
+    }
 
     const size_t n = registrySize.load(std::memory_order_relaxed);
     for (size_t i = 0; i < n && i < REGISTRY_CAP; ++i) {
@@ -412,10 +436,15 @@ void SigBWriterProvenance::LogSummary() noexcept
     EnsureExitDumpRegistered();
     VLOG(REPORT,
          "[SIGB_WRITER] summary registry=%zu overflow=%zu write_hits=%zu copy_hits=%zu relocates=%zu "
-         "hashmapentry_allocs=%zu",
+         "hashmapentry_allocs=%zu type_samples=%zu",
          registrySize.load(std::memory_order_relaxed), overflowCount.load(std::memory_order_relaxed),
          writeHitCount.load(std::memory_order_relaxed), copyHitCount.load(std::memory_order_relaxed),
          relocateCount.load(std::memory_order_relaxed),
-         hashMapEntryAllocCount.load(std::memory_order_relaxed));
+         hashMapEntryAllocCount.load(std::memory_order_relaxed),
+         typeNameSampleCount.load(std::memory_order_relaxed));
+    const size_t sc = typeNameSampleCount.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < sc && i < SAMPLE_CAP; ++i) {
+        VLOG(REPORT, "[SIGB_TYPE_SAMPLE] %s", typeNameSamples[i] == nullptr ? "<null>" : typeNameSamples[i]);
+    }
 }
 } // namespace MapleRuntime

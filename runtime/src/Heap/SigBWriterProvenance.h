@@ -109,6 +109,9 @@ private:
     std::atomic<size_t> copyHitCount{ 0 };
     std::atomic<size_t> relocateCount{ 0 };
     std::atomic<size_t> hashMapEntryAllocCount{ 0 };
+    static constexpr size_t SAMPLE_CAP = 16;
+    const char* typeNameSamples[SAMPLE_CAP]{};
+    std::atomic<size_t> typeNameSampleCount{ 0 };
 
     std::mutex ringListMutex;
     ThreadRing* ringListHead{ nullptr };
