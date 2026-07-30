@@ -853,6 +853,14 @@ public:
     // reinstalled after the caller's region view expired. This is the single definition
     // of route-carrier validity — RegionManager::RouteObject consumes it rather than
     // repeating the predicate inline.
+    //
+    // This is a deliberate strengthening of the one-argument form, and therefore a real
+    // change in what the API answers: it used to accept installed && matching install
+    // stamp, and now also requires the region's current identity to match. Only the
+    // harness calls it today (RouteObject took the inline route until this chain), so no
+    // production answer changes — but the predicate is stricter, not equivalent, and can
+    // only turn a former accept into a reject, never the reverse (review epochrev4
+    // ISSUE-4, which caught this missing from my own list of behaviour changes).
     bool RouteEpochMatches(uint64_t expectedEpoch) const
     {
         RouteInfo routeInfo = AcquireRouteInfo();

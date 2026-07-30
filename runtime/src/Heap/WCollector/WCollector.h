@@ -148,8 +148,13 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
+        // Sampled here, one line before use — the same weak form as the RouteObject
+        // wrappers, but reaching the three-argument overload directly, so it has to
+        // report itself (review epochrev4 ISSUE-1: the block-4 counter missed exactly
+        // this caller, the one epochresid named first).
         const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        space.GetRegionManager().NoteEpochSampledAtUse();
         return space.GetRegionManager().RouteObject(obj, fromRegionInfo, expectedEpoch);
     }
 
