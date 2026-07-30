@@ -523,8 +523,15 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // A no-stack cjthread (foreign/exclusive) copies a null base but a nonzero
         // configured size into this mutator, so the doubling loops below would iterate
         // on wrap-around arithmetic before the guarded allocator ever answered zero.
-        // No own stack means no growth to size: answer "did not move" up front.
+        // No own stack means no growth to size — but only the arithmetic is skipped,
+        // not the branch semantics: the FFI entry (frameBase == 0) answered a plain
+        // zero, while both stack-check entries raised StackOverflow when growth
+        // failed, and a caller that asked for a stack check must still get its
+        // exception.
         if (stackBaseAddr == 0) {
+            if (frameBase != 0) {
+                ExceptionManager::StackOverflow(adjustedSize, ip);
+            }
             return 0;
         }
         intptr_t stackOffset;

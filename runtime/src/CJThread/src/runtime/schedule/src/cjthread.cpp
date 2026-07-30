@@ -959,9 +959,11 @@ struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAtt
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     // No-stack cjthreads have no shadow to clean and no per-stack slot to hold a race
-    // state, so TSAN tracking for them is forgone entirely — a deliberate degradation,
-    // not a claim that the state would be useless. Their delete path is balanced:
-    // the null-safe accessor hands compiler-rt a null state, which it ignores.
+    // state, so as of this skip their TSAN tracking is forgone. Whether that stays the
+    // accepted semantics — together with initialize ordering and proc-state teardown —
+    // is the TSAN lifecycle work's to rule. Deletion stays balanced either way: a
+    // freed foreign cjthread hands compiler-rt a null state, which it ignores, and an
+    // exclusive one is freed without touching the state hooks at all.
     if (newCJThread->stack.stackTopAddr != nullptr) {
         MapleRuntime::Sanitizer::TsanNewRaceState(newCJThread, CJThreadGet(), __builtin_return_address(0));
         MapleRuntime::Sanitizer::TsanCleanShadow(newCJThread->stack.stackTopAddr, newCJThread->stack.totalSize);
