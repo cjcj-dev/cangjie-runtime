@@ -47,9 +47,17 @@ enum class YoungAccountingSource : uint8_t {
 struct YoungAccountingStats {
     size_t gcOrdinal = 0;
     size_t accountedBytes = 0;
+    size_t measuredObjectBytes = 0;
+    size_t objectAllocPointerBytes = 0;
+    size_t pinnedSlotBytes = 0;
     size_t actualBytes = 0;
     size_t heapBaselineBytes = 0;
     size_t heapCurrentBytes = 0;
+    size_t objectBaselineBytes = 0;
+    size_t objectCurrentBytes = 0;
+    size_t rawPrivateBaselineBytes = 0;
+    size_t rawPrivateCurrentBytes = 0;
+    int64_t conservationErrorBytes = 0;
     size_t newRegionEvents = 0;
     size_t newRegionBytes = 0;
     size_t reusedGarbageEvents = 0;
@@ -864,6 +872,9 @@ private:
     std::atomic<size_t> youngAccountingOrdinal = { 1 };
     std::atomic<size_t> youngDiagnosticAccountedBytes = { 0 };
     std::atomic<size_t> youngDiagnosticHeapBaseline = { 0 };
+    size_t youngObjectBytesBaseline = 0;
+    size_t youngRawPrivateBytesBaseline = 0;
+    size_t youngPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
     std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
     std::atomic<size_t> youngDiagnosticReusedGarbageEvents = { 0 };
@@ -886,6 +897,9 @@ private:
 #endif
     std::mutex freePinnedSlotListMutex;
     FreePinnedSlotLists freePinnedSlotLists;
+
+    size_t GetAllocPointerBytes() const;
+    size_t GetRawPrivateBytes() const;
 };
 } // namespace MapleRuntime
 #endif // MRT_REGION_MANAGER_H

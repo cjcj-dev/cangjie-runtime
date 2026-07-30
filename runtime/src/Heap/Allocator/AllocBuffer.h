@@ -28,6 +28,10 @@ public:
     MAddress Allocate(size_t size, AllocType allocType);
     RegionInfo* GetRegion() { return tlRegion; }
     RegionInfo* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
+    size_t GetRawPointerAllocatedSize() const
+    {
+        return tlRawPointerRegions.GetAllocatedSize() + tlLargeRawPointerRegions.GetAllocatedSize();
+    }
     void SetRegion(RegionInfo* newRegion) { tlRegion = newRegion; }
     inline void ClearRegion()
     {

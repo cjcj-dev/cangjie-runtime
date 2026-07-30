@@ -710,6 +710,23 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
     stats.heapCurrentBytes = GetAllocatedSize();
     stats.actualBytes = stats.heapCurrentBytes >= stats.heapBaselineBytes ?
         stats.heapCurrentBytes - stats.heapBaselineBytes : 0;
+    stats.objectBaselineBytes = youngObjectBytesBaseline;
+    stats.objectCurrentBytes = GetAllocPointerBytes();
+    stats.objectAllocPointerBytes = stats.objectCurrentBytes >= stats.objectBaselineBytes ?
+        stats.objectCurrentBytes - stats.objectBaselineBytes : 0;
+    stats.rawPrivateBaselineBytes = youngRawPrivateBytesBaseline;
+    stats.rawPrivateCurrentBytes = GetRawPrivateBytes();
+    {
+        std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
+        stats.pinnedSlotBytes = youngPinnedSlotBytes;
+        youngPinnedSlotBytes = 0;
+    }
+    stats.measuredObjectBytes = stats.objectAllocPointerBytes + stats.pinnedSlotBytes;
+    int64_t rawPrivateDelta = static_cast<int64_t>(stats.rawPrivateCurrentBytes) -
+        static_cast<int64_t>(stats.rawPrivateBaselineBytes);
+    int64_t conservationReference = static_cast<int64_t>(stats.actualBytes) + rawPrivateDelta +
+        static_cast<int64_t>(stats.pinnedSlotBytes);
+    stats.conservationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) - conservationReference;
     stats.newRegionEvents = youngDiagnosticNewRegionEvents.exchange(0, std::memory_order_relaxed);
     stats.newRegionBytes = youngDiagnosticNewRegionBytes.exchange(0, std::memory_order_relaxed);
     stats.reusedGarbageEvents = youngDiagnosticReusedGarbageEvents.exchange(0, std::memory_order_relaxed);
@@ -722,17 +739,53 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
 void RegionManager::SetYoungAccountingHeapBaseline()
 {
     youngDiagnosticHeapBaseline.store(GetAllocatedSize(), std::memory_order_relaxed);
+    youngObjectBytesBaseline = GetAllocPointerBytes();
+    youngRawPrivateBytesBaseline = GetRawPrivateBytes();
+}
+
+size_t RegionManager::GetAllocPointerBytes() const
+{
+    size_t allocatedBytes = 0;
+    for (uintptr_t address = regionHeapStart; address < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
+        if (!region->IsValidRegion()) {
+            address += RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        MAddress regionEnd = region->GetRegionEnd();
+        MRT_ASSERT(regionEnd > address, "invalid region extent while settling young allocation bytes");
+        if (!region->IsGarbageRegion()) {
+            allocatedBytes += region->GetRegionAllocatedSize();
+        }
+        address = regionEnd;
+    }
+    return allocatedBytes;
+}
+
+size_t RegionManager::GetRawPrivateBytes() const
+{
+    size_t rawPrivateBytes = 0;
+    AllocBufferVisitor visitor = [&rawPrivateBytes](AllocBuffer& buffer) {
+        rawPrivateBytes += buffer.GetRawPointerAllocatedSize();
+    };
+    Heap::GetHeap().GetAllocator().VisitAllocBuffers(visitor);
+    return rawPrivateBytes;
 }
 
 void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, const char* collectionKind) const
 {
     VLOG(REPORT,
-         "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_bytes=%zu actual_bytes=%zu "
-         "heap_baseline_bytes=%zu heap_current_bytes=%zu "
+         "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_region_bytes=%zu measured_object_bytes=%zu "
+         "object_alloc_pointer_bytes=%zu pinned_slot_bytes=%zu accounted_bytes=%zu actual_bytes=%zu "
+         "heap_baseline_bytes=%zu heap_current_bytes=%zu object_baseline_bytes=%zu object_current_bytes=%zu "
+         "raw_private_baseline_bytes=%zu raw_private_current_bytes=%zu conservation_error_bytes=%lld "
          "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
          "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
-         stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.actualBytes,
-         stats.heapBaselineBytes, stats.heapCurrentBytes,
+         stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.measuredObjectBytes,
+         stats.objectAllocPointerBytes, stats.pinnedSlotBytes, stats.accountedBytes, stats.actualBytes,
+         stats.heapBaselineBytes, stats.heapCurrentBytes, stats.objectBaselineBytes, stats.objectCurrentBytes,
+         stats.rawPrivateBaselineBytes, stats.rawPrivateCurrentBytes,
+         static_cast<long long>(stats.conservationErrorBytes),
          stats.newRegionEvents, stats.newRegionBytes, stats.reusedGarbageEvents, stats.reusedGarbageBytes,
          stats.reusedFreeEvents, stats.reusedFreeBytes);
 }
@@ -1436,6 +1489,9 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    if (allocPtr != 0) {
+        youngPinnedSlotBytes += size;
+    }
     // For making bitmap comform with live object count, do not mark object repeated.
     if (allocPtr == 0 ||
         (mutatorPhase != GCPhase::GC_PHASE_ENUM &&
