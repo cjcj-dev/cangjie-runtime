@@ -885,8 +885,8 @@ private:
     size_t youngObjectBytesBaseline = 0;
     size_t youngRegionCapacityBaseline = 0;
     size_t youngRawPrivateBytesBaseline = 0;
-    size_t youngValidationObjectBaseline = 0;
     size_t youngPinnedSlotBytes = 0; // guarded by freePinnedSlotListMutex
+    std::map<size_t, std::pair<uint64_t, MAddress>> youngValidationBaselines;
     std::atomic<size_t> youngDiagnosticNewRegionEvents = { 0 };
     std::atomic<size_t> youngDiagnosticNewRegionBytes = { 0 };
     std::atomic<size_t> youngDiagnosticReusedGarbageEvents = { 0 };
@@ -912,6 +912,7 @@ private:
 
     __attribute__((visibility("hidden"))) size_t GetAllocPointerBytes(size_t& regionCapacityBytes) const;
     __attribute__((visibility("hidden"))) size_t GetValidationObjectBytes() const;
+    __attribute__((visibility("hidden"))) void SetValidationObjectBaseline();
     __attribute__((visibility("hidden"))) size_t GetRawPrivateBytes() const;
 };
 } // namespace MapleRuntime

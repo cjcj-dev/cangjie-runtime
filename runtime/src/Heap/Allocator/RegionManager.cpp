@@ -739,12 +739,10 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
         static_cast<int64_t>(stats.pinnedSlotBytes);
     stats.conservationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) - conservationReference;
     if (IsYoungAccountingValidationEnabled()) {
-        stats.validationBaselineBytes = youngValidationObjectBaseline;
         scanStart = TimeUtil::NanoSeconds();
-        stats.validationCurrentBytes = GetValidationObjectBytes();
+        size_t validationAllocBytes = GetValidationObjectBytes();
         stats.validationScanNs = TimeUtil::NanoSeconds() - scanStart;
-        size_t validationAllocBytes = stats.validationCurrentBytes >= stats.validationBaselineBytes ?
-            stats.validationCurrentBytes - stats.validationBaselineBytes : 0;
+        stats.validationCurrentBytes = validationAllocBytes;
         stats.validationObjectBytes = validationAllocBytes + stats.pinnedSlotBytes;
         stats.validationErrorBytes = static_cast<int64_t>(stats.measuredObjectBytes) -
             static_cast<int64_t>(stats.validationObjectBytes);
@@ -764,7 +762,7 @@ void RegionManager::SetYoungAccountingHeapBaseline()
     youngObjectBytesBaseline = GetAllocPointerBytes(youngRegionCapacityBaseline);
     youngRawPrivateBytesBaseline = GetRawPrivateBytes();
     if (IsYoungAccountingValidationEnabled()) {
-        youngValidationObjectBaseline = GetValidationObjectBytes();
+        SetValidationObjectBaseline();
     }
 }
 
@@ -801,13 +799,44 @@ size_t RegionManager::GetValidationObjectBytes() const
         MAddress regionEnd = region->GetRegionEnd();
         MRT_ASSERT(regionEnd > address, "invalid region extent while validating young allocation bytes");
         if (!region->IsGarbageRegion()) {
-            region->VisitAllObjects([&objectBytes](BaseObject* object) {
-                objectBytes += RegionSpace::GetAllocSize(*object);
-            });
+            MAddress position = region->GetRegionStart();
+            auto baseline = youngValidationBaselines.find(region->GetUnitIdx());
+            if (baseline != youngValidationBaselines.end() &&
+                baseline->second.first == region->GetIdentityEpoch() &&
+                baseline->second.second >= position && baseline->second.second <= region->GetRegionAllocPtr()) {
+                position = baseline->second.second;
+            }
+            MAddress allocPtr = region->GetRegionAllocPtr();
+            while (position < allocPtr) {
+                BaseObject* object = reinterpret_cast<BaseObject*>(position);
+                size_t size = RegionSpace::GetAllocSize(*object);
+                objectBytes += size;
+                position += size;
+            }
+            MRT_ASSERT(position == allocPtr, "object layout walk crossed young allocation frontier");
         }
         address = regionEnd;
     }
     return objectBytes;
+}
+
+void RegionManager::SetValidationObjectBaseline()
+{
+    youngValidationBaselines.clear();
+    for (uintptr_t address = regionHeapStart; address < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
+        if (!region->IsValidRegion()) {
+            address += RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        MAddress regionEnd = region->GetRegionEnd();
+        MRT_ASSERT(regionEnd > address, "invalid region extent while baselining young allocation bytes");
+        if (!region->IsGarbageRegion()) {
+            youngValidationBaselines[region->GetUnitIdx()] =
+                std::make_pair(region->GetIdentityEpoch(), region->GetRegionAllocPtr());
+        }
+        address = regionEnd;
+    }
 }
 
 size_t RegionManager::GetRawPrivateBytes() const
