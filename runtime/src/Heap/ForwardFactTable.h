@@ -22,7 +22,7 @@ namespace MapleRuntime {
 // self-invalidating window [copy write, BulkForward clear].
 //
 // Named ForwardFactTable (not ForwardTable) to avoid clash with the existing
-// WCollector::ForwardTable route facade (RouteObject/PrepareForwardTable).
+// WCollector::ForwardTable route facade (RouteRegion/PrepareForwardTable).
 //
 // Concurrent writers: GC thread-pool Forward/Preforward/Compact paths. Object
 // lock ensures one copy per from-object; distinct keys may insert concurrently.

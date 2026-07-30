@@ -793,6 +793,23 @@ void WCollector::BulkForwardHolderRefs()
          missBuckets.invalidToRegionFree, missBuckets.invalidToRegionGarbage, missBuckets.invalidToRegionFrom,
          missBuckets.invalidToRegionRole, missBuckets.ghostOverlayPassedActiveGate,
          missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange);
+    // B1 and B2 misses have proven legitimate producers; B3 (survivor in a from-region
+    // with no copy fact and no identity record) does not — each one is a reference this
+    // pass left pointing into reclaimed space, so validator runs fail on it. The
+    // unclassified aggregate is NOT folded into the check: it spans several
+    // destination-validity families that have carried legitimate producers before
+    // (r1missbucket's fact-hit invalid_to_region, later re-gated), so it stays a
+    // counter until a design ruling classifies every current producer. Release keeps
+    // all counters; the acceptance gate consumes the cumulative totals that
+    // GCStats::Dump reports — B3 nonzero fails, unclassified nonzero blocks until
+    // classified.
+    GCStats::b3RealLossTotal.fetch_add(missBuckets.b3RealLoss, std::memory_order_relaxed);
+    GCStats::unclassifiedMissTotal.fetch_add(missBuckets.unclassified, std::memory_order_relaxed);
+    if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+        CHECK_DETAIL(missBuckets.b3RealLoss == 0,
+                     "BulkForwardHolderRefs real-loss misses in validator mode: b3=%zu",
+                     missBuckets.b3RealLoss);
+    }
     for (const auto& type : missBuckets.b3Types) {
         VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
              type.first == nullptr ? "<null>" : type.first->GetName(), type.second);
@@ -1081,9 +1098,19 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                     CHECK_DETAIL(false, "retained snapshot epoch mismatch in validator mode");
                 }
 #endif
-                // A mismatched bitmap may already belong to a released arena. Stable-state
-                // mismatches are producer bugs; the only admitted transient is region teardown.
-                return false;
+                // A mismatched bitmap may not be consulted, but the line's logged edges
+                // are still facts: returning false here would clear the line's log
+                // marker, and an edge whose holder field is never written again has no
+                // other producer to re-log it — absent from the next minor's remset, its
+                // sole young referent is reclaimable before any major rediscovers it.
+                // That is the empty-remset path this collector's own consumer guard
+                // exists to prevent. Fail safe instead: scan the region's objects
+                // conservatively, exactly as NEVER_EXAMINED does above, and let
+                // retainLine decide as usual. Stable mismatches are still producer bugs
+                // (the validator tiers above abort); this only changes what a release
+                // build does about them: slow, not wrong.
+                region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
+                return retainLine;
             }
             if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
                 return false;
@@ -1369,11 +1396,6 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
-{
-    return ForwardObjectImpl(obj, ghostFromRegion, ghostFromRegion->GetIdentityEpoch());
-}
-
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
     BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
@@ -1402,19 +1424,6 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
     return nullptr;
-}
-
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
-{
-    size_t size = RegionSpace::GetAllocSize(*obj);
-    BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
-    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-    CopyObject(*obj, *toObj, size);
-    toObj->SetStateCode(ObjectState::NORMAL);
-    std::atomic_thread_fence(std::memory_order_release);
-    obj->UnlockObject(ObjectState::FORWARDED);
-    return toObj;
 }
 
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclusive(

@@ -38,6 +38,12 @@ namespace {
 static std::atomic<size_t> retainedDispelNoGhostCount{ 0 };
 static std::atomic<size_t> retainedDispelPartialGhostCount{ 0 };
 static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
+// One-sided drift sentinel: a teardown early-exit found no ghost overlay to clear while
+// a route carrier was still installed — the exact ghost/route split the teardown
+// invariant hunts, on the path the end-of-teardown assert never reaches. Counted and
+// sampled loudly in release (no abort until a corpus proves the state illegal
+// everywhere), aborted in debug builds.
+static std::atomic<size_t> ghostRouteOneSidedCount{ 0 };
 }
 
 template<typename T>
@@ -766,51 +772,26 @@ public:
 
     // Install route geometry in the identity domain. Installation is a semantic advance,
     // so it does not advance either epoch.
+    // hidden: the readback check below made this too large to inline everywhere, and an
+    // internal route installer has no business appearing on the export surface.
+    __attribute__((visibility("hidden")))
     void SetRouteInfo(uintptr_t to1, uint64_t to1used = 0, uint32_t to2 = RouteInfo::INVALID_VALUE)
     {
         // Phase: GC routing path (RouteOrCompactRegionImpl under ROUTING state).
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2, GetIdentityEpoch());
+        // Consumers require expected == identity && expected == install, which only
+        // holds if install == identity held from the moment of installation. The stamp
+        // one line up makes that true by construction; read it back so a future stamp
+        // source or a torn seqlock publish fails here, at the single install point,
+        // instead of as a permanent fail-closed route miss at every consumer.
+        RouteInfo installed = AcquireRouteInfo();
+        CHECK_DETAIL(installed.IsInstalled() && installed.GetInstallEpoch() == GetIdentityEpoch(),
+                     "route install did not bind the current identity epoch on region %p", this);
     }
 
     __attribute__((always_inline, visibility("hidden"))) RouteInfo AcquireRouteInfo() const
     {
         return metadata.routeInfo.AcquireRouteInfo();
-    }
-
-    // Deprecated entry point, kept for the versioned export surface
-    // (_ZN12MapleRuntime10RegionInfo8GetRouteEPNS_10BaseObjectE@@CANGJIE).
-    //
-    // It has no caller-held expected epoch, so it cannot show that the route belongs to
-    // the generation the caller saw. Every in-tree reader goes through
-    // RegionManager::RouteObject(fromObj, region, expectedEpoch), which checks identity
-    // epoch and install stamp together.
-    //
-    // The behaviour is deliberately left as it was. The only reason this symbol exists
-    // is binary compatibility with callers we do not control, and returning nullptr
-    // where the old code returned a to-address is not a safe default for them: a caller
-    // reads "no route" as "not evacuated" and keeps using the from-address. Changing the
-    // answer would be a worse outcome than answering without an epoch. So: same answer,
-    // plus one async-signal-safe line on stderr saying the caller is on the epochless
-    // path. No formatting, no lock, no static storage — an external caller may be inside
-    // its own signal handler, where a locking logger self-deadlocks
-    // (reports/REPORT-gchang11.md), and a function-local static here would add a
-    // versioned dynamic export (review epochrev1 ISSUE-1).
-    __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
-    {
-#ifndef _WIN64
-        // Not static: a function-local static in an inline member becomes a weak data
-        // export, which is exactly what ISSUE-1 flagged. A ~100-byte stack copy on a
-        // path that should never execute is the cheaper trade.
-        const char msg[] =
-            "E RegionInfo::GetRoute(fromObj) has no caller-held epoch; use "
-            "RegionManager::RouteObject(fromObj, region, expectedEpoch)\n";
-        (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
-#endif
-        RouteInfo routeInfo = AcquireRouteInfo();
-        if (!routeInfo.IsInstalled()) {
-            return nullptr;
-        }
-        return GetRoute(fromObj, routeInfo);
     }
 
     __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
@@ -852,21 +833,10 @@ public:
     // Both halves are required: the install stamp alone would accept a route that was
     // reinstalled after the caller's region view expired. This is the single definition
     // of route-carrier validity — RegionManager::RouteObject consumes it rather than
-    // repeating the predicate inline.
-    //
-    // This is a deliberate strengthening of the one-argument form, and therefore a real
-    // change in what the API answers: it used to accept installed && matching install
-    // stamp, and now also requires the region's current identity to match. Only the
-    // harness calls it today (RouteObject took the inline route until this chain), so no
-    // production answer changes — but the predicate is stricter, not equivalent, and can
-    // only turn a former accept into a reject, never the reverse (review epochrev4
-    // ISSUE-4, which caught this missing from my own list of behaviour changes).
-    bool RouteEpochMatches(uint64_t expectedEpoch) const
-    {
-        RouteInfo routeInfo = AcquireRouteInfo();
-        return RouteEpochMatches(expectedEpoch, routeInfo);
-    }
-
+    // repeating the predicate inline. (A one-argument wrapper that acquired its own
+    // route record existed for the review harness; it had no production caller and is
+    // gone — a caller without a held RouteInfo has no business asking, because a
+    // self-acquired record can only answer for the instant of the call.)
     bool RouteEpochMatches(uint64_t expectedEpoch, const RouteInfo& routeInfo) const
     {
         return expectedEpoch == GetIdentityEpoch() && routeInfo.IsInstalled() &&
@@ -931,6 +901,45 @@ public:
             if (restampRetainedSnapshot) {
                 metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             }
+            AssertGhostRouteTornDown("ClearGhostRegionBit", nUnit);
+        } else if (UNLIKELY(AcquireRouteInfo().IsInstalled())) {
+            // Head bit already clear but a route carrier still installed: the same
+            // one-sided drift the Dispel early exit watches for, observed here because
+            // this caller may have just removed the region from the from-list — a
+            // region that never reaches the ghost list never reaches Dispel's sentinel,
+            // so deferral is not a guarantee on this path.
+            size_t m = ghostRouteOneSidedCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((m & (m - 1)) == 0) {
+                VLOG(REPORT,
+                     "[ClearGhostRegionBit] ghost_route_one_sided region=%p identity_epoch=%llu n=%zu",
+                     this, static_cast<unsigned long long>(GetIdentityEpoch()), m);
+            }
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+            CHECK_DETAIL(false, "route carrier installed with no ghost overlay on region %p", this);
+#endif
+        }
+    }
+
+    // Ghost discoverability (the unit bits) and the route carrier (RouteInfo) answer the
+    // same lifetime question through two structures; every teardown must end both, or a
+    // reader that discovers the region through the surviving one consumes state the
+    // other already declared dead. Checked at the end of both teardown paths, over the
+    // exact extent the caller's own clearing loop walked (passed in, not re-read: the
+    // Clear path holds no lock, and its extent is the current slice only — a partial
+    // historical overlay from a smaller reuse is Dispel's to close, over the saved
+    // extent). One extra O(units) pass per teardown. Unit bits are read through the
+    // atomic bitfield accessor: teardown writers are monotone clearers, but this
+    // checker runs on the no-lock path and must not invent its own weaker read.
+    __attribute__((visibility("hidden")))
+    void AssertGhostRouteTornDown(const char* who, size_t nUnit)
+    {
+        CHECK_DETAIL(!AcquireRouteInfo().IsInstalled(),
+                     "%s left an installed route carrier on region %p", who, this);
+        UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
+        UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
+        for (size_t i = 0; i < nUnit; i++) {
+            CHECK_DETAIL(array[i].GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) == 0,
+                         "%s left ghost unit %zu discoverable on region %p", who, i, this);
         }
     }
 
@@ -946,7 +955,7 @@ public:
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         size_t ghostUnitCount = 0;
         for (size_t i = 0; i < nUnit; ++i) {
-            if (array[i].GetMetadata().inGhostFromRegion != 0) {
+            if (array[i].GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) != 0) {
                 ++ghostUnitCount;
             }
         }
@@ -958,6 +967,17 @@ public:
                 VLOG(REPORT,
                      "[DispelGhostFromRegion] no_ghost_skip region=%p identity_epoch=%llu units=%zu n=%zu",
                      this, static_cast<unsigned long long>(GetIdentityEpoch()), nUnit, n);
+            }
+            if (UNLIKELY(AcquireRouteInfo().IsInstalled())) {
+                size_t m = ghostRouteOneSidedCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((m & (m - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[DispelGhostFromRegion] ghost_route_one_sided region=%p identity_epoch=%llu n=%zu",
+                         this, static_cast<unsigned long long>(GetIdentityEpoch()), m);
+                }
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                CHECK_DETAIL(false, "route carrier installed with no ghost overlay on region %p", this);
+#endif
             }
             return;
         }
@@ -998,6 +1018,7 @@ public:
                      static_cast<unsigned>(metadata.retainedLiveInfoState), n);
             }
         }
+        AssertGhostRouteTornDown("DispelGhostFromRegion", nUnit);
     }
 
     bool IsGhostFromRegion() const

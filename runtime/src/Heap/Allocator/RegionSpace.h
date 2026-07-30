@@ -161,8 +161,6 @@ public:
         return regionManager.ExemptFromRegions();
     }
 
-    BaseObject* RouteObject(BaseObject* fromObj) { return regionManager.RouteObject(fromObj); }
-
     void PrepareFromSpace() { regionManager.PrepareFromRegionList(); }
 
     void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }

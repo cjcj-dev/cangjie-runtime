@@ -176,7 +176,7 @@ bool ProbeClearGhostRouteEpoch(RegionManager& manager)
     const uint64_t after = region->GetIdentityEpoch();
     const uint64_t snapshotAfter = region->GetSnapshotEpoch();
     RouteInfo cleared = region->AcquireRouteInfo();
-    const bool matchAfter = region->RouteEpochMatches(after);
+    const bool matchAfter = region->RouteEpochMatches(after, cleared);
     const bool pass = after != before && !cleared.IsInstalled() && !matchAfter &&
         !region->IsGhostFromRegion() && snapshotAfter != snapshotBefore && snapshotValidBefore &&
         region->IsRetainedSnapshotValid();
@@ -211,11 +211,12 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
     const uint64_t snapshotBefore = region->GetSnapshotEpoch();
     const bool beforeClear = region->IsRetainedSnapshotValid() &&
         region->GetRetainedLiveInfoState() == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
-        region->RouteEpochMatches(identityBefore);
+        region->RouteEpochMatches(identityBefore, region->AcquireRouteInfo());
     region->ClearLiveInfo();
     const bool afterClear = !region->IsRetainedSnapshotValid();
     const bool pass = beforeClear && afterClear && region->GetIdentityEpoch() == identityBefore &&
-        region->GetSnapshotEpoch() != snapshotBefore && region->RouteEpochMatches(identityBefore) &&
+        region->GetSnapshotEpoch() != snapshotBefore &&
+        region->RouteEpochMatches(identityBefore, region->AcquireRouteInfo()) &&
         region->IsGhostFromRegion();
     std::printf(
         "EPOCH_PROBE snapshot result=%s identity_before=%llu identity_after=%llu "
@@ -225,7 +226,8 @@ bool ProbeRetainedSnapshotEpoch(RegionManager& manager)
         static_cast<unsigned long long>(region->GetIdentityEpoch()),
         static_cast<unsigned long long>(snapshotBefore),
         static_cast<unsigned long long>(region->GetSnapshotEpoch()),
-        region->RouteEpochMatches(identityBefore) ? 1 : 0, region->IsGhostFromRegion() ? 1 : 0,
+        region->RouteEpochMatches(identityBefore, region->AcquireRouteInfo()) ? 1 : 0,
+        region->IsGhostFromRegion() ? 1 : 0,
         afterClear ? 1 : 0);
     // Reclaim preserves the historical ghost overlay by design. End the route lifetime
     // through its production teardown path before returning this region to the free tree.

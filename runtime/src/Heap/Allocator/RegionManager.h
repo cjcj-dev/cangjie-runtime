@@ -566,9 +566,9 @@ public:
             BaseObject* to = fromRegionInfo->GetRoute(fromObj, routeInfo);
             // Read-after-use probe. The check above proves the region carried
             // expectedEpoch at check time; it cannot prove the caller's view was still
-            // current when the caller formed it. Readers that sample the epoch after
-            // establishing their view (FindToVersion, the one/two-argument wrappers) hold
-            // it for zero time.
+            // current when the caller formed it. The one reader that samples the epoch
+            // after establishing its view — FindToVersion, now that the epochless
+            // wrappers are gone — holds it for zero time.
             //
             // What that zero-length hold can actually produce is narrower than it looks.
             // Review epochrev2 refuted the obvious story — teardown, reclaim, reallocate,
@@ -607,35 +607,6 @@ public:
     size_t GetEpochSampledAtUseCount() const
     {
         return epochSampledAtUseCount.load(std::memory_order_relaxed);
-    }
-
-    // ABI-compatible wrappers. Internal GC readers carry a caller-held expectedEpoch into
-    // the three-argument overload above; these two sample it themselves, right before use,
-    // so their check has no holding time and can only catch a turnover between the sample
-    // and the geometry read.
-    //
-    // Both stay for the versioned export surface. The counter says how often a
-    // sample-at-use reader ran during a workload. What it cannot say: a zero reading over
-    // one corpus does not establish that no in-tree caller exists — only that none ran
-    // here (the reachability question needs the call graph, not a counter), and a non-zero
-    // reading gives a total, not a set of call sites. Read it as a workload observation,
-    // not as proof either way.
-    BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        NoteEpochSampledAtUse();
-        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetIdentityEpoch());
-    }
-
-    BaseObject* RouteObject(BaseObject* fromObj)
-    {
-        NoteEpochSampledAtUse();
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return nullptr;
-        }
-
-        const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
-        return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
     }
 
     size_t GetRouteEpochMismatchCount() const
@@ -897,8 +868,9 @@ private:
     // reader's captured epoch can go stale mid-call (see RouteObject read-after-use probe).
     std::atomic<size_t> routeEpochRaceAfterUseCount = { 0 };
     // Route consumptions where the epoch was sampled at the point of use instead of being
-    // carried from where the caller formed its region view. Covers the two wrappers here
-    // and FindToVersion, which reaches the three-argument overload directly.
+    // carried from where the caller formed its region view. Sole remaining producer is
+    // FindToVersion, which reaches the three-argument overload directly and reports
+    // itself; the epochless wrappers this counter once covered are deleted.
     std::atomic<size_t> epochSampledAtUseCount = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
