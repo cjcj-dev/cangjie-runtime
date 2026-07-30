@@ -6,6 +6,7 @@
 
 
 #include <atomic>
+#include <cstdio>
 
 #include "TsanInterface.h"
 
@@ -25,6 +26,9 @@ using RaceProcHandle = void*;
 static void* g_tsanRuntimeSync = nullptr;
 static std::atomic<bool> g_initialized{false};
 static CJThreadRecorder<RaceProcHandle> g_procState{};
+static std::atomic<uint64_t> g_tsanInitializeEarlyCount{0};
+static std::atomic<uint64_t> g_tsanInitializeDelayCount{0};
+static std::atomic<uint64_t> g_tsanInitializeInitCount{0};
 
 void TsanInitialize()
 {
@@ -35,6 +39,9 @@ void TsanInitialize()
     // and their tracking hooks are no-ops by design, while managed owned-stack
     // cjthreads stay tracked.
     if (cjthread == nullptr || CJThreadStackBaseAddrGet() == nullptr) {
+        auto count = g_tsanInitializeDelayCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        std::fprintf(stderr, "TSANREV4_PROBE branch=delay count=%llu\n",
+            static_cast<unsigned long long>(count));
         return;
     }
     // Idempotent per slot, not per process. Every scheduler's thread0 still gets its
@@ -45,12 +52,18 @@ void TsanInitialize()
     // parent's state and leaked the old one. The slot belongs to one cjthread, which
     // cannot race itself here.
     if (CJThreadGetSanitizerContext(cjthread) != nullptr) {
+        auto count = g_tsanInitializeEarlyCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        std::fprintf(stderr, "TSANREV4_PROBE branch=early count=%llu\n",
+            static_cast<unsigned long long>(count));
         return;
     }
     CJThreadSetSanitizerContext(cjthread, REAL(__tsan_init)());
     // One-way gate for the getters below: once any cjthread is tracked, TSAN is live.
     // Concurrent stores of the same value are harmless.
     g_initialized.store(true, std::memory_order_release);
+    auto count = g_tsanInitializeInitCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    std::fprintf(stderr, "TSANREV4_PROBE branch=init count=%llu\n",
+        static_cast<unsigned long long>(count));
 }
 
 void TsanFinalize()
