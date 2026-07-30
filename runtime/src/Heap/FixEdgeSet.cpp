@@ -164,6 +164,7 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
                 holderTypeName = "<null-name>";
             }
 
+            visitor(*reinterpret_cast<RefField<>*>(toSlot));
             RefField<> toField(*reinterpret_cast<RefField<>*>(toSlot));
             BaseObject* target = toField.GetTargetObject();
             bool staleTarget = false;
