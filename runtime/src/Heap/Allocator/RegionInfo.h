@@ -967,14 +967,32 @@ public:
         bool restampRetainedSnapshot =
             metadata.retainedLiveInfoState != RetainedLiveInfoState::NEVER_EXAMINED &&
             metadata.retainedLiveInfoEpoch == oldSnapshotEpoch;
+        // Retire the guard before dismantling what it guards. The ghost bit is how a
+        // concurrent reader discovers this overlay at all (GetGhostFromRegionAt), and
+        // teardown runs outside stop-the-world — PostTrace calls this via
+        // PrepareForwardTable while mutator trace/enum barriers can be in FindToVersion.
+        // Clearing the route first leaves a window where a reader still finds the region
+        // through the ghost bit but the carrier is already gone; RouteObject answers that
+        // with CHECK_DETAIL(false, "route carrier expired"), i.e. an abort on a state that
+        // is a normal step of teardown rather than a defect. Dropping the bit first makes
+        // the region simply undiscoverable, and FindToVersion returns nullptr as it would
+        // for any non-ghost address.
+        //
+        // Readers already holding a region pointer plus an epoch are unaffected: until the
+        // bump below their epoch still matches and the route is still installed, which is
+        // the same answer they would have gotten a moment earlier.
+        //
+        // Same principle as fix/gcfix@45f221ed ("retire ghost guard before republishing
+        // route state"), reapplied here because teardown has since grown the epoch bump,
+        // ClearRouteInfo and the retained-snapshot restamp.
+        for (size_t i = 0; i < nUnit; i++) {
+            array[i].SetInGhostRegion(0);
+        }
         BumpIdentityEpoch();
         SetRouteState(NORMAL);
         // Teardown ends the carrier lifetime by publishing absence (seqlock protocol);
         // do not restamp cleared geometry as current, no epoch sentinel values.
         metadata.routeInfo.ClearRouteInfo();
-        for (size_t i = 0; i < nUnit; i++) {
-            array[i].SetInGhostRegion(0);
-        }
         if (restampRetainedSnapshot) {
             // Route teardown ends RouteInfo validity, but it does not change the retained
             // bitmap or coveredUpTo truth. Re-endorse only the snapshot stamped immediately
