@@ -176,6 +176,18 @@ void Mutator::ResetMutator()
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
     }
     uwContext.Reset();
+    // ClearInfo below clears the throwing-SOF marker; pair the stack-guard Recover that
+    // BeginCatch would have performed, or the guard stays expanded with nothing left to
+    // say so. All three callers run on the mutator's own thread, so recovering here
+    // targets the right stack. What it buys differs by caller: for a reusable scheduler
+    // cjthread (TransitMutatorToExit) it keeps an expanded guard out of the freelist,
+    // and for the runtime mutator it restores the current thread's protect boundary.
+    // (The finalizer mutator's setup path never arms that boundary — StackGuardRecover
+    // sees the null and leaves the threshold alone — and a finalizer whose exception
+    // was fatal aborts before reaching this Reset at all.)
+    if (exceptionWrapper.IsThrowingSOFE()) {
+        StackGuardRecover();
+    }
     exceptionWrapper.ClearInfo();
 }
 
@@ -358,6 +370,11 @@ void Mutator::StackGuardExpand() const
     // Expand stack boundary when StackOverflowError occurs
     if (!IsRuntimeThread()) {
         CJThreadStackGuardExpand();
+        // No own stack (foreign/exclusive): the expand above was a no-op and there is
+        // no guard page to unprotect — nullptr minus a page is not an address.
+        if (CJThreadStackAddrGet() == nullptr) {
+            return;
+        }
         if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
             void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
 #ifdef _WIN64
@@ -383,6 +400,9 @@ void Mutator::StackGuardRecover() const
     // Recover stack boundary when StackOverflowError has been caught
     if (!IsRuntimeThread()) {
         CJThreadStackGuardRecover();
+        if (CJThreadStackAddrGet() == nullptr) {
+            return;
+        }
         if (Runtime::Current().GetConcurrencyModel().GetStackGuardCheckFlag()) {
             void* topAddr = reinterpret_cast<uint8_t*>(CJThreadStackAddrGet()) - MapleRuntime::MRT_PAGE_SIZE;
 #ifdef _WIN64
@@ -399,6 +419,12 @@ void Mutator::StackGuardRecover() const
 #endif
         }
     } else {
+        // A runtime-thread mutator whose protect boundary was never armed (the
+        // finalizer mutator's setup path skips InitProtectStackAddr) has nothing to
+        // restore; null + reserved would install a bogus non-null threshold.
+        if (stackBoundAddr == nullptr) {
+            return;
+        }
         size_t reversedSize = Runtime::Current().GetConcurrencyModel().GetReservedStackSize();
         ThreadLocal::SetProtectAddr(
             reinterpret_cast<uint8_t*>(reinterpret_cast<uintptr_t>(stackBoundAddr) + reversedSize));
@@ -494,6 +520,28 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #if defined(_WIN64)
         stackGrowFrameSize = adjustedSize;
 #endif
+        // A no-stack cjthread (foreign/exclusive) copies a null base but a nonzero
+        // configured size into this mutator, so the doubling loops below would iterate
+        // on wrap-around arithmetic before the guarded allocator ever answered zero.
+        // No own stack means no growth to size — but only the arithmetic is skipped,
+        // not the branch semantics: the FFI entry (frameBase == 0) answered a plain
+        // zero, while both stack-check entries raised StackOverflow when growth
+        // failed, and a caller that asked for a stack check must still get its
+        // exception.
+        if (stackBaseAddr == 0) {
+            if (frameBase != 0) {
+#ifdef INTERPRETER_ENABLED
+                // The interpreter branch below logs its own failure; keep that visible
+                // here too, without the frame dereference and doubling loop that only
+                // make sense for a stack that exists.
+                if (StackManager::IsInterpreterCodeAddr(reinterpret_cast<uintptr_t>(ip))) {
+                    DLOG(INTERPRETER, "       stack overflow at %p on a cjthread with no own stack", ip);
+                }
+#endif
+                ExceptionManager::StackOverflow(adjustedSize, ip);
+            }
+            return 0;
+        }
         intptr_t stackOffset;
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.

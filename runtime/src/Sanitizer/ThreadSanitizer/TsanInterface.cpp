@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <atomic>
+
 #include "TsanInterface.h"
 
 #include "Base/Log.h"
@@ -21,15 +23,34 @@ using RaceStateHandle = void*;
 using RaceProcHandle = void*;
 
 static void* g_tsanRuntimeSync = nullptr;
-static bool g_initialized = false;
+static std::atomic<bool> g_initialized{false};
 static CJThreadRecorder<RaceProcHandle> g_procState{};
 
 void TsanInitialize()
 {
     void* cjthread = CJThreadGetHandle();
-    CHECK_DETAIL(cjthread != nullptr, "init cjthread is null.");
+    // __tsan_init returns a state that has to live in the calling cjthread's own
+    // sanitizer slot. A null current cjthread, or one with no stack of its own
+    // (foreign/exclusive), has no slot to put it in: those run with a null race state
+    // and their tracking hooks are no-ops by design, while managed owned-stack
+    // cjthreads stay tracked.
+    if (cjthread == nullptr || CJThreadStackBaseAddrGet() == nullptr) {
+        return;
+    }
+    // Idempotent per slot, not per process. Every scheduler's thread0 still gets its
+    // own state the first time it initializes — that is the upstream behaviour, and a
+    // process-wide once would leave every scheduler after the first untracked. What
+    // repetition must not do is overwrite a state that is already there: that was the
+    // defect, where a sub-scheduler created from a tracked cjthread replaced its
+    // parent's state and leaked the old one. The slot belongs to one cjthread, which
+    // cannot race itself here.
+    if (CJThreadGetSanitizerContext(cjthread) != nullptr) {
+        return;
+    }
     CJThreadSetSanitizerContext(cjthread, REAL(__tsan_init)());
-    g_initialized = true;
+    // One-way gate for the getters below: once any cjthread is tracked, TSAN is live.
+    // Concurrent stores of the same value are harmless.
+    g_initialized.store(true, std::memory_order_release);
 }
 
 void TsanFinalize()
@@ -163,10 +184,15 @@ void TsanNewRaceProc(void* processor)
     g_procState.CreateThread(processor, REAL(__tsan_proc_create)());
 }
 
+void TsanDeleteRaceProc(void* processor)
+{
+    REAL(__tsan_proc_destroy)(g_procState.DeleteThread(processor));
+}
+
 extern "C" {
 MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 {
-    if (g_initialized) {
+    if (g_initialized.load(std::memory_order_acquire)) {
         void* processor = ProcessorGetHandle();
         return g_procState.GetDataFromThread(processor);
     } else {
@@ -176,7 +202,7 @@ MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 
 MRT_EXPORT void* CJ_MCC_TsanGetThreadState(void)
 {
-    if (g_initialized) {
+    if (g_initialized.load(std::memory_order_acquire)) {
         return CJThreadGetCurRaceState();
     } else {
         return nullptr;
