@@ -27,14 +27,25 @@ bool GCExecutor::Execute(void* owner)
             if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
                 GCStats::SetPrevGCStartTime(curTime);
                 collectorProxy->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
-                GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+                uint64_t finish = TimeUtil::NanoSeconds();
+                GCStats::SetPrevGCFinishTime(finish);
+                GCStats::SetPrevYoungGCFinishTime(finish);
             }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             collectorProxy->RunGarbageCollection(taskIndex, gcReason);
-            GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+            uint64_t finish = TimeUtil::NanoSeconds();
+            // The clocks follow what actually ran, not what was requested: after
+            // majorInterval completed minors, the next GC_REASON_YOUNG request executes
+            // as a promoted full collection, and that full must arm the shared clock
+            // like any other — keying on gcReason here would let back-to-back fulls
+            // through.
+            GCStats::SetPrevYoungGCFinishTime(finish);
+            if (!collectorProxy->GetCurrentCollector().GetGCStats().lastCollectionWasYoung) {
+                GCStats::SetPrevGCFinishTime(finish);
+            }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {

@@ -49,6 +49,7 @@ struct GCRequest {
 
     inline bool IsFrequentGC() const;
     inline bool IsFrequentAsyncGC() const;
+    inline bool IsFrequentYoungGC() const;
     inline bool IsFrequentHeuristicGC() const;
     bool ShouldBeIgnored() const;
 
