@@ -852,21 +852,10 @@ public:
     // Both halves are required: the install stamp alone would accept a route that was
     // reinstalled after the caller's region view expired. This is the single definition
     // of route-carrier validity — RegionManager::RouteObject consumes it rather than
-    // repeating the predicate inline.
-    //
-    // This is a deliberate strengthening of the one-argument form, and therefore a real
-    // change in what the API answers: it used to accept installed && matching install
-    // stamp, and now also requires the region's current identity to match. Only the
-    // harness calls it today (RouteObject took the inline route until this chain), so no
-    // production answer changes — but the predicate is stricter, not equivalent, and can
-    // only turn a former accept into a reject, never the reverse (review epochrev4
-    // ISSUE-4, which caught this missing from my own list of behaviour changes).
-    bool RouteEpochMatches(uint64_t expectedEpoch) const
-    {
-        RouteInfo routeInfo = AcquireRouteInfo();
-        return RouteEpochMatches(expectedEpoch, routeInfo);
-    }
-
+    // repeating the predicate inline. (A one-argument wrapper that acquired its own
+    // route record existed for the review harness; it had no production caller and is
+    // gone — a caller without a held RouteInfo has no business asking, because a
+    // self-acquired record can only answer for the instant of the call.)
     bool RouteEpochMatches(uint64_t expectedEpoch, const RouteInfo& routeInfo) const
     {
         return expectedEpoch == GetIdentityEpoch() && routeInfo.IsInstalled() &&
