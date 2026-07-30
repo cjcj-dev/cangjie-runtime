@@ -134,10 +134,12 @@ public:
         if (fromRegionInfo == nullptr) {
             return nullptr;
         }
-        // Sampled here, one line before use — the same weak form as the RouteObject
-        // wrappers, but reaching the three-argument overload directly, so it has to
-        // report itself (review epochrev4 ISSUE-1: the block-4 counter missed exactly
-        // this caller, the one epochresid named first).
+        // Sampled here, one line before use — the last sample-at-use reader now that
+        // the epochless RouteObject wrappers are deleted. A barrier has no earlier
+        // region view to carry an epoch from, and the three-argument overload rechecks
+        // for turnover between this sample and its geometry read; it reports itself
+        // because it bypasses any wrapper that would count it (review epochrev4
+        // ISSUE-1: the block-4 counter missed exactly this caller).
         const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.GetRegionManager().NoteEpochSampledAtUse();

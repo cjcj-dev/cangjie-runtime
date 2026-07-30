@@ -566,9 +566,9 @@ public:
             BaseObject* to = fromRegionInfo->GetRoute(fromObj, routeInfo);
             // Read-after-use probe. The check above proves the region carried
             // expectedEpoch at check time; it cannot prove the caller's view was still
-            // current when the caller formed it. Readers that sample the epoch after
-            // establishing their view (FindToVersion, the one/two-argument wrappers) hold
-            // it for zero time.
+            // current when the caller formed it. The one reader that samples the epoch
+            // after establishing its view — FindToVersion, now that the epochless
+            // wrappers are gone — holds it for zero time.
             //
             // What that zero-length hold can actually produce is narrower than it looks.
             // Review epochrev2 refuted the obvious story — teardown, reclaim, reallocate,
@@ -868,8 +868,9 @@ private:
     // reader's captured epoch can go stale mid-call (see RouteObject read-after-use probe).
     std::atomic<size_t> routeEpochRaceAfterUseCount = { 0 };
     // Route consumptions where the epoch was sampled at the point of use instead of being
-    // carried from where the caller formed its region view. Covers the two wrappers here
-    // and FindToVersion, which reaches the three-argument overload directly.
+    // carried from where the caller formed its region view. Sole remaining producer is
+    // FindToVersion, which reaches the three-argument overload directly and reports
+    // itself; the epochless wrappers this counter once covered are deleted.
     std::atomic<size_t> epochSampledAtUseCount = { 0 };
 
     // heap space not allocated yet for even once. this value should not be decreased.
