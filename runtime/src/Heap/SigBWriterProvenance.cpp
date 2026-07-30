@@ -53,15 +53,23 @@ bool SigBWriterProvenance::IsConstAnalysisVictimType(TypeInfo* typeInfo) noexcep
     if (name == nullptr) {
         return false;
     }
-    // Match gccslot FixEdgeSet domain filters (ConstDomain / ConstPoolDomain
-    // HashMapEntry RawArrays backing ConstAnalysisWrapper.resultsMap).
+    // Runtime TypeInfo expands aliases: ConstDomain → State<ValueDomain<ConstValue>,
+    // FullStatePool<...>>; ConstPoolDomain → ...ActiveStatePool<...>. Match the
+    // expanded mangled form for resultsMap / resultsPoolMap entry RawArrays.
     if (std::strstr(name, "RawArray") == nullptr || std::strstr(name, "HashMapEntry") == nullptr) {
         return false;
     }
-    if (std::strstr(name, "ConstPoolDomain") != nullptr) {
+    if (std::strstr(name, "Function") == nullptr || std::strstr(name, "Results") == nullptr) {
+        return false;
+    }
+    if (std::strstr(name, "ConstValue") == nullptr) {
+        return false;
+    }
+    if (std::strstr(name, "FullStatePool") != nullptr || std::strstr(name, "ActiveStatePool") != nullptr) {
         return true;
     }
-    return std::strstr(name, "ConstDomain") != nullptr;
+    // Literal alias names (if ever present unexpanded).
+    return std::strstr(name, "ConstDomain") != nullptr || std::strstr(name, "ConstPoolDomain") != nullptr;
 }
 
 void SigBWriterProvenance::MaybeRegister(BaseObject* obj, TypeInfo* typeInfo, size_t size) noexcept
@@ -379,6 +387,7 @@ void SigBWriterProvenance::EnsureExitDumpRegistered() noexcept
 
 void SigBWriterProvenance::LogSummary() noexcept
 {
+    EnsureExitDumpRegistered();
     VLOG(REPORT,
          "[SIGB_WRITER] summary registry=%zu overflow=%zu write_hits=%zu copy_hits=%zu relocates=%zu",
          registrySize.load(std::memory_order_relaxed), overflowCount.load(std::memory_order_relaxed),
