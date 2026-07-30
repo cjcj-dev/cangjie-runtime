@@ -18,13 +18,6 @@ class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
-    // if object is not relocated (forwarded or compacted), return nullptr.
-    BaseObject* RouteObject(BaseObject* old)
-    {
-        BaseObject* toAddress = theSpace.RouteObject(old);
-        return toAddress;
-    }
-
     // if region is compacted, return false.
     bool RouteRegion(RegionInfo* region) { return theSpace.GetRegionManager().RouteRegion(region); }
 
@@ -152,10 +145,8 @@ public:
     }
 
 protected:
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
     __attribute__((visibility("hidden")))
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
-    BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
     __attribute__((visibility("hidden")))
     BaseObject* ForwardObjectExclusive(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
 

@@ -609,35 +609,6 @@ public:
         return epochSampledAtUseCount.load(std::memory_order_relaxed);
     }
 
-    // ABI-compatible wrappers. Internal GC readers carry a caller-held expectedEpoch into
-    // the three-argument overload above; these two sample it themselves, right before use,
-    // so their check has no holding time and can only catch a turnover between the sample
-    // and the geometry read.
-    //
-    // Both stay for the versioned export surface. The counter says how often a
-    // sample-at-use reader ran during a workload. What it cannot say: a zero reading over
-    // one corpus does not establish that no in-tree caller exists — only that none ran
-    // here (the reachability question needs the call graph, not a counter), and a non-zero
-    // reading gives a total, not a set of call sites. Read it as a workload observation,
-    // not as proof either way.
-    BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
-    {
-        NoteEpochSampledAtUse();
-        return RouteObject(fromObj, fromRegionInfo, fromRegionInfo->GetIdentityEpoch());
-    }
-
-    BaseObject* RouteObject(BaseObject* fromObj)
-    {
-        NoteEpochSampledAtUse();
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return nullptr;
-        }
-
-        const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
-        return RouteObject(fromObj, fromRegionInfo, expectedEpoch);
-    }
-
     size_t GetRouteEpochMismatchCount() const
     {
         return routeEpochMismatchCount.load(std::memory_order_relaxed);

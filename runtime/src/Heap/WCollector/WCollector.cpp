@@ -1365,11 +1365,6 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     return nullptr;
 }
 
-BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
-{
-    return ForwardObjectImpl(obj, ghostFromRegion, ghostFromRegion->GetIdentityEpoch());
-}
-
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
     BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
@@ -1398,19 +1393,6 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
     return nullptr;
-}
-
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
-{
-    size_t size = RegionSpace::GetAllocSize(*obj);
-    BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
-    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
-    CopyObject(*obj, *toObj, size);
-    toObj->SetStateCode(ObjectState::NORMAL);
-    std::atomic_thread_fence(std::memory_order_release);
-    obj->UnlockObject(ObjectState::FORWARDED);
-    return toObj;
 }
 
 __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclusive(

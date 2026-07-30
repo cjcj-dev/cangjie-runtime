@@ -777,42 +777,6 @@ public:
         return metadata.routeInfo.AcquireRouteInfo();
     }
 
-    // Deprecated entry point, kept for the versioned export surface
-    // (_ZN12MapleRuntime10RegionInfo8GetRouteEPNS_10BaseObjectE@@CANGJIE).
-    //
-    // It has no caller-held expected epoch, so it cannot show that the route belongs to
-    // the generation the caller saw. Every in-tree reader goes through
-    // RegionManager::RouteObject(fromObj, region, expectedEpoch), which checks identity
-    // epoch and install stamp together.
-    //
-    // The behaviour is deliberately left as it was. The only reason this symbol exists
-    // is binary compatibility with callers we do not control, and returning nullptr
-    // where the old code returned a to-address is not a safe default for them: a caller
-    // reads "no route" as "not evacuated" and keeps using the from-address. Changing the
-    // answer would be a worse outcome than answering without an epoch. So: same answer,
-    // plus one async-signal-safe line on stderr saying the caller is on the epochless
-    // path. No formatting, no lock, no static storage — an external caller may be inside
-    // its own signal handler, where a locking logger self-deadlocks
-    // (reports/REPORT-gchang11.md), and a function-local static here would add a
-    // versioned dynamic export (review epochrev1 ISSUE-1).
-    __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
-    {
-#ifndef _WIN64
-        // Not static: a function-local static in an inline member becomes a weak data
-        // export, which is exactly what ISSUE-1 flagged. A ~100-byte stack copy on a
-        // path that should never execute is the cheaper trade.
-        const char msg[] =
-            "E RegionInfo::GetRoute(fromObj) has no caller-held epoch; use "
-            "RegionManager::RouteObject(fromObj, region, expectedEpoch)\n";
-        (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
-#endif
-        RouteInfo routeInfo = AcquireRouteInfo();
-        if (!routeInfo.IsInstalled()) {
-            return nullptr;
-        }
-        return GetRoute(fromObj, routeInfo);
-    }
-
     __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
         BaseObject* fromObj, RouteInfo& routeInfo)
     {
