@@ -50,6 +50,14 @@ public:
     static constexpr size_t RING_CAP = 1024; // 2^10
     static constexpr size_t RING_MASK = RING_CAP - 1;
 
+    struct ThreadRing {
+        RingEntry entries[RING_CAP];
+        std::atomic<uint32_t> cursor{ 0 };
+        std::atomic<uint32_t> total{ 0 };
+        ThreadRing* next{ nullptr };
+        uint64_t tid{ 0 };
+    };
+
     static SigBWriterProvenance& Instance() noexcept;
 
     // Alloc path: register resultsMap-domain RawArray [start,end).
@@ -84,14 +92,6 @@ private:
     bool ContainsSlot(uintptr_t slot) const noexcept;
     void RecordRing(WriterKind kind, uintptr_t slot, BaseObject* holder, uintptr_t oldValue,
                     uintptr_t newValue) noexcept;
-
-    struct ThreadRing {
-        RingEntry entries[RING_CAP];
-        std::atomic<uint32_t> cursor{ 0 };
-        std::atomic<uint32_t> total{ 0 };
-        ThreadRing* next{ nullptr };
-        uint64_t tid{ 0 };
-    };
 
     ThreadRing* GetThreadRing() noexcept;
     void DumpRing(int fd, const ThreadRing* ring) const noexcept;
