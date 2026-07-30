@@ -143,6 +143,9 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
                 continue;
             }
 
+            // The fix-set indexes a logical edge: when its holder moved, consume
+            // that edge at the same offset in the completed destination copy.
+            visitor(*reinterpret_cast<RefField<>*>(toSlot));
             BaseObject* fromHolder = reinterpret_cast<BaseObject*>(addr - offset);
             BaseObject* toHolder = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(toSlot) - offset);
             RelocationDiagnosticTable::Entry relocation{ false, nullptr, nullptr, 0, nullptr };
