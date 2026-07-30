@@ -116,11 +116,14 @@ void ExceptionManager::StackOverflow(uint32_t adjustedSize __attribute__((unused
         return;
     }
     ExceptionWrapper& eWrapper = mutator->GetExceptionWrapper();
-    // Expand/Recover are a pair: this function expands the guard on the way in, and
-    // BeginCatch recovers it once the handler is reached. Re-entering here with the pc
-    // still set means no Recover has run, because BeginCatch is the only clearer that
-    // pairs one (the other two, ClearInfo at the uncaught-exception dump and in
-    // Mutator::ResetMutator, clear the pc without recovering the guard).
+    // Expand/Recover are a pair: this function expands the guard on the way in, and the
+    // clearer that ends the throw recovers it — BeginCatch when a handler is reached,
+    // and the two ClearInfo sites (the uncaught-exception dump and
+    // Mutator::ResetMutator) when it is not. Every known clearer recovers first, so the
+    // pc being set here means no clearer has run yet: this is a re-entry that happened
+    // before the throw reached any of them. The check also stands guard over that
+    // pairing itself — if a future exit path clears the marker without recovering, the
+    // next overflow on that thread arrives here instead of going unnoticed.
     //
     // Continuing from that state is what produced the crash this guard exists for.
     // CJThreadStackGuardExpand subtracts the reserved size from stackGuard with no

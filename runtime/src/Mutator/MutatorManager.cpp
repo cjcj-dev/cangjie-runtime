@@ -106,8 +106,38 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
     mutator.SetSafepointStatePtr(nullptr);
 }
 
+// A cjthread that is about to run a task must start with the stack guard at its birth
+// value. StackOverflow expands the guard and every exit path is supposed to recover it
+// (BeginCatch and the two ClearInfo sites all pair a StackGuardRecover); freelist reuse
+// keeps the dead cjthread's stack fields and CJThreadInit does not reinitialize them,
+// so a leaked expansion would arrive here as a task that silently starts with no
+// reserved headroom for its own overflow handling.
+//
+// This runs at task entry on the task's own cjthread, which is why StackGuardRecover
+// applies: it targets the current cjthread and restores the guard page as well as the
+// pointer. Fail closed — a task whose overflow check is already weakened cannot be
+// allowed to run, and self-healing quietly would erase the evidence that a recover
+// path regressed.
+void MutatorManager::CheckStackGuardAtTaskEntry() const
+{
+    const char* guard = static_cast<const char*>(CJThreadStackGuardGet());
+    if (guard == nullptr) {
+        // No cjthread stack to check: EXCLUSIVE schedules run on the OS thread stack,
+        // and foreign/exclusive cjthreads are created with no stack of their own.
+        return;
+    }
+    const char* birth = static_cast<const char*>(CJThreadStackAddrGet()) + CJThreadStackReversedGet();
+    if (guard != birth) {
+        LOG(RTLOG_FATAL,
+            "cjthread starting a task with its stack guard at %p instead of its birth value %p: "
+            "a stack-overflow expansion was not recovered",
+            guard, birth);
+    }
+}
+
 Mutator* MutatorManager::CreateMutator()
 {
+    CheckStackGuardAtTaskEntry();
     Mutator* mutator = ConcurrencyModel::GetMutator();
     if (mutator == nullptr) {
         mutator = new (std::nothrow) Mutator();
