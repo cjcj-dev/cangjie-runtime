@@ -530,6 +530,14 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         // exception.
         if (stackBaseAddr == 0) {
             if (frameBase != 0) {
+#ifdef INTERPRETER_ENABLED
+                // The interpreter branch below logs its own failure; keep that visible
+                // here too, without the frame dereference and doubling loop that only
+                // make sense for a stack that exists.
+                if (StackManager::IsInterpreterCodeAddr(reinterpret_cast<uintptr_t>(ip))) {
+                    DLOG(INTERPRETER, "       stack overflow at %p on a cjthread with no own stack", ip);
+                }
+#endif
                 ExceptionManager::StackOverflow(adjustedSize, ip);
             }
             return 0;
