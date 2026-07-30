@@ -42,6 +42,13 @@ public:
     static uint64_t prevGcStartTime;
     static uint64_t prevGcFinishTime;
 
+    // Cumulative BulkForwardHolderRefs miss totals with no legitimate producer.
+    // Written by WCollector after each pass, reported in Dump's REPORT tail so an
+    // acceptance gate can consume one process-lifetime number instead of scraping
+    // per-pass lines; the release acceptance criterion is both staying zero.
+    static std::atomic<size_t> b3RealLossTotal;
+    static std::atomic<size_t> unclassifiedMissTotal;
+
     GCReason reason;
     bool isConcurrentMark;
     bool async;

@@ -794,13 +794,20 @@ void WCollector::BulkForwardHolderRefs()
          missBuckets.invalidToRegionRole, missBuckets.ghostOverlayPassedActiveGate,
          missBuckets.b2InteriorNonObjectBase, missBuckets.unclassifiedNoCopyRange);
     // B1 and B2 misses have proven legitimate producers; B3 (survivor in a from-region
-    // with no copy fact and no identity record) and unclassified do not — each one is a
-    // reference this pass left pointing into reclaimed space. Validator runs fail on
-    // them; release keeps the counters above, and acceptance gates on B3 == 0.
+    // with no copy fact and no identity record) does not — each one is a reference this
+    // pass left pointing into reclaimed space, so validator runs fail on it. The
+    // unclassified aggregate is NOT folded into the check: it spans several
+    // destination-validity families that have carried legitimate producers before
+    // (r1missbucket's fact-hit invalid_to_region, later re-gated), so it stays a
+    // counter until a design ruling classifies every current producer. Release keeps
+    // all counters; the acceptance gate consumes the cumulative totals that
+    // GCStats::Dump reports and requires both to be zero.
+    GCStats::b3RealLossTotal.fetch_add(missBuckets.b3RealLoss, std::memory_order_relaxed);
+    GCStats::unclassifiedMissTotal.fetch_add(missBuckets.unclassified, std::memory_order_relaxed);
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
-        CHECK_DETAIL(missBuckets.b3RealLoss == 0 && missBuckets.unclassified == 0,
-                     "BulkForwardHolderRefs real-loss misses in validator mode: b3=%zu unclassified=%zu",
-                     missBuckets.b3RealLoss, missBuckets.unclassified);
+        CHECK_DETAIL(missBuckets.b3RealLoss == 0,
+                     "BulkForwardHolderRefs real-loss misses in validator mode: b3=%zu",
+                     missBuckets.b3RealLoss);
     }
     for (const auto& type : missBuckets.b3Types) {
         VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
@@ -1091,13 +1098,16 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
                 }
 #endif
                 // A mismatched bitmap may not be consulted, but the line's logged edges
-                // are still facts: returning false here would clear the line's log marker
-                // and silently drop every old→young edge it recorded — the empty-remset
-                // path this collector's own consumer guard exists to prevent. Fail safe
-                // instead: scan the region's objects conservatively, exactly as
-                // NEVER_EXAMINED does above, and let retainLine decide as usual. Stable
-                // mismatches are still producer bugs (the validator tiers above abort);
-                // this only changes what a release build does about them: slow, not wrong.
+                // are still facts: returning false here would clear the line's log
+                // marker, and an edge whose holder field is never written again has no
+                // other producer to re-log it — absent from the next minor's remset, its
+                // sole young referent is reclaimable before any major rediscovers it.
+                // That is the empty-remset path this collector's own consumer guard
+                // exists to prevent. Fail safe instead: scan the region's objects
+                // conservatively, exactly as NEVER_EXAMINED does above, and let
+                // retainLine decide as usual. Stable mismatches are still producer bugs
+                // (the validator tiers above abort); this only changes what a release
+                // build does about them: slow, not wrong.
                 region->VisitAllObjects([&scanObject](BaseObject* object) { scanObject(object); });
                 return retainLine;
             }

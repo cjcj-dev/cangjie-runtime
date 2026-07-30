@@ -17,6 +17,8 @@ size_t g_gcCollectedTotalBytes = 0;
 
 uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
 uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+std::atomic<size_t> GCStats::b3RealLossTotal{ 0 };
+std::atomic<size_t> GCStats::unclassifiedMissTotal{ 0 };
 
 void GCStats::Init()
 {
@@ -70,5 +72,8 @@ void GCStats::Dump() const
 
     VLOG(REPORT, "allocated size: %s, heap size: %s, heap utilization: %.2f%%", Pretty(liveSize).Str(),
          Pretty(heapSize).Str(), utilization);
+    VLOG(REPORT, "[EpochResidue] b3_real_loss_total=%zu unclassified_miss_total=%zu",
+         b3RealLossTotal.load(std::memory_order_relaxed),
+         unclassifiedMissTotal.load(std::memory_order_relaxed));
 }
 } // namespace MapleRuntime

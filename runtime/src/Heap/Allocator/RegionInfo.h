@@ -38,6 +38,12 @@ namespace {
 static std::atomic<size_t> retainedDispelNoGhostCount{ 0 };
 static std::atomic<size_t> retainedDispelPartialGhostCount{ 0 };
 static std::atomic<size_t> retainedSnapshotRestampCount{ 0 };
+// One-sided drift sentinel: a teardown early-exit found no ghost overlay to clear while
+// a route carrier was still installed — the exact ghost/route split the teardown
+// invariant hunts, on the path the end-of-teardown assert never reaches. Counted and
+// sampled loudly in release (no abort until a corpus proves the state illegal
+// everywhere), aborted in debug builds.
+static std::atomic<size_t> ghostRouteOneSidedCount{ 0 };
 }
 
 template<typename T>
@@ -892,7 +898,7 @@ public:
             if (restampRetainedSnapshot) {
                 metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             }
-            AssertGhostRouteTornDown("ClearGhostRegionBit", GetUnitCount());
+            AssertGhostRouteTornDown("ClearGhostRegionBit", nUnit);
         }
     }
 
@@ -900,8 +906,12 @@ public:
     // same lifetime question through two structures; every teardown must end both, or a
     // reader that discovers the region through the surviving one consumes state the
     // other already declared dead. Checked at the end of both teardown paths, over the
-    // same unit extent the teardown's own clearing loop walked — one extra O(units)
-    // pass per teardown.
+    // exact extent the caller's own clearing loop walked (passed in, not re-read: the
+    // Clear path holds no lock, and its extent is the current slice only — a partial
+    // historical overlay from a smaller reuse is Dispel's to close, over the saved
+    // extent). One extra O(units) pass per teardown. Unit bits are read through the
+    // atomic bitfield accessor: teardown writers are monotone clearers, but this
+    // checker runs on the no-lock path and must not invent its own weaker read.
     void AssertGhostRouteTornDown(const char* who, size_t nUnit)
     {
         CHECK_DETAIL(!AcquireRouteInfo().IsInstalled(),
@@ -909,7 +919,7 @@ public:
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
-            CHECK_DETAIL(array[i].GetMetadata().inGhostFromRegion == 0,
+            CHECK_DETAIL(array[i].GetMetadata().regionStateBitField.GetAtomicValue(IN_GHOST_FROM_REGION_FLAG, 1) == 0,
                          "%s left ghost unit %zu discoverable on region %p", who, i, this);
         }
     }
@@ -938,6 +948,17 @@ public:
                 VLOG(REPORT,
                      "[DispelGhostFromRegion] no_ghost_skip region=%p identity_epoch=%llu units=%zu n=%zu",
                      this, static_cast<unsigned long long>(GetIdentityEpoch()), nUnit, n);
+            }
+            if (UNLIKELY(AcquireRouteInfo().IsInstalled())) {
+                size_t m = ghostRouteOneSidedCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((m & (m - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[DispelGhostFromRegion] ghost_route_one_sided region=%p identity_epoch=%llu n=%zu",
+                         this, static_cast<unsigned long long>(GetIdentityEpoch()), m);
+                }
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                CHECK_DETAIL(false, "route carrier installed with no ghost overlay on region %p", this);
+#endif
             }
             return;
         }
