@@ -13,6 +13,7 @@
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 
@@ -710,6 +711,8 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         if (isInterior && interiorRewritten != nullptr) {
             ++(*interiorRewritten);
         }
+        SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BULK_FIX, &field, holder,
+                                                       oldField.GetFieldValue(), newField.GetFieldValue());
         DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p interior_offset=%zu)", holder,
              &field, oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target, interiorOffset);
     }
@@ -790,8 +793,9 @@ void WCollector::BulkForwardHolderRefs()
          FixEdgeSet::Instance().CopyDstFactCount(), FixEdgeSet::Instance().CopyDstNoFactCount(),
          FixEdgeSet::Instance().CopyDstStaleTargetCount(), FixEdgeSet::Instance().CopyDstConstDomainFactCount(),
          FixEdgeSet::Instance().CopyDstConstDomainStaleTargetCount(),
-         FixEdgeSet::Instance().CopyDstConstPoolDomainFactCount(),
-         FixEdgeSet::Instance().CopyDstConstPoolDomainStaleTargetCount());
+          FixEdgeSet::Instance().CopyDstConstPoolDomainFactCount(),
+          FixEdgeSet::Instance().CopyDstConstPoolDomainStaleTargetCount());
+    SigBWriterProvenance::Instance().LogSummary();
     for (const auto& type : missBuckets.b3Types) {
         VLOG(REPORT, "[MISSBUCKET_B3_TYPE] type_info=%p type=%s count=%zu stage=BulkForward", type.first,
              type.first == nullptr ? "<null>" : type.first->GetName(), type.second);

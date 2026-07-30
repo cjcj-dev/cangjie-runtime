@@ -21,6 +21,7 @@
 #include <type_traits>
 #include <utility>
 #include "Cangjie.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -99,6 +100,8 @@ struct SignalArgs {
 
 void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
 {
+    // gcsigb2 observe-only: dump exact-slot writer ring before any further work.
+    SigBWriterProvenance::Instance().Dump();
     FLOG(RTLOG_ERROR, "CJNative Handle signal: %d.", signal);
     SignalArgs* args = new SignalArgs{signal, siginfo, ucontextRaw, false};
     if (args == nullptr) {

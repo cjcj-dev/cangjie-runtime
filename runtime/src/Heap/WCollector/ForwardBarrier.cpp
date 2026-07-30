@@ -10,6 +10,7 @@
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
 #include "Heap/FixEdgeSet.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -111,6 +112,8 @@ void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field
     } else {
         DLOG(FBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
     }
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj, 0,
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 

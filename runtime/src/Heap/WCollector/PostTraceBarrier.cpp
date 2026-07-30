@@ -8,6 +8,7 @@
 #include "PostTraceBarrier.h"
 
 #include "Heap/FixEdgeSet.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -101,6 +102,8 @@ void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, B
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj,
+                                                   tmpField.GetFieldValue(), newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 }
 
@@ -108,6 +111,8 @@ void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) c
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, nullptr, 0,
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(nullptr, &field, ref);
 }
 
@@ -201,6 +206,8 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
     } else {
         DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj, oldValue,
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 

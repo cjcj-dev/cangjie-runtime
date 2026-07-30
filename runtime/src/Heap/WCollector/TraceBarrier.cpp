@@ -8,6 +8,7 @@
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -136,6 +137,9 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj,
+                                                   reinterpret_cast<uintptr_t>(rememberedObject),
+                                                   newField.GetFieldValue());
     // R1 I4/I5: Trace-phase store may leave plain→from when !IsFromObject (P7).
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 }
@@ -146,6 +150,8 @@ void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, nullptr, 0,
+                                                   newField.GetFieldValue());
     // E8: mirror WriteReference :140 — static root may hold plain→from (P7).
     FixEdgeSet::Instance().MaybeAdd(nullptr, &field, ref);
 }
@@ -257,6 +263,8 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
     } else {
         DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj, oldValue,
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 

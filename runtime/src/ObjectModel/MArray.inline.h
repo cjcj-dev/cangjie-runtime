@@ -13,6 +13,7 @@
 #include "ExceptionManager.h"
 #include "Heap/Barrier/Barrier.inline.h"
 #include "Heap/Heap.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "HeapManager.inline.h"
 #include "Mutator/Mutator.h"
 // module internal interfaces
@@ -136,6 +137,8 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
             CjAllocData::GetCjAllocData()->RecordAllocNodes(&arrayClass, arraySize);
         }
 #endif
+        // gcsigb2 observe-only: register ConstAnalysis resultsMap backing arrays.
+        SigBWriterProvenance::Instance().MaybeRegister(newArray, &arrayClass, arraySize);
         Mutator* mutator = Mutator::GetMutator();
         if (mutator != nullptr) {
             mutator->DeferLogObject(newArray);

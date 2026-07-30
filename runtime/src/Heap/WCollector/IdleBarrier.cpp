@@ -8,6 +8,7 @@
 #include "IdleBarrier.h"
 
 #include "Heap/FixEdgeSet.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -105,6 +106,8 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
         DLOG(BARRIER, "atomic write static ref@%p: %p", &field, newRef);
     }
     field.SetTargetObject(newRef, order);
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj, 0,
+                                                   reinterpret_cast<uintptr_t>(newRef));
     // R1 fix-set: register edge after successful store (plainsrc P2).
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
@@ -145,8 +148,12 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
 
 void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
+    BaseObject* oldRef = field.GetTargetObject();
+    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, oldRef, ref);
     field.SetTargetObject(ref);
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj,
+                                                   reinterpret_cast<uintptr_t>(oldRef),
+                                                   reinterpret_cast<uintptr_t>(ref));
     // R1 fix-set production (I5): edge key = field slot absolute address (H3).
     // Established on store; cleared after BulkForward (H4). plainsrc P1.
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);

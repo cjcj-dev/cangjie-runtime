@@ -11,6 +11,7 @@
 #include "Common/Runtime.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -43,6 +44,8 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
     // Aborted paths never reach this point (no half entry).
     ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
+    // gcsigb2 observe-only: relocate victim registry + log dest-range hits.
+    SigBWriterProvenance::Instance().OnCopyObject(const_cast<BaseObject*>(&fromObj), &toObj, size, typeInfo);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

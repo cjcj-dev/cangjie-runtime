@@ -8,6 +8,7 @@
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
+#include "Heap/SigBWriterProvenance.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -130,6 +131,9 @@ void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj,
+                                                   reinterpret_cast<uintptr_t>(remeberedObject),
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 }
 
@@ -257,6 +261,8 @@ void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     } else {
         DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
+    SigBWriterProvenance::Instance().MaybeLogWrite(SigBWriterProvenance::WRITER_BARRIER, &field, obj, oldValue,
+                                                   newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
