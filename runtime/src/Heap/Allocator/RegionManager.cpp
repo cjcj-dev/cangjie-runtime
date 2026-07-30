@@ -534,6 +534,20 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 region = next;
                 continue;
             }
+            // diag-only: count young reclaim of regions that still hold raw-pointer pins
+            // (major ExemptFromRegions would keep them). DO NOT MERGE — zero behavior change.
+            {
+                long rawPinCnt = region->GetRawPointerObjectCount();
+                if (rawPinCnt > 0) {
+                    static std::atomic<size_t> reclaimedYoungWithRawPin{ 0 };
+                    size_t n = reclaimedYoungWithRawPin.fetch_add(1, std::memory_order_relaxed) + 1;
+                    VLOG(REPORT,
+                         "[CollectYoungGarbage] reclaimed_young_with_raw_pin region=%p start=0x%zx size=%zu "
+                         "rawPointerObjectCount=%ld liveBytes=%zu reason=YOUNG n=%zu",
+                         region, region->GetRegionStart(), region->GetRegionSize(), rawPinCnt,
+                         region->GetLiveByteCount(), n);
+                }
+            }
             size_t num = region->GetUnitCount();
             size_t unitIndex = region->GetUnitIdx();
             MAddress regionStart = region->GetRegionStart();
