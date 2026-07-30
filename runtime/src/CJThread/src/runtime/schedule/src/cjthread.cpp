@@ -57,10 +57,13 @@ uintptr_t g_cjthreadStackReservedSize = STACK_DEFAULT_REVERSED;
  * size above UINTPTR_MAX >> 1, which no real reserved size approaches.
  * g_cjthreadStackReservedSize stays defined only because it is an exported data
  * symbol; it is never read here. Set updates it under g_cjthreadStackReservedSetLock,
- * which serializes Sets so the mirror always ends at the last accepted value — the
- * lock-free CAS alone would let two Sets' mirror stores land in the opposite order of
- * their CASes. Freeze stays lock-free; its interleaving with a locked Set is decided
- * by the state CAS exactly as before. */
+ * which orders runtime Sets so that among them the mirror ends at the last accepted
+ * value (the lock-free CAS alone would let two Sets' mirror stores land in the
+ * opposite order of their CASes). The mirror's ABI contract is a quiescent snapshot:
+ * the public Set API is documented init-time-before-ScheduleNew, and a reader that
+ * races a Set, or out-of-tree code writing the symbol directly, is outside that
+ * contract — the lock cannot reach readers who cannot take it. Freeze stays
+ * lock-free; its interleaving with a locked Set is decided by the state CAS. */
 static std::atomic<uintptr_t> g_cjthreadStackReservedState{STACK_DEFAULT_REVERSED << 1};
 static std::mutex g_cjthreadStackReservedSetLock;
 
@@ -955,8 +958,10 @@ struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAtt
     CJThreadNewSetLocalData(newCJThread, attr);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
-    // No-stack cjthreads have no shadow to clean and no sanitizer context slot; the
-    // setters below are null-safe too, but there is nothing useful to record.
+    // No-stack cjthreads have no shadow to clean and no per-stack slot to hold a race
+    // state, so TSAN tracking for them is forgone entirely — a deliberate degradation,
+    // not a claim that the state would be useless. Their delete path is balanced:
+    // the null-safe accessor hands compiler-rt a null state, which it ignores.
     if (newCJThread->stack.stackTopAddr != nullptr) {
         MapleRuntime::Sanitizer::TsanNewRaceState(newCJThread, CJThreadGet(), __builtin_return_address(0));
         MapleRuntime::Sanitizer::TsanCleanShadow(newCJThread->stack.stackTopAddr, newCJThread->stack.totalSize);
@@ -1829,7 +1834,7 @@ int CJThreadStackReversedSet(uintptr_t size)
         }
     } while (!g_cjthreadStackReservedState.compare_exchange_weak(
         state, size << 1, std::memory_order_acq_rel, std::memory_order_acquire));
-    g_cjthreadStackReservedSize = size;
+    __atomic_store_n(&g_cjthreadStackReservedSize, size, __ATOMIC_RELEASE);
     return 0;
 }
 
@@ -2408,8 +2413,9 @@ intptr_t CJThreadStackGrow(size_t stackSize)
 #ifdef CANGJIE_SANITIZER_SUPPORT
 // The sanitizer context slot lives at the base of the cjthread's own stack. A no-stack
 // cjthread (foreign/exclusive) has no slot: answer null / drop the store instead of
-// dereferencing the null base — sanitizer race tracking degrades for that cjthread,
-// it does not crash the sanitizer build.
+// dereferencing the null base. This closes the null dereference in these two
+// accessors only — TSAN's wider lifecycle on no-stack paths (initialize ordering,
+// proc-state teardown) is its own defect family, tracked separately.
 void* CJThreadGetSanitizerContext(void* cjthread)
 {
     CJThread* thread = static_cast<CJThread*>(cjthread);

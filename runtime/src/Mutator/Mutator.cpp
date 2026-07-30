@@ -520,6 +520,13 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
 #if defined(_WIN64)
         stackGrowFrameSize = adjustedSize;
 #endif
+        // A no-stack cjthread (foreign/exclusive) copies a null base but a nonzero
+        // configured size into this mutator, so the doubling loops below would iterate
+        // on wrap-around arithmetic before the guarded allocator ever answered zero.
+        // No own stack means no growth to size: answer "did not move" up front.
+        if (stackBaseAddr == 0) {
+            return 0;
+        }
         intptr_t stackOffset;
         // When frameBase is 0, it is actively invoked in the FFI. In this case, the stack is expanded to the maximum.
         // When frameBase != 0, the stack check is invoked. In this case, the stack is expanded by two times by default.
