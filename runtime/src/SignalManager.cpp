@@ -136,11 +136,17 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     // AS-safe path: key fields (tid/si_addr/pc/fa) via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
     // signal-context critical path (REPORT-gchang11 §5 D).
+    // Called from HandlerImpl entry so user-registered crashSignalHandler cannot
+    // suppress the pc line (sigdiag2: SECOND_FAULT via crashSignalHandler).
     PrintUntagRefFieldBreadcrumb();
 
-    ucontext_t* ucontext = static_cast<ucontext_t*>(context);
-    uintptr_t sigPc = GetPCFromUContext(*ucontext);
-    uintptr_t sigFa = GetFAFromUContext(*ucontext);
+    uintptr_t sigPc = 0;
+    uintptr_t sigFa = 0;
+    if (context != nullptr) {
+        ucontext_t* ucontext = static_cast<ucontext_t*>(context);
+        sigPc = GetPCFromUContext(*ucontext);
+        sigFa = GetFAFromUContext(*ucontext);
+    }
     const void* siAddr = (info != nullptr) ? info->si_addr : nullptr;
 
     char line[320];
@@ -157,7 +163,7 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 bool SignalManager::HandleUnexpectedSignal(int sig, siginfo_t* info, void* context)
 {
     CheckSuspendState();
-    PrintSignalHandlerStack(sig, info, context);
+    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
 #ifdef COV_SIGNALHANDLE
     __gcov_dump();
 #endif
@@ -281,9 +287,10 @@ bool SignalManager::HandleUnexpectedSigsegv(int sig, siginfo_t* info, void* cont
 {
     CheckSuspendState();
     // Do more functional things here.
-    CheckStackOverflow(*info);
-
-    PrintSignalHandlerStack(sig, info, context);
+    if (info != nullptr) {
+        CheckStackOverflow(*info);
+    }
+    // pc/fa/si_addr already emitted at HandlerImpl entry (before user handlers).
     return false;
 }
 

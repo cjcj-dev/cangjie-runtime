@@ -227,6 +227,9 @@ void SignalStack::Handler(int signal, siginfo_t* siginfo, void* ucontextRaw)
     }
 }
 
+// Defined in SignalManager.cpp; emit pc/fa/si_addr before any user saSignalAction.
+void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context);
+
 void SignalStack::HandlerImpl(void* args)
 {
     // Extract signal arguments
@@ -234,6 +237,21 @@ void SignalStack::HandlerImpl(void* args)
     int signal = signalArgs->signal;
     siginfo_t* siginfo = signalArgs->siginfo;
     void* ucontextRaw = signalArgs->ucontextRaw;
+    // Crash-family diagnostics first: cjcj crashSignalHandler (registered via
+    // CJ_MCC_AddSignalHandler) sits atop the stack and may _exit / re-fault
+    // without ever reaching HandleUnexpectedSigsegv. Emit pc/fa/si_addr here.
+    switch (signal) {
+        case SIGSEGV:
+        case SIGBUS:
+        case SIGILL:
+        case SIGFPE:
+        case SIGABRT:
+        case SIGTRAP:
+            PrintSignalHandlerStack(signal, siginfo, ucontextRaw);
+            break;
+        default:
+            break;
+    }
     // Check if we are already handling a signal
     if (!GetHandlingSignal()) {
         std::vector<SignalAction>& handlerStack = SignalStack::stacks[signal].handlerStack;
@@ -267,6 +285,11 @@ void SignalStack::HandlerImpl(void* args)
     ucontext_t* ucontext = static_cast<ucontext_t*>(ucontextRaw);
     // Combine the signal masks
     sigset_t mask;
+    if (ucontext == nullptr) {
+        ReleaseSignalArgs(signalArgs);
+        RaiseDefaultAsSafe(signal);
+        return;
+    }
     SigOrSet(&mask, &ucontext->uc_sigmask, &SignalStack::stacks[signal].sigAction.sa_mask);
     // Add the current signal to the mask if SA_NODEFER is not set
     if (!(handlerFlags & SA_NODEFER)) {
