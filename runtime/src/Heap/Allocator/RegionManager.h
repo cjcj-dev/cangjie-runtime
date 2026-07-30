@@ -34,8 +34,28 @@ void RouteRecordAfterAcquireForTest(RegionInfo* region);
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
     size_t candidateBytes = 0;
+    size_t candidateFullRegions = 0;
+    size_t candidateFullBytes = 0;
+    size_t candidateLargeRegions = 0;
+    size_t candidateLargeBytes = 0;
+    size_t candidatePinnedRegions = 0;
+    size_t candidatePinnedBytes = 0;
+    size_t prepareSkippedNonYoungRegions = 0;
+    size_t prepareSkippedNonYoungBytes = 0;
     size_t reclaimedRegions = 0;
     size_t reclaimedBytes = 0;
+    size_t collectionSkippedNonYoungRegions = 0;
+    size_t collectionSkippedNonYoungBytes = 0;
+    size_t retainedAgeZeroRegions = 0;
+    size_t retainedAgeZeroBytes = 0;
+    size_t promotedRegions = 0;
+    size_t promotedBytes = 0;
+    size_t reclaimedPinnedRegions = 0;
+    size_t reclaimedPinnedBytes = 0;
+    size_t releasedLargeRegions = 0;
+    size_t releasedLargeBytes = 0;
+    size_t collectedRegionRegions = 0;
+    size_t collectedRegionBytes = 0;
 
     size_t reclaimedObjects = 0;
     size_t reclaimedCandidateBytes = 0;

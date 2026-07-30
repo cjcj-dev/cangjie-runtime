@@ -1500,6 +1500,29 @@ void WCollector::DoYoungGarbageCollection()
             minorStaticRootSeeds.size(), minorOtherRootHits, minorOtherRootSeeds.size(), minorRememberedRealHits,
             minorRememberedRealSeeds.size(), minorNeverExaminedHits, minorNeverExaminedSeeds.size(),
             minorSnapshotConservativeHits, minorSnapshotConservativeSeeds.size());
+        size_t candidateListBytes = stats.candidateFullBytes + stats.candidateLargeBytes + stats.candidatePinnedBytes;
+        size_t exitAccountedBytes = stats.retainedAgeZeroBytes + stats.promotedBytes +
+            stats.releasedLargeBytes + stats.collectedRegionBytes;
+        VLOG(REPORT,
+            "[StickyMinorYield] run=%zu view=exits candidateBytes=%zu "
+            "CANDIDATE_FULL_count=%zu CANDIDATE_FULL_bytes=%zu "
+            "CANDIDATE_LARGE_count=%zu CANDIDATE_LARGE_bytes=%zu "
+            "CANDIDATE_PINNED_count=%zu CANDIDATE_PINNED_bytes=%zu CANDIDATE_LIST_bytes=%zu "
+            "PREPARE_SKIPPED_NON_YOUNG_count=%zu PREPARE_SKIPPED_NON_YOUNG_bytes=%zu "
+            "COLLECTION_SKIPPED_NON_YOUNG_count=%zu COLLECTION_SKIPPED_NON_YOUNG_bytes=%zu "
+            "RETAINED_AGE_ZERO_count=%zu RETAINED_AGE_ZERO_bytes=%zu "
+            "PROMOTED_count=%zu PROMOTED_bytes=%zu "
+            "RECLAIMED_PINNED_count=%zu RECLAIMED_PINNED_bytes=%zu "
+            "RELEASED_LARGE_count=%zu RELEASED_LARGE_bytes=%zu "
+            "COLLECTED_REGION_count=%zu COLLECTED_REGION_bytes=%zu EXIT_ACCOUNTED_bytes=%zu",
+            minorTotalRuns, stats.candidateBytes, stats.candidateFullRegions, stats.candidateFullBytes,
+            stats.candidateLargeRegions, stats.candidateLargeBytes, stats.candidatePinnedRegions,
+            stats.candidatePinnedBytes, candidateListBytes, stats.prepareSkippedNonYoungRegions,
+            stats.prepareSkippedNonYoungBytes, stats.collectionSkippedNonYoungRegions,
+            stats.collectionSkippedNonYoungBytes, stats.retainedAgeZeroRegions, stats.retainedAgeZeroBytes,
+            stats.promotedRegions, stats.promotedBytes, stats.reclaimedPinnedRegions, stats.reclaimedPinnedBytes,
+            stats.releasedLargeRegions, stats.releasedLargeBytes, stats.collectedRegionRegions,
+            stats.collectedRegionBytes, exitAccountedBytes);
     }
 }
 

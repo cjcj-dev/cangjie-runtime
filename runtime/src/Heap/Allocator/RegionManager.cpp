@@ -494,20 +494,25 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
     YoungCollectionStats stats;
-    auto prepare = [&stats, &visitor](RegionList& list) {
-        list.VisitAllRegions([&stats, &visitor](RegionInfo* region) {
+    auto prepare = [&stats, &visitor](RegionList& list, size_t& candidateRegions, size_t& candidateBytes) {
+        list.VisitAllRegions([&](RegionInfo* region) {
             if (!region->IsYoungRegion()) {
+                ++stats.prepareSkippedNonYoungRegions;
+                stats.prepareSkippedNonYoungBytes += region->GetRegionAllocatedSize();
                 return;
             }
             region->ClearLiveInfo();
             visitor(region);
             ++stats.candidateRegions;
-            stats.candidateBytes += region->GetRegionAllocatedSize();
+            ++candidateRegions;
+            size_t allocatedBytes = region->GetRegionAllocatedSize();
+            stats.candidateBytes += allocatedBytes;
+            candidateBytes += allocatedBytes;
         });
     };
-    prepare(recentFullRegionList);
-    prepare(recentLargeRegionList);
-    prepare(recentPinnedRegionList);
+    prepare(recentFullRegionList, stats.candidateFullRegions, stats.candidateFullBytes);
+    prepare(recentLargeRegionList, stats.candidateLargeRegions, stats.candidateLargeBytes);
+    prepare(recentPinnedRegionList, stats.candidatePinnedRegions, stats.candidatePinnedBytes);
     return stats;
 }
 
@@ -519,13 +524,20 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
             if (!region->IsYoungRegion()) {
+                ++stats.collectionSkippedNonYoungRegions;
+                stats.collectionSkippedNonYoungBytes += region->GetRegionAllocatedSize();
                 region = next;
                 continue;
             }
+            size_t allocatedBytes = region->GetRegionAllocatedSize();
             if (region->GetLiveByteCount() != 0) {
                 if (region->GetYoungAge() == 0) {
+                    ++stats.retainedAgeZeroRegions;
+                    stats.retainedAgeZeroBytes += allocatedBytes;
                     region->SetYoungAge(1);
                 } else {
+                    ++stats.promotedRegions;
+                    stats.promotedBytes += allocatedBytes;
                     region->PreserveRetainedLiveInfo();
                     region->SetYoungRegionFlag(0);
                     region->SetYoungAge(0);
@@ -544,12 +556,18 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                        "sticky region clear must cover exactly the captured units");
             StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
             if (releaseResources) {
+                ++stats.reclaimedPinnedRegions;
+                stats.reclaimedPinnedBytes += allocatedBytes;
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
             ++stats.reclaimedRegions;
             if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
+                ++stats.releasedLargeRegions;
+                stats.releasedLargeBytes += allocatedBytes;
                 stats.reclaimedBytes += ReleaseRegion(region);
             } else {
+                ++stats.collectedRegionRegions;
+                stats.collectedRegionBytes += allocatedBytes;
                 stats.reclaimedBytes += CollectRegion(region);
             }
             region = next;
