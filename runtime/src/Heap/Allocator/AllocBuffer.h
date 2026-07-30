@@ -73,6 +73,7 @@ private:
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
     MAddress AllocateImpl(size_t totalSize, AllocType allocType);
     MAddress AllocateRawPointerObject(size_t totalSize);
+    __attribute__((visibility("hidden"))) void FlushYoungRawObjectBytes();
 
     // tlRegion in AllocBuffer is a shortcut for fast allocation.
     // we should handle failure in RegionManager
@@ -83,6 +84,7 @@ private:
     // allocation context is responsible to notify collector when these objects are safe to be collected.
     RegionList tlRawPointerRegions;
     RegionList tlLargeRawPointerRegions;
+    size_t youngRawObjectBytes = 0;
     // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
     std::list<BaseObject*> stackRoots;
 };

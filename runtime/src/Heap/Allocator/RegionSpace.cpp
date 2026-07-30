@@ -246,9 +246,11 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
     if (region != nullptr) {
         MAddress allocAddr = region->Alloc(totalSize);
         if (allocAddr != 0) {
+            youngRawObjectBytes += totalSize;
             return allocAddr;
         }
     }
+    FlushYoungRawObjectBytes();
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     size_t needUnitNum = AlignUp(totalSize, RegionInfo::UNIT_SIZE) / RegionInfo::UNIT_SIZE;
     if (totalSize <= manager.GetThreadLocalRegionSize()) {
@@ -268,13 +270,25 @@ MAddress AllocBuffer::AllocateRawPointerObject(size_t totalSize)
     // region is enough for totalSize.
     MAddress allocAddr = region->Alloc(totalSize);
     MRT_ASSERT(allocAddr != 0, "allocation failure");
+    youngRawObjectBytes += totalSize;
     return allocAddr;
 }
 
 void AllocBuffer::CommitRawPointerRegions()
 {
+    FlushYoungRawObjectBytes();
     RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
     manager.MergeRawPointerRegions(tlRawPointerRegions, tlLargeRawPointerRegions);
+}
+
+void AllocBuffer::FlushYoungRawObjectBytes()
+{
+    if (youngRawObjectBytes == 0) {
+        return;
+    }
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    manager.RecordYoungObjectAllocation(youngRawObjectBytes);
+    youngRawObjectBytes = 0;
 }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

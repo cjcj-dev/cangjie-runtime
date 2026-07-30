@@ -48,6 +48,7 @@ struct YoungAccountingStats {
     size_t gcOrdinal = 0;
     size_t accountedBytes = 0;
     size_t measuredObjectBytes = 0;
+    size_t maintainedObjectBytes = 0;
     size_t objectAllocPointerBytes = 0;
     size_t pinnedSlotBytes = 0;
     size_t actualBytes = 0;
@@ -204,6 +205,7 @@ public:
         uintptr_t addr = AllocPinnedLocked(size);
         regionListMutex.unlock();
         if (addr != 0) {
+            RecordYoungObjectAllocation(size);
             DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
             return addr;
         }
@@ -248,6 +250,9 @@ public:
         }
 
         DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
+        if (addr != 0) {
+            RecordYoungObjectAllocation(size);
+        }
         return addr;
     }
 
@@ -264,6 +269,7 @@ public:
         DLOG(REGION, "alloc large region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
              region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
         uintptr_t addr = region->Alloc(size);
+        RecordYoungObjectAllocation(size);
 
         GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
         bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
@@ -282,6 +288,7 @@ public:
     void EnlistFullThreadLocalRegion(RegionInfo* region) noexcept
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
+        RecordYoungObjectAllocation(region->GetRegionAllocatedSize());
 
         if (region->IsTraceRegion()) {
             if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
@@ -433,10 +440,9 @@ public:
             recentPinnedRegionList.GetAllocatedSize();
     }
 
-    size_t GetYoungAllocatedSize() const
-    {
-        return youngAllocatedBytes.load(std::memory_order_relaxed);
-    }
+    __attribute__((visibility("hidden"))) size_t GetYoungAllocatedSize() const;
+
+    __attribute__((visibility("hidden"))) void RecordYoungObjectAllocation(size_t size);
 
     __attribute__((visibility("hidden"))) YoungAccountingStats SnapshotYoungAccounting();
     __attribute__((visibility("hidden")))
@@ -877,6 +883,7 @@ private:
     std::atomic<uint64_t> prevRegionAllocTime = { 0 };
 
     std::atomic<size_t> youngAllocatedBytes = { 0 };
+    std::atomic<size_t> youngObjectAllocatedBytes = { 0 };
     __attribute__((visibility("hidden")))
     void RecordYoungRegionAccounting(YoungAccountingSource source, RegionInfo* region);
     std::atomic<size_t> youngAccountingOrdinal = { 1 };

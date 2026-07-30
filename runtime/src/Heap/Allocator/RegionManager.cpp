@@ -35,6 +35,15 @@ bool IsYoungAccountingValidationEnabled()
     }();
     return enabled;
 }
+
+bool IsRegionYoungAccountingEnabled()
+{
+    static bool enabled = []() {
+        const char* value = std::getenv("MRT_STICKY_YOUNG_ACCOUNTING");
+        return value != nullptr && strcmp(value, "region") == 0;
+    }();
+    return enabled;
+}
 }
 
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
@@ -575,6 +584,7 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
     collect(recentLargeRegionList, false);
     collect(recentPinnedRegionList, true);
     youngAllocatedBytes.store(0, std::memory_order_relaxed);
+    youngObjectAllocatedBytes.store(0, std::memory_order_relaxed);
 }
 
 void RegionManager::PromoteAllRegions()
@@ -611,6 +621,7 @@ void RegionManager::PromoteAllRegions()
         }
     }
     youngAllocatedBytes.store(0, std::memory_order_relaxed);
+    youngObjectAllocatedBytes.store(0, std::memory_order_relaxed);
 }
 
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
@@ -715,6 +726,7 @@ YoungAccountingStats RegionManager::SnapshotYoungAccounting()
     YoungAccountingStats stats;
     stats.gcOrdinal = youngAccountingOrdinal.fetch_add(1, std::memory_order_relaxed);
     stats.accountedBytes = youngDiagnosticAccountedBytes.exchange(0, std::memory_order_relaxed);
+    stats.maintainedObjectBytes = youngObjectAllocatedBytes.load(std::memory_order_relaxed);
     stats.heapBaselineBytes = youngDiagnosticHeapBaseline.load(std::memory_order_relaxed);
     stats.heapCurrentBytes = GetAllocatedSize();
     stats.actualBytes = stats.heapCurrentBytes >= stats.heapBaselineBytes ?
@@ -863,7 +875,8 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
 {
     VLOG(REPORT,
          "[YoungAccounting] gcOrdinal=%zu kind=%s accounted_region_bytes=%zu measured_object_bytes=%zu "
-         "object_alloc_pointer_bytes=%zu pinned_slot_bytes=%zu accounted_bytes=%zu actual_bytes=%zu "
+         "maintained_object_bytes=%zu object_alloc_pointer_bytes=%zu pinned_slot_bytes=%zu "
+         "accounted_bytes=%zu actual_bytes=%zu "
          "heap_baseline_bytes=%zu heap_current_bytes=%zu object_baseline_bytes=%zu object_current_bytes=%zu "
          "region_capacity_baseline_bytes=%zu region_capacity_current_bytes=%zu "
          "tail_baseline_bytes=%zu tail_current_bytes=%zu "
@@ -873,7 +886,8 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          "source_hist_new_events=%zu new_bytes=%zu reused_garbage_events=%zu reused_garbage_bytes=%zu "
          "reused_free_events=%zu reused_free_bytes=%zu continued_current_accounting_events=0",
          stats.gcOrdinal, collectionKind, stats.accountedBytes, stats.measuredObjectBytes,
-         stats.objectAllocPointerBytes, stats.pinnedSlotBytes, stats.accountedBytes, stats.actualBytes,
+         stats.maintainedObjectBytes, stats.objectAllocPointerBytes, stats.pinnedSlotBytes,
+         stats.accountedBytes, stats.actualBytes,
          stats.heapBaselineBytes, stats.heapCurrentBytes, stats.objectBaselineBytes, stats.objectCurrentBytes,
          stats.regionCapacityBaselineBytes, stats.regionCapacityCurrentBytes,
          stats.tailBaselineBytes, stats.tailCurrentBytes,
@@ -885,6 +899,19 @@ void RegionManager::ReportYoungAccounting(const YoungAccountingStats& stats, con
          static_cast<unsigned long long>(stats.validationScanNs),
          stats.newRegionEvents, stats.newRegionBytes, stats.reusedGarbageEvents, stats.reusedGarbageBytes,
          stats.reusedFreeEvents, stats.reusedFreeBytes);
+}
+
+size_t RegionManager::GetYoungAllocatedSize() const
+{
+    if (IsRegionYoungAccountingEnabled()) {
+        return youngAllocatedBytes.load(std::memory_order_relaxed);
+    }
+    return youngObjectAllocatedBytes.load(std::memory_order_relaxed);
+}
+
+void RegionManager::RecordYoungObjectAllocation(size_t size)
+{
+    youngObjectAllocatedBytes.fetch_add(size, std::memory_order_relaxed);
 }
 
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem)
