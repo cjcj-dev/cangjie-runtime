@@ -187,10 +187,17 @@ void HeapImpl::Init(const HeapParam& param)
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         SetGCPhase(GCPhase::GC_PHASE_ENUM);
         InstallBarrier(GCPhase::GC_PHASE_IDLE);
-    } else if (StickyLog::Instance().IsMinorEnabled()) {
         LOG(RTLOG_WARNING,
-            "MRT_STICKY_MINOR is experimental: production correctness requires the compiler sticky barrier; "
-            "use MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 for the P1 correctness harness");
+            "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
+            "barriers; compiler sticky metadata is not required and performance is not production representative");
+    } else if (!StickyLog::Instance().IsMinorEnabled()) {
+        // Only the explicit escape hatch; auto-disabled(no consumer) already warned in StickyLog.
+        const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
+        if (minorEnv != nullptr && strcmp(minorEnv, "0") == 0) {
+            LOG(RTLOG_WARNING,
+                "MRT_STICKY_MINOR=0 disables the supported generational GC configuration and is intended only "
+                "as an unsupported diagnostic escape hatch");
+        }
     }
     collectorResources.Init();
 }
