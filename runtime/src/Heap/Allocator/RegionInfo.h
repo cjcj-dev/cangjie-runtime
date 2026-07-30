@@ -19,6 +19,7 @@
 #include <memoryapi.h>
 #else
 #include <sys/mman.h>
+#include <unistd.h>
 #endif
 #include "Base/Globals.h"
 #include "Base/MemUtils.h"
@@ -776,6 +777,12 @@ public:
         return metadata.routeInfo.AcquireRouteInfo();
     }
 
+    static std::atomic<size_t>& RetiredRouteEntryCounter()
+    {
+        static std::atomic<size_t> counter{ 0 };
+        return counter;
+    }
+
     // Retired entry point, kept only for the versioned export surface
     // (_ZN12MapleRuntime10RegionInfo8GetRouteEPNS_10BaseObjectE@@CANGJIE).
     //
@@ -783,17 +790,27 @@ public:
     // whose region was torn down after the caller formed its view. Every legitimate
     // reader goes through RegionManager::RouteObject(fromObj, region, expectedEpoch),
     // which checks identity epoch and install stamp together. Any call arriving here
-    // is a mis-wire; fail loudly instead of returning an unvalidated address.
-    __attribute__((used)) BaseObject* GetRoute(BaseObject* fromObj)
+    // is a mis-wire; refuse it instead of returning an unvalidated address.
+    __attribute__((used)) BaseObject* GetRoute(BaseObject*)
     {
-        static std::atomic<size_t> retiredEntryCalls{ 0 };
-        size_t n = retiredEntryCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-        LOG(RTLOG_ERROR,
-            "RegionInfo::GetRoute(fromObj) is retired: no caller-held epoch, region=%p fromObj=%p n=%zu. "
-            "Use RegionManager::RouteObject(fromObj, region, expectedEpoch).",
-            this, fromObj, n);
+        // Warn once, async-signal-safely: fixed string, no formatting, no lock. An
+        // external caller reaching this through the versioned symbol may be inside its
+        // own signal handler or stop-the-world, where a locking logger self-deadlocks
+        // (reports/REPORT-gchang11.md). A warning must not be more dangerous than the
+        // condition it warns about.
+        if (RetiredRouteEntryCounter().fetch_add(1, std::memory_order_relaxed) == 0) {
+#ifndef _WIN64
+            static const char msg[] =
+                "E RegionInfo::GetRoute(fromObj) is retired: no caller-held epoch; use "
+                "RegionManager::RouteObject(fromObj, region, expectedEpoch)\n";
+            (void)!write(STDERR_FILENO, msg, sizeof(msg) - 1);
+#endif
+        }
         return nullptr;
     }
+
+    // Retired-entry hit count, for gates that must prove the entry is unreached.
+    static size_t GetRetiredRouteEntryCalls() { return RetiredRouteEntryCounter().load(std::memory_order_relaxed); }
 
     __attribute__((always_inline, visibility("hidden"))) BaseObject* GetRoute(
         BaseObject* fromObj, RouteInfo& routeInfo)
