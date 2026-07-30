@@ -121,9 +121,10 @@ void ExceptionManager::StackOverflow(uint32_t adjustedSize __attribute__((unused
     // and the two ClearInfo sites (the uncaught-exception dump and
     // Mutator::ResetMutator) when it is not. Every known clearer recovers first, so the
     // pc being set here means no clearer has run yet: this is a re-entry that happened
-    // before the throw reached any of them. The check also stands guard over that
-    // pairing itself — if a future exit path clears the marker without recovering, the
-    // next overflow on that thread arrives here instead of going unnoticed.
+    // before the throw reached any of them. (A clearer that forgets to recover is not
+    // caught here — clearing the marker disarms this check — but the reuse backstop in
+    // CJThreadAlloc catches the leaked expansion when the cjthread is next taken from a
+    // freelist.)
     //
     // Continuing from that state is what produced the crash this guard exists for.
     // CJThreadStackGuardExpand subtracts the reserved size from stackGuard with no
