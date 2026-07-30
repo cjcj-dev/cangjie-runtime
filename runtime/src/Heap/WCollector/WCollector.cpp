@@ -9,12 +9,15 @@
 
 #include <atomic>
 #include <csignal>
+#include <unistd.h>
 
+#include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
+#include "securec.h"
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
@@ -46,10 +49,16 @@ void PrintUntagRefFieldBreadcrumb() noexcept
         return;
     }
     std::atomic_signal_fence(std::memory_order_seq_cst);
-    FLOG(RTLOG_ERROR,
-         "GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p",
-         untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field, untagRefFieldBreadcrumb.fieldOffset,
-         untagRefFieldBreadcrumb.target, untagRefFieldBreadcrumb.caller);
+    // AS-safe: stack format + write(2); no FormatLog / logMutex (REPORT-gchang11 §5 D).
+    char buf[320];
+    int n = sprintf_s(buf, sizeof(buf),
+                      "%d E GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p\n",
+                      static_cast<int>(GetTid()), untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field,
+                      untagRefFieldBreadcrumb.fieldOffset, untagRefFieldBreadcrumb.target,
+                      untagRefFieldBreadcrumb.caller);
+    if (n > 0) {
+        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
+    }
 }
 
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
