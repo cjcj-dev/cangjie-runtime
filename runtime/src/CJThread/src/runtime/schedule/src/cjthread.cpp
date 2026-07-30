@@ -233,13 +233,17 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
     cjthread->stack.stackSize = stackAttr->stackSizeAlign;
 
     if (stackAddr == nullptr) {
-        // Foreign and exclusive cjthreads run on the OS thread's stack and own none of
-        // their own. Leave every derived address null instead of computing it from
-        // nullptr: the arithmetic is undefined, and its garbage results used to escape
-        // through the getters looking like real addresses.
-        cjthread->stack.stackGuard = nullptr;
-        cjthread->stack.stackBaseAddr = nullptr;
-        cjthread->stack.cjthreadStackBaseAddr = nullptr;
+        // SOFNULLAB probe (DO NOT MERGE): restore pre-facb844e observable bit patterns
+        // for the no-stack path without reintroducing nullptr+N UB. Old code computed
+        // stackGuard/base from null+reserved / null+stackSizeAlign; on this platform
+        // that produced the integer values themselves (reserved default 4096).
+        uintptr_t reserved = CJThreadStackReservedFreeze();
+        cjthread->stack.stackGuard = reinterpret_cast<char *>(reserved);
+        cjthread->stack.stackBaseAddr =
+            reinterpret_cast<char *>(static_cast<uintptr_t>(stackAttr->stackSizeAlign));
+        cjthread->stack.cjthreadStackBaseAddr = reinterpret_cast<char *>(
+            STACK_ADDR_ALIGN_DOWN(static_cast<uintptr_t>(stackAttr->stackSizeAlign),
+                                  CJTHREAD_ARG_ALIGN));
         cjthread->stack.stackGrowCnt = stackAttr->stackGrow ? 0 : 1;
         return;
     }
