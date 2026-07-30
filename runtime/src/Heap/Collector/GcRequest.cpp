@@ -7,10 +7,32 @@
 
 #include "GcRequest.h"
 
+#include <cerrno>
+#include <cstdlib>
+#include <limits>
+
 #include "Base/TimeUtils.h"
 #include "GcStats.h"
 namespace MapleRuntime {
 namespace {
+uint64_t ReadStickyNonNegativeInteger(const char* name, uint64_t defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || *value == '-' ||
+        parsed > std::numeric_limits<uint64_t>::max()) {
+        LOG(RTLOG_ERROR, "Unsupported %s=%s; using default %llu", name, value,
+            static_cast<unsigned long long>(defaultValue));
+        return defaultValue;
+    }
+    return static_cast<uint64_t>(parsed);
+}
+
 // Set a safe initial value so that the first GC is able to trigger.
 uint64_t g_initHeuTriggerTimestamp = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
 uint64_t g_initNativeTriggerTimestamp = TimeUtil::NanoSeconds() - MIN_ASYNC_GC_INTERVAL_NS;
@@ -60,6 +82,8 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_HEU_SYNC, "heuristic_sync", true, true, 0, 0 },
     { GC_REASON_NATIVE_SYNC, "native_alloc_sync", true, true, 0, 0 },
     { GC_REASON_FORCE, "force", true, false, 0, 0 },
-    { GC_REASON_YOUNG, "young", false, false, LONG_MIN_HEU_GC_INTERVAL_NS, g_initHeuTriggerTimestamp }
+    { GC_REASON_YOUNG, "young", false, false,
+      ReadStickyNonNegativeInteger("MRT_STICKY_MINOR_MIN_INTERVAL_NS", LONG_MIN_HEU_GC_INTERVAL_NS),
+      g_initHeuTriggerTimestamp }
 };
 } // namespace MapleRuntime
