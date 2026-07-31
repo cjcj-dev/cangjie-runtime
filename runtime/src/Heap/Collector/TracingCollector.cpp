@@ -21,7 +21,9 @@
 #include "ObjectModel/MFuncdesc.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "StackMap/CompressedStackMap.h"
+#include "StackMap/StackMapTable.h"
 #include "StackMap/StackMapTypeDef.h"
+#include "StackMap/StackSizeVarInt.h"
 
 namespace MapleRuntime {
 namespace {
@@ -237,40 +239,31 @@ const char* ClassifyInvalidMapReason(uintptr_t startIP, uintptr_t frameIP, Frame
     Uptr* stackmapStartRaw = desc->GetStackMap();
     if (stackmapStartRaw == nullptr) {
         stats.invalidNoStackmap.fetch_add(1, std::memory_order_relaxed);
-        return "not-emitted";
+        return "absent-from-section";
     }
+    // Parse stackmap header RECORD_NUM (first VarInt after prologue).
+    auto* stackmapStart = reinterpret_cast<U8*>(stackmapStartRaw);
+    StacksizeVarInt stacksizeVarInt(stackmapStart, 0);
+    StacksizeVarInt compressedFormatVarInt(stacksizeVarInt.GetNextTable());
+    (void)compressedFormatVarInt.GetStacksize();
+    PrologueVarInt prologue(compressedFormatVarInt.GetNextTable(), nullptr);
+    VarInt recordNumVar(prologue.GetNextTable());
+    U32 recordNum = recordNumVar.GetValue().first;
     U32 codeSize = desc->GetCodeSize();
     U32 targetPCOff = static_cast<U32>(frameIP - startIP);
     if (codeSize != 0 && targetPCOff > codeSize) {
         stats.invalidPcOutOfRange.fetch_add(1, std::memory_order_relaxed);
         return "lookup-key-mismatch:pc-gt-codesize";
     }
+    if (recordNum == 0) {
+        stats.invalidEmptyRecords.fetch_add(1, std::memory_order_relaxed);
+        return "present-but-zero-entries";
+    }
     auto head = CompressedStackMapHead::GetStackMapHead(startIP, nullptr);
     auto entry = head.GetStackMapEntry(startIP, frameIP);
     if (entry.IsValid()) {
         stats.invalidClassifyErr.fetch_add(1, std::memory_order_relaxed);
         return "classify_err:entry-valid-but-map-invalid";
-    }
-    // Probe whether any PC in this function has a stackmap entry.
-    bool any = false;
-    U32 step = codeSize > 64 ? codeSize / 32 : 1;
-    if (step == 0) {
-        step = 1;
-    }
-    for (U32 off = 0; off <= codeSize; off += step) {
-        auto e = CompressedStackMapHead::GetStackMapHead(startIP, nullptr)
-                     .GetStackMapEntry(startIP, startIP + off);
-        if (e.IsValid()) {
-            any = true;
-            break;
-        }
-        if (codeSize == 0) {
-            break;
-        }
-    }
-    if (!any) {
-        stats.invalidEmptyRecords.fetch_add(1, std::memory_order_relaxed);
-        return "not-emitted-or-empty-records";
     }
     stats.invalidPcMissExact.fetch_add(1, std::memory_order_relaxed);
     return "lookup-key-mismatch:pc-miss-exact";
