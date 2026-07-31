@@ -1373,7 +1373,7 @@ void WCollector::DoYoungGarbageCollection()
     satbBuffer.FlushStickyLogQueue(promotionNode);
     VLOG(REPORT, "[StickyMinor] promotion scan regions=%zu objects=%zu loggedLines=%zu time=%zu us",
          promotedRegions, promotedObjects, promotedLoggedLines, promotionScanNs / NS_PER_US);
-    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+    if (StickyLog::Instance().IsForceSlowPathEnabled() || CanonicalWriteTable::Instance().IsEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
     } else {
@@ -1434,7 +1434,7 @@ void WCollector::DoGarbageCollection()
         SatbBuffer::Instance().DiscardStickyLogBuffer();
         StickyLog::Instance().BeginEpoch();
     }
-    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+    if (StickyLog::Instance().IsForceSlowPathEnabled() || CanonicalWriteTable::Instance().IsEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
     } else {
