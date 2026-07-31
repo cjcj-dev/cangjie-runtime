@@ -50,13 +50,13 @@ public:
     void MarkNewObject(BaseObject* obj) override;
 
     bool ShouldIgnoreRequest(GCRequest& request) override;
-    bool MarkObject(BaseObject* obj) const override;
-    bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
+    bool MarkObject(CurrentPtr obj) const override;
+    bool ResurrectObject(CurrentPtr obj, size_t offset, RegionInfo* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
-    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
-    void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
-    BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
+    void TraceRefField(CurrentPtr obj, RefField<>& ref, WorkStack& workStack) const;
+    void TraceObjectRefFields(CurrentPtr obj, WorkStack& workStack) override;
+    BaseObject* GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) override;
     CurrentPtr ForwardObject(MaybeStalePtr fromVersion) override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
@@ -123,10 +123,10 @@ public:
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
     ALWAYS_INLINE
-    BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region, uint64_t expectedEpoch)
+    CurrentPtr GetForwardPointer(MaybeStalePtr maybeStale, RegionInfo* region, uint64_t expectedEpoch)
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(fromObj, region, expectedEpoch);
+        return CurrentPtr(space.GetRegionManager().RouteObject(maybeStale.pointer, region, expectedEpoch));
     }
 
     CurrentPtr FindToVersion(MaybeStalePtr maybeStale) const override
@@ -150,13 +150,13 @@ public:
 
 protected:
     __attribute__((visibility("hidden")))
-    BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
+    CurrentPtr ForwardObjectImpl(MaybeStalePtr obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
     __attribute__((visibility("hidden")))
-    BaseObject* ForwardObjectExclusive(BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
+    CurrentPtr ForwardObjectExclusive(CurrentPtr obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch);
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
-    BaseObject* TryForwardObject(BaseObject* fromVersion);
+    CurrentPtr TryForwardObject(MaybeStalePtr fromVersion);
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
@@ -255,7 +255,7 @@ private:
     // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
     // Weak referents soft-clear when dead; strong slots keep hard validity checks.
     void NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& field, bool isWeakReferent);
-    void NormalizeTraceRegionObject(BaseObject* object);
+    void NormalizeTraceRegionObject(CurrentPtr object);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();
