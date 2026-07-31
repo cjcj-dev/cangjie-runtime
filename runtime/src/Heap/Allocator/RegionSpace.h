@@ -37,9 +37,9 @@ public:
         return RoundUp<size_t>(size, ALLOC_ALIGN);
     }
 
-    static size_t GetAllocSize(const BaseObject& obj)
+    static size_t GetAllocSize(CurrentPtr object)
     {
-        size_t objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(&obj)));
+        size_t objSize = GetSize(object);
         return ToAllocSize(objSize);
     }
 
