@@ -53,6 +53,13 @@ public:
         COUNT,
     };
 
+    enum class DirtyLinePath : uint8_t {
+        NONE,
+        RETAIN2_SKIP,
+        VISITED,
+        BYTE0_CONTINUE,
+    };
+
     static RemsetCheck& Instance() noexcept;
 
     void ConfigureFromEnvironment(bool forceSlowPath);
@@ -69,6 +76,9 @@ public:
     void CheckRound(size_t run, size_t young);
     void RecordVisitedLine(MAddress lineStart, VisitorHookSite site);
     void RecordRetain2SkippedLine(MAddress lineStart);
+    void RecordBufferLineResult(MAddress lineStart, bool retained);
+    void RecordDirtyRegionEntry(MAddress regionStart, bool accepted);
+    void RecordDirtyLinePath(MAddress lineStart, DirtyLinePath path);
     void CheckVisitedRound(size_t run);
     void Fini();
 
@@ -87,6 +97,17 @@ private:
         MAddress logHeapStart;
         size_t logHeapSize;
         bool holderInHeapRangeAtLog;
+    };
+
+    struct LineTrace {
+        MAddress regionStart;
+        uint8_t byteAtRoundStart;
+        bool dirtyAtRoundStart;
+        bool inBuffer;
+        bool dirtyRegionConsidered;
+        bool regionFiltered;
+        bool byte2WrittenByPreviousRound;
+        DirtyLinePath dirtyLinePath;
     };
 
     RemsetCheck() = default;
@@ -113,11 +134,13 @@ private:
     bool stickyLogExitControlEnabled = false;
     bool falseUnvisitedControlEnabled = false;
     bool trueUnvisitedControlEnabled = false;
+    bool retain2SkipControlEnabled = false;
     bool detectControlCaught = false;
     bool produceControlCaught = false;
     bool orphanControlCaught = false;
     bool falseUnvisitedControlCaught = false;
     bool trueUnvisitedControlCaught = false;
+    bool retain2SkipControlCaught = false;
     std::atomic<size_t> barrierHits{ 0 };
     std::atomic<size_t> hookHits[HOOK_SITE_COUNT]{};
     std::atomic<size_t> stickyLogExitHits[STICKY_LOG_EXIT_COUNT]{};
@@ -131,10 +154,25 @@ private:
     std::vector<Edge> visitedRoundCandidates;
     std::unordered_set<MAddress> visitedLines;
     std::unordered_set<MAddress> retain2SkippedLines;
+    std::unordered_map<MAddress, LineTrace> visitedRoundLineTraces;
+    std::unordered_map<MAddress, std::vector<MAddress>> visitedRoundRegionLines;
+    std::unordered_map<MAddress, size_t> bufferRetainedWriteRuns;
+    MAddress retain2SkipControlLine = 0;
+    MAddress retain2SkipControlSlot = 0;
+    uint8_t retain2SkipControlPreviousByte = 0;
+    bool retain2SkipControlActive = false;
     size_t visitedLineHits[VISITOR_HOOK_SITE_COUNT]{};
     size_t visitedRoundLineHits[VISITOR_HOOK_SITE_COUNT]{};
     size_t retain2Skipped = 0;
     size_t retain2SkippedThisRound = 0;
+    size_t retain2SkipMissing = 0;
+    size_t notInDirtyLoopMissing = 0;
+    size_t regionFilteredMissing = 0;
+    size_t otherPathMissing = 0;
+    size_t missingByteAtRoundStart[3]{};
+    size_t missingDirtyAtRoundStart[2]{};
+    size_t missingInBuffer = 0;
+    size_t missingByte2WrittenByPreviousRound = 0;
     size_t includedRuns = 0;
     size_t youngZeroExcluded = 0;
     size_t edgesFromBarrier = 0;
