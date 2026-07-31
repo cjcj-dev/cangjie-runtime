@@ -9,6 +9,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
+#include "Heap/CanonicalWriteTable.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Mutator/MutatorManager.h"
@@ -43,6 +44,10 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
     // Aborted paths never reach this point (no half entry).
     ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
+    // The IDLE canonical-write carrier has a longer lifetime than the Bulk
+    // consumer above and independently rejects every overlapping source/
+    // destination region at publish time.
+    CanonicalWriteTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
