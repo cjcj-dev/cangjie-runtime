@@ -498,7 +498,8 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         if (!obj->IsValidObject()) {
             continue;
         }
-        TypeInfo* tip = obj->GetTypeInfo();
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        TypeInfo* tip = GetTypeInfo(currentObject);
         uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
         CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
                      "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) is not 8-byte aligned "
@@ -507,10 +508,10 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         CHECK_DETAIL(tip->IsVaildType(),
                      "RecordStackPtrs: TypeInfo %p on stack object %p (slot %p) has invalid type kind",
                      tip, obj, objSlot);
-        if (!obj->HasRefField()) {
+        if (!HasRefField(currentObject)) {
             continue;
         }
-        obj->ForEachRefField(refVisitor);
+        ForEachRefField(currentObject, refVisitor);
     }
 }
 
@@ -638,7 +639,8 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
         return;
     }
-    TypeInfo* tip = obj->GetTypeInfo();
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    TypeInfo* tip = GetTypeInfo(currentObject);
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
     CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
                  "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
@@ -646,7 +648,7 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
                  tip, obj);
     CHECK_DETAIL(tip->IsVaildType(),
                  "CheckAndPush: TypeInfo %p on stack object %p has invalid type kind", tip, obj);
-    if (obj->HasRefField()) {
+    if (HasRefField(currentObject)) {
         rootStack.push(obj);
     }
 }
@@ -678,7 +680,7 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
             rootStack.pop();
-            obj->ForEachRefField(refVisitor);
+            ForEachRefField(UnsafeAssumeCurrent(obj), refVisitor);
         }
     };
     VisitMutatorRoots(visitor);
@@ -724,7 +726,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
             rootStack.pop();
-            obj->ForEachRefField(refVisitor);
+            ForEachRefField(UnsafeAssumeCurrent(obj), refVisitor);
         }
     };
 
