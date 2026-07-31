@@ -270,6 +270,7 @@ public:
     void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
     void CollectYoungGarbage(YoungCollectionStats& stats, const std::function<void(RegionInfo*)>& promoteVisitor);
+    void StampCensusBoundaries();
     void PromoteAllRegions();
 
     void MergeRawPointerPinnedRegions()

@@ -561,19 +561,44 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
     youngAllocatedBytes.store(0, std::memory_order_relaxed);
 }
 
+// Stamp every valid region's census boundary at its current allocation
+// pointer. Runs under the pre-major rollover STW: allocation buffers were
+// just flushed, so each region's allocPtr is exactly the frontier between
+// "existed before the imminent snapshot" (the mark bitmap will carry a
+// verdict) and "born during the cycle" (it will not). Regions taken after
+// this walk start with boundary == regionStart (InitRegionInfo), which makes
+// their whole content implicitly live for the promoted census.
+void RegionManager::StampCensusBoundaries()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            region->StampCensusBoundary();
+        }
+    }
+}
+
 void RegionManager::PromoteAllRegions()
 {
     // E6 (ii): every post-major valid region must pass through Preserve so remset
     // consumers get SNAPSHOT_VALID/EMPTY when a census exists (T9 universalised).
     // Regions without LiveInfo are classified inside PreserveRetainedLiveInfo
     // (empty→EMPTY; to-space unmarked survivors→NEVER full-scan, never silent skip).
+    // Bitmap authority ends at the census boundary stamped by the rollover STW:
+    // the cycle's SATB trace proves life and death only for objects that already
+    // existed then. Everything above the boundary (during-cycle allocation in any
+    // space, pinned bump, forwarded copies in post-rollover to-regions) is
+    // published as implicitly live. min() guards allocPtr rewinds (compaction
+    // resets the boundary itself, this is belt and braces).
     for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         regionAddr = region->GetRegionEnd();
         if (region->IsValidRegion() && !region->IsGarbageRegion()) {
             size_t liveBytes = region->GetLiveByteCount();
             if (liveBytes > 0) {
-                region->PreserveRetainedLiveInfo(region->GetRegionAllocPtr());
+                region->PreserveRetainedLiveInfoUpTo(
+                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
             } else if (region->GetRawPointerObjectCount() > 0) {
                 // A post-trace raw pin is neither an EMPTY proof nor an all-live region.
                 // Keep the existing conservative NEVER walk until pinned-object snapshot
@@ -611,7 +636,15 @@ size_t RegionManager::ExemptFromRegions()
     double exempt = exemptedRegionThreshold;
     rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
         if (region->GetLiveByteCount() > 0) {
-            region->PreserveRetainedLiveInfo();
+            if (StickyLog::Instance().IsMinorEnabled()) {
+                // Same authority rule as PromoteAllRegions: raw-pointer regions
+                // committed during the cycle carry partial bitmaps; the census
+                // may only claim objects below the rollover boundary.
+                region->PreserveRetainedLiveInfoUpTo(
+                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+            } else {
+                region->PreserveRetainedLiveInfo();
+            }
         }
     });
     auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
@@ -1258,6 +1291,12 @@ void RegionManager::CompactRegion(RegionInfo* region)
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
     }
 
+    // Compaction rewrote the region's geometry: every byte below the new
+    // allocPtr is a live survivor and the old mark bitmap no longer matches
+    // any offset. Reset the census boundary so the promoted retained census
+    // treats the whole region as implicitly live instead of consulting the
+    // stale-geometry bitmap.
+    region->ResetCensusBoundary();
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -1318,6 +1357,12 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
     }
 
+    // Compaction rewrote the region's geometry: every byte below the new
+    // allocPtr is a live survivor and the old mark bitmap no longer matches
+    // any offset. Reset the census boundary so the promoted retained census
+    // treats the whole region as implicitly live instead of consulting the
+    // stale-geometry bitmap.
+    region->ResetCensusBoundary();
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -1368,10 +1413,25 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
     // For making bitmap comform with live object count, do not mark object repeated.
-    if (allocPtr == 0 ||
-        (mutatorPhase != GCPhase::GC_PHASE_ENUM &&
-        mutatorPhase != GCPhase::GC_PHASE_TRACE &&
-        mutatorPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
+    bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||
+        mutatorPhase == GCPhase::GC_PHASE_TRACE ||
+        mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+    // Sticky minor: a slot revived below its region's census boundary would be
+    // recorded dead by the published (or imminent) retained census. Marking is
+    // extended to exactly the windows where it cannot truncate a live trace:
+    // after tracing completed (PREFORWARD/FORWARD — the mark is consumed by
+    // the promote census and wiped by the next cycle's
+    // AssemblePinnedGarbageCandidates before any tracer consults it), or
+    // between cycles (IDLE with no GC in flight — the mark lands in the bitmap
+    // the published census aliases). Not marked: revivals while a cycle is in
+    // flight but the mutator still runs the idle barrier. In the pre-ENUM
+    // sliver that is harmless — a live revived object is reached and marked by
+    // the full trace itself; the post-epoch idle tail before promotion remains
+    // a documented residual micro-window.
+    bool censusSafeMarking = StickyLog::Instance().IsMinorEnabled() &&
+        (mutatorPhase == GCPhase::GC_PHASE_PREFORWARD || mutatorPhase == GCPhase::GC_PHASE_FORWARD ||
+         (mutatorPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted()));
+    if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
         return allocPtr;
     }
 
