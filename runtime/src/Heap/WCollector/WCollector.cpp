@@ -1425,6 +1425,10 @@ void WCollector::DoGarbageCollection()
     // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
     BulkForwardHolderRefs();
 
+    // All copy workers and the Bulk consumer have joined. Publish the separate
+    // non-overlapping fact snapshot before any mutator can enter IDLE.
+    CanonicalWriteTable::Instance().Publish();
+
     if (StickyLog::Instance().IsEnabled()) {
         ScopedStopTheWorld stw("advance sticky log epoch");
         SatbBuffer::Instance().DiscardStickyLogBuffer();
