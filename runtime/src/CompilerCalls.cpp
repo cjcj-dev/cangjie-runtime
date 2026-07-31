@@ -331,8 +331,12 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
         return;
     }
     if (UNLIKELY(!Heap::IsHeapAddress(obj))) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                     "memcpy_s failed");
+        if (CanonicalWriteTable::Instance().IsEnabled()) {
+            Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
+        } else {
+            CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
+                         "memcpy_s failed");
+        }
         return;
     }
     Heap::GetBarrier().WriteStruct(obj, dst, dstLen, src, srcLen);
