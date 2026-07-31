@@ -31,7 +31,7 @@ public:
     // Clear the rest memory of slot object if the slot object size is greater than ObjectSlot(16 Bytes).
     void ClearExtraContent(BaseObject* slot)
     {
-        size_t size = slot->GetSize() - sizeof(ObjectSlot);
+        size_t size = GetSize(UnsafeAssumeCurrent(slot)) - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
             CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
