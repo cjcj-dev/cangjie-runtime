@@ -877,6 +877,8 @@ void WCollector::CaptureFromRegionIntervalsBeforeForward()
 // DO NOT MERGE: after UnbindPreviousLiveInfo — count survived ref slots whose target
 // address still falls in this major's from intervals. Address-only: no target deref,
 // no FindToVersion / FindLatestVersion / GetAndTryTagObj / IsValidObject on targets.
+// unbindctl: also split hits by *current* region state of the target address
+// (read-only predicates only) → intoFrom_dead / intoFrom_reused / intoFrom_other.
 void WCollector::CountPostUnbindIntoFrom()
 {
     MRT_PHASE_TIMER("CountPostUnbindIntoFrom");
@@ -885,12 +887,15 @@ void WCollector::CountPostUnbindIntoFrom()
     size_t postUnbindIntoFrom = 0;
     size_t postUnbindIntoFromTagged = 0;
     size_t postUnbindIntoFromPlain = 0;
+    size_t intoFromDead = 0;
+    size_t intoFromReused = 0;
+    size_t intoFromOther = 0;
     size_t holdersScanned = 0;
     size_t slotsScanned = 0;
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.ForEachObj(
-        [this, &postUnbindIntoFrom, &postUnbindIntoFromTagged, &postUnbindIntoFromPlain, &holdersScanned,
-         &slotsScanned](BaseObject* obj) {
+        [this, &postUnbindIntoFrom, &postUnbindIntoFromTagged, &postUnbindIntoFromPlain, &intoFromDead,
+         &intoFromReused, &intoFromOther, &holdersScanned, &slotsScanned](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
@@ -902,6 +907,7 @@ void WCollector::CountPostUnbindIntoFrom()
             }
             ++holdersScanned;
             ForEachRefSlot(obj, [obj, &postUnbindIntoFrom, &postUnbindIntoFromTagged, &postUnbindIntoFromPlain,
+                                 &intoFromDead, &intoFromReused, &intoFromOther,
                                  &slotsScanned](RefField<>& field) {
                 RefField<> oldField(field);
                 BaseObject* target = oldField.GetTargetObject();
@@ -919,6 +925,23 @@ void WCollector::CountPostUnbindIntoFrom()
                     ++postUnbindIntoFromTagged;
                 } else {
                     ++postUnbindIntoFromPlain;
+                }
+                // Region-state split (read-only): never deref target header/TypeInfo.
+                // dead = GARBAGE / FREE / invalid (not yet reused) → true stale slot.
+                // reused = valid in-use region (re-taken) → ambiguous legal-new vs stale.
+                // other = remainder.
+                RegionInfo* tgtRegion = RegionInfo::TryGetRegionInfoAt(taddr);
+                const char* stateTag = "other";
+                if (tgtRegion == nullptr || !tgtRegion->IsValidRegion() || tgtRegion->IsFreeRegion() ||
+                    tgtRegion->IsGarbageRegion()) {
+                    ++intoFromDead;
+                    stateTag = "dead";
+                } else if (tgtRegion->IsValidRegion()) {
+                    ++intoFromReused;
+                    stateTag = "reused";
+                } else {
+                    ++intoFromOther;
+                    stateTag = "other";
                 }
                 size_t n = postUnbindIntoFrom;
                 if ((n & (n - 1)) == 0) {
@@ -943,9 +966,9 @@ void WCollector::CountPostUnbindIntoFrom()
                     }
                     VLOG(REPORT,
                          "[UNBINDCOUNT] postUnbindIntoFrom n=%zu holder=%p type=%s slotOff=%zu "
-                         "target=%p interval=[%#zx,%#zx) tagged=%d",
+                         "target=%p interval=[%#zx,%#zx) tagged=%d regionState=%s",
                          n, obj, holderType, static_cast<size_t>(BaseObject::FieldOffset(obj, &field)), target,
-                         static_cast<size_t>(ivStart), static_cast<size_t>(ivEnd), tagged ? 1 : 0);
+                         static_cast<size_t>(ivStart), static_cast<size_t>(ivEnd), tagged ? 1 : 0, stateTag);
                 }
             });
         },
@@ -957,6 +980,11 @@ void WCollector::CountPostUnbindIntoFrom()
          "pause=%zu us",
          postUnbindIntoFrom, postUnbindIntoFromTagged, postUnbindIntoFromPlain, holdersScanned, slotsScanned,
          g_probeFromIntervals.size(), static_cast<size_t>(pauseUs));
+    // unbindctl discriminant: only intoFrom_dead is definitive stale.
+    VLOG(REPORT,
+         "[UNBINDCTL] intoFrom_dead=%zu intoFrom_reused=%zu intoFrom_other=%zu "
+         "postUnbindIntoFrom=%zu pause=%zu us",
+         intoFromDead, intoFromReused, intoFromOther, postUnbindIntoFrom, static_cast<size_t>(pauseUs));
 }
 
 // DO NOT MERGE: after BulkForwardHolderRefs, before FlipTagID — count plain→from/ghost
