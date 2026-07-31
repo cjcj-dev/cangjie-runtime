@@ -549,7 +549,7 @@ private:
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
     std::atomic<GCPhase> mutatorPhase = { GCPhase::GC_PHASE_UNDEF };
     // ATTENTION: LLVM's inline allocation fast path writes this fixed layout.
-    BaseObject* deferredLogRing[DEFERRED_LOG_RING_SIZE] = {};
+    MaybeStalePtr deferredLogRing[DEFERRED_LOG_RING_SIZE] = {};
     size_t deferredLogRingIndex = 0;
     // thread id
     uint32_t tid = 0;
