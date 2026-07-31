@@ -12,6 +12,8 @@
 #include <cstdint>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "Common/TypeDef.h"
 
@@ -45,6 +47,12 @@ public:
         COUNT,
     };
 
+    enum class VisitorHookSite : uint8_t {
+        BUFFER,
+        DIRTY_REGION,
+        COUNT,
+    };
+
     static RemsetCheck& Instance() noexcept;
 
     void ConfigureFromEnvironment(bool forceSlowPath);
@@ -59,6 +67,9 @@ public:
     void RecordMajor(size_t completedMinorRuns, size_t minorRunsSinceMajor);
     void RecordBeginEpoch(size_t completedMinorRuns);
     void CheckRound(size_t run, size_t young);
+    void RecordVisitedLine(MAddress lineStart, VisitorHookSite site);
+    void RecordRetain2SkippedLine(MAddress lineStart);
+    void CheckVisitedRound(size_t run);
     void Fini();
 
 private:
@@ -91,6 +102,7 @@ private:
 
     static constexpr size_t HOOK_SITE_COUNT = static_cast<size_t>(HookSite::COUNT);
     static constexpr size_t STICKY_LOG_EXIT_COUNT = static_cast<size_t>(StickyLogExit::COUNT);
+    static constexpr size_t VISITOR_HOOK_SITE_COUNT = static_cast<size_t>(VisitorHookSite::COUNT);
 
     bool configured = false;
     bool enabled = false;
@@ -99,9 +111,13 @@ private:
     bool produceControlEnabled = false;
     bool orphanControlEnabled = false;
     bool stickyLogExitControlEnabled = false;
+    bool falseUnvisitedControlEnabled = false;
+    bool trueUnvisitedControlEnabled = false;
     bool detectControlCaught = false;
     bool produceControlCaught = false;
     bool orphanControlCaught = false;
+    bool falseUnvisitedControlCaught = false;
+    bool trueUnvisitedControlCaught = false;
     std::atomic<size_t> barrierHits{ 0 };
     std::atomic<size_t> hookHits[HOOK_SITE_COUNT]{};
     std::atomic<size_t> stickyLogExitHits[STICKY_LOG_EXIT_COUNT]{};
@@ -109,11 +125,20 @@ private:
     std::atomic<bool> stickyLogExitControlStarted{ false };
     std::mutex edgeMutex;
     std::unordered_map<MAddress, Edge> edges;
+    bool visitedRoundActive = false;
+    size_t visitedRoundRun = 0;
+    size_t visitedRoundOldMissing = 0;
+    std::vector<Edge> visitedRoundCandidates;
+    std::unordered_set<MAddress> visitedLines;
+    std::unordered_set<MAddress> retain2SkippedLines;
+    size_t visitedLineHits[VISITOR_HOOK_SITE_COUNT]{};
+    size_t retain2Skipped = 0;
     size_t includedRuns = 0;
     size_t youngZeroExcluded = 0;
     size_t edgesFromBarrier = 0;
     size_t revalidateDropped = 0;
     size_t missing = 0;
+    size_t missingNewPredicate = 0;
     size_t missingByteZero = 0;
     size_t missingOrphan = 0;
     size_t missingDirtyNotBuffered = 0;
