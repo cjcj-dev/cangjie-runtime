@@ -860,30 +860,29 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
     while (!workStack.empty()) {
         BaseObject* obj = workStack.back();
         workStack.pop_back();
-        obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        ForEachRefField(currentObject, [&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);
             if (IsCurrentPointer(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
+                CurrentPtr currentTarget = UnsafeAssumeCurrent(targetObj);
                 if (IsMarkedObject(targetObj)) {
                     return;
                 }
-                if (targetObj->GetTypeInfo()->IsForeignType()) {
+                if (GetTypeInfo(currentTarget)->IsForeignType()) {
                     workStack.push_back(targetObj);
                     externObjs.push_back(targetObj);
-                } else if (!MarkObject(targetObj)) {
+                } else if (!MarkObject(currentTarget)) {
                     workStack.push_back(targetObj);
                 }
                 return;
             }
 
-            BaseObject* latest = nullptr;
-            if (IsOldPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
-                latest = FindLatestVersion(MaybeStalePtr(targetObj));
-            } else {
-                latest = field.GetTargetObject();
-            }
+            CurrentPtr currentLatest = IsOldPointer(oldField)
+                ? FindLatestVersion(MaybeStalePtr(oldField.GetTargetObject()))
+                : UnsafeAssumeCurrent(field.GetTargetObject());
+            BaseObject* latest = currentLatest;
 
             // target object could be null or non-heap for some static variable.
             if (!Heap::IsHeapAddress(latest)) {
@@ -893,21 +892,21 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
 
             RefField<> newField = GetAndTryTagRefField(latest);
             if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-                DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
-                     latest->GetSize());
+                DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, GetTypeInfo(currentLatest),
+                     GetSize(currentLatest));
             } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
                 DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-                     newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+                     newField.GetFieldValue(), latest, GetTypeInfo(currentLatest), GetSize(currentLatest));
             }
 
             if (IsMarkedObject(latest)) {
                 return;
             }
-            if (latest->GetTypeInfo()->IsForeignType()) {
+            if (GetTypeInfo(currentLatest)->IsForeignType()) {
                 workStack.push_back(latest);
                 externObjs.push_back(latest);
             } else {
-                if (!MarkObject(latest)) {
+                if (!MarkObject(currentLatest)) {
                     workStack.push_back(latest);
                 }
             }
