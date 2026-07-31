@@ -72,7 +72,7 @@ void IdleBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
 {
     if (obj != nullptr) {
         // note fix/untag dst would be better.
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [this, obj](RefField<false>& field) {
                 RefField<> oldField(field);
                 BaseObject* target = ReadReference(obj, field);
@@ -99,8 +99,9 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
                                        MemoryOrder order) const
 {
     if (obj != nullptr) {
-        DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %p", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newRef);
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %p", obj, GetTypeInfo(currentObject),
+             GetSize(currentObject), &field, newRef);
     } else {
         DLOG(BARRIER, "atomic write static ref@%p: %p", &field, newRef);
     }
@@ -116,8 +117,10 @@ BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(order), newRef);
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj,
+         GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(order),
+         newRef);
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
@@ -164,7 +167,7 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
     // when holder is a stable heap object (same source-proof as WriteReference).
     // MaybeAdd skips from/ghost holders and non-From/Ghost targets (I5).
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [obj](RefField<false>& field) {
                 BaseObject* ref = field.GetTargetObject();
                 FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
@@ -183,14 +186,14 @@ void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
 void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize, BaseObject* srcObj, MAddress src,
                                MIndex srcSize) const
 {
+    CurrentPtr currentDestination = UnsafeAssumeCurrent(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    if (!dstObj->HasRefField()) {
+    if (!HasRefField(currentDestination)) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);
         return;
     }
-    if (!static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsObjectType() &&
-        !static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsInterface() &&
-        !static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsArrayType()) {
+    TypeInfo* componentType = GetComponentTypeInfo(currentDestination);
+    if (!componentType->IsObjectType() && !componentType->IsInterface() && !componentType->IsArrayType()) {
         LOG(RTLOG_FATAL, "array %p type is not class", dstObj);
         return;
     }
@@ -241,19 +244,20 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
 void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    CurrentPtr currentDestination = UnsafeAssumeCurrent(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    if (!dstObj->HasRefField()) {
+    if (!HasRefField(currentDestination)) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);
         return;
     }
-    if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
+    if (!GetComponentTypeInfo(currentDestination)->IsStructType()) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
         return;
     }
 #endif
     MArray* srcArray = static_cast<MArray*>(srcObj);
     RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
-    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+    ForEachRefFieldInRange(UnsafeAssumeCurrent(srcArray), srcVisitor, srcField, srcField + srcSize);
 
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -267,7 +271,7 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
             BaseObject* ref = field.GetTargetObject();
             FixEdgeSet::Instance().MaybeAdd(dstObj, &field, ref);
         };
-        dstArray->ForEachRefFieldInRange(regVisitor, dstField, dstField + dstSize);
+        ForEachRefFieldInRange(currentDestination, regVisitor, dstField, dstField + dstSize);
     }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
