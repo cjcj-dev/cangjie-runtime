@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <mutex>
+#include <map>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -60,6 +61,40 @@ public:
         BYTE0_CONTINUE,
     };
 
+    enum class LogLineSource : uint8_t {
+        BARRIER,
+        DEFERRED_LOG_RING,
+        PROMOTION,
+    };
+
+    enum class RescanWritePath : uint8_t {
+        BUFFER,
+        DIRTY_REGION,
+    };
+
+    enum class ClearWhenEventKind : uint8_t {
+        LOG_LINE,
+        BARRIER_WRITE,
+        CONSUME_START,
+        RESCAN_BUFFER_WRITE,
+        RESCAN_DIRTY_WRITE,
+        RESCAN_DIRTY_CLEAR,
+        CLEAR_UNAVAILABLE_REGION,
+        BEGIN_EPOCH,
+        POSITIVE_CONTROL_CLEAR,
+        POSITIVE_CONTROL_RESTORE,
+    };
+
+    enum class ClearedBy : uint8_t {
+        RESCAN_BUFFER,
+        RESCAN_DIRTY_REGION,
+        CLEAR_UNAVAILABLE_REGION,
+        BEGIN_EPOCH,
+        POSITIVE_CONTROL,
+        NOT_OBSERVED,
+        COUNT,
+    };
+
     static RemsetCheck& Instance() noexcept;
 
     void ConfigureFromEnvironment(bool forceSlowPath);
@@ -70,6 +105,7 @@ public:
     void RecordNoLogObjectCall(HookSite site);
     size_t GetThreadLogObjectCallCount() const;
     void RunStickyLogExitPositiveControls(BaseObject* object);
+    void RecordLoggedLineWrite(MAddress lineStart, LogLineSource source, bool dirtyBefore);
     void RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObject* target, HookSite site);
     void RecordMajor(size_t completedMinorRuns, size_t minorRunsSinceMajor);
     void RecordBeginEpoch(size_t completedMinorRuns);
@@ -79,6 +115,10 @@ public:
     void RecordBufferLineResult(MAddress lineStart, bool retained);
     void RecordDirtyRegionEntry(MAddress regionStart, bool accepted);
     void RecordDirtyLinePath(MAddress lineStart, DirtyLinePath path);
+    void RecordRescanByteWrite(MAddress lineStart, RescanWritePath path, uint8_t before, uint8_t after);
+    void RecordRescanDirtyClear(MAddress regionStart, size_t regionSize, bool dirtyBefore);
+    void RecordClearUnavailableRegion(MAddress regionStart, size_t regionSize);
+    void RecordBeginEpochClear();
     void CheckVisitedRound(size_t run);
     void Fini();
 
@@ -97,6 +137,7 @@ private:
         MAddress logHeapStart;
         size_t logHeapSize;
         bool holderInHeapRangeAtLog;
+        uint64_t writeSequence;
     };
 
     struct LineTrace {
@@ -108,6 +149,29 @@ private:
         bool regionFiltered;
         bool byte2WrittenByPreviousRound;
         DirtyLinePath dirtyLinePath;
+        uint64_t consumeSequence;
+    };
+
+    struct ClearWhenEvent {
+        uint64_t sequence;
+        size_t run;
+        ClearWhenEventKind kind;
+        uint8_t byteBefore;
+        uint8_t byteAfter;
+        bool dirtyBefore;
+        bool dirtyAfter;
+        HookSite hookSite;
+        StickyLogExit stickyLogExit;
+        LogLineSource logLineSource;
+        MAddress slot;
+    };
+
+    struct LineTimeline {
+        MAddress regionStart;
+        size_t startRun;
+        uint8_t startByte;
+        bool startDirty;
+        std::vector<ClearWhenEvent> events;
     };
 
     RemsetCheck() = default;
@@ -120,6 +184,16 @@ private:
     uint8_t ExchangeLoggedByte(MAddress line, uint8_t value) const;
     bool LoadDirtyBit(MAddress holder) const;
     bool ExchangeDirtyBit(MAddress holder, bool value) const;
+    uint64_t AppendClearWhenEventLocked(MAddress line, MAddress regionStart, ClearWhenEventKind kind,
+                                        uint8_t byteBefore, uint8_t byteAfter, bool dirtyBefore, bool dirtyAfter,
+                                        HookSite hookSite = HookSite::COUNT,
+                                        StickyLogExit stickyLogExit = StickyLogExit::COUNT,
+                                        LogLineSource logLineSource = LogLineSource::BARRIER, MAddress slot = 0);
+    void RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
+                                    bool dirtyAfter);
+    ClearedBy ClassifyClearedBy(const Edge& edge, const LineTrace& trace, const ClearWhenEvent*& clearEvent,
+                                size_t& minorsSinceWrite) const;
+    void EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace, size_t run, bool visited);
 
     static constexpr size_t HOOK_SITE_COUNT = static_cast<size_t>(HookSite::COUNT);
     static constexpr size_t STICKY_LOG_EXIT_COUNT = static_cast<size_t>(StickyLogExit::COUNT);
@@ -135,12 +209,14 @@ private:
     bool falseUnvisitedControlEnabled = false;
     bool trueUnvisitedControlEnabled = false;
     bool retain2SkipControlEnabled = false;
+    bool clearWhenControlEnabled = false;
     bool detectControlCaught = false;
     bool produceControlCaught = false;
     bool orphanControlCaught = false;
     bool falseUnvisitedControlCaught = false;
     bool trueUnvisitedControlCaught = false;
     bool retain2SkipControlCaught = false;
+    bool clearWhenControlCaught = false;
     std::atomic<size_t> barrierHits{ 0 };
     std::atomic<size_t> hookHits[HOOK_SITE_COUNT]{};
     std::atomic<size_t> stickyLogExitHits[STICKY_LOG_EXIT_COUNT]{};
@@ -148,6 +224,9 @@ private:
     std::atomic<bool> stickyLogExitControlStarted{ false };
     std::mutex edgeMutex;
     std::unordered_map<MAddress, Edge> edges;
+    std::unordered_map<MAddress, LineTimeline> lineTimelines;
+    uint64_t nextClearWhenSequence = 1;
+    size_t clearWhenRun = 1;
     bool visitedRoundActive = false;
     size_t visitedRoundRun = 0;
     size_t visitedRoundOldMissing = 0;
@@ -161,6 +240,9 @@ private:
     MAddress retain2SkipControlSlot = 0;
     uint8_t retain2SkipControlPreviousByte = 0;
     bool retain2SkipControlActive = false;
+    MAddress clearWhenControlLine = 0;
+    MAddress clearWhenControlSlot = 0;
+    bool clearWhenControlActive = false;
     size_t visitedLineHits[VISITOR_HOOK_SITE_COUNT]{};
     size_t visitedRoundLineHits[VISITOR_HOOK_SITE_COUNT]{};
     size_t retain2Skipped = 0;
@@ -173,6 +255,13 @@ private:
     size_t missingDirtyAtRoundStart[2]{};
     size_t missingInBuffer = 0;
     size_t missingByte2WrittenByPreviousRound = 0;
+    size_t clearedByCounts[static_cast<size_t>(ClearedBy::COUNT)]{};
+    std::map<size_t, size_t> missingMinorsSinceWrite;
+    size_t missingClearAfterMiddleMinor = 0;
+    size_t clearWhenEdges = 0;
+    size_t clearWhenAllEdgesOneMinor = 0;
+    size_t clearWhenAllEdgesMultipleMinors = 0;
+    size_t clearWhenAllEdgesClearedAfterWrite = 0;
     size_t includedRuns = 0;
     size_t youngZeroExcluded = 0;
     size_t edgesFromBarrier = 0;
