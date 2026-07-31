@@ -875,7 +875,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             BaseObject* latest = nullptr;
             if (IsOldPointer(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
-                latest = FindLatestVersion(targetObj);
+                latest = FindLatestVersion(MaybeStalePtr(targetObj));
             } else {
                 latest = field.GetTargetObject();
             }
