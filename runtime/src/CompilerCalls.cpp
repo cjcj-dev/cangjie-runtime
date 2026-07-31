@@ -882,10 +882,11 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     if (UNLIKELY(array == nullptr)) {
         return nullptr;
     }
-    if (UNLIKELY(array->GetContentSize() == 0)) {
+    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
+    if (UNLIKELY(GetContentSize(currentArray) == 0)) {
         return unreadablePage;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
+    MRT_ASSERT(IsPrimitiveArray(currentArray), "Expect primitive array in MCC_AcquireRawData");
     if (isCopy != nullptr) {
         *isCopy = false;
     }
@@ -909,7 +910,7 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     }
 #endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
-    return Sanitizer::ArrayAcquireMemoryRegion(pArray, pArray->ConvertToCArray(), pArray->GetContentSize());
+    return Sanitizer::ArrayAcquireMemoryRegion(pArray, pArray->ConvertToCArray(), GetContentSize(currentArray));
 #else
     return pArray->ConvertToCArray();
 #endif
@@ -921,7 +922,8 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     if (!Heap::IsHeapAddress(array)) {
         return;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
+    MRT_ASSERT(IsPrimitiveArray(currentArray), "Expect primitive array in MCC_ReleaseRawData");
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else
@@ -936,7 +938,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     }
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
     // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(array, rawPtr, array->GetContentSize());
+    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(array, rawPtr, GetContentSize(currentArray));
 #endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     std::vector<uint64_t> frame;
@@ -1005,8 +1007,9 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0); // 0: first field type RawArray<CPointer<Unit>>.ti
     ArrayRef rawArrayObj = ObjectManager::NewKnownWidthArray(subPkgCnt, rawArrayTi,
         ObjectManager::ArrayElemBits::ELEM_64B, AllocType::RAW_POINTER_OBJECT);
+    CurrentPtr currentRawArray = UnsafeAssumeCurrent(rawArrayObj);
     for (size_t idx = 0; idx < subPkgCnt; ++idx) {
-        rawArrayObj->SetPrimitiveElement(idx, reinterpret_cast<int64_t>(subPackages[idx]));
+        SetPrimitiveElement(currentRawArray, idx, reinterpret_cast<int64_t>(subPackages[idx]));
     }
     U32 size = arrayTi->GetInstanceSize();
     MSize objSize = MRT_ALIGN(size + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
