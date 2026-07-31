@@ -7,6 +7,8 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <algorithm>
+#include <limits>
 #include <atomic>
 #include <list>
 #include <map>
@@ -245,6 +247,54 @@ public:
         } else {
             metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         }
+    }
+
+    MAddress GetCensusBoundary() const
+    {
+        return GetRegionStart() + metadata.censusBoundaryOffset;
+    }
+
+    // Record "everything allocated so far predates the imminent cycle's
+    // snapshot". Caller must hold the world stopped (pre-major rollover STW).
+    void StampCensusBoundary()
+    {
+        uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
+        metadata.censusBoundaryOffset =
+            static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
+    }
+
+    void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
+
+    // Publish the retained census with bitmap authority ending at `boundary`
+    // (exclusive): below it the retained bitmap decides survivorship, at or
+    // above it remset consumers treat objects as implicitly live (the existing
+    // coveredUpTo protocol, WCollector::RescanRememberedSet). The sticky
+    // promote path passes the cycle's census boundary here because the mark
+    // bitmap only carries a verdict for objects that already existed when the
+    // cycle began; everything born later — ordinary bump allocation, pinned
+    // bump-over-the-boundary, and forwarded copies (to-space shares
+    // post-rollover thread-local regions) — sits above the boundary. The
+    // tracer, weak-reference and finalizer machinery are never consulted or
+    // touched: this publishes consumer-side metadata only.
+    void PreserveRetainedLiveInfoUpTo(MAddress boundary)
+    {
+        CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
+        if (IsLargeRegion()) {
+            // Single-object region: the consumer visits the object without
+            // consulting coveredUpTo; keep the plain publication.
+            PreserveRetainedLiveInfo();
+            return;
+        }
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = boundary;
+        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
+            // A censused prefix without a bitmap cannot prove death; fall back
+            // to the conservative full-scan state rather than publish silence.
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            return;
+        }
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
     }
 
     ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
@@ -1346,6 +1396,17 @@ private:
 
             uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
+            // Sticky minor census boundary, as an offset from the region start
+            // (fills the padding slot; small/pinned regions are <= 2048KB so a
+            // u32 offset always fits — large regions never consult it).
+            // Objects at addresses >= regionStart + censusBoundaryOffset were
+            // born after the current cycle's allocation rollover, so the cycle's
+            // mark bitmap holds no verdict about them: the promoted retained
+            // census must treat them as implicitly live (coveredUpTo protocol)
+            // instead of publishing bitmap authority over them. Stamped under
+            // the pre-major rollover STW; reset to 0 (= region start) whenever a
+            // region enters service or its geometry is rebuilt (compaction).
+            uint32_t censusBoundaryOffset;
         };
 
         LiveInfo* liveInfo = nullptr;
@@ -1578,6 +1639,7 @@ private:
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
+        metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         metadata.retainedLiveInfo = nullptr;

@@ -1414,6 +1414,13 @@ void WCollector::DoGarbageCollection()
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major allocation rollover");
         FlushAllocationRegions();
+        // With every allocation buffer flushed, each region's allocPtr is the
+        // exact frontier between objects the imminent SATB snapshot will
+        // census and objects born during the cycle. PromoteAllRegions later
+        // limits the retained census's bitmap authority to this boundary; the
+        // tracer, its mark bitmap, and the weak/finalizer machinery are not
+        // involved at any point (no allocate-black).
+        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().StampCensusBoundaries();
     }
     TraceHeap();
     PostTrace();
