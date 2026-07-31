@@ -214,7 +214,7 @@ private:
                                         StickyLogExit stickyLogExit = StickyLogExit::COUNT,
                                         LogLineSource logLineSource = LogLineSource::BARRIER, MAddress slot = 0,
                                         uint64_t sequence = 0, size_t eventRun = 0);
-    uint64_t RecordPendingClearWhenEvent(ClearWhenPendingEvent event);
+    uint64_t RecordPendingClearWhenEvent(ClearWhenPendingEvent& event);
     void ReplayClearWhenEventLocked(const ClearWhenPendingEvent& event);
     void RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
                                     bool dirtyAfter, uint64_t sequence = 0, size_t eventRun = 0);
