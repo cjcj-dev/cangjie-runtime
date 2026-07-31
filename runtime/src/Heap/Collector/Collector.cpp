@@ -12,6 +12,8 @@
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
+#pragma GCC poison UnsafeAssumeCurrent
+
 namespace MapleRuntime {
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
