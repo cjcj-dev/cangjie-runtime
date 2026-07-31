@@ -1678,7 +1678,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
     TypeInfo* ti = typeInfo;
     U32 base = 0;
     if (typeInfo == nullptr) {
-        ti = obj->GetTypeInfo();
+        ti = GetTypeInfo(UnsafeAssumeCurrent(obj));
         // 8: typeInfo offset
         base = 8;
     }
@@ -1705,7 +1705,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
             } else {
                 curObj = obj->GetRefField(offset).GetTargetObject();
             }
-            TypeInfo* curti = curObj->GetTypeInfo();
+            TypeInfo* curti = GetTypeInfo(UnsafeAssumeCurrent(curObj));
             if (!curti->IsSubType(fieldTargetTI)) {
                 return false;
             }
@@ -1757,7 +1757,7 @@ extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typ
 
 extern "C" void CJ_MCC_WriteGenericPayload(ObjectPtr dst, MAddress srcField, size_t srcSize)
 {
-    TypeInfo* typeInfo = dst->GetTypeInfo();
+    TypeInfo* typeInfo = GetTypeInfo(UnsafeAssumeCurrent(dst));
     if (srcSize == 0) {
         return;
     }
@@ -1780,11 +1780,12 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
         return;
     }
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(fieldPtr))) {
+        CurrentPtr currentDestination = UnsafeAssumeCurrent(dstPtr);
         constexpr size_t stackCache = 256;
         if (size < stackCache) {
             char stackMem[stackCache]{ 0 };
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(stackMem),
-                reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
+                reinterpret_cast<MAddress>(fieldPtr), size, GetGCTib(currentDestination));
             Heap::GetBarrier().ReadGeneric(dstPtr, nullptr, stackMem, size);
             return;
         } else {
@@ -1792,7 +1793,7 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
             CHECK_DETAIL(nativeHeapMem != nullptr, "malloc failed when read generic %p -> %p(%p) size %zu",
                          dstPtr, obj, fieldPtr, size);
             Heap::GetBarrier().ReadStaticStruct(reinterpret_cast<MAddress>(nativeHeapMem),
-                reinterpret_cast<MAddress>(fieldPtr), size, dstPtr->GetGCTib());
+                reinterpret_cast<MAddress>(fieldPtr), size, GetGCTib(currentDestination));
             Heap::GetBarrier().ReadGeneric(dstPtr, nullptr, nativeHeapMem, size);
             free(nativeHeapMem);
             return;
@@ -1905,7 +1906,7 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         return;
     }
     MRT_ASSERT(dstSize <= SECUREC_MEM_MAX_LEN, "size too big in MCC_ArrayCopyGeneric");
-    TypeInfo* arrayInfo = srcObj->GetTypeInfo();
+    TypeInfo* arrayInfo = GetTypeInfo(UnsafeAssumeCurrent(srcObj));
 
     TypeInfo* componentTypeInfo = arrayInfo->GetComponentTypeInfo();
     I8 type = componentTypeInfo->GetType();
@@ -1994,13 +1995,15 @@ void CJ_MCC_RemoveExportedRef(U64 id)
 extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)
 {
     ObjectPtr currentObj = obj;
+    CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
     // offset of realAutoEnvObj in instance data (func1: 8 bytes + func2: 8 bytes)
     constexpr size_t realAutoEnvObjOffset = 16;
 
     // Loop to check if it's a wrapper class, if so, get realAutoEnvObj until finding a non-wrapper class
-    while (MCC_IsWrapperClassForAutoEnv(currentObj->GetTypeInfo())) {
+    while (MCC_IsWrapperClassForAutoEnv(GetTypeInfo(currentObject))) {
         currentObj = Heap::GetBarrier().ReadReference(currentObj,
             currentObj->GetRefField(TYPEINFO_PTR_SIZE + realAutoEnvObjOffset));
+        currentObject = UnsafeAssumeCurrent(currentObj);
     }
 
     // Access func1 directly from currentObj
