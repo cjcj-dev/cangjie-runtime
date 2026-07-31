@@ -1431,6 +1431,7 @@ void WCollector::DoGarbageCollection()
     }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
+    ForwardDataManager::GetForwardDataManager().ReportZoneWaterAndReset(minorRunsSinceMajor);
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
 

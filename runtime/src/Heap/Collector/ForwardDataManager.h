@@ -40,13 +40,21 @@ class ForwardDataManager {
                 TOTAL_NUM,
             };
             uintptr_t zoneStartAddress = 0;
+            uintptr_t zoneEndAddress = 0;
             std::atomic<uintptr_t> zonePosition;
+            std::atomic<size_t> allocationCount { 0 };
+            std::atomic<size_t> highWater { 0 };
+        };
+        struct ZoneWaterSnapshot {
+            size_t allocationCount[Zone::TOTAL_NUM] = { 0 };
+            size_t highWater[Zone::TOTAL_NUM] = { 0 };
         };
         ForwardDataSpace() = default;
-        void InitializeMemory(uintptr_t start, size_t sz, size_t unitCount)
+        void InitializeMemory(uintptr_t start, size_t sz, size_t unitCount, bool enableZoneWater)
         {
             startAddress = start;
             size = sz;
+            zoneWaterEnabled = enableZoneWater;
             InitZones(unitCount);
         }
         void InitZones(size_t unitCount)
@@ -58,7 +66,9 @@ class ForwardDataManager {
             lastCommitEndAddr[Zone::ZoneType::LIVE_INFO].store(start);
 #endif
             start += unitCount * sizeof(LiveInfo);
+            allocZone[Zone::ZoneType::LIVE_INFO].zoneEndAddress = start;
             allocZone[Zone::ZoneType::BIT_MAP].zoneStartAddress = start;
+            allocZone[Zone::ZoneType::BIT_MAP].zoneEndAddress = startAddress + size;
             allocZone[Zone::ZoneType::BIT_MAP].zonePosition = start;
 #if defined(_WIN64)
             lastCommitEndAddr[Zone::ZoneType::BIT_MAP].store(start);
@@ -69,6 +79,7 @@ class ForwardDataManager {
 #if defined(_WIN64)
             allocSpinLock.Lock();
             uintptr_t startAddr = allocZone[type].zonePosition.fetch_add(sz);
+            RecordZoneWater(type, startAddr, sz);
             uintptr_t endAddr = startAddr + sz;
             uintptr_t lastAddr = lastCommitEndAddr[type].load(std::memory_order_relaxed);
             if (endAddr <= lastAddr) {
@@ -82,9 +93,32 @@ class ForwardDataManager {
             allocSpinLock.Unlock();
             return startAddr;
 #else
-            return allocZone[type].zonePosition.fetch_add(sz);
+            uintptr_t startAddr = allocZone[type].zonePosition.fetch_add(sz);
+            RecordZoneWater(type, startAddr, sz);
+            return startAddr;
 #endif
         }
+        ZoneWaterSnapshot GetZoneWaterSnapshot(bool reset)
+        {
+            ZoneWaterSnapshot snapshot;
+            for (size_t i = Zone::ZoneType::LIVE_INFO; i < Zone::ZoneType::TOTAL_NUM; ++i) {
+                if (reset) {
+                    snapshot.allocationCount[i] = allocZone[i].allocationCount.exchange(0, std::memory_order_relaxed);
+                    snapshot.highWater[i] = allocZone[i].highWater.exchange(0, std::memory_order_relaxed);
+                } else {
+                    snapshot.allocationCount[i] = allocZone[i].allocationCount.load(std::memory_order_relaxed);
+                    snapshot.highWater[i] = allocZone[i].highWater.load(std::memory_order_relaxed);
+                }
+            }
+            return snapshot;
+        }
+        size_t GetZoneCapacity(Zone::ZoneType type) const
+        {
+            return allocZone[type].zoneEndAddress - allocZone[type].zoneStartAddress;
+        }
+        uintptr_t GetZoneStartAddress(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
+        uintptr_t GetZoneEndAddress(Zone::ZoneType type) const { return allocZone[type].zoneEndAddress; }
+        size_t GetSpaceSize() const { return size; }
         void ReleaseMemory()
         {
 #if defined(_WIN64)
@@ -118,9 +152,24 @@ class ForwardDataManager {
         void UnbindPreviousLiveInfo();
 
     private:
+        void RecordZoneWater(Zone::ZoneType type, uintptr_t allocationStart, size_t allocationSize)
+        {
+            if (!zoneWaterEnabled) {
+                return;
+            }
+            Zone& zone = allocZone[type];
+            zone.allocationCount.fetch_add(1, std::memory_order_relaxed);
+            size_t used = allocationStart + allocationSize - zone.zoneStartAddress;
+            size_t observed = zone.highWater.load(std::memory_order_relaxed);
+            while (observed < used && !zone.highWater.compare_exchange_weak(
+                observed, used, std::memory_order_relaxed, std::memory_order_relaxed)) {
+            }
+        }
+
         Zone allocZone[Zone::TOTAL_NUM];
         uintptr_t startAddress = 0;
         size_t size = 0;
+        bool zoneWaterEnabled = false;
 #if defined(_WIN64)
         std::atomic<uintptr_t> lastCommitEndAddr[Zone::TOTAL_NUM];
         AtomicSpinLock allocSpinLock;
@@ -145,6 +194,10 @@ public:
     static ForwardDataManager& GetForwardDataManager();
 
     void InitializeForwardData();
+
+    void ReportZoneWaterAndReset(size_t minorsInTag);
+
+    void ReportFinalZoneWater();
 
     void ClearPreviousForwardData() { liveInfoData[GetPreviousTagID()].ReleaseMemory(); }
 
@@ -189,6 +242,12 @@ private:
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;
     uint16_t currentTagID = 0; // propagate from collector.
+    bool zoneWaterEnabled = false;
+    size_t zoneWaterAllocationCount[ForwardDataSpace::Zone::TOTAL_NUM] = { 0 };
+    size_t zoneWaterHighWater[ForwardDataSpace::Zone::TOTAL_NUM] = { 0 };
+    unsigned zoneWaterEverOverQuota = 0;
+    unsigned zoneWaterEverOverZone = 0;
+    unsigned zoneWaterUnbindOver = 0;
 };
 } // namespace MapleRuntime
 #endif // MRT_FORWARD_DATA_MANAGER_H

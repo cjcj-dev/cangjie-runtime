@@ -45,6 +45,11 @@ public:
     ~WCollector() override = default;
 
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
+    void Fini() override
+    {
+        ForwardDataManager::GetForwardDataManager().ReportFinalZoneWater();
+        TracingCollector::Fini();
+    }
 
     void MarkNewObject(BaseObject* obj) override;
 
