@@ -384,7 +384,8 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         if (IsGhostFromObject(oldObj)) {
-            BaseObject* toVersion = TryForwardObject(oldObj);
+            CurrentPtr currentToVersion = TryForwardObject(MaybeStalePtr(oldObj));
+            BaseObject* toVersion = currentToVersion;
             CHECK(toVersion != nullptr);
             RefField<> newField(toVersion);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
