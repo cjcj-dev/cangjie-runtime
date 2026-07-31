@@ -41,7 +41,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         return tmpField.GetTargetObject();
     } else if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* fromVersion = tmpField.GetTargetObject();
-        BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
+        BaseObject* toVersion = theCollector.FindToVersion(MaybeStalePtr(fromVersion));
         BaseObject* target = nullptr;
         if (toVersion != nullptr) {
             target = toVersion;
