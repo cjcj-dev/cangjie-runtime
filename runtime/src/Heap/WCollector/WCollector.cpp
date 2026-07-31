@@ -1497,6 +1497,8 @@ void WCollector::ValidateYoungMarking()
         if (!Heap::IsHeapAddress(object) || !reachable.insert(object).second) {
             continue;
         }
+        CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+        CurrentPtr currentSource = UnsafeAssumeCurrent(source);
         CHECK_DETAIL(object->IsValidObject(), "sticky validator reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (region->IsYoungRegion()) {
@@ -1513,7 +1515,7 @@ void WCollector::ValidateYoungMarking()
                 "targetAge=%u sourceAge=%u "
                 "sourceClass=%s sourceField=%#zx sourceOffset=%zu",
                 object, region, region->GetRegionType(), line, StickyLog::Instance().IsLoggedLine(line),
-                region->GetLiveByteCount(), object->GetTypeInfo()->GetName(), source, sourceRegion,
+                region->GetLiveByteCount(), GetTypeInfo(currentObject)->GetName(), source, sourceRegion,
                 sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->GetRegionType()),
                 sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->IsYoungRegion()), sourceLine,
                 source == nullptr ? 0 : static_cast<unsigned>(StickyLog::Instance().IsLoggedLine(sourceLine)),
@@ -1523,10 +1525,10 @@ void WCollector::ValidateYoungMarking()
                 static_cast<unsigned>(minorCandidateRegions.count(region) != 0),
                 static_cast<unsigned>(region->GetYoungAge()),
                 sourceRegion == nullptr ? 0 : static_cast<unsigned>(sourceRegion->GetYoungAge()),
-                source == nullptr ? "<root>" : source->GetTypeInfo()->GetName(), sourceField,
+                source == nullptr ? "<root>" : GetTypeInfo(currentSource)->GetName(), sourceField,
                 source == nullptr ? 0 : sourceField - reinterpret_cast<MAddress>(source));
         }
-        object->ForEachRefField([this, &pending, object](RefField<>& field) {
+        ForEachRefField(currentObject, [this, &pending, object](RefField<>& field) {
             BaseObject* target = ResolveMinorReference(field);
             if (Heap::IsHeapAddress(target)) {
                 pending.push_back({ target, object, reinterpret_cast<MAddress>(&field) });
