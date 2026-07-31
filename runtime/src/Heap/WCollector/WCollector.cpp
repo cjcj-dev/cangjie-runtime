@@ -80,27 +80,29 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
     return regionInfo->IsUnmovableFromRegion();
 }
 
-bool WCollector::MarkObject(BaseObject* obj) const
+bool WCollector::MarkObject(CurrentPtr currentObject) const
 {
+    BaseObject* obj = currentObject;
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    size_t objectSize = obj->GetSize();
+    size_t objectSize = GetSize(currentObject);
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
+        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, GetTypeInfo(currentObject), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
     return marked;
 }
 
-bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
+bool WCollector::ResurrectObject(CurrentPtr currentObject, size_t offset, RegionInfo* region)
 {
+    BaseObject* obj = currentObject;
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
-            region->AddLiveByteCount(obj->GetSize());
+            region->AddLiveByteCount(GetSize(currentObject));
             DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+                 obj, GetTypeInfo(currentObject), GetSize(currentObject), region->GetLiveByteCount());
         }
         return resurrected;
 }
@@ -110,11 +112,12 @@ template<bool forward>
 bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                        BaseObject*& toObj) const
 {
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
         if (forward) {
-            toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
+            toObj = const_cast<WCollector*>(this)->TryForwardObject(MaybeStalePtr(fromObj));
         } else {
             toObj = FindToVersion(MaybeStalePtr(fromObj));
         }
@@ -128,8 +131,9 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         RefField<> tmpField(toObj);
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
             if (obj != nullptr) {
-                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
-                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, oldRef.GetFieldValue(),
+                DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj,
+                     GetTypeInfo(currentObject), GetSize(currentObject), BaseObject::FieldOffset(obj, &field), &field,
+                     oldRef.GetFieldValue(),
                      tmpField.GetFieldValue());
             } else {
                 DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, oldRef.GetFieldValue(), toObj);
@@ -139,7 +143,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
             if (obj != nullptr) {
                 DLOG(TRACE,
                      "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
-                     obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
+                     GetTypeInfo(currentObject), GetSize(currentObject), BaseObject::FieldOffset(obj, &field), &field,
                      oldRef.GetFieldValue(), field.GetFieldValue(), tmpField.GetFieldValue());
             } else {
                 DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, oldRef.GetFieldValue(),
@@ -165,6 +169,7 @@ bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObje
 // this api untags current pointer as well as old pointer, caller should take care of this.
 bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
 {
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
     for (;;) {
         RefField<> oldRef(field);
         if (!oldRef.IsTagged()) {
@@ -191,8 +196,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
-                DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-                     &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
+                DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, GetTypeInfo(currentObject),
+                     GetSize(currentObject), &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
             } else {
                 DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
             }
