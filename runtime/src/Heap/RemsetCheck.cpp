@@ -6,6 +6,7 @@
 
 #include "RemsetCheck.h"
 
+#include <algorithm>
 #include <array>
 #include <cstdlib>
 #include <cstring>
@@ -300,9 +301,9 @@ void RemsetCheck::RecordLoggedLineWrite(MAddress lineStart, LogLineSource source
     }
     HookSite hookSite = source == LogLineSource::BARRIER ? threadStickyLogEvent.hookSite : HookSite::COUNT;
     StickyLogExit exit = source == LogLineSource::BARRIER ? StickyLogExit::LOGGED : StickyLogExit::COUNT;
-    std::lock_guard<std::mutex> lg(edgeMutex);
-    (void)AppendClearWhenEventLocked(lineStart, region->GetRegionStart(), ClearWhenEventKind::LOG_LINE, 0, 1,
-                                     dirtyBefore, true, hookSite, exit, source);
+    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::LOG_LINE, lineStart, region->GetRegionStart(), 0, 0,
+                                 0, 1, dirtyBefore, true, hookSite, exit, source };
+    (void)RecordPendingClearWhenEvent(event);
 }
 
 void RemsetCheck::RunStickyLogExitPositiveControls(BaseObject* object)
@@ -355,10 +356,11 @@ void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObjec
     MAddress line = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
     uint8_t byte = LoadLoggedByte(line);
     bool dirty = LoadDirtyBit(reinterpret_cast<MAddress>(holder));
+    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::BARRIER_WRITE, line,
+                                 holderRegion->GetRegionStart(), 0, slot, byte, byte, dirty, dirty, site,
+                                 edge.stickyLogExit, LogLineSource::BARRIER };
+    edge.writeSequence = RecordPendingClearWhenEvent(event);
     std::lock_guard<std::mutex> lg(edgeMutex);
-    edge.writeSequence = AppendClearWhenEventLocked(
-        line, holderRegion->GetRegionStart(), ClearWhenEventKind::BARRIER_WRITE, byte, byte, dirty, dirty, site,
-        edge.stickyLogExit, LogLineSource::BARRIER, slot);
     edges[slot] = edge;
 }
 
@@ -472,18 +474,108 @@ bool RemsetCheck::ExchangeDirtyBit(MAddress holder, bool value) const
 uint64_t RemsetCheck::AppendClearWhenEventLocked(MAddress line, MAddress regionStart, ClearWhenEventKind kind,
                                                   uint8_t byteBefore, uint8_t byteAfter, bool dirtyBefore,
                                                   bool dirtyAfter, HookSite hookSite, StickyLogExit stickyLogExit,
-                                                  LogLineSource logLineSource, MAddress slot)
+                                                  LogLineSource logLineSource, MAddress slot, uint64_t sequence,
+                                                  size_t eventRun)
 {
-    uint64_t sequence = nextClearWhenSequence++;
+    if (sequence == 0) {
+        sequence = ReserveClearWhenSequence();
+    }
+    if (eventRun == 0) {
+        eventRun = GetClearWhenRun();
+    }
     auto inserted = lineTimelines.emplace(
-        line, LineTimeline{ regionStart, clearWhenRun, byteBefore, dirtyBefore, {} });
+        line, LineTimeline{ regionStart, eventRun, byteBefore, dirtyBefore, {} });
     LineTimeline& timeline = inserted.first->second;
     if (!inserted.second) {
         timeline.regionStart = regionStart;
     }
-    timeline.events.push_back(ClearWhenEvent{ sequence, clearWhenRun, kind, byteBefore, byteAfter, dirtyBefore,
+    timeline.events.push_back(ClearWhenEvent{ sequence, eventRun, kind, byteBefore, byteAfter, dirtyBefore,
                                               dirtyAfter, hookSite, stickyLogExit, logLineSource, slot });
     return sequence;
+}
+
+uint64_t RemsetCheck::ReserveClearWhenSequence()
+{
+    return nextClearWhenSequence.fetch_add(1, std::memory_order_relaxed);
+}
+
+size_t RemsetCheck::GetClearWhenRun() const
+{
+    return clearWhenRun.load(std::memory_order_acquire);
+}
+
+void RemsetCheck::RecordClearWhenEventDrop(bool firstOverflow)
+{
+    if (firstOverflow) {
+        clearWhenEventRingOverflows.fetch_add(1, std::memory_order_relaxed);
+    }
+    clearWhenEventsDropped.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64_t RemsetCheck::RecordPendingClearWhenEvent(ClearWhenPendingEvent event)
+{
+    if (event.sequence == 0) {
+        event.sequence = ReserveClearWhenSequence();
+    }
+    if (event.run == 0) {
+        event.run = GetClearWhenRun();
+    }
+    Mutator* mutator = Mutator::GetMutator();
+    if (!MutatorManager::Instance().WorldStopped() && mutator != nullptr) {
+        (void)mutator->RecordClearWhenEvent(event);
+        return event.sequence;
+    }
+    std::lock_guard<std::mutex> lg(edgeMutex);
+    ReplayClearWhenEventLocked(event);
+    return event.sequence;
+}
+
+void RemsetCheck::ReplayClearWhenEventLocked(const ClearWhenPendingEvent& event)
+{
+    if (event.kind == ClearWhenEventKind::CLEAR_UNAVAILABLE_REGION) {
+        RecordClearWhenRangeLocked(event.regionStart, event.regionSize, event.kind, false, event.sequence,
+                                   event.run);
+        return;
+    }
+    CHECK(event.kind == ClearWhenEventKind::LOG_LINE || event.kind == ClearWhenEventKind::BARRIER_WRITE);
+    (void)AppendClearWhenEventLocked(event.line, event.regionStart, event.kind, event.byteBefore, event.byteAfter,
+                                     event.dirtyBefore, event.dirtyAfter, event.hookSite, event.stickyLogExit,
+                                     event.logLineSource, event.slot, event.sequence, event.run);
+}
+
+void RemsetCheck::ReplayClearWhenEvents(const ClearWhenPendingEvent* events, size_t count)
+{
+    if (LIKELY(!enabled) || count == 0) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "clear timing events may only replay while stopped");
+    std::lock_guard<std::mutex> lg(edgeMutex);
+    for (size_t i = 0; i < count; ++i) {
+        uint64_t sequence = __atomic_load_n(&events[i].sequence, __ATOMIC_ACQUIRE);
+        if (sequence == 0) {
+            RecordClearWhenEventDrop(false);
+            continue;
+        }
+        replayEvents.push_back(events[i]);
+        replayEvents.back().sequence = sequence;
+    }
+}
+
+void RemsetCheck::FinishReplayClearWhenEvents()
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "clear timing replay may only finish while stopped");
+    std::lock_guard<std::mutex> lg(edgeMutex);
+    std::sort(replayEvents.begin(), replayEvents.end(), [](const ClearWhenPendingEvent& left,
+                                                           const ClearWhenPendingEvent& right) {
+        return left.sequence < right.sequence;
+    });
+    for (const ClearWhenPendingEvent& event : replayEvents) {
+        ReplayClearWhenEventLocked(event);
+    }
+    replayEvents.clear();
 }
 
 void RemsetCheck::RecordRescanByteWrite(MAddress lineStart, RescanWritePath path, uint8_t before, uint8_t after)
@@ -521,7 +613,7 @@ void RemsetCheck::RecordRescanDirtyClear(MAddress regionStart, size_t regionSize
 }
 
 void RemsetCheck::RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
-                                              bool dirtyAfter)
+                                              bool dirtyAfter, uint64_t sequence, size_t eventRun)
 {
     MAddress regionEnd = regionStart + regionSize;
     for (MAddress line = regionStart; line < regionEnd; line += StickyLog::LINE_SIZE) {
@@ -529,12 +621,29 @@ void RemsetCheck::RecordClearWhenRangeLocked(MAddress regionStart, size_t region
         if (entry == lineTimelines.end()) {
             continue;
         }
-        uint8_t byte = LoadLoggedByte(line);
-        bool dirty = LoadDirtyBit(line);
+        uint8_t byte = 0;
+        bool dirty = false;
+        if (sequence == 0) {
+            byte = LoadLoggedByte(line);
+            dirty = LoadDirtyBit(line);
+        } else {
+            uint64_t latestSequence = 0;
+            byte = entry->second.startByte;
+            dirty = entry->second.startDirty;
+            for (const ClearWhenEvent& previous : entry->second.events) {
+                if (previous.sequence < sequence && previous.sequence > latestSequence) {
+                    latestSequence = previous.sequence;
+                    byte = previous.byteAfter;
+                    dirty = previous.dirtyAfter;
+                }
+            }
+        }
         if (byte == 0 && dirty == dirtyAfter) {
             continue;
         }
-        (void)AppendClearWhenEventLocked(line, entry->second.regionStart, kind, byte, 0, dirty, dirtyAfter);
+        (void)AppendClearWhenEventLocked(line, entry->second.regionStart, kind, byte, 0, dirty, dirtyAfter,
+                                         HookSite::COUNT, StickyLogExit::COUNT, LogLineSource::BARRIER, 0,
+                                         sequence, eventRun);
     }
 }
 
@@ -543,8 +652,10 @@ void RemsetCheck::RecordClearUnavailableRegion(MAddress regionStart, size_t regi
     if (LIKELY(!enabled)) {
         return;
     }
-    std::lock_guard<std::mutex> lg(edgeMutex);
-    RecordClearWhenRangeLocked(regionStart, regionSize, ClearWhenEventKind::CLEAR_UNAVAILABLE_REGION, false);
+    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::CLEAR_UNAVAILABLE_REGION, 0, regionStart, regionSize,
+                                 0, 0, 0, false, false, HookSite::COUNT, StickyLogExit::COUNT,
+                                 LogLineSource::BARRIER };
+    (void)RecordPendingClearWhenEvent(event);
 }
 
 void RemsetCheck::RecordBeginEpochClear()
@@ -690,10 +801,7 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     }
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "remset check requires stopped mutators");
     CHECK(!visitedRoundActive);
-    {
-        std::lock_guard<std::mutex> lg(edgeMutex);
-        clearWhenRun = run;
-    }
+    clearWhenRun.store(run, std::memory_order_release);
     visitedRoundRun = run;
     visitedRoundOldMissing = 0;
     visitedRoundCandidates.clear();
@@ -724,6 +832,18 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     size_t droppedThisRound = 0;
     {
         std::lock_guard<std::mutex> lg(edgeMutex);
+        for (auto& timelineEntry : lineTimelines) {
+            LineTimeline& timeline = timelineEntry.second;
+            std::sort(timeline.events.begin(), timeline.events.end(), [](const ClearWhenEvent& left,
+                                                                         const ClearWhenEvent& right) {
+                return left.sequence < right.sequence;
+            });
+            if (!timeline.events.empty()) {
+                timeline.startRun = timeline.events.front().run;
+                timeline.startByte = timeline.events.front().byteBefore;
+                timeline.startDirty = timeline.events.front().dirtyBefore;
+            }
+        }
         for (auto it = edges.begin(); it != edges.end();) {
             RegionInfo* holderRegion = nullptr;
             RegionInfo* targetRegion = nullptr;
@@ -1323,7 +1443,7 @@ void RemsetCheck::CheckVisitedRound(size_t run)
     visitedRoundActive = false;
     {
         std::lock_guard<std::mutex> lg(edgeMutex);
-        clearWhenRun = run + 1;
+        clearWhenRun.store(run + 1, std::memory_order_release);
     }
     visitedRoundCandidates.clear();
     visitedLines.clear();
@@ -1432,7 +1552,8 @@ void RemsetCheck::Fini()
              "[CLEARWHEN-FINAL] edges=%zu RescanLoggedLines-buffer=%zu RescanLoggedLines-dirty-region=%zu "
              "ClearUnavailableRegion=%zu BeginEpoch=%zu positiveControl=%zu notObserved=%zu "
              "clearAfterMiddleMinor=%zu allEdgeOneMinor=%zu allEdgeMultipleMinors=%zu "
-             "allEdgeClearedAfterWrite=%zu posctrlFires=%u",
+             "allEdgeClearedAfterWrite=%zu posctrlFires=%u eventRingCapacity=%zu eventRingOverflows=%zu "
+             "eventsDropped=%zu",
              clearWhenEdges, clearedByCounts[static_cast<size_t>(ClearedBy::RESCAN_BUFFER)],
              clearedByCounts[static_cast<size_t>(ClearedBy::RESCAN_DIRTY_REGION)],
              clearedByCounts[static_cast<size_t>(ClearedBy::CLEAR_UNAVAILABLE_REGION)],
@@ -1440,7 +1561,9 @@ void RemsetCheck::Fini()
              clearedByCounts[static_cast<size_t>(ClearedBy::POSITIVE_CONTROL)],
              clearedByCounts[static_cast<size_t>(ClearedBy::NOT_OBSERVED)], missingClearAfterMiddleMinor,
              clearWhenAllEdgesOneMinor, clearWhenAllEdgesMultipleMinors, clearWhenAllEdgesClearedAfterWrite,
-             static_cast<unsigned>(clearWhenControlCaught));
+             static_cast<unsigned>(clearWhenControlCaught), CLEAR_WHEN_EVENT_RING_CAPACITY,
+             clearWhenEventRingOverflows.load(std::memory_order_relaxed),
+             clearWhenEventsDropped.load(std::memory_order_relaxed));
         for (const auto& entry : missingMinorsSinceWrite) {
             VLOG(REPORT, "[CLEARWHEN-MINORS] minorsSinceWrite=%zu edges=%zu", entry.first, entry.second);
         }
@@ -1448,5 +1571,6 @@ void RemsetCheck::Fini()
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges.clear();
     lineTimelines.clear();
+    replayEvents.clear();
 }
 } // namespace MapleRuntime
