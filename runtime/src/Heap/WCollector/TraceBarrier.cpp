@@ -254,6 +254,7 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
     mutator->RememberObjectInSatbBuffer(oldRef);
     if (obj != nullptr) {
         CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        (void)currentObject;
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, GetTypeInfo(currentObject),
              GetSize(currentObject), &field, oldValue, newField.GetFieldValue());
     } else {
@@ -273,6 +274,7 @@ BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& f
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     mutator->RememberObjectInSatbBuffer(oldRef);
     CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    (void)currentObject;
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj,
          GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
@@ -336,7 +338,6 @@ void TraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex
         BaseObject* target = ReadReference(nullptr, oldField);
         mutator->RememberObjectInSatbBuffer(target);
     };
-    MArray* dstArray = static_cast<MArray*>(dstObj);
     ForEachRefFieldInRange(currentDestination, dstVisitor, dstField, dstField + srcSize);
 
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
