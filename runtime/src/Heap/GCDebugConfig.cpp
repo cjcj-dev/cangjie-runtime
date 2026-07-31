@@ -13,6 +13,7 @@
 #include <limits>
 
 #include "Base/Log.h"
+#include "Base/LogFile.h"
 #include "Base/MemUtils.h"
 #include "Common/BaseObject.h"
 
