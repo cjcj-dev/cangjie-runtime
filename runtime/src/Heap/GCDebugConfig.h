@@ -11,15 +11,11 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "Base/Macros.h"
-#include "Base/MemUtils.h"
-
 namespace MapleRuntime {
 class __attribute__((visibility("hidden"))) GCDebugConfig {
 public:
-    static constexpr uint8_t CLOBBER_PATTERN = 0xA5;
-
     static void ConfigureFromEnvironment();
+    static void Finalize();
     static void DisableStress();
 
     static bool IsStressEnabled()
@@ -29,18 +25,7 @@ public:
     }
 
     static bool IsClobberEnabled() { return clobberEnabled.load(std::memory_order_relaxed); }
-    static bool IsClobberPositiveControlEnabled()
-    {
-        return clobberPositiveControlEnabled.load(std::memory_order_relaxed);
-    }
-
-    static ALWAYS_INLINE void FillReclaimedMemory(uintptr_t start, size_t size)
-    {
-        if (UNLIKELY(IsClobberEnabled())) {
-            MemorySet(start, size, CLOBBER_PATTERN, size);
-        }
-    }
-    static void FillYoungReclaimedMemory(uintptr_t start, size_t size, size_t allocatedSize);
+    static bool FillReclaimedMemory(uintptr_t start, size_t size);
     static bool ShouldTriggerMinor();
     static bool ShouldTriggerMajor();
     static void NoteStressMinorRequest();
@@ -50,8 +35,6 @@ public:
 
 private:
     static std::atomic<bool> clobberEnabled;
-    static std::atomic<bool> clobberPositiveControlEnabled;
-    static std::atomic<bool> clobberPositiveControlRan;
     static std::atomic<size_t> stressMinorInterval;
     static std::atomic<size_t> stressMajorInterval;
     static std::atomic<size_t> stressMinorAllocationCount;

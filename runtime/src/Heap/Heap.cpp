@@ -220,13 +220,14 @@ void HeapImpl::Init(const HeapParam& param)
 
 void HeapImpl::Fini()
 {
-    GCDebugConfig::DisableStress();
     collectorResources.Fini();
     collectorProxy.Fini();
+    GCDebugConfig::DisableStress();
     if (theSpace != nullptr) {
         delete theSpace;
         theSpace = nullptr;
     }
+    GCDebugConfig::Finalize();
 }
 
 Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }

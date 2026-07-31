@@ -553,8 +553,7 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
             if (releaseResources) {
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
-            GCDebugConfig::FillYoungReclaimedMemory(
-                regionStart, regionSize, region->GetRegionAllocatedSize());
+            GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
             ++stats.reclaimedRegions;
             if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 stats.reclaimedBytes += ReleaseRegion(region);
