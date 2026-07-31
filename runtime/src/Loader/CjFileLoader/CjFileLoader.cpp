@@ -493,7 +493,7 @@ bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
             if (ExceptionManager::HasPendingException()) {
                 ExceptionRef ex = ExceptionManager::GetPendingException();
                 LOG(RTLOG_ERROR, "Init Image fail! exception occurrence when init image, exception:%s ",
-                    ex->GetTypeInfo()->GetName());
+                    GetTypeInfo(UnsafeAssumeCurrent(ex))->GetName());
                 ExceptionManager::ClearPendingException();
                 return false;
             }
