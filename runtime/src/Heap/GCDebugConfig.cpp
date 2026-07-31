@@ -48,7 +48,8 @@ size_t ReadInterval(const char* name)
     errno = 0;
     char* end = nullptr;
     unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (errno != 0 || end == value || *end != '\0' || parsed > std::numeric_limits<size_t>::max()) {
+    if (value[0] == '-' || errno != 0 || end == value || *end != '\0' ||
+        parsed > std::numeric_limits<size_t>::max()) {
         LOG(RTLOG_ERROR, "Unsupported %s=%s; expected a non-negative integer, using 0", name, value);
         return 0;
     }
