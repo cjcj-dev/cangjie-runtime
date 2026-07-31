@@ -251,24 +251,14 @@ public:
         return MapType(true, stackBase, entry, std::move(closure));
     }
 
-    template<class MapType>
-    MapType Build(StackMapInvalidReason* invalidReason) const
+    StackMapInvalidReason GetInvalidReason() const
     {
-        MapType map = Build<MapType>();
-        if (invalidReason == nullptr) {
-            return map;
-        }
-        if (map.IsValid()) {
-            *invalidReason = StackMapInvalidReason::NONE;
-            return map;
-        }
 #ifdef __APPLE__
         auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
 #endif
-        *invalidReason = head.GetInvalidReason(startPC, framePC);
-        return map;
+        return head.GetInvalidReason(startPC, framePC);
     }
 
 protected:
