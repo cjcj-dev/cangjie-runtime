@@ -112,7 +112,7 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
     MArray* mArray = static_cast<MArray*>(this);
     CurrentPtr currentArray = UnsafeAssumeCurrent(mArray);
     MIndex arrayLen = mArray->GetLength();
-    TypeInfo* component = GetComponentTypeInfo(currentArray);
+    TypeInfo* component = MapleRuntime::GetComponentTypeInfo(currentArray);
     if (component->IsStructType()) {
         GCTib gcTib = component->GetGCTib();
         MAddress contentAddr = reinterpret_cast<Uptr>(this) + MArray::GetContentOffset();
