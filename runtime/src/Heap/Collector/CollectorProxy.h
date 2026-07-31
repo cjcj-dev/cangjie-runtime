@@ -41,7 +41,7 @@ public:
 
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
-    BaseObject* FindToVersion(BaseObject* obj) const override { return currentCollector->FindToVersion(obj); }
+    CurrentPtr FindToVersion(MaybeStalePtr obj) const override { return currentCollector->FindToVersion(obj); }
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
     bool IsCurrentPointer(RefField<>& ref) const override { return currentCollector->IsCurrentPointer(ref); }
@@ -52,7 +52,7 @@ public:
     void AddRawPointerObject(BaseObject* obj) override { return currentCollector->AddRawPointerObject(obj); }
     void RemoveRawPointerObject(BaseObject* obj) override { return currentCollector->RemoveRawPointerObject(obj); }
 
-    BaseObject* ForwardObject(BaseObject* obj) override { return currentCollector->ForwardObject(obj); }
+    CurrentPtr ForwardObject(MaybeStalePtr obj) override { return currentCollector->ForwardObject(obj); }
 
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& toVersion) const override
     {
