@@ -53,8 +53,8 @@ ALWAYS_INLINE inline CurrentPtr UnsafeAssumeCurrent(BaseObject* object) { return
 
 using ObjectPtr = BaseObject*;
 
-static_assert(std::is_trivially_copyable_v<MaybeStalePtr>, "MaybeStalePtr must remain trivially copyable");
-static_assert(std::is_trivially_copyable_v<CurrentPtr>, "CurrentPtr must remain trivially copyable");
+static_assert(std::is_trivially_copyable<MaybeStalePtr>::value, "MaybeStalePtr must remain trivially copyable");
+static_assert(std::is_trivially_copyable<CurrentPtr>::value, "CurrentPtr must remain trivially copyable");
 static_assert(sizeof(MaybeStalePtr) == sizeof(BaseObject*), "MaybeStalePtr must remain pointer-sized");
 static_assert(sizeof(CurrentPtr) == sizeof(BaseObject*), "CurrentPtr must remain pointer-sized");
 } // namespace MapleRuntime
