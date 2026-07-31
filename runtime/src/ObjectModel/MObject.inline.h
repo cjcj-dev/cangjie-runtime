@@ -35,21 +35,24 @@ inline T0* MObject::CastNonNull(T1 o)
     return Cast<T0>(o);
 }
 
-inline bool MObject::IsArray() const { return GetTypeInfo()->IsArrayType(); }
+ALWAYS_INLINE inline bool IsArray(CurrentPtr object) { return GetTypeInfo(object)->IsArrayType(); }
 
-inline bool MObject::IsPrimitiveArray() const
+ALWAYS_INLINE inline bool IsPrimitiveArray(CurrentPtr object)
 {
-    TypeInfo* componentTypeInfo = GetTypeInfo()->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
     return componentTypeInfo == nullptr ? false : componentTypeInfo->IsPrimitiveType();
 }
 
-inline bool MObject::IsStructArray() const
+ALWAYS_INLINE inline bool IsStructArray(CurrentPtr object)
 {
-    TypeInfo* componentTypeInfo = GetTypeInfo()->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
     return componentTypeInfo == nullptr ? false : (componentTypeInfo->IsStructType() || componentTypeInfo->IsTuple());
 }
 
-inline bool MObject::IsSubType(TypeInfo& mClass) { return GetTypeInfo()->IsSubType(&mClass); }
+ALWAYS_INLINE inline bool IsSubType(CurrentPtr object, TypeInfo& mClass)
+{
+    return GetTypeInfo(object)->IsSubType(&mClass);
+}
 
 template<typename T>
 inline T MObject::Load(size_t offset) const
