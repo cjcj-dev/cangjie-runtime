@@ -197,6 +197,7 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        (void)currentObject;
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, GetTypeInfo(currentObject),
              GetSize(currentObject), &field, oldValue, newField.GetFieldValue());
     } else {
@@ -213,6 +214,7 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    (void)currentObject;
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj,
          GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     return oldRef;
@@ -240,6 +242,7 @@ void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MI
                                        MAddress srcField, MIndex srcSize) const
 {
     CurrentPtr currentDestination = UnsafeAssumeCurrent(dstObj);
+    (void)currentDestination;
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!HasRefField(currentDestination)) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);
