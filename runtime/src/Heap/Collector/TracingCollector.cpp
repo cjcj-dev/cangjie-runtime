@@ -318,8 +318,7 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    StackMapInvalidReason invalidReason = StackMapInvalidReason::NONE;
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(&invalidReason);
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
@@ -357,7 +356,7 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
-        RecordSkippedStackMap(invalidReason, frame, startIP, frameIP);
+        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
