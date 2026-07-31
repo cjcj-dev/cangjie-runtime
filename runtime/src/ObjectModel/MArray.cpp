@@ -7,6 +7,8 @@
 
 #include "MArray.inline.h"
 
+#pragma GCC poison UnsafeAssumeCurrent
+
 namespace MapleRuntime {
 void ForEachRefFieldInRange(CurrentPtr object, const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd)
 {
