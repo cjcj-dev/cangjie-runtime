@@ -48,7 +48,7 @@ public:
     // (age once, promote on the second surviving minor).
     uint8_t GetPromoteAge() const { return promoteAge; }
     bool IsLoggedLine(MAddress address) const;
-    bool TryLogLine(MAddress address, MAddress& lineStart) const;
+    bool TryLogLine(MAddress address, MAddress& lineStart, bool& dirtyBefore) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
 
