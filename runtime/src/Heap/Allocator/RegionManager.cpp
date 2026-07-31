@@ -1465,7 +1465,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
 
     // Mark new allocated pinned object.
     BaseObject* object = reinterpret_cast<BaseObject*>(allocPtr);
-    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
+    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(UnsafeAssumeCurrent(object));
     return allocPtr;
 }
 } // namespace MapleRuntime
