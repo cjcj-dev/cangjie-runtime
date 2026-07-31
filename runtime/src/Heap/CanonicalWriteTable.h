@@ -25,7 +25,7 @@ class RegionInfo;
 // facts whose destination region is outside every source region of the cycle
 // are published: an in-place compacted address cannot identify which object
 // version its numeric value names.
-class CanonicalWriteTable {
+class __attribute__((visibility("hidden"))) CanonicalWriteTable {
 public:
     static CanonicalWriteTable& Instance() noexcept;
 
