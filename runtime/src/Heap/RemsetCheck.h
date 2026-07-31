@@ -141,6 +141,7 @@ public:
     uint64_t ReserveClearWhenSequence();
     size_t GetClearWhenRun() const;
     void ReplayClearWhenEvents(const ClearWhenPendingEvent* events, size_t count);
+    void FinishReplayClearWhenEvents();
     void RecordClearWhenEventDrop(bool firstOverflow);
     void CheckVisitedRound(size_t run);
     void Fini();
@@ -251,6 +252,7 @@ private:
     std::mutex edgeMutex;
     std::unordered_map<MAddress, Edge> edges;
     std::unordered_map<MAddress, LineTimeline> lineTimelines;
+    std::vector<ClearWhenPendingEvent> replayEvents;
     std::atomic<uint64_t> nextClearWhenSequence{ 1 };
     std::atomic<size_t> clearWhenRun{ 1 };
     std::atomic<size_t> clearWhenEventRingOverflows{ 0 };
