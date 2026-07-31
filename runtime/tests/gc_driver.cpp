@@ -5,6 +5,7 @@
 // Synthetic event-sequence driver for the memory manager.
 // Events drive allocation / store / drop / force collection / pin.
 // Deterministic --seed / --replay / --reduce. No compiler involved.
+// Round 2: barrier-only hit search (STORE_PLAIN excluded from hit criterion).
 
 #include <cerrno>
 #include <cinttypes>
@@ -22,6 +23,8 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/StickyLog.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
@@ -66,11 +69,11 @@ enum class Op : uint8_t {
     GROW = 6,        // a: bytes (approx via many small allocs)
     PIN = 7,         // a: objIdx
     UNPIN = 8,       // a: objIdx
-    // observation / control (driver-local)
     OBSERVE = 9,     // run remset completeness check; fail => "reproduced"
     PROMOTE = 10,    // promote all young regions to old (synthetic age-out)
     STORE_PLAIN = 11,// store without write-barrier / without sticky log
     STORE_BARRIER = 12, // store via Heap barrier (logs when IdleLogBarrier active)
+    FILL_REGION = 13, // a: objIdx — pack holder's region to RECENT_FULL via allocs in same region
 };
 
 struct Event {
@@ -115,6 +118,21 @@ struct Slot {
     bool live = false;
     bool pinned = false;
     uint32_t size = 0;
+    // provenance of the last write into this holder's ref slot
+    bool lastStoreWasBarrier = false;
+    bool lastStoreWasPlain = false;
+};
+
+struct MissInfo {
+    size_t holderIdx = 0;
+    BaseObject* holder = nullptr;
+    BaseObject* target = nullptr;
+    unsigned holderRegionType = 0;
+    unsigned targetRegionType = 0;
+    uint64_t regionPendingLines = 0;
+    bool storeWasBarrier = false;
+    bool storeWasPlain = false;
+    bool lineLogged = false;
 };
 
 struct Driver {
@@ -122,27 +140,55 @@ struct Driver {
     RegionManager* manager = nullptr;
     uint64_t allocCount = 0;
     uint64_t storeCount = 0;
+    uint64_t barrierStoreCount = 0;
+    uint64_t plainStoreCount = 0;
     uint64_t observeCount = 0;
     uint64_t missingEdges = 0;
     uint64_t loggedEdges = 0;
     uint64_t oldToYoungEdges = 0;
-    bool lastObserveHit = false;
+    uint64_t barrierMissing = 0; // missing edges whose last store was STORE_BARRIER
+    uint64_t plainMissing = 0;
+    bool lastObserveHit = false;          // any missing (compat)
+    bool lastBarrierOnlyHit = false;      // barrier-origin + line=0 + region pending=0
     std::string lastMissDetail;
+    MissInfo lastMiss {};
+    bool requireBarrierOnlyHit = false;   // OBSERVE hit predicate for reduce/search
+    bool trackStepTrace = false;
+    uint64_t stepIndex = 0;
 
     void ResetStats()
     {
-        allocCount = storeCount = observeCount = 0;
-        missingEdges = loggedEdges = oldToYoungEdges = 0;
+        allocCount = storeCount = barrierStoreCount = plainStoreCount = observeCount = 0;
+        missingEdges = loggedEdges = oldToYoungEdges = barrierMissing = plainMissing = 0;
         lastObserveHit = false;
+        lastBarrierOnlyHit = false;
         lastMissDetail.clear();
+        lastMiss = MissInfo {};
+        stepIndex = 0;
+    }
+
+    // Count sticky-log bytes that are non-zero inside [regionStart, regionStart+regionSize).
+    static uint64_t CountPendingLinesInRegion(RegionInfo* reg)
+    {
+        if (reg == nullptr || !reg->IsValidRegion()) {
+            return 0;
+        }
+        StickyLog& log = StickyLog::Instance();
+        MAddress start = reg->GetRegionStart();
+        size_t size = reg->GetRegionSize();
+        uint64_t n = 0;
+        for (MAddress a = start; a < start + size; a += StickyLog::LINE_SIZE) {
+            if (log.IsLoggedLine(a)) {
+                ++n;
+            }
+        }
+        return n;
     }
 
     int AllocSlot(uint32_t sizeClass, uint32_t kind)
     {
-        // sizeClass 0..3 => payload sizes; object total = TYPEINFO + instanceSize
         static const uint32_t kPayload[] = { 8, 8, 16, 32 };
         uint32_t payload = kPayload[sizeClass % 4];
-        // force our synthetic type (one ref) for STORE shapes
         g_holderTi->SetInstanceSize(payload);
         size_t objSize = payload + TYPEINFO_PTR_SIZE;
         if (objSize < 16) {
@@ -168,7 +214,6 @@ struct Driver {
         }
         MAddress addr = region->Alloc(objSize);
         if (addr == 0) {
-            // region full — take another
             region = manager->TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
             if (region == nullptr) {
                 return -1;
@@ -180,7 +225,6 @@ struct Driver {
         }
         BaseObject* obj = reinterpret_cast<BaseObject*>(addr);
         obj->SetClassInfo(g_holderTi);
-        // zero payload refs
         auto* slot0 = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
         slot0->SetTargetObject(nullptr);
 
@@ -203,7 +247,6 @@ struct Driver {
 
     RefField<>* SlotField(BaseObject* obj, uint32_t slotIdx)
     {
-        // only slot 0 supported in synthetic type
         (void)slotIdx;
         return reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
     }
@@ -215,7 +258,10 @@ struct Driver {
         }
         RefField<>* f = SlotField(slots[holderIdx].obj, slotIdx);
         f->SetTargetObject(slots[targetIdx].obj);
+        slots[holderIdx].lastStoreWasBarrier = false;
+        slots[holderIdx].lastStoreWasPlain = true;
         ++storeCount;
+        ++plainStoreCount;
     }
 
     void StoreBarrier(uint32_t holderIdx, uint32_t slotIdx, uint32_t targetIdx)
@@ -223,9 +269,16 @@ struct Driver {
         if (!ValidIdx(holderIdx) || !ValidIdx(targetIdx)) {
             return;
         }
+        // Ensure mutator TLS is bound — CJ_MCC_StickyLogLine no-ops without it.
+        if (Mutator::GetMutator() == nullptr) {
+            MutatorManager::Instance().CreateMutator();
+        }
         RefField<>& f = *SlotField(slots[holderIdx].obj, slotIdx);
         Heap::GetBarrier().WriteReference(slots[holderIdx].obj, f, slots[targetIdx].obj);
+        slots[holderIdx].lastStoreWasBarrier = true;
+        slots[holderIdx].lastStoreWasPlain = false;
         ++storeCount;
+        ++barrierStoreCount;
     }
 
     void Drop(uint32_t idx)
@@ -236,7 +289,6 @@ struct Driver {
         if (slots[idx].pinned && slots[idx].home != nullptr) {
             slots[idx].home->DecRawPointerObjectCount();
         }
-        // clear outgoing refs only; do not free (region reclaim is GC's job)
         RefField<>* f = SlotField(slots[idx].obj, 0);
         f->SetTargetObject(nullptr);
         slots[idx].live = false;
@@ -290,16 +342,54 @@ struct Driver {
         }
     }
 
+    // Pack the region that currently holds slots[objIdx] until Alloc fails
+    // (region becomes full / RECENT_FULL candidate). Extra objects go into table.
+    void FillRegionOf(uint32_t objIdx)
+    {
+        if (!ValidIdx(objIdx)) {
+            return;
+        }
+        RegionInfo* reg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(slots[objIdx].obj));
+        if (reg == nullptr) {
+            return;
+        }
+        g_holderTi->SetInstanceSize(8);
+        size_t objSize = 8 + TYPEINFO_PTR_SIZE;
+        objSize = (objSize + 7u) & ~size_t(7u);
+        for (int i = 0; i < 4096; ++i) {
+            MAddress addr = reg->Alloc(objSize);
+            if (addr == 0) {
+                break;
+            }
+            BaseObject* obj = reinterpret_cast<BaseObject*>(addr);
+            obj->SetClassInfo(g_holderTi);
+            auto* slot0 = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+            slot0->SetTargetObject(nullptr);
+            Slot s;
+            s.obj = obj;
+            s.home = reg;
+            s.live = true;
+            s.pinned = false;
+            s.size = static_cast<uint32_t>(objSize);
+            slots.push_back(s);
+            ++allocCount;
+        }
+    }
+
     // Independent remset observer: walk live table slots; for each old→young ref,
     // require holder's sticky line to be logged. Report first miss.
+    // Barrier-only hit: missing edge + last store was STORE_BARRIER + region pending=0.
     bool ObserveRemset()
     {
         ++observeCount;
         lastObserveHit = false;
+        lastBarrierOnlyHit = false;
         lastMissDetail.clear();
         missingEdges = 0;
         loggedEdges = 0;
         oldToYoungEdges = 0;
+        barrierMissing = 0;
+        plainMissing = 0;
         StickyLog& log = StickyLog::Instance();
 
         for (size_t i = 0; i < slots.size(); ++i) {
@@ -312,7 +402,7 @@ struct Driver {
                 continue;
             }
             if (hReg->IsYoungRegion()) {
-                continue; // only old holders produce remset edges
+                continue;
             }
             RefField<>* f = SlotField(holder, 0);
             BaseObject* target = f->GetTargetObject();
@@ -326,71 +416,138 @@ struct Driver {
             ++oldToYoungEdges;
             MAddress line = reinterpret_cast<MAddress>(holder);
             bool logged = log.IsLoggedLine(line);
+            uint64_t pending = CountPendingLinesInRegion(hReg);
             if (logged) {
                 ++loggedEdges;
             } else {
                 ++missingEdges;
+                if (slots[i].lastStoreWasBarrier) {
+                    ++barrierMissing;
+                }
+                if (slots[i].lastStoreWasPlain) {
+                    ++plainMissing;
+                }
+                // Barrier-only hit: STORE_BARRIER produced the edge, line gone, region clean.
+                if (slots[i].lastStoreWasBarrier && pending == 0) {
+                    lastBarrierOnlyHit = true;
+                }
                 if (lastMissDetail.empty()) {
-                    char buf[256];
+                    char buf[512];
                     std::snprintf(buf, sizeof(buf),
                         "holderIdx=%zu holder=%p target=%p holderYoung=0 targetYoung=1 "
-                        "lineLogged=0 holderRegionType=%u",
+                        "lineLogged=0 holderRegionType=%u targetRegionType=%u "
+                        "regionPendingLines=%" PRIu64 " storeBarrier=%d storePlain=%d",
                         i, static_cast<void*>(holder), static_cast<void*>(target),
-                        static_cast<unsigned>(hReg->GetRegionType()));
+                        static_cast<unsigned>(hReg->GetRegionType()),
+                        static_cast<unsigned>(tReg->GetRegionType()),
+                        pending,
+                        slots[i].lastStoreWasBarrier ? 1 : 0,
+                        slots[i].lastStoreWasPlain ? 1 : 0);
                     lastMissDetail = buf;
+                    lastMiss.holderIdx = i;
+                    lastMiss.holder = holder;
+                    lastMiss.target = target;
+                    lastMiss.holderRegionType = static_cast<unsigned>(hReg->GetRegionType());
+                    lastMiss.targetRegionType = static_cast<unsigned>(tReg->GetRegionType());
+                    lastMiss.regionPendingLines = pending;
+                    lastMiss.storeWasBarrier = slots[i].lastStoreWasBarrier;
+                    lastMiss.storeWasPlain = slots[i].lastStoreWasPlain;
+                    lastMiss.lineLogged = false;
                 }
             }
         }
 
-        std::printf("[GCDRIVER-OBSERVE] oldToYoung=%" PRIu64 " logged=%" PRIu64 " missing=%" PRIu64 "\n",
-            oldToYoungEdges, loggedEdges, missingEdges);
+        std::printf("[GCDRIVER-OBSERVE] oldToYoung=%" PRIu64 " logged=%" PRIu64
+                    " missing=%" PRIu64 " barrierMissing=%" PRIu64 " plainMissing=%" PRIu64
+                    " barrierOnlyHit=%d\n",
+            oldToYoungEdges, loggedEdges, missingEdges, barrierMissing, plainMissing,
+            lastBarrierOnlyHit ? 1 : 0);
         if (missingEdges > 0) {
             lastObserveHit = true;
             std::printf("[GCDRIVER-MISS] %s\n", lastMissDetail.c_str());
         }
         std::fflush(stdout);
-        return lastObserveHit;
+        return requireBarrierOnlyHit ? lastBarrierOnlyHit : lastObserveHit;
     }
 
     bool RunEvent(const Event& e)
     {
+        ++stepIndex;
+        bool ok = true;
         switch (e.op) {
             case Op::ALLOC:
-                return AllocSlot(e.a, e.b) >= 0;
+                ok = AllocSlot(e.a, e.b) >= 0;
+                break;
             case Op::STORE:
             case Op::STORE_PLAIN:
                 StorePlain(e.a, e.b, e.c);
-                return true;
+                break;
             case Op::STORE_BARRIER:
                 StoreBarrier(e.a, e.b, e.c);
-                return true;
+                break;
             case Op::DROP:
                 Drop(e.a);
-                return true;
+                break;
             case Op::FORCE_MINOR:
                 ForceMinor();
-                return true;
+                break;
             case Op::FORCE_MAJOR:
                 ForceMajor();
-                return true;
+                break;
             case Op::GROW:
                 Grow(e.a);
-                return true;
+                break;
             case Op::PIN:
                 Pin(e.a);
-                return true;
+                break;
             case Op::UNPIN:
                 Unpin(e.a);
-                return true;
+                break;
             case Op::OBSERVE:
                 (void)ObserveRemset();
-                return true;
+                break;
             case Op::PROMOTE:
                 PromoteAll();
-                return true;
+                break;
+            case Op::FILL_REGION:
+                FillRegionOf(e.a);
+                break;
             default:
                 return false;
         }
+        if (trackStepTrace && e.op != Op::OBSERVE) {
+            // Lightweight step snapshot for culprit localization (no full observe).
+            StickyLog& log = StickyLog::Instance();
+            uint64_t o2y = 0, miss = 0, blog = 0;
+            for (size_t i = 0; i < slots.size(); ++i) {
+                if (!slots[i].live || slots[i].obj == nullptr) {
+                    continue;
+                }
+                RegionInfo* hReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(slots[i].obj));
+                if (hReg == nullptr || hReg->IsYoungRegion()) {
+                    continue;
+                }
+                BaseObject* t = SlotField(slots[i].obj, 0)->GetTargetObject();
+                if (t == nullptr || !Heap::IsHeapAddress(reinterpret_cast<MAddress>(t))) {
+                    continue;
+                }
+                RegionInfo* tReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(t));
+                if (tReg == nullptr || !tReg->IsYoungRegion()) {
+                    continue;
+                }
+                ++o2y;
+                if (!log.IsLoggedLine(reinterpret_cast<MAddress>(slots[i].obj))) {
+                    ++miss;
+                    if (slots[i].lastStoreWasBarrier) {
+                        ++blog;
+                    }
+                }
+            }
+            std::printf("[GCDRIVER-STEP] i=%" PRIu64 " op=%u a=%u b=%u c=%u o2y=%" PRIu64
+                        " miss=%" PRIu64 " barrierMiss=%" PRIu64 "\n",
+                stepIndex, static_cast<unsigned>(e.op), e.a, e.b, e.c, o2y, miss, blog);
+        }
+        return ok;
     }
 
     void RunAll(const std::vector<Event>& events)
@@ -417,6 +574,7 @@ const char* OpName(Op op)
         case Op::PROMOTE: return "PROMOTE";
         case Op::STORE_PLAIN: return "STORE_PLAIN";
         case Op::STORE_BARRIER: return "STORE_BARRIER";
+        case Op::FILL_REGION: return "FILL_REGION";
         default: return "UNKNOWN";
     }
 }
@@ -435,6 +593,7 @@ bool ParseOp(const char* s, Op& out)
     if (std::strcmp(s, "PROMOTE") == 0) { out = Op::PROMOTE; return true; }
     if (std::strcmp(s, "STORE_PLAIN") == 0) { out = Op::STORE_PLAIN; return true; }
     if (std::strcmp(s, "STORE_BARRIER") == 0) { out = Op::STORE_BARRIER; return true; }
+    if (std::strcmp(s, "FILL_REGION") == 0) { out = Op::FILL_REGION; return true; }
     return false;
 }
 
@@ -471,37 +630,131 @@ bool ReadEvents(const char* path, std::vector<Event>& events)
     return true;
 }
 
-// Canonical minimal sequence for old→young unlogged edge.
-// Shape: alloc holder, alloc target, promote holder region to old, plain store, observe.
+// Positive-control shape: STORE_PLAIN old→young (observer must catch).
 std::vector<Event> SequenceOldYoungUnlogged()
 {
-    // indices: 0=holder, 1=target
     return {
-        { Op::ALLOC, 0, 0, 0 },          // holder (young)
-        { Op::ALLOC, 0, 0, 0 },          // target (young)
-        { Op::PIN, 0, 0, 0 },            // keep holder across promote/GC
-        { Op::PIN, 1, 0, 0 },            // keep target for observation
-        { Op::PROMOTE, 0, 0, 0 },        // holder region → old (all young→old)
-        // after promote both are old; re-alloc a fresh young target
-        { Op::ALLOC, 0, 0, 0 },          // idx 2 young target
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PIN, 1, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
         { Op::PIN, 2, 0, 0 },
-        { Op::STORE_PLAIN, 0, 0, 2 },    // old[0] → young[2], NO sticky log
+        { Op::STORE_PLAIN, 0, 0, 2 },
         { Op::OBSERVE, 0, 0, 0 },
     };
 }
 
-// Seeded random sequence (deterministic). Always ends with OBSERVE.
-std::vector<Event> GenerateFromSeed(uint64_t seed, uint32_t n)
+// Barrier baseline: same shape with STORE_BARRIER — expect missing=0 if log works.
+std::vector<Event> SequenceOldYoungBarrier()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PIN, 1, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 2, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 2 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// Hypothesis sequences (barrier-only).
+// H1: barrier write → minor (consume) → barrier write again → observe
+std::vector<Event> SequenceH1WriteMinorRewrite()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 }, // 0 holder
+        { Op::ALLOC, 0, 0, 0 }, // 1 spare
+        { Op::PIN, 0, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 }, // 2 young target
+        { Op::PIN, 2, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 2 },
+        { Op::FORCE_MINOR, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 }, // 3 new young
+        { Op::PIN, 3, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 3 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// H2: barrier write → major (BeginEpoch clears map) → observe without re-write
+std::vector<Event> SequenceH2WriteMajorNoRewrite()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 }, // 1 young
+        { Op::PIN, 1, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 1 },
+        { Op::FORCE_MAJOR, 0, 0, 0 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// H3: fill holder region → promote → barrier store young → observe
+std::vector<Event> SequenceH3FillPromoteStore()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 }, // 0
+        { Op::FILL_REGION, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 }, // young target (new region)
+        { Op::PIN, 0, 0, 0 },   // re-pin holder if still live idx0
+        { Op::STORE_BARRIER, 0, 0, 1 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// H4: barrier → minor → major → minor interleaved
+std::vector<Event> SequenceH4MajorMinorInterleave()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 1, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 1 },
+        { Op::FORCE_MAJOR, 0, 0, 0 },
+        { Op::FORCE_MINOR, 0, 0, 0 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// H5: barrier write, then FILL other regions / GROW, promote path via age, observe
+std::vector<Event> SequenceH5GrowAround()
+{
+    return {
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 0, 0, 0 },
+        { Op::PROMOTE, 0, 0, 0 },
+        { Op::ALLOC, 0, 0, 0 },
+        { Op::PIN, 1, 0, 0 },
+        { Op::STORE_BARRIER, 0, 0, 1 },
+        { Op::GROW, 8192, 0, 0 },
+        { Op::FORCE_MINOR, 0, 0, 0 },
+        { Op::OBSERVE, 0, 0, 0 },
+    };
+}
+
+// Seeded random sequence. barrierOnly=true ⇒ never emits STORE_PLAIN.
+std::vector<Event> GenerateFromSeed(uint64_t seed, uint32_t n, bool barrierOnly)
 {
     Rng rng(seed);
     std::vector<Event> out;
     out.reserve(n + 4);
-    // ensure at least two objects and a plain old→young attempt
     out.push_back({ Op::ALLOC, 0, 0, 0 });
     out.push_back({ Op::ALLOC, 0, 0, 0 });
     uint32_t live = 2;
     for (uint32_t i = 0; i + 1 < n; ++i) {
-        uint32_t pick = rng.next_u32(0, 9);
+        uint32_t pick = rng.next_u32(0, barrierOnly ? 11 : 12);
         Event e {};
         switch (pick) {
             case 0:
@@ -511,27 +764,39 @@ std::vector<Event> GenerateFromSeed(uint64_t seed, uint32_t n)
                 break;
             case 2:
             case 3:
-                e = { Op::STORE_PLAIN, rng.next_u32(0, live > 0 ? live - 1 : 0), 0,
-                    rng.next_u32(0, live > 0 ? live - 1 : 0) };
+                if (barrierOnly) {
+                    e = { Op::STORE_BARRIER, rng.next_u32(0, live > 0 ? live - 1 : 0), 0,
+                        rng.next_u32(0, live > 0 ? live - 1 : 0) };
+                } else {
+                    e = { Op::STORE_PLAIN, rng.next_u32(0, live > 0 ? live - 1 : 0), 0,
+                        rng.next_u32(0, live > 0 ? live - 1 : 0) };
+                }
                 break;
             case 4:
+            case 5:
                 e = { Op::STORE_BARRIER, rng.next_u32(0, live > 0 ? live - 1 : 0), 0,
                     rng.next_u32(0, live > 0 ? live - 1 : 0) };
                 break;
-            case 5:
+            case 6:
                 e = { Op::PROMOTE, 0, 0, 0 };
                 break;
-            case 6:
+            case 7:
                 e = { Op::PIN, rng.next_u32(0, live > 0 ? live - 1 : 0), 0, 0 };
                 break;
-            case 7:
+            case 8:
                 e = { Op::DROP, rng.next_u32(0, live > 0 ? live - 1 : 0), 0, 0 };
                 break;
-            case 8:
-                e = { Op::GROW, rng.next_u32(64, 4096), 0, 0 };
+            case 9:
+                e = { Op::GROW, rng.next_u32(64, 8192), 0, 0 };
+                break;
+            case 10:
+                e = { Op::FORCE_MINOR, 0, 0, 0 };
+                break;
+            case 11:
+                e = { Op::FORCE_MAJOR, 0, 0, 0 };
                 break;
             default:
-                e = { Op::FORCE_MINOR, 0, 0, 0 };
+                e = { Op::FILL_REGION, rng.next_u32(0, live > 0 ? live - 1 : 0), 0, 0 };
                 break;
         }
         out.push_back(e);
@@ -540,18 +805,12 @@ std::vector<Event> GenerateFromSeed(uint64_t seed, uint32_t n)
     return out;
 }
 
-// Fresh runtime driver for one sequence run (caller owns process lifetime).
-// We re-init only once per process; reduce re-runs reuse heap — for reduce we
-// re-exec via --replay of candidate files from the outer reduce loop.
-// Here, for in-process reduce, we only DROP all and re-alloc (heap may be dirty).
-// Prefer process-level reduce for determinism; provide in-process for speed.
-
 bool RunSequenceInProcess(const std::vector<Event>& events, Driver& d)
 {
     d.slots.clear();
     d.ResetStats();
     d.RunAll(events);
-    return d.lastObserveHit;
+    return d.requireBarrierOnlyHit ? d.lastBarrierOnlyHit : d.lastObserveHit;
 }
 
 // Naive linear reduction: drop one event at a time while predicate holds.
@@ -562,7 +821,6 @@ std::vector<Event> Reduce(const std::vector<Event>& input, bool (*predicate)(con
     while (improved && cur.size() > 1) {
         improved = false;
         for (size_t i = 0; i < cur.size(); ++i) {
-            // never drop the final OBSERVE if present
             if (cur[i].op == Op::OBSERVE && i + 1 == cur.size()) {
                 continue;
             }
@@ -583,6 +841,17 @@ std::vector<Event> Reduce(const std::vector<Event>& input, bool (*predicate)(con
     return cur;
 }
 
+// True if sequence contains any STORE_PLAIN (excluded from barrier-only hits).
+bool SequenceHasStorePlain(const std::vector<Event>& events)
+{
+    for (const Event& e : events) {
+        if (e.op == Op::STORE_PLAIN || e.op == Op::STORE) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void PrintUsage()
 {
     std::printf(
@@ -591,15 +860,20 @@ void PrintUsage()
         "  --events <n>         event count for --seed (default 32)\n"
         "  --replay <file>      replay event file\n"
         "  --write <file>       write generated/replayed sequence\n"
-        "  --shape oldyoung     run the canonical old→young unlogged-edge sequence\n"
-        "  --reduce             after a hit, reduce to a minimal subset (re-exec style via temp)\n"
-        "  --dump               print events to stdout\n");
+        "  --shape oldyoung     positive-control STORE_PLAIN old→young\n"
+        "  --shape barrier      same shape with STORE_BARRIER (expect logged)\n"
+        "  --shape h1|h2|h3|h4|h5  hypothesis sequences (barrier-only)\n"
+        "  --barrier-only       seed gen never emits STORE_PLAIN; hit=barrierOnlyHit\n"
+        "  --scan-seeds <n>     try seeds 1..n (or --seed base) for barrier-only hit\n"
+        "  --step-trace         print per-event o2y/miss snapshot\n"
+        "  --reduce             after a hit, reduce to a minimal subset\n"
+        "  --dump               print events to stdout\n"
+        "  --no-fini            skip FiniAndDelete (diagnose rc=134)\n");
 }
 
 } // namespace
 } // namespace MapleRuntime
 
-// Global driver for reduce predicate (same process; sequence must be self-contained).
 static MapleRuntime::Driver* g_driver = nullptr;
 static bool ReducePredicate(const std::vector<MapleRuntime::Event>& events)
 {
@@ -607,11 +881,13 @@ static bool ReducePredicate(const std::vector<MapleRuntime::Event>& events)
     if (g_driver == nullptr) {
         return false;
     }
-    // Clear table; objects remain on heap (acceptable for reduction of observation).
+    if (g_driver->requireBarrierOnlyHit && SequenceHasStorePlain(events)) {
+        return false;
+    }
     g_driver->slots.clear();
     g_driver->ResetStats();
     g_driver->RunAll(events);
-    return g_driver->lastObserveHit;
+    return g_driver->requireBarrierOnlyHit ? g_driver->lastBarrierOnlyHit : g_driver->lastObserveHit;
 }
 
 int main(int argc, char** argv)
@@ -623,9 +899,13 @@ int main(int argc, char** argv)
     uint32_t nEvents = 32;
     const char* replayPath = nullptr;
     const char* writePath = nullptr;
-    bool shapeOldYoung = false;
+    const char* shapeName = nullptr;
     bool doReduce = false;
     bool doDump = false;
+    bool barrierOnly = false;
+    uint32_t scanSeeds = 0;
+    bool stepTrace = false;
+    bool noFini = false;
 
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--seed") == 0 && i + 1 < argc) {
@@ -638,33 +918,148 @@ int main(int argc, char** argv)
         } else if (std::strcmp(argv[i], "--write") == 0 && i + 1 < argc) {
             writePath = argv[++i];
         } else if (std::strcmp(argv[i], "--shape") == 0 && i + 1 < argc) {
-            if (std::strcmp(argv[++i], "oldyoung") == 0) {
-                shapeOldYoung = true;
-            }
+            shapeName = argv[++i];
         } else if (std::strcmp(argv[i], "--reduce") == 0) {
             doReduce = true;
         } else if (std::strcmp(argv[i], "--dump") == 0) {
             doDump = true;
+        } else if (std::strcmp(argv[i], "--barrier-only") == 0) {
+            barrierOnly = true;
+        } else if (std::strcmp(argv[i], "--scan-seeds") == 0 && i + 1 < argc) {
+            scanSeeds = static_cast<uint32_t>(std::strtoul(argv[++i], nullptr, 0));
+            barrierOnly = true;
+        } else if (std::strcmp(argv[i], "--step-trace") == 0) {
+            stepTrace = true;
+        } else if (std::strcmp(argv[i], "--no-fini") == 0) {
+            noFini = true;
         } else if (std::strcmp(argv[i], "--help") == 0) {
             PrintUsage();
             return 0;
         }
     }
 
-    if (!haveSeed && replayPath == nullptr && !shapeOldYoung) {
-        shapeOldYoung = true; // default: the known shape
+    setenv("MRT_STICKY_MINOR", "1", 1);
+    setenv("MRT_STICKY_MINOR_FORCE_SLOW_PATH", "1", 1);
+
+    MRT_CjRuntimeInit();
+    InitSyntheticTypeInfo();
+
+    // Bind a mutator so IdleLogBarrier → CJ_MCC_StickyLogLine actually logs.
+    Mutator* mut = MutatorManager::Instance().CreateMutator();
+    std::printf("GCDRIVER mutator=%p\n", static_cast<void*>(mut));
+
+    auto& allocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    RegionManager& manager = allocator.GetRegionManager();
+
+    Driver driver;
+    driver.manager = &manager;
+    driver.requireBarrierOnlyHit = barrierOnly;
+    driver.trackStepTrace = stepTrace;
+    g_driver = &driver;
+
+    auto runOne = [&](const std::vector<Event>& events) -> bool {
+        return RunSequenceInProcess(events, driver);
+    };
+
+    // ---- multi-seed scan mode ----
+    if (scanSeeds > 0) {
+        uint64_t base = haveSeed ? seed : 1;
+        uint64_t hitSeed = 0;
+        std::vector<Event> hitEvents;
+        uint32_t tried = 0;
+        for (uint32_t k = 0; k < scanSeeds; ++k) {
+            uint64_t s = base + k;
+            std::vector<Event> events = GenerateFromSeed(s, nEvents, true);
+            ++tried;
+            if (SequenceHasStorePlain(events)) {
+                continue; // should not happen in barrierOnly gen
+            }
+            bool hit = runOne(events);
+            if ((k & 63u) == 0u) {
+                std::printf("GCDRIVER SCAN progress k=%u seed=%" PRIu64 " hit=%d barrierMissing=%" PRIu64 "\n",
+                    k, s, hit ? 1 : 0, driver.barrierMissing);
+                std::fflush(stdout);
+            }
+            if (hit) {
+                hitSeed = s;
+                hitEvents = events;
+                std::printf("GCDRIVER SCAN_HIT seed=%" PRIu64 " tried=%u events=%zu\n", s, tried, events.size());
+                break;
+            }
+        }
+        if (hitSeed != 0) {
+            if (writePath != nullptr) {
+                WriteEvents(writePath, hitEvents);
+            }
+            if (doReduce) {
+                std::vector<Event> reduced = Reduce(hitEvents, ReducePredicate);
+                std::printf("GCDRIVER REDUCED from=%zu to=%zu\n", hitEvents.size(), reduced.size());
+                if (writePath != nullptr) {
+                    std::string rpath = std::string(writePath) + ".reduced";
+                    WriteEvents(rpath.c_str(), reduced);
+                }
+                for (const Event& e : reduced) {
+                    std::printf("REDUCED %s %u %u %u\n", OpName(e.op), e.a, e.b, e.c);
+                }
+                driver.trackStepTrace = true;
+                const bool hit2 = runOne(reduced);
+                std::printf("GCDRIVER REDUCED_CONFIRM hit=%d barrierOnlyHit=%d missing=%" PRIu64
+                            " barrierMissing=%" PRIu64 "\n",
+                    hit2 ? 1 : 0, driver.lastBarrierOnlyHit ? 1 : 0, driver.missingEdges, driver.barrierMissing);
+            }
+            std::printf("GCDRIVER_DONE hit=1 barrierOnly=1 seed=%" PRIu64 " tried=%u\n", hitSeed, tried);
+            if (!noFini) {
+                CangjieRuntime::FiniAndDelete();
+            }
+            return 0;
+        }
+        std::printf("GCDRIVER_DONE hit=0 barrierOnly=1 tried=%u\n", tried);
+        if (!noFini) {
+            CangjieRuntime::FiniAndDelete();
+        }
+        return 1;
     }
 
+    // ---- single sequence mode ----
     std::vector<Event> events;
     if (replayPath != nullptr) {
         if (!ReadEvents(replayPath, events)) {
             std::printf("GCDRIVER replay FAIL path=%s\n", replayPath);
             return 2;
         }
-    } else if (shapeOldYoung) {
-        events = SequenceOldYoungUnlogged();
+    } else if (shapeName != nullptr) {
+        if (std::strcmp(shapeName, "oldyoung") == 0) {
+            events = SequenceOldYoungUnlogged();
+        } else if (std::strcmp(shapeName, "barrier") == 0) {
+            events = SequenceOldYoungBarrier();
+        } else if (std::strcmp(shapeName, "h1") == 0) {
+            events = SequenceH1WriteMinorRewrite();
+            barrierOnly = true;
+            driver.requireBarrierOnlyHit = true;
+        } else if (std::strcmp(shapeName, "h2") == 0) {
+            events = SequenceH2WriteMajorNoRewrite();
+            barrierOnly = true;
+            driver.requireBarrierOnlyHit = true;
+        } else if (std::strcmp(shapeName, "h3") == 0) {
+            events = SequenceH3FillPromoteStore();
+            barrierOnly = true;
+            driver.requireBarrierOnlyHit = true;
+        } else if (std::strcmp(shapeName, "h4") == 0) {
+            events = SequenceH4MajorMinorInterleave();
+            barrierOnly = true;
+            driver.requireBarrierOnlyHit = true;
+        } else if (std::strcmp(shapeName, "h5") == 0) {
+            events = SequenceH5GrowAround();
+            barrierOnly = true;
+            driver.requireBarrierOnlyHit = true;
+        } else {
+            std::printf("GCDRIVER unknown shape=%s\n", shapeName);
+            return 2;
+        }
+    } else if (haveSeed) {
+        events = GenerateFromSeed(seed, nEvents, barrierOnly);
     } else {
-        events = GenerateFromSeed(seed, nEvents);
+        events = SequenceOldYoungUnlogged();
     }
 
     if (doDump) {
@@ -676,31 +1071,23 @@ int main(int argc, char** argv)
         WriteEvents(writePath, events);
     }
 
-    // Force sticky minor on for observation of the log map (even without compiler consumer).
-    // StickyLog::ConfigureMinorFromEnvironment runs at init; set env before Init.
-    setenv("MRT_STICKY_MINOR", "1", 1);
-    setenv("MRT_STICKY_MINOR_FORCE_SLOW_PATH", "1", 1);
-
-    MRT_CjRuntimeInit();
-    InitSyntheticTypeInfo();
-
-    auto& allocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-    RegionManager& manager = allocator.GetRegionManager();
-
-    Driver driver;
-    driver.manager = &manager;
-    g_driver = &driver;
-
-    const bool hit = RunSequenceInProcess(events, driver);
+    const bool hit = runOne(events);
 
     std::printf("GCDRIVER events=%zu allocs=%" PRIu64 " stores=%" PRIu64
+                " barrierStores=%" PRIu64 " plainStores=%" PRIu64
                 " observes=%" PRIu64 " oldToYoung=%" PRIu64 " missing=%" PRIu64
-                " logged=%" PRIu64 " hit=%d\n",
-        events.size(), driver.allocCount, driver.storeCount, driver.observeCount,
-        driver.oldToYoungEdges, driver.missingEdges, driver.loggedEdges, hit ? 1 : 0);
-    if (hit) {
+                " logged=%" PRIu64 " barrierMissing=%" PRIu64 " plainMissing=%" PRIu64
+                " hit=%d barrierOnlyHit=%d\n",
+        events.size(), driver.allocCount, driver.storeCount, driver.barrierStoreCount,
+        driver.plainStoreCount, driver.observeCount, driver.oldToYoungEdges, driver.missingEdges,
+        driver.loggedEdges, driver.barrierMissing, driver.plainMissing,
+        hit ? 1 : 0, driver.lastBarrierOnlyHit ? 1 : 0);
+    if (driver.lastObserveHit) {
         std::printf("GCDRIVER REPRODUCED shape=old-to-young-unlogged-line %s\n",
             driver.lastMissDetail.c_str());
+    }
+    if (driver.lastBarrierOnlyHit) {
+        std::printf("GCDRIVER BARRIER_ONLY_HIT %s\n", driver.lastMissDetail.c_str());
     }
 
     std::vector<Event> reduced;
@@ -715,16 +1102,18 @@ int main(int argc, char** argv)
         for (const Event& e : reduced) {
             std::printf("REDUCED %s %u %u %u\n", OpName(e.op), e.a, e.b, e.c);
         }
-        // re-run reduced for confirmation
-        const bool hit2 = RunSequenceInProcess(reduced, driver);
-        std::printf("GCDRIVER REDUCED_CONFIRM hit=%d missing=%" PRIu64 "\n",
-            hit2 ? 1 : 0, driver.missingEdges);
+        driver.trackStepTrace = true;
+        const bool hit2 = runOne(reduced);
+        std::printf("GCDRIVER REDUCED_CONFIRM hit=%d missing=%" PRIu64 " barrierOnlyHit=%d\n",
+            hit2 ? 1 : 0, driver.missingEdges, driver.lastBarrierOnlyHit ? 1 : 0);
     }
 
-    CangjieRuntime::FiniAndDelete();
+    if (!noFini) {
+        CangjieRuntime::FiniAndDelete();
+    }
 
-    std::printf("GCDRIVER_DONE hit=%d events=%zu reduced=%zu\n",
-        hit ? 1 : 0, events.size(), reduced.size());
+    std::printf("GCDRIVER_DONE hit=%d barrierOnlyHit=%d events=%zu reduced=%zu\n",
+        hit ? 1 : 0, driver.lastBarrierOnlyHit ? 1 : 0, events.size(), reduced.size());
     std::fflush(stdout);
     return hit ? 0 : 1;
 }
