@@ -1238,6 +1238,8 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
 {
     StickyLog& stickyLog = StickyLog::Instance();
     size_t run = minorTotalRuns + 1;
+    size_t loggedLinesInCleanRegions = stickyLog.CountLoggedLinesInCleanRegions();
+    VLOG(REPORT, "[E1DECIDE-ROUND] run=%zu loggedLinesInCleanRegions=%zu", run, loggedLinesInCleanRegions);
     bool droppedThisRun = stickyLog.TryDropEdgeCompleteStoreAtSTW(run);
     size_t regionsSeen = 0;
     size_t regionsSkipped = 0;
@@ -1416,6 +1418,19 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                         size_t targetType = static_cast<size_t>(targetRegion->GetRegionType());
                         ++e1Shapes[holderType][targetType];
                         rawPinUncovered += static_cast<size_t>(rawPin);
+                        MAddress holderRegionAddress = __cj_sticky_heap_base +
+                            ((holderAddress - __cj_sticky_heap_base) / RegionInfo::UNIT_SIZE) *
+                                RegionInfo::UNIT_SIZE;
+                        uint8_t loggedByte = stickyLog.GetLoggedByte(holderAddress);
+                        bool dirtyBit = stickyLog.IsDirtyRegion(holderAddress);
+                        VLOG(REPORT,
+                             "[E1DECIDE-EVENT] run=%zu holder=%#zx slot=%#zx holderTypeInfo=%p "
+                             "loggedByte=%u dirtyBit=%u regionType=%u regionValid=%u "
+                             "regionStartMatch=%u storeKind=unavailable",
+                             run, holderAddress, slot, holder->GetTypeInfo(), static_cast<unsigned>(loggedByte),
+                             static_cast<unsigned>(dirtyBit), static_cast<unsigned>(holderRegion->GetRegionType()),
+                             static_cast<unsigned>(holderRegion->IsValidRegion()),
+                             static_cast<unsigned>(holderRegion->GetRegionStart() == holderRegionAddress));
                     } else {
                         ++bucketE2;
                         bucket = "E2_HOLDER_NOT_VISITED";

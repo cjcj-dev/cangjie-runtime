@@ -49,6 +49,9 @@ public:
     // (RegionManager::CollectYoungGarbage). Default 1 = shipped behavior
     // (age once, promote on the second surviving minor).
     uint8_t GetPromoteAge() const { return promoteAge; }
+    uint8_t GetLoggedByte(MAddress address) const;
+    bool IsDirtyRegion(MAddress address) const;
+    size_t CountLoggedLinesInCleanRegions() const;
     bool IsLoggedLine(MAddress address) const;
     bool HasPendingEdgeCompleteLine(MAddress rangeStart, MAddress rangeEnd) const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;

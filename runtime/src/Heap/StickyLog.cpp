@@ -251,6 +251,44 @@ bool StickyLog::IsEdgeCompleteDroppedLine(MAddress address) const
     return droppedLine != 0 && (address & ~(LINE_SIZE - 1)) == droppedLine;
 }
 
+uint8_t StickyLog::GetLoggedByte(MAddress address) const
+{
+    if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {
+        return 0;
+    }
+    size_t lineIndex = (address - heapStart) >> LINE_SHIFT;
+    return __atomic_load_n(__cj_sticky_logged_base + lineIndex, __ATOMIC_ACQUIRE);
+}
+
+bool StickyLog::IsDirtyRegion(MAddress address) const
+{
+    if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || dirtyRegionMap == nullptr)) {
+        return false;
+    }
+    size_t regionIndex = (address - heapStart) / RegionInfo::UNIT_SIZE;
+    uint8_t* dirtyByte = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr()) + regionIndex / 8;
+    uint8_t mask = static_cast<uint8_t>(1U << (regionIndex % 8));
+    return (__atomic_load_n(dirtyByte, __ATOMIC_ACQUIRE) & mask) != 0;
+}
+
+size_t StickyLog::CountLoggedLinesInCleanRegions() const
+{
+    if (__cj_sticky_logged_base == nullptr || dirtyRegionMap == nullptr) {
+        return 0;
+    }
+    size_t count = 0;
+    for (size_t lineIndex = 0; lineIndex < loggedByteCount; ++lineIndex) {
+        if (__atomic_load_n(__cj_sticky_logged_base + lineIndex, __ATOMIC_ACQUIRE) == 0) {
+            continue;
+        }
+        MAddress lineAddress = heapStart + (lineIndex << LINE_SHIFT);
+        if (!IsDirtyRegion(lineAddress)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 bool StickyLog::IsLoggedLine(MAddress address) const
 {
     if (UNLIKELY(IsEdgeCompleteDroppedLine(address))) {
