@@ -239,9 +239,20 @@ bool Mutator::RecordClearWhenEvent(const RemsetCheck::ClearWhenPendingEvent& eve
         RemsetCheck::Instance().RecordClearWhenEventDrop(index == RemsetCheck::CLEAR_WHEN_EVENT_RING_CAPACITY);
         return false;
     }
-    RemsetCheck::ClearWhenPendingEvent unpublished = event;
-    unpublished.sequence = 0;
-    clearWhenEventRing[index] = unpublished;
+    clearWhenEventRing[index].sequence = 0;
+    clearWhenEventRing[index].run = event.run;
+    clearWhenEventRing[index].kind = event.kind;
+    clearWhenEventRing[index].line = event.line;
+    clearWhenEventRing[index].regionStart = event.regionStart;
+    clearWhenEventRing[index].regionSize = event.regionSize;
+    clearWhenEventRing[index].slot = event.slot;
+    clearWhenEventRing[index].byteBefore = event.byteBefore;
+    clearWhenEventRing[index].byteAfter = event.byteAfter;
+    clearWhenEventRing[index].dirtyBefore = event.dirtyBefore;
+    clearWhenEventRing[index].dirtyAfter = event.dirtyAfter;
+    clearWhenEventRing[index].hookSite = event.hookSite;
+    clearWhenEventRing[index].stickyLogExit = event.stickyLogExit;
+    clearWhenEventRing[index].logLineSource = event.logLineSource;
     __atomic_store_n(&clearWhenEventRing[index].sequence, event.sequence, __ATOMIC_RELEASE);
     return true;
 }
