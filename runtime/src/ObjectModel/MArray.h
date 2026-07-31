@@ -35,6 +35,12 @@ public:
     inline void SetRefElement(MIndex index, const ObjectPtr mObj);
     inline U8* ConvertToCArray() const;
 private:
+    // This implementation consumes component type information and is exposed
+    // only through the CurrentPtr overload in MArray.inline.h.
+    void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
+    friend void ForEachRefFieldInRange(CurrentPtr object, const RefFieldVisitor& visitor, MAddress fieldStart,
+                                       MIndex fieldEnd);
+
     // use MIndex because length is the upper boundary of all indices
     MIndex length;
     // array content is appended here.
