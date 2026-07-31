@@ -492,16 +492,25 @@ struct IdxSet {
     U32 stackSlotIdx;
 };
 
+enum class StackMapLookupResult : U8 {
+    FOUND,
+    ZERO_ENTRIES,
+    PC_MISS,
+};
+
 class StackMapTable : public TableAPI {
 public:
     StackMapTable(U8* tableAddrStart, U32 tableBitStart) : TableAPI(tableAddrStart, tableBitStart) { Init(); }
     explicit StackMapTable(const BitsManager& bits) : TableAPI(bits) { Init(); }
     explicit StackMapTable(BitsManager&& bits) : TableAPI(bits) { Init(); }
     ~StackMapTable() = default;
-    IdxSet GetIdxSet(Uptr startPC, Uptr framePC) const
+    IdxSet GetIdxSet(Uptr startPC, Uptr framePC, StackMapLookupResult* lookupResult = nullptr) const
     {
         U32 recordNum = headerInfo[RECORD_NUM];
         if (recordNum == 0) {
+            if (lookupResult != nullptr) {
+                *lookupResult = StackMapLookupResult::ZERO_ENTRIES;
+            }
             return IdxSet();
         }
         // 32 bits is enough.
@@ -510,6 +519,9 @@ public:
         U32 right = recordNum - 1;
         U32 leftPCOff = PCAt(left);
         if (leftPCOff == targetPCOff) {
+            if (lookupResult != nullptr) {
+                *lookupResult = StackMapLookupResult::FOUND;
+            }
             if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
                 return IdxSet(RegIdxAt(left), SlotIdxAt(left), LineNumIdxAt(left),
                     DerivePtrIdxAt(left), StackRegIdxAt(left), StackSlotIdxAt(left));
@@ -519,6 +531,9 @@ public:
         }
         U32 rightPCOff = PCAt(right);
         if (rightPCOff == targetPCOff) {
+            if (lookupResult != nullptr) {
+                *lookupResult = StackMapLookupResult::FOUND;
+            }
             if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
                 return IdxSet(RegIdxAt(right), SlotIdxAt(right), LineNumIdxAt(right),
                     DerivePtrIdxAt(right), StackRegIdxAt(right), StackSlotIdxAt(right));
@@ -528,6 +543,9 @@ public:
         }
         if (targetPCOff < leftPCOff || targetPCOff > rightPCOff) {
             DLOG(ENUM, "stack map is empty in this frame");
+            if (lookupResult != nullptr) {
+                *lookupResult = StackMapLookupResult::PC_MISS;
+            }
             return IdxSet();
         }
         while (left <= right) {
@@ -535,6 +553,9 @@ public:
             U32 mid = (left + right) >> 1;
             U32 midPCOff = PCAt(mid);
             if (midPCOff == targetPCOff) {
+                if (lookupResult != nullptr) {
+                    *lookupResult = StackMapLookupResult::FOUND;
+                }
                 if (CangjieRuntime::stackGrowConfig == StackGrowConfig::STACK_GROW_ON) {
                     return IdxSet(RegIdxAt(mid), SlotIdxAt(mid), LineNumIdxAt(mid),
                         DerivePtrIdxAt(mid), StackRegIdxAt(mid), StackSlotIdxAt(mid));
@@ -546,6 +567,9 @@ public:
             } else {
                 right = mid - 1;
             }
+        }
+        if (lookupResult != nullptr) {
+            *lookupResult = StackMapLookupResult::PC_MISS;
         }
         return IdxSet();
     }
