@@ -57,7 +57,7 @@ public:
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
-    BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    CurrentPtr ForwardObject(MaybeStalePtr fromVersion) override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -129,11 +129,12 @@ public:
         return space.GetRegionManager().RouteObject(fromObj, region, expectedEpoch);
     }
 
-    BaseObject* FindToVersion(BaseObject* obj) const override
+    CurrentPtr FindToVersion(MaybeStalePtr maybeStale) const override
     {
+        BaseObject* obj = maybeStale.pointer;
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (fromRegionInfo == nullptr) {
-            return nullptr;
+            return CurrentPtr(nullptr);
         }
         // Sampled here, one line before use — the last sample-at-use reader now that
         // the epochless RouteObject wrappers are deleted. A barrier has no earlier
@@ -144,7 +145,7 @@ public:
         const uint64_t expectedEpoch = fromRegionInfo->GetIdentityEpoch();
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.GetRegionManager().NoteEpochSampledAtUse();
-        return space.GetRegionManager().RouteObject(obj, fromRegionInfo, expectedEpoch);
+        return CurrentPtr(space.GetRegionManager().RouteObject(obj, fromRegionInfo, expectedEpoch));
     }
 
 protected:
