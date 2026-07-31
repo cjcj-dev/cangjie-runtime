@@ -8,6 +8,7 @@ set(SRC_LIST
     "Heap.cpp"
     "GcThreadPool.cpp"
     "StickyLog.cpp"
+    "RemsetCheck.cpp"
     "FixEdgeSet.cpp"
     "ForwardFactTable.cpp"
     "RelocationDiagnosticTable.cpp"

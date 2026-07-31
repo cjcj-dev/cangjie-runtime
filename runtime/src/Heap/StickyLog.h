@@ -21,6 +21,7 @@ extern "C" MRT_EXPORT const uint8_t __cj_sticky_line_shift;
 extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object);
 
 class MemMap;
+class RemsetCheck;
 
 class StickyLog {
 public:
@@ -56,6 +57,8 @@ public:
     void RescanLoggedLines(const LoggedLineVisitor& visitor);
 
 private:
+    friend class RemsetCheck;
+
     MemMap* loggedMap = nullptr;
     MemMap* dirtyRegionMap = nullptr;
     MAddress heapStart = 0;
