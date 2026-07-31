@@ -37,10 +37,6 @@ public:
         auto addr = reinterpret_cast<uintptr_t>(this) + offset;
         return *reinterpret_cast<Field<T>*>(static_cast<Uptr>(addr));
     }
-#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    void DumpObject(int logtype, bool isSimple = false) const;
-#endif
-
     StateWord GetStateWord() const { return stateWord.GetStateWord(); }
     ObjectState GetObjectState() const { return stateWord.GetObjectState(); }
 
@@ -92,6 +88,9 @@ private:
     void ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
     // size in bytes
     size_t GetSize() const;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    void DumpObject(int logtype, bool isSimple) const;
+#endif
 
     void ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
     void ForEachAggRefFieldInNonArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd) const;
@@ -106,6 +105,9 @@ private:
     friend void ForEachRefInStruct(CurrentPtr object, const RefFieldVisitor& visitor, MAddress aggStart,
                                    MAddress aggEnd);
     friend size_t GetSize(CurrentPtr object);
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+    friend void DumpObject(CurrentPtr object, int logtype, bool isSimple);
+#endif
 
     // The only contract between Managed Heap and other modules
     StateWord stateWord;
@@ -156,6 +158,13 @@ ALWAYS_INLINE inline size_t GetSize(CurrentPtr object)
 {
     return static_cast<BaseObject*>(object)->GetSize();
 }
+
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+ALWAYS_INLINE inline void DumpObject(CurrentPtr object, int logtype, bool isSimple = false)
+{
+    static_cast<BaseObject*>(object)->DumpObject(logtype, isSimple);
+}
+#endif
 
 using ObjectVisitor = std::function<void(ObjectPtr)>;
 
