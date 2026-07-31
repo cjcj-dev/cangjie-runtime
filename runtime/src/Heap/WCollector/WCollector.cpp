@@ -1184,14 +1184,16 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
         bool retainLine = false;
         auto scanObject = [this, workStack, forwarding, evacuatedRegions, lineStart, lineEnd,
                            &retainLine](BaseObject* object) {
+            CurrentPtr currentObject = UnsafeAssumeCurrent(object);
             MAddress objectStart = reinterpret_cast<MAddress>(object);
-            MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+            MAddress objectEnd = objectStart + RegionSpace::ToAllocSize(GetSize(currentObject));
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
-            ForEachStrongRefSlot(object,
+            ForEachStrongRefSlot(currentObject,
                 [this, workStack, forwarding, evacuatedRegions,
-                 &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+                 &retainLine](RefSlotKind, CurrentPtr currentTarget, RefField<>& field) {
+                    BaseObject* target = currentTarget;
                     if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
                         minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
                     }
@@ -1604,9 +1606,10 @@ void WCollector::DoYoungGarbageCollection()
                                                     &promotedObjects, &promotedLoggedLines](BaseObject* object) {
             ++promotedObjects;
             bool logged = false;
-            ForEachStrongRefSlot(object,
+            ForEachStrongRefSlot(UnsafeAssumeCurrent(object),
                 [&satbBuffer, &stickyLog, &promotionNode, &promotedLoggedLines, &logged, object]
-                (RefSlotKind, BaseObject* target, RefField<>&) {
+                (RefSlotKind, CurrentPtr currentTarget, RefField<>&) {
+                    BaseObject* target = currentTarget;
                     if (logged || !Heap::IsHeapAddress(target)) {
                         return;
                     }
