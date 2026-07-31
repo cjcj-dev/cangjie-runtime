@@ -11,12 +11,16 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "Common/BaseObject.h"
 #include "Common/Runtime.h"
+#include "Common/StateWord.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/StickyLog.h"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MFuncdesc.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "StackMap/CompressedStackMap.h"
 #include "StackMap/StackMapTypeDef.h"
 
 namespace MapleRuntime {
@@ -46,6 +50,20 @@ struct FrameGapStats {
     std::atomic<uint64_t> nonEntryHits{ 0 };
     std::atomic<uint64_t> maxDepthObserved{ 0 };
     std::atomic<uint64_t> walksObserved{ 0 };
+    std::atomic<uint64_t> refStateNormal{ 0 };
+    std::atomic<uint64_t> refStateLocked{ 0 };
+    std::atomic<uint64_t> refStateForwarding{ 0 };
+    std::atomic<uint64_t> refStateForwarded{ 0 };
+    std::atomic<uint64_t> refStateOther{ 0 };
+    std::atomic<uint64_t> refStateRead{ 0 };
+    std::atomic<uint64_t> nonEntryRefStateNormal{ 0 };
+    std::atomic<uint64_t> nonEntryRefStateNonNormal{ 0 };
+    std::atomic<uint64_t> invalidNoStackmap{ 0 };
+    std::atomic<uint64_t> invalidEmptyRecords{ 0 };
+    std::atomic<uint64_t> invalidPcOutOfRange{ 0 };
+    std::atomic<uint64_t> invalidPcMissExact{ 0 };
+    std::atomic<uint64_t> invalidDescNull{ 0 };
+    std::atomic<uint64_t> invalidClassifyErr{ 0 };
     FrameGapSymbolBucket symbols[kFrameGapSymbolBuckets];
 };
 
@@ -127,6 +145,29 @@ bool FrameGapStatsEnabled()
                                       static_cast<size_t>(stats.nonEntryHits.load(std::memory_order_relaxed)),
                                       static_cast<size_t>(stats.maxDepthObserved.load(std::memory_order_relaxed)),
                                       static_cast<size_t>(stats.walksObserved.load(std::memory_order_relaxed)));
+                         std::fprintf(stderr,
+                                      "FRAMEGAP_REF_STATE total_read=%zu s0_normal=%zu s1_locked=%zu "
+                                      "s2_forwarding=%zu s3_forwarded=%zu s_other=%zu "
+                                      "non_entry_s0=%zu non_entry_non_normal=%zu\n",
+                                      static_cast<size_t>(stats.refStateRead.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.refStateNormal.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.refStateLocked.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.refStateForwarding.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.refStateForwarded.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.refStateOther.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(
+                                          stats.nonEntryRefStateNormal.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(
+                                          stats.nonEntryRefStateNonNormal.load(std::memory_order_relaxed)));
+                         std::fprintf(stderr,
+                                      "FRAMEGAP_INVALID_REASON no_stackmap=%zu empty_records=%zu "
+                                      "pc_out_of_range=%zu pc_miss_exact=%zu desc_null=%zu classify_err=%zu\n",
+                                      static_cast<size_t>(stats.invalidNoStackmap.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.invalidEmptyRecords.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.invalidPcOutOfRange.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.invalidPcMissExact.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.invalidDescNull.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.invalidClassifyErr.load(std::memory_order_relaxed)));
                          for (size_t i = 0; i < kFrameGapSymbolBuckets; ++i) {
                              FrameGapSymbolBucket& bucket = stats.symbols[i];
                              uint64_t count = bucket.count.load(std::memory_order_relaxed);
@@ -143,19 +184,115 @@ bool FrameGapStatsEnabled()
     return enabled;
 }
 
+void RecordRefState(FrameGapStats& stats, BaseObject* obj, bool entryBoundary)
+{
+    // Only read StateWord high/state bits; do not follow TypeInfo.
+    ObjectState::ObjectStateCode code = obj->GetStateWord().GetStateCode();
+    stats.refStateRead.fetch_add(1, std::memory_order_relaxed);
+    switch (code) {
+        case ObjectState::NORMAL:
+            stats.refStateNormal.fetch_add(1, std::memory_order_relaxed);
+            if (!entryBoundary) {
+                stats.nonEntryRefStateNormal.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
+        case ObjectState::LOCKED:
+            stats.refStateLocked.fetch_add(1, std::memory_order_relaxed);
+            if (!entryBoundary) {
+                stats.nonEntryRefStateNonNormal.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
+        case ObjectState::FORWARDING:
+            stats.refStateForwarding.fetch_add(1, std::memory_order_relaxed);
+            if (!entryBoundary) {
+                stats.nonEntryRefStateNonNormal.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
+        case ObjectState::FORWARDED:
+            stats.refStateForwarded.fetch_add(1, std::memory_order_relaxed);
+            if (!entryBoundary) {
+                stats.nonEntryRefStateNonNormal.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
+        default:
+            stats.refStateOther.fetch_add(1, std::memory_order_relaxed);
+            if (!entryBoundary) {
+                stats.nonEntryRefStateNonNormal.fetch_add(1, std::memory_order_relaxed);
+            }
+            break;
+    }
+}
+
+const char* ClassifyInvalidMapReason(uintptr_t startIP, uintptr_t frameIP, FrameGapStats& stats)
+{
+    if (startIP == 0) {
+        stats.invalidDescNull.fetch_add(1, std::memory_order_relaxed);
+        return "desc_null";
+    }
+    FuncDescRef desc = MFuncDesc::GetFuncDesc(startIP);
+    if (desc == nullptr) {
+        stats.invalidDescNull.fetch_add(1, std::memory_order_relaxed);
+        return "desc_null";
+    }
+    Uptr* stackmapStartRaw = desc->GetStackMap();
+    if (stackmapStartRaw == nullptr) {
+        stats.invalidNoStackmap.fetch_add(1, std::memory_order_relaxed);
+        return "not-emitted";
+    }
+    U32 codeSize = desc->GetCodeSize();
+    U32 targetPCOff = static_cast<U32>(frameIP - startIP);
+    if (codeSize != 0 && targetPCOff > codeSize) {
+        stats.invalidPcOutOfRange.fetch_add(1, std::memory_order_relaxed);
+        return "lookup-key-mismatch:pc-gt-codesize";
+    }
+    auto head = CompressedStackMapHead::GetStackMapHead(startIP, nullptr);
+    auto entry = head.GetStackMapEntry(startIP, frameIP);
+    if (entry.IsValid()) {
+        stats.invalidClassifyErr.fetch_add(1, std::memory_order_relaxed);
+        return "classify_err:entry-valid-but-map-invalid";
+    }
+    // Probe whether any PC in this function has a stackmap entry.
+    bool any = false;
+    U32 step = codeSize > 64 ? codeSize / 32 : 1;
+    if (step == 0) {
+        step = 1;
+    }
+    for (U32 off = 0; off <= codeSize; off += step) {
+        auto e = CompressedStackMapHead::GetStackMapHead(startIP, nullptr)
+                     .GetStackMapEntry(startIP, startIP + off);
+        if (e.IsValid()) {
+            any = true;
+            break;
+        }
+        if (codeSize == 0) {
+            break;
+        }
+    }
+    if (!any) {
+        stats.invalidEmptyRecords.fetch_add(1, std::memory_order_relaxed);
+        return "not-emitted-or-empty-records";
+    }
+    stats.invalidPcMissExact.fetch_add(1, std::memory_order_relaxed);
+    return "lookup-key-mismatch:pc-miss-exact";
+}
+
 void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapMap, RegSlotsMap& regSlotsMap)
 {
     FrameGapStats& stats = GetFrameGapStats();
     FrameAddress* fa = frame.mFrame.GetFA();
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(fa);
+    uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+    uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     size_t hits = 0;
     size_t samples = 0;
     size_t calleeRegs = 0;
     size_t stackSlots = 0;
     size_t stackHits = 0;
+    size_t nonNormalHits = 0;
     CString nameCs = frame.GetFuncName();
     const char* name = nameCs.IsEmpty() ? "?" : nameCs.Str();
     bool entryBoundary = IsEntryBoundaryName(name);
+    const char* invReason = ClassifyInvalidMapReason(startIP, frameIP, stats);
     for (RegisterNum reg = 0; reg < REGISTERS_COUNT; ++reg) {
         if (!regSlotsMap.HasReg(reg)) {
             continue;
@@ -169,6 +306,11 @@ void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapM
         ++samples;
         if (obj != nullptr && Heap::IsHeapAddress(obj)) {
             ++hits;
+            ObjectState::ObjectStateCode code = obj->GetStateWord().GetStateCode();
+            if (code != ObjectState::NORMAL) {
+                ++nonNormalHits;
+            }
+            RecordRefState(stats, obj, entryBoundary);
         }
     }
     if (fa != nullptr && fa->callerFrameAddress != nullptr) {
@@ -182,6 +324,12 @@ void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapM
                 if (val != nullptr && Heap::IsHeapAddress(val)) {
                     ++stackHits;
                     ++hits;
+                    auto* obj = reinterpret_cast<BaseObject*>(val);
+                    ObjectState::ObjectStateCode code = obj->GetStateWord().GetStateCode();
+                    if (code != ObjectState::NORMAL) {
+                        ++nonNormalHits;
+                    }
+                    RecordRefState(stats, obj, entryBoundary);
                 }
             }
             samples += stackSlots;
@@ -208,16 +356,14 @@ void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapM
     }
     RecordSkippedSymbol(stats, name);
     uint64_t printed = stats.samplePrinted.fetch_add(1, std::memory_order_relaxed);
-    if (printed < 64 || (!entryBoundary && hits > 0) || (!entryBoundary && printed < 128)) {
-        uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
-        uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+    if (printed < 64 || (!entryBoundary && hits > 0) || nonNormalHits > 0 || (!entryBoundary && printed < 128)) {
         std::fprintf(stderr,
                      "FRAMEGAP_SKIP sample=%zu start_ip=0x%zx frame_ip=0x%zx fa=0x%zx "
                      "func=%s entry=%d callee_regs=%zu stack_slots=%zu stack_hits=%zu "
-                     "samples=%zu heap_hits=%zu map_valid=%d\n",
+                     "samples=%zu heap_hits=%zu non_normal_hits=%zu map_valid=%d inv=%s\n",
                      static_cast<size_t>(printed), startIP, frameIP, frameAddress, name,
-                     entryBoundary ? 1 : 0, calleeRegs, stackSlots, stackHits, samples, hits,
-                     heapMap.IsValid() ? 1 : 0);
+                     entryBoundary ? 1 : 0, calleeRegs, stackSlots, stackHits, samples, hits, nonNormalHits,
+                     heapMap.IsValid() ? 1 : 0, invReason);
     }
     (void)heapMap;
 }
