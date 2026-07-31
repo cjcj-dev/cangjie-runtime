@@ -116,7 +116,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
-            toObj = FindToVersion(fromObj);
+            toObj = FindToVersion(MaybeStalePtr(fromObj));
         }
         if (toObj == nullptr) {
             CHECK_DETAIL(!forward,
@@ -221,7 +221,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     BaseObject* latest = nullptr;
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
+        latest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
         latest = field.GetTargetObject();
     }
@@ -290,7 +290,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     BaseObject* latest = nullptr;
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
+        latest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
         latest = field.GetTargetObject();
     }
@@ -339,7 +339,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     }
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
+        latest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
         latest = field.GetTargetObject();
     }
@@ -416,11 +416,11 @@ void WCollector::PreforwardDiscoveredExternObjects()
         BaseObject* exportObj = it->first;
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
+            latest = ForwardObject(MaybeStalePtr(exportObj));
         }
         for (auto &externObj : it->second) {
             if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
-                BaseObject* toObj = ForwardObject(externObj);
+                BaseObject* toObj = ForwardObject(MaybeStalePtr(externObj));
                 externObj = toObj;
             }
         }
@@ -445,7 +445,7 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         BaseObject* exportObj = *it;
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
-            latest = ForwardObject(exportObj);
+            latest = ForwardObject(MaybeStalePtr(exportObj));
         }
         if (latest != exportObj) {
             tmp.insert(latest);
@@ -489,7 +489,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         return;
     }
     BaseObject* fromObj = oldField.GetTargetObject();
-    BaseObject* latest = FindToVersion(fromObj);
+    BaseObject* latest = FindToVersion(MaybeStalePtr(fromObj));
     if (latest == nullptr) {
         latest = fromObj;
     }
@@ -527,13 +527,13 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
     if (IsCurrentPointer(oldField)) {
         latest = raw;
     } else if (IsOldPointer(oldField)) {
-        latest = FindToVersion(raw);
+        latest = FindToVersion(MaybeStalePtr(raw));
         if (latest == nullptr) {
             latest = raw;
         }
     } else {
         // Untagged: may still be a from-object whose route is live until Unbind.
-        latest = FindToVersion(raw);
+        latest = FindToVersion(MaybeStalePtr(raw));
         if (latest == nullptr) {
             latest = raw;
         }
@@ -1071,7 +1071,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     RefField<> value(field);
     BaseObject* object = value.GetTargetObject();
     if (IsOldPointer(value)) {
-        BaseObject* latest = FindLatestVersion(object);
+        BaseObject* latest = FindLatestVersion(MaybeStalePtr(object));
         return latest == nullptr ? object : latest;
     }
     return object;
@@ -1725,10 +1725,11 @@ void WCollector::ProcessFinalizers()
     fp.Notify();
 }
 
-BaseObject* WCollector::ForwardObject(BaseObject* obj)
+CurrentPtr WCollector::ForwardObject(MaybeStalePtr maybeStale)
 {
+    BaseObject* obj = maybeStale.pointer;
     BaseObject* to = TryForwardObject(obj);
-    return (to != nullptr) ? to : obj;
+    return CurrentPtr((to != nullptr) ? to : obj);
 }
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
