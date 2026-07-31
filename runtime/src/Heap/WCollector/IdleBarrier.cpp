@@ -210,6 +210,7 @@ void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
     // when holder is a stable heap object (same source-proof as WriteReference).
     // MaybeAdd skips from/ghost holders and non-From/Ghost targets (I5).
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        CanonicalizeCopiedStruct(obj, dst, dst, dstLen);
         obj->ForEachRefInStruct(
             [obj](RefField<false>& field) {
                 BaseObject* ref = field.GetTargetObject();
