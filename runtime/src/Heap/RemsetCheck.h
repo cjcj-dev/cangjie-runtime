@@ -95,6 +95,25 @@ public:
         COUNT,
     };
 
+    struct ClearWhenPendingEvent {
+        uint64_t sequence;
+        size_t run;
+        ClearWhenEventKind kind;
+        MAddress line;
+        MAddress regionStart;
+        size_t regionSize;
+        MAddress slot;
+        uint8_t byteBefore;
+        uint8_t byteAfter;
+        bool dirtyBefore;
+        bool dirtyAfter;
+        HookSite hookSite;
+        StickyLogExit stickyLogExit;
+        LogLineSource logLineSource;
+    };
+
+    static constexpr size_t CLEAR_WHEN_EVENT_RING_CAPACITY = 262144;
+
     static RemsetCheck& Instance() noexcept;
 
     void ConfigureFromEnvironment(bool forceSlowPath);
@@ -119,6 +138,10 @@ public:
     void RecordRescanDirtyClear(MAddress regionStart, size_t regionSize, bool dirtyBefore);
     void RecordClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void RecordBeginEpochClear();
+    uint64_t ReserveClearWhenSequence();
+    size_t GetClearWhenRun() const;
+    void ReplayClearWhenEvents(const ClearWhenPendingEvent* events, size_t count);
+    void RecordClearWhenEventDrop(bool firstOverflow);
     void CheckVisitedRound(size_t run);
     void Fini();
 
@@ -188,7 +211,10 @@ private:
                                         uint8_t byteBefore, uint8_t byteAfter, bool dirtyBefore, bool dirtyAfter,
                                         HookSite hookSite = HookSite::COUNT,
                                         StickyLogExit stickyLogExit = StickyLogExit::COUNT,
-                                        LogLineSource logLineSource = LogLineSource::BARRIER, MAddress slot = 0);
+                                        LogLineSource logLineSource = LogLineSource::BARRIER, MAddress slot = 0,
+                                        uint64_t sequence = 0, size_t eventRun = 0);
+    uint64_t RecordPendingClearWhenEvent(ClearWhenPendingEvent event);
+    void ReplayClearWhenEventLocked(const ClearWhenPendingEvent& event);
     void RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
                                     bool dirtyAfter);
     ClearedBy ClassifyClearedBy(const Edge& edge, const LineTrace& trace, const ClearWhenEvent*& clearEvent,
@@ -225,8 +251,10 @@ private:
     std::mutex edgeMutex;
     std::unordered_map<MAddress, Edge> edges;
     std::unordered_map<MAddress, LineTimeline> lineTimelines;
-    uint64_t nextClearWhenSequence = 1;
-    size_t clearWhenRun = 1;
+    std::atomic<uint64_t> nextClearWhenSequence{ 1 };
+    std::atomic<size_t> clearWhenRun{ 1 };
+    std::atomic<size_t> clearWhenEventRingOverflows{ 0 };
+    std::atomic<size_t> clearWhenEventsDropped{ 0 };
     bool visitedRoundActive = false;
     size_t visitedRoundRun = 0;
     size_t visitedRoundOldMissing = 0;
