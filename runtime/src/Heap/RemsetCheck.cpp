@@ -784,8 +784,6 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
     if (clearEvent != nullptr && clearEvent->run < run && minorsSinceWrite > 1) {
         ++missingClearAfterMiddleMinor;
     }
-    uint8_t byteAtConsume = LoadLoggedByte(line);
-    bool dirtyAtConsume = LoadDirtyBit(edge.holder);
     uint64_t firstLogSequence = 0;
     size_t firstEventIndex = 0;
     if (timeline != lineTimelines.end()) {
@@ -812,8 +810,8 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
          timeline == lineTimelines.end() ? 0 : static_cast<unsigned>(timeline->second.startDirty),
          static_cast<unsigned long long>(firstLogSequence), static_cast<unsigned long long>(edge.writeSequence),
          HookSiteName(edge.site), StickyLogExitName(edge.stickyLogExit),
-         static_cast<unsigned long long>(trace.consumeSequence), static_cast<unsigned>(byteAtConsume),
-         static_cast<unsigned>(dirtyAtConsume), static_cast<unsigned>(trace.dirtyRegionConsidered),
+         static_cast<unsigned long long>(trace.consumeSequence), static_cast<unsigned>(trace.byteAtRoundStart),
+         static_cast<unsigned>(trace.dirtyAtRoundStart), static_cast<unsigned>(trace.dirtyRegionConsidered),
          static_cast<unsigned>(visited), minorsSinceWrite, ClearedByName(clearedBy),
          static_cast<unsigned long long>(clearEvent == nullptr ? 0 : clearEvent->sequence),
          clearEvent == nullptr ? 0 : clearEvent->run);
@@ -824,6 +822,9 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
         const ClearWhenEvent& event = timeline->second.events[i];
         if (event.sequence > trace.consumeSequence && event.run > run) {
             break;
+        }
+        if (event.kind == ClearWhenEventKind::BARRIER_WRITE && event.sequence != edge.writeSequence) {
+            continue;
         }
         VLOG(REPORT,
              "[CLEARWHEN-EVENT] run=%zu slot=%p line=%p sequence=%llu eventRun=%zu kind=%s byte=%u->%u "
