@@ -15,6 +15,7 @@ set(SRC_LIST
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
+set_property(SOURCE CanonicalWriteTable.cpp APPEND PROPERTY COMPILE_OPTIONS -fvisibility=hidden)
 add_subdirectory(Allocator)
 add_subdirectory(Barrier)
 add_subdirectory(Collector)
