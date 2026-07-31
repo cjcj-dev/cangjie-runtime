@@ -124,6 +124,13 @@ void StickyLog::ConfigureMinorFromEnvironment()
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
         static_cast<size_t>(std::numeric_limits<uint32_t>::max())));
+    // Measurement knob for the promotion-age sweep: default 1 keeps the shipped
+    // aging decision bit-identical. Clamped to the widened youngAge field
+    // (RegionInfo::MAX_YOUNG_AGE); the interval knob above bounds how many
+    // minors an epoch can run, which in turn bounds reachable ages.
+    size_t configuredPromoteAge = ReadStickyPositiveInteger("MRT_STICKY_MINOR_PROMOTE_AGE", 1);
+    promoteAge = static_cast<uint8_t>(std::min(configuredPromoteAge,
+        static_cast<size_t>(RegionInfo::MAX_YOUNG_AGE)));
     // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
     // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
     // a harness that still aborts under this load; major-only matches sticky0 green path.

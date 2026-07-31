@@ -41,6 +41,11 @@ public:
     bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
     size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
     uint32_t GetMajorInterval() const { return majorInterval; }
+    // Region promotion age: a young region with live bytes ages until
+    // youngAge reaches this value, then the whole region is promoted to old
+    // (RegionManager::CollectYoungGarbage). Default 1 = shipped behavior
+    // (age once, promote on the second surviving minor).
+    uint8_t GetPromoteAge() const { return promoteAge; }
     bool IsLoggedLine(MAddress address) const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
@@ -63,6 +68,7 @@ private:
     bool forceSlowPathEnabled = false;
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;
+    uint8_t promoteAge = 1;
 };
 } // namespace MapleRuntime
 
