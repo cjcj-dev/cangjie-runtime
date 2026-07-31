@@ -26,6 +26,28 @@ namespace MapleRuntime {
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
+// Provenance breadcrumb for precise stack-root enumeration forensics.
+// Filled while visiting a mutator's frames (TracingCollector::VisitStackRoots /
+// VisitHeapReferencesOnStack) and consumed only by the fail-closed gates in
+// CheckAndPush (Mutator.cpp). A tip->IsVaildType() abort without the frame PC
+// and the slot/register the root came from cannot be reconciled against the
+// compiler's stackmap (the vaildtype and vtpublish lanes both ended UNKNOWN for
+// exactly this reason); with the breadcrumb one hit carries everything needed.
+// Cost on healthy paths: a few thread-local stores per visited frame/root.
+struct StackRootProvenance {
+    uintptr_t startIP = 0;
+    uintptr_t frameIP = 0;
+    uintptr_t frameFA = 0;
+    uint32_t frameType = 0;
+    // 0=none 1=slot-table 2=reg-table 3=stack-object-field 4=other-root
+    uint32_t sourceKind = 0;
+    int64_t slotBias = 0;
+    uint32_t regNum = 0;
+    const void* holder = nullptr;
+    const void* holderField = nullptr;
+};
+extern thread_local StackRootProvenance g_stackRootProvenance;
+
 // prefetch distance for mark.
 #define MACRO_MARK_PREFETCH_DISTANCE 16    // this macro is used for check when pre-compiling.
 constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to change MACRO_MARK_PREFETCH_DISTANCE.

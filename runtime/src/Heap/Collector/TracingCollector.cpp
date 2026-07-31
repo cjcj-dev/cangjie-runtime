@@ -241,12 +241,19 @@ private:
     TracingCollector& collector;
     TracingCollector::WorkStack workStack;
 };
+thread_local StackRootProvenance g_stackRootProvenance;
+
 void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                        Mutator& mutator)
 {
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+    g_stackRootProvenance = StackRootProvenance();
+    g_stackRootProvenance.startIP = startIP;
+    g_stackRootProvenance.frameIP = frameIP;
+    g_stackRootProvenance.frameFA = frameAddress;
+    g_stackRootProvenance.frameType = static_cast<uint32_t>(frame.GetFrameType());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
     RootMap rootMap = builder.Build<RootMap>();
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -267,8 +274,14 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         }
     };
 #else
-    SlotDebugVisitor slotDebugFunc = nullptr;
-    RegDebugVisitor regDebugFunc = nullptr;
+    SlotDebugVisitor slotDebugFunc = [](SlotBias off, BaseObject*) {
+        g_stackRootProvenance.sourceKind = 1;
+        g_stackRootProvenance.slotBias = off;
+    };
+    RegDebugVisitor regDebugFunc = [](RegisterNum reg, const BaseObject*) {
+        g_stackRootProvenance.sourceKind = 2;
+        g_stackRootProvenance.regNum = reg;
+    };
 #endif
     if (rootMap.IsValid()) {
         rootMap.VisitSlotRoots(visitor, slotDebugFunc);
@@ -293,6 +306,11 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+    g_stackRootProvenance = StackRootProvenance();
+    g_stackRootProvenance.startIP = startIP;
+    g_stackRootProvenance.frameIP = frameIP;
+    g_stackRootProvenance.frameFA = frameAddress;
+    g_stackRootProvenance.frameType = static_cast<uint32_t>(frame.GetFrameType());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -315,8 +333,14 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
         infoNode.InsertDerivedPtrRef(basePtr, derivedPtr);
     };
 #else
-    RegDebugVisitor regDebugFunc = nullptr;
-    SlotDebugVisitor slotDebugFunc = nullptr;
+    RegDebugVisitor regDebugFunc = [](RegisterNum reg, const BaseObject*) {
+        g_stackRootProvenance.sourceKind = 2;
+        g_stackRootProvenance.regNum = reg;
+    };
+    SlotDebugVisitor slotDebugFunc = [](SlotBias off, BaseObject*) {
+        g_stackRootProvenance.sourceKind = 1;
+        g_stackRootProvenance.slotBias = off;
+    };
     DerivedPtrDebugVisitor derivedPtrDebugFunc = nullptr;
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);

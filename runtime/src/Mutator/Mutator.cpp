@@ -5,6 +5,8 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 
+#include <algorithm>
+
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
 #if defined(_WIN64)
@@ -633,17 +635,63 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
     return 0;
 }
 
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+// Forensics for the fail-closed gates below: the gate is an alarm for a real
+// producer defect (a precise gc-table root naming a stack address that is not a
+// constructed stack object). Without the enumerated frame's PC and the
+// slot/register the value came from, the hit cannot be reconciled against the
+// compiler stackmap (vaildtype / vtpublish both ended UNKNOWN on this gap).
+// Runs only on the already-fatal path; reads only within the mutator stack.
+static void DumpStackRootForensics(const BaseObject* obj, const void* tip, Mutator* mutator)
+{
+    const StackRootProvenance& p = g_stackRootProvenance;
+    LOG(RTLOG_ERROR,
+        "stack-root forensics: obj=%p tip=%p frame start_ip=%p frame_ip=%p fa=%p frame_type=%u "
+        "source_kind=%u slot_bias=%lld reg=%u holder=%p holder_field=%p",
+        obj, tip, reinterpret_cast<void*>(p.startIP), reinterpret_cast<void*>(p.frameIP),
+        reinterpret_cast<void*>(p.frameFA), p.frameType, p.sourceKind,
+        static_cast<long long>(p.slotBias), p.regNum, p.holder, p.holderField);
+    if (mutator == nullptr) {
+        return;
+    }
+    uintptr_t top = mutator->GetStackTopAddr();
+    size_t size = mutator->GetStackSize();
+    LOG(RTLOG_ERROR, "stack-root forensics: stack_top=%p stack_size=%zu base_off=%zd",
+        reinterpret_cast<void*>(top), size,
+        static_cast<ssize_t>((top + size) - reinterpret_cast<uintptr_t>(obj)));
+    if (top == 0 || size == 0) {
+        return;
+    }
+    // Hexdump the corpse neighbourhood, clamped to the mutator stack mapping.
+    uintptr_t objAddr = reinterpret_cast<uintptr_t>(obj);
+    uintptr_t lo = std::max(objAddr - 64, top);
+    uintptr_t hi = std::min(objAddr + 64, top + size);
+    for (uintptr_t addr = lo & ~static_cast<uintptr_t>(7); addr + 32 <= hi; addr += 32) {
+        const uint64_t* w = reinterpret_cast<const uint64_t*>(addr);
+        LOG(RTLOG_ERROR, "stack-root forensics: %p: %016llx %016llx %016llx %016llx",
+            reinterpret_cast<void*>(addr), static_cast<unsigned long long>(w[0]),
+            static_cast<unsigned long long>(w[1]), static_cast<unsigned long long>(w[2]),
+            static_cast<unsigned long long>(w[3]));
+    }
+}
+
+inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack,
+                         Mutator* mutator)
 {
     if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
         return;
     }
     TypeInfo* tip = obj->GetTypeInfo();
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    if (UNLIKELY((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0)) {
+        DumpStackRootForensics(obj, tip, mutator);
+    }
     CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
                  "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
                  "(stateWord non-zero is not a managed-object proof)",
                  tip, obj);
+    if (UNLIKELY(!tip->IsVaildType())) {
+        DumpStackRootForensics(obj, tip, mutator);
+    }
     CHECK_DETAIL(tip->IsVaildType(),
                  "CheckAndPush: TypeInfo %p on stack object %p has invalid type kind", tip, obj);
     if (obj->HasRefField()) {
@@ -662,7 +710,8 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            g_stackRootProvenance.holderField = &refFieldAddr;
+            CheckAndPush(obj, rootSet, rootStack, this);
         }
     };
 
@@ -673,11 +722,13 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            CheckAndPush(obj, rootSet, rootStack, this);
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
             rootStack.pop();
+            g_stackRootProvenance.sourceKind = 3;
+            g_stackRootProvenance.holder = obj;
             obj->ForEachRefField(refVisitor);
         }
     };
@@ -707,7 +758,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (oldObj != toObj) { refFieldAddr.SetTargetObject(toObj); }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            g_stackRootProvenance.holderField = &refFieldAddr;
+            CheckAndPush(oldObj, rootSet, rootStack, this);
         }
     };
 
@@ -719,11 +771,13 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (oldObj != toObj) { root.object = toObj; }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            CheckAndPush(oldObj, rootSet, rootStack, this);
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
             rootStack.pop();
+            g_stackRootProvenance.sourceKind = 3;
+            g_stackRootProvenance.holder = obj;
             obj->ForEachRefField(refVisitor);
         }
     };
