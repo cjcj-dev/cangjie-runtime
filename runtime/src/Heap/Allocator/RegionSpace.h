@@ -39,7 +39,7 @@ public:
 
     static size_t GetAllocSize(const BaseObject& obj)
     {
-        size_t objSize = obj.GetSize();
+        size_t objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(&obj)));
         return ToAllocSize(objSize);
     }
 
