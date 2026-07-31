@@ -20,6 +20,7 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Heap/Heap.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -122,6 +123,8 @@ void StickyLog::ConfigureMinorFromEnvironment()
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE", false);
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH", false);
     edgeCompleteEnabled = ReadStickyBoolean("MRT_EDGECOMPLETE", false);
+    edgeCompleteFakeMissEnabled =
+        edgeCompleteEnabled ? ReadStickyBoolean("MRT_EDGECOMPLETE_FAKEMISS", false) : false;
     edgeCompleteDropN = edgeCompleteEnabled ? ReadStickyPositiveInteger("MRT_EDGECOMPLETE_DROP_N", 0) : 0;
     if (edgeCompleteDropN != 0) {
         forceSlowPathEnabled = true;
@@ -191,12 +194,17 @@ void StickyLog::Fini() noexcept
             static_cast<double>(edgeCompleteMissing) * 100.0 / static_cast<double>(edgeCompleteEdgesToYoung);
         VLOG(REPORT,
              "[EDGECOMPLETE-FINAL] runs=%zu oldObjs=%zu refFields=%zu edgesToYoung=%zu inRemset=%zu "
-             "missing=%zu pct=%.6f posctrlN=%zu eligibleStores=%zu dropped=%u caught=%u",
+             "missing=%zu pct=%.6f posctrlN=%zu eligibleStores=%zu candidateAttempts=%zu candidateRejects=%zu "
+             "candidateWaitRuns=%zu dropped=%u caught=%u fakeMiss=%u fakeMissCaught=%u",
              edgeCompleteRuns, edgeCompleteOldObjects, edgeCompleteRefFields, edgeCompleteEdgesToYoung,
              edgeCompleteInRemset, edgeCompleteMissing, pct, edgeCompleteDropN,
              edgeCompleteEligibleStores.load(std::memory_order_acquire),
-             static_cast<unsigned>(edgeCompleteDroppedSlot.load(std::memory_order_acquire) != 0),
-             static_cast<unsigned>(edgeCompleteDropCaught.load(std::memory_order_acquire)));
+             edgeCompleteCandidateAttempts.load(std::memory_order_acquire), edgeCompleteCandidateRejects,
+             edgeCompleteCandidateWaitRuns,
+             static_cast<unsigned>(edgeCompleteDropInjected.load(std::memory_order_acquire)),
+             static_cast<unsigned>(edgeCompleteDropCaught.load(std::memory_order_acquire)),
+             static_cast<unsigned>(edgeCompleteFakeMissSlot != 0),
+             static_cast<unsigned>(edgeCompleteFakeMissCaught));
     }
     __cj_sticky_logged_base = nullptr;
     __cj_sticky_heap_base = 0;
@@ -212,13 +220,24 @@ void StickyLog::Fini() noexcept
     minorValidatorEnabled = false;
     forceSlowPathEnabled = false;
     edgeCompleteEnabled = false;
+    edgeCompleteFakeMissEnabled = false;
     edgeCompleteDropN = 0;
     edgeCompleteEligibleStores.store(0, std::memory_order_release);
-    edgeCompleteDroppedHolder.store(0, std::memory_order_release);
-    edgeCompleteDroppedSlot.store(0, std::memory_order_release);
-    edgeCompleteDroppedTarget.store(0, std::memory_order_release);
+    edgeCompleteCandidateClaimed.store(false, std::memory_order_release);
+    edgeCompleteCandidateHolder.store(0, std::memory_order_release);
+    edgeCompleteCandidateSlot.store(0, std::memory_order_release);
+    edgeCompleteCandidateTarget.store(0, std::memory_order_release);
+    edgeCompleteCandidateAttempts.store(0, std::memory_order_release);
+    edgeCompleteCandidateRejects = 0;
+    edgeCompleteCandidateWaitRuns = 0;
+    edgeCompleteDropInjected.store(false, std::memory_order_release);
     edgeCompleteDroppedLine.store(0, std::memory_order_release);
+    edgeCompleteDroppedValue = 0;
     edgeCompleteDropCaught.store(false, std::memory_order_release);
+    edgeCompleteFakeMissLine = 0;
+    edgeCompleteFakeMissSlot = 0;
+    edgeCompleteFakeMissTarget = 0;
+    edgeCompleteFakeMissCaught = false;
     edgeCompleteRuns = 0;
     edgeCompleteOldObjects = 0;
     edgeCompleteRefFields = 0;
@@ -267,47 +286,168 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
     return true;
 }
 
-bool StickyLog::ShouldDropEdgeCompleteStore(BaseObject* holder, MAddress slot, BaseObject* target)
+void StickyLog::RecordEdgeCompleteStoreCandidate(BaseObject* holder, MAddress slot, BaseObject* target)
 {
     if (LIKELY(edgeCompleteDropN == 0) || holder == nullptr || !Heap::IsHeapAddress(holder) ||
-        !Heap::IsHeapAddress(target)) {
-        return false;
+        !Heap::IsHeapAddress(target) || edgeCompleteDropInjected.load(std::memory_order_acquire) ||
+        edgeCompleteCandidateAttempts.load(std::memory_order_acquire) >= MAX_DROP_CANDIDATES) {
+        return;
     }
-    RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-    if (holderRegion->IsYoungRegion() || !targetRegion->IsYoungRegion() ||
+    RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (holderRegion == nullptr || targetRegion == nullptr || !holderRegion->IsValidRegion() ||
+        holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion() || holderRegion->IsYoungRegion() ||
+        !targetRegion->IsValidRegion() || targetRegion->IsFreeRegion() || targetRegion->IsGarbageRegion() ||
+        !targetRegion->IsYoungRegion() ||
         IsLoggedLine(reinterpret_cast<MAddress>(holder))) {
-        return false;
+        return;
     }
     size_t store = edgeCompleteEligibleStores.fetch_add(1, std::memory_order_acq_rel) + 1;
-    if (store != edgeCompleteDropN) {
+    if (store < edgeCompleteDropN) {
+        return;
+    }
+    bool expected = false;
+    if (!edgeCompleteCandidateClaimed.compare_exchange_strong(
+            expected, true, std::memory_order_acq_rel, std::memory_order_acquire)) {
+        return;
+    }
+    size_t attempt = edgeCompleteCandidateAttempts.fetch_add(1, std::memory_order_acq_rel) + 1;
+    edgeCompleteCandidateHolder.store(reinterpret_cast<MAddress>(holder), std::memory_order_relaxed);
+    edgeCompleteCandidateTarget.store(reinterpret_cast<MAddress>(target), std::memory_order_relaxed);
+    edgeCompleteCandidateSlot.store(slot, std::memory_order_release);
+    VLOG(REPORT,
+         "[EDGECOMPLETE-STWDROP-CANDIDATE] store=%zu attempt=%zu holder=%p slot=%#zx target=%p "
+         "holderRegion=%u targetRegion=%u",
+         store, attempt, holder, slot, target, static_cast<unsigned>(holderRegion->GetRegionType()),
+         static_cast<unsigned>(targetRegion->GetRegionType()));
+}
+
+void StickyLog::RejectEdgeCompleteStoreCandidate(size_t run, const char* reason)
+{
+    ++edgeCompleteCandidateRejects;
+    VLOG(REPORT,
+         "[EDGECOMPLETE-STWDROP-REJECT] run=%zu attempt=%zu waitRuns=%zu reason=%s",
+         run, edgeCompleteCandidateAttempts.load(std::memory_order_acquire), edgeCompleteCandidateWaitRuns, reason);
+    edgeCompleteCandidateSlot.store(0, std::memory_order_release);
+    edgeCompleteCandidateHolder.store(0, std::memory_order_relaxed);
+    edgeCompleteCandidateTarget.store(0, std::memory_order_relaxed);
+    edgeCompleteCandidateClaimed.store(false, std::memory_order_release);
+}
+
+bool StickyLog::TryDropEdgeCompleteStoreAtSTW(size_t run)
+{
+    if (edgeCompleteDropN == 0 || edgeCompleteDropInjected.load(std::memory_order_acquire)) {
         return false;
     }
-    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
-    MAddress targetAddress = reinterpret_cast<MAddress>(target);
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "edge-completeness store drop requires stopped mutators");
+    if (edgeCompleteCandidateWaitRuns < MAX_DROP_WAIT_RUNS) {
+        ++edgeCompleteCandidateWaitRuns;
+    }
+    if (edgeCompleteCandidateWaitRuns > MAX_DROP_WAIT_RUNS ||
+        edgeCompleteCandidateAttempts.load(std::memory_order_acquire) > MAX_DROP_CANDIDATES) {
+        return false;
+    }
+
+    MAddress slot = edgeCompleteCandidateSlot.load(std::memory_order_acquire);
+    if (slot == 0) {
+        VLOG(REPORT, "[EDGECOMPLETE-STWDROP-WAIT] run=%zu attempts=%zu waitRuns=%zu",
+             run, edgeCompleteCandidateAttempts.load(std::memory_order_acquire), edgeCompleteCandidateWaitRuns);
+        return false;
+    }
+    MAddress holderAddress = edgeCompleteCandidateHolder.load(std::memory_order_relaxed);
+    MAddress targetAddress = edgeCompleteCandidateTarget.load(std::memory_order_relaxed);
+    if (!Heap::IsHeapAddress(reinterpret_cast<BaseObject*>(holderAddress)) ||
+        !Heap::IsHeapAddress(reinterpret_cast<BaseObject*>(targetAddress))) {
+        RejectEdgeCompleteStoreCandidate(run, "address-outside-heap");
+        return false;
+    }
+    RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(holderAddress);
+    RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
+    if (holderRegion == nullptr || !holderRegion->IsValidRegion() || holderRegion->IsFreeRegion() ||
+        holderRegion->IsGarbageRegion() || holderRegion->IsYoungRegion()) {
+        RejectEdgeCompleteStoreCandidate(run, "holder-region-not-active-old");
+        return false;
+    }
+    if (targetRegion == nullptr || !targetRegion->IsValidRegion() || targetRegion->IsFreeRegion() ||
+        targetRegion->IsGarbageRegion() || !targetRegion->IsYoungRegion()) {
+        RejectEdgeCompleteStoreCandidate(run, "target-region-not-active-young");
+        return false;
+    }
+    BaseObject* holder = reinterpret_cast<BaseObject*>(holderAddress);
+    BaseObject* target = reinterpret_cast<BaseObject*>(targetAddress);
+    if (!holder->IsValidObject()) {
+        RejectEdgeCompleteStoreCandidate(run, "holder-invalid-header");
+        return false;
+    }
+    if (!target->IsValidObject()) {
+        RejectEdgeCompleteStoreCandidate(run, "target-invalid-header");
+        return false;
+    }
+    if (slot < holderRegion->GetRegionStart() || slot + sizeof(RefField<>) > holderRegion->GetRegionAllocPtr()) {
+        RejectEdgeCompleteStoreCandidate(run, "slot-outside-holder-region");
+        return false;
+    }
+    RefField<> current(*reinterpret_cast<RefField<>*>(slot));
+    if (current.GetTargetObject() != target) {
+        RejectEdgeCompleteStoreCandidate(run, "slot-overwritten");
+        return false;
+    }
     MAddress holderLine = holderAddress & ~(LINE_SIZE - 1);
-    edgeCompleteDroppedHolder.store(holderAddress, std::memory_order_release);
-    edgeCompleteDroppedSlot.store(slot, std::memory_order_release);
-    edgeCompleteDroppedTarget.store(targetAddress, std::memory_order_release);
-    edgeCompleteDroppedLine.store(holderLine, std::memory_order_release);
+    if (!IsLoggedLine(holderLine)) {
+        RejectEdgeCompleteStoreCandidate(run, "line-not-logged");
+        return false;
+    }
+
     size_t lineIndex = (holderLine - heapStart) >> LINE_SHIFT;
+    edgeCompleteDroppedValue = __atomic_load_n(__cj_sticky_logged_base + lineIndex, __ATOMIC_ACQUIRE);
+    edgeCompleteDroppedLine.store(holderLine, std::memory_order_release);
     __atomic_store_n(__cj_sticky_logged_base + lineIndex, 0, __ATOMIC_RELEASE);
+    edgeCompleteDropInjected.store(true, std::memory_order_release);
     VLOG(REPORT,
-         "[EDGECOMPLETE-POSCTRL-DROP] n=%zu holder=%p slot=%#zx target=%p holderRegion=%u targetRegion=%u",
-         store, holder, slot, target, static_cast<unsigned>(holderRegion->GetRegionType()),
-         static_cast<unsigned>(targetRegion->GetRegionType()));
+         "[EDGECOMPLETE-STWDROP] run=%zu attempt=%zu waitRuns=%zu holder=%p slot=%#zx target=%p "
+         "holderRegion=%u targetRegion=%u previousLogged=%u",
+         run, edgeCompleteCandidateAttempts.load(std::memory_order_acquire), edgeCompleteCandidateWaitRuns,
+         holder, slot, target, static_cast<unsigned>(holderRegion->GetRegionType()),
+         static_cast<unsigned>(targetRegion->GetRegionType()), static_cast<unsigned>(edgeCompleteDroppedValue));
     return true;
+}
+
+bool StickyLog::QueryEdgeCompleteLine(MAddress line, MAddress slot, BaseObject* target)
+{
+    if (!IsLoggedLine(line)) {
+        return false;
+    }
+    if (!edgeCompleteFakeMissEnabled || edgeCompleteFakeMissSlot != 0) {
+        return true;
+    }
+    edgeCompleteFakeMissLine = line;
+    edgeCompleteFakeMissSlot = slot;
+    edgeCompleteFakeMissTarget = reinterpret_cast<MAddress>(target);
+    VLOG(REPORT, "[EDGECOMPLETE-FAKEMISS-INJECT] line=%#zx slot=%#zx target=%p", line, slot, target);
+    return false;
 }
 
 bool StickyLog::IsEdgeCompleteDroppedEdge(MAddress slot, BaseObject* target) const
 {
-    return slot == edgeCompleteDroppedSlot.load(std::memory_order_acquire) &&
-        reinterpret_cast<MAddress>(target) == edgeCompleteDroppedTarget.load(std::memory_order_acquire);
+    return edgeCompleteDropInjected.load(std::memory_order_acquire) &&
+        slot == edgeCompleteCandidateSlot.load(std::memory_order_acquire) &&
+        reinterpret_cast<MAddress>(target) == edgeCompleteCandidateTarget.load(std::memory_order_acquire);
+}
+
+bool StickyLog::IsEdgeCompleteFakeMissEdge(MAddress slot, BaseObject* target) const
+{
+    return slot == edgeCompleteFakeMissSlot &&
+        reinterpret_cast<MAddress>(target) == edgeCompleteFakeMissTarget;
 }
 
 void StickyLog::MarkEdgeCompleteDropCaught()
 {
     edgeCompleteDropCaught.store(true, std::memory_order_release);
+}
+
+void StickyLog::MarkEdgeCompleteFakeMissCaught()
+{
+    edgeCompleteFakeMissCaught = true;
 }
 
 bool StickyLog::RepairEdgeCompleteDroppedLine()
@@ -316,8 +456,8 @@ bool StickyLog::RepairEdgeCompleteDroppedLine()
     if (droppedLine == 0) {
         return false;
     }
-    MAddress lineStart = 0;
-    (void)TryLogLine(droppedLine, lineStart);
+    size_t lineIndex = (droppedLine - heapStart) >> LINE_SHIFT;
+    __atomic_store_n(__cj_sticky_logged_base + lineIndex, edgeCompleteDroppedValue, __ATOMIC_RELEASE);
     return true;
 }
 
