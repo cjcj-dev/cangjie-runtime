@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <csignal>
+#include <cstring>
 #include <unistd.h>
 
 #include "Base/SysCall.h"
@@ -1252,6 +1253,32 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
     size_t inRemset = 0;
     size_t missing = 0;
     size_t printedMissing = 0;
+    size_t printedE1 = 0;
+    size_t printedE2 = 0;
+    size_t printedCensusDead = 0;
+    size_t bucketAFrom = 0;
+    size_t bucketBAboveBoundary = 0;
+    size_t bucketCNeverExamined = 0;
+    size_t bucketDRawPin = 0;
+    size_t censusSaysDead = 0;
+    size_t retainedLiveCovered = 0;
+    size_t epochMismatchCovered = 0;
+    size_t bucketE1 = 0;
+    size_t bucketE2 = 0;
+    size_t rawPinUncovered = 0;
+    constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
+    size_t e1Shapes[regionTypeCount][regionTypeCount] = {};
+    size_t e2Shapes[regionTypeCount][regionTypeCount] = {};
+    size_t censusDeadShapes[regionTypeCount][regionTypeCount] = {};
+    constexpr const char* censusWitnessTypes[] = {
+        "DeclInstantiationStatusEntry",
+        "TreeMapEntry<Symbol>",
+        "ArrayList<InstantiatedMemberDiagnosticPair>",
+        "TreeMap.Node<Symbol>",
+        "LexerImpl",
+        "ArrayList<Node>",
+    };
+    size_t censusWitnessCounts[sizeof(censusWitnessTypes) / sizeof(censusWitnessTypes[0])] = {};
     bool dropCaughtThisRun = false;
     bool fakeMissCaughtThisRun = false;
 
@@ -1267,6 +1294,8 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
             ++youngHolderRegions;
             continue;
         }
+        bool regionPendingKnown = false;
+        bool regionPending = false;
         holderRegion->VisitAllObjects([&](BaseObject* holder) {
             ++objectsSeen;
             if (!holder->IsValidObject()) {
@@ -1301,6 +1330,87 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                     return;
                 }
                 ++missing;
+                MAddress holderAddress = reinterpret_cast<MAddress>(holder);
+                MAddress holderEnd = holderAddress + RegionSpace::GetAllocSize(*holder);
+                RegionInfo::RetainedLiveInfoState retainedState = holderRegion->GetRetainedLiveInfoState();
+                bool snapshotValid = holderRegion->IsRetainedSnapshotValid();
+                MAddress coveredUpTo = holderRegion->GetRetainedLiveInfoCoveredUpTo();
+                bool holderIntersectPending = false;
+                bool censusSurvived = false;
+                bool censusKnown = false;
+                bool aboveBoundary = snapshotValid &&
+                    retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
+                    holderAddress >= coveredUpTo;
+                bool rawPin = holderRegion->GetRegionType() ==
+                    RegionInfo::RegionType::RAW_POINTER_PINNED_REGION;
+                const char* bucket = nullptr;
+
+                if (holderRegion->IsFromRegion()) {
+                    ++bucketAFrom;
+                    bucket = "A_FROM";
+                } else {
+                    if (!regionPendingKnown) {
+                        regionPending = stickyLog.HasPendingEdgeCompleteLine(
+                            holderRegion->GetRegionStart(), holderRegion->GetRegionEnd());
+                        regionPendingKnown = true;
+                    }
+                    holderIntersectPending = stickyLog.HasPendingEdgeCompleteLine(holderAddress, holderEnd);
+                    if (snapshotValid) {
+                        if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                            censusKnown = true;
+                        } else if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID) {
+                            if (aboveBoundary || holderRegion->IsLargeRegion()) {
+                                censusKnown = true;
+                                censusSurvived = true;
+                            } else if (LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo()) {
+                                censusKnown = true;
+                                censusSurvived = retainedLiveInfo->IsSurvivedObject(
+                                    holderAddress - holderRegion->GetRegionStart());
+                            }
+                        }
+                    }
+
+                    if (holderIntersectPending &&
+                        retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+                        ++bucketCNeverExamined;
+                        bucket = "C_NEVER_EXAMINED";
+                    } else if (holderIntersectPending && !snapshotValid) {
+                        ++epochMismatchCovered;
+                        bucket = "X_EPOCH_MISMATCH_FULLSCAN";
+                    } else if (holderIntersectPending && aboveBoundary) {
+                        ++bucketBAboveBoundary;
+                        bucket = "B_ABOVE_BOUNDARY";
+                    } else if (holderIntersectPending && censusKnown && censusSurvived) {
+                        ++retainedLiveCovered;
+                        bucket = "X_RETAINED_LIVE";
+                    } else if (censusKnown && !censusSurvived) {
+                        ++censusSaysDead;
+                        bucket = "CENSUS_SAYS_DEAD";
+                        size_t holderType = static_cast<size_t>(holderRegion->GetRegionType());
+                        size_t targetType = static_cast<size_t>(targetRegion->GetRegionType());
+                        ++censusDeadShapes[holderType][targetType];
+                        const char* holderTypeName = holder->GetTypeInfo()->GetName();
+                        for (size_t i = 0; i < sizeof(censusWitnessTypes) / sizeof(censusWitnessTypes[0]); ++i) {
+                            if (std::strstr(holderTypeName, censusWitnessTypes[i]) != nullptr) {
+                                ++censusWitnessCounts[i];
+                            }
+                        }
+                    } else if (!regionPending) {
+                        ++bucketE1;
+                        bucket = "E1_REGION_NOT_VISITED";
+                        size_t holderType = static_cast<size_t>(holderRegion->GetRegionType());
+                        size_t targetType = static_cast<size_t>(targetRegion->GetRegionType());
+                        ++e1Shapes[holderType][targetType];
+                        rawPinUncovered += static_cast<size_t>(rawPin);
+                    } else {
+                        ++bucketE2;
+                        bucket = "E2_HOLDER_NOT_VISITED";
+                        size_t holderType = static_cast<size_t>(holderRegion->GetRegionType());
+                        size_t targetType = static_cast<size_t>(targetRegion->GetRegionType());
+                        ++e2Shapes[holderType][targetType];
+                        rawPinUncovered += static_cast<size_t>(rawPin);
+                    }
+                }
                 bool isDroppedEdge = stickyLog.IsEdgeCompleteDroppedEdge(slot, target);
                 bool isFakeMissEdge = stickyLog.IsEdgeCompleteFakeMissEdge(slot, target);
                 if (isDroppedEdge) {
@@ -1311,18 +1421,37 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                     fakeMissCaughtThisRun = true;
                     stickyLog.MarkEdgeCompleteFakeMissCaught();
                 }
-                if (isDroppedEdge || isFakeMissEdge || printedMissing < 20) {
+                bool bucketSample =
+                    (bucket == std::strstr(bucket, "E1_") && printedE1 < 5) ||
+                    (bucket == std::strstr(bucket, "E2_") && printedE2 < 5) ||
+                    (bucket == std::strstr(bucket, "CENSUS_") && printedCensusDead < 5);
+                if (isDroppedEdge || isFakeMissEdge || printedMissing < 20 || bucketSample) {
                     const char* reason = isFakeMissEdge ? "fakemiss-injected" :
                         (isDroppedEdge ? "stw-dropped-store" : "line-not-logged");
                     VLOG(REPORT,
                          "[EDGECOMPLETE-MISS] run=%zu holderType=%s holderRegion=%u slotOff=%zu targetRegion=%u "
-                         "phase=pre-remset reason=%s slot=%#zx target=%p",
+                         "phase=pre-remset reason=%s bucket=%s retainedState=%u snapshotValid=%u "
+                         "coveredUpTo=%#zx holder=%#zx regionPending=%u holderIntersectPending=%u "
+                         "censusKnown=%u censusSurvived=%u rawPin=%u slot=%#zx target=%p",
                          run, holder->GetTypeInfo()->GetName(),
                          static_cast<unsigned>(holderRegion->GetRegionType()),
                          slot - reinterpret_cast<MAddress>(holder),
-                         static_cast<unsigned>(targetRegion->GetRegionType()), reason, slot, target);
+                         static_cast<unsigned>(targetRegion->GetRegionType()), reason, bucket,
+                         static_cast<unsigned>(retainedState), static_cast<unsigned>(snapshotValid), coveredUpTo,
+                         holderAddress, static_cast<unsigned>(regionPending),
+                         static_cast<unsigned>(holderIntersectPending), static_cast<unsigned>(censusKnown),
+                         static_cast<unsigned>(censusSurvived), static_cast<unsigned>(rawPin), slot, target);
                     if (printedMissing < 20) {
                         ++printedMissing;
+                    }
+                    if (bucket == std::strstr(bucket, "E1_") && printedE1 < 5) {
+                        ++printedE1;
+                    }
+                    if (bucket == std::strstr(bucket, "E2_") && printedE2 < 5) {
+                        ++printedE2;
+                    }
+                    if (bucket == std::strstr(bucket, "CENSUS_") && printedCensusDead < 5) {
+                        ++printedCensusDead;
                     }
                 }
             });
@@ -1341,6 +1470,40 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
          "targetsSkippedInvalidHeader=%zu",
          run, regionsSkipped, objectsSkippedInvalidHeader, objectsWalked, regionsSeen, youngHolderRegions,
          objectsSeen, targetsSkippedRegionState, targetsSkippedInvalidHeader);
+    size_t classified = bucketAFrom + bucketBAboveBoundary + bucketCNeverExamined + bucketDRawPin +
+        censusSaysDead + retainedLiveCovered + epochMismatchCovered + bucketE1 + bucketE2;
+    CHECK_DETAIL(classified == missing, "edge decomposition lost entries: classified=%zu missing=%zu", classified,
+                 missing);
+    VLOG(REPORT,
+         "[EDGEDECOMP] run=%zu total=%zu A_FROM=%zu B_ABOVE_BOUNDARY=%zu C_NEVER_EXAMINED=%zu "
+         "D_RAWPIN=%zu CENSUS_SAYS_DEAD=%zu X_RETAINED_LIVE=%zu X_EPOCH_MISMATCH=%zu E1=%zu E2=%zu "
+         "E=%zu RAWPIN_UNCOVERED=%zu",
+         run, missing, bucketAFrom, bucketBAboveBoundary, bucketCNeverExamined, bucketDRawPin, censusSaysDead,
+         retainedLiveCovered, epochMismatchCovered, bucketE1, bucketE2, bucketE1 + bucketE2, rawPinUncovered);
+    for (size_t holderType = 0; holderType < regionTypeCount; ++holderType) {
+        for (size_t targetType = 0; targetType < regionTypeCount; ++targetType) {
+            if (e1Shapes[holderType][targetType] != 0) {
+                VLOG(REPORT, "[EDGEDECOMP-SHAPE] run=%zu bucket=E1 holderRegion=%zu targetRegion=%zu count=%zu",
+                     run, holderType, targetType, e1Shapes[holderType][targetType]);
+            }
+            if (e2Shapes[holderType][targetType] != 0) {
+                VLOG(REPORT, "[EDGEDECOMP-SHAPE] run=%zu bucket=E2 holderRegion=%zu targetRegion=%zu count=%zu",
+                     run, holderType, targetType, e2Shapes[holderType][targetType]);
+            }
+            if (censusDeadShapes[holderType][targetType] != 0) {
+                VLOG(REPORT,
+                     "[EDGEDECOMP-SHAPE] run=%zu bucket=CENSUS_SAYS_DEAD holderRegion=%zu targetRegion=%zu "
+                     "count=%zu",
+                     run, holderType, targetType, censusDeadShapes[holderType][targetType]);
+            }
+        }
+    }
+    for (size_t i = 0; i < sizeof(censusWitnessTypes) / sizeof(censusWitnessTypes[0]); ++i) {
+        if (censusWitnessCounts[i] != 0) {
+            VLOG(REPORT, "[EDGEDECOMP-CENSUS-WITNESS] run=%zu holderType=%s count=%zu", run,
+                 censusWitnessTypes[i], censusWitnessCounts[i]);
+        }
+    }
 
     bool repaired = stickyLog.RepairEdgeCompleteDroppedLine();
     if (stickyLog.GetEdgeCompleteDropN() != 0) {

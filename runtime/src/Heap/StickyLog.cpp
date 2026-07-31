@@ -263,6 +263,22 @@ bool StickyLog::IsLoggedLine(MAddress address) const
     return *reinterpret_cast<volatile uint8_t*>(__cj_sticky_logged_base + lineIndex) != 0;
 }
 
+bool StickyLog::HasPendingEdgeCompleteLine(MAddress rangeStart, MAddress rangeEnd) const
+{
+    if (rangeStart >= rangeEnd || rangeStart < heapStart || rangeEnd > heapStart + heapSize ||
+        __cj_sticky_logged_base == nullptr) {
+        return false;
+    }
+    size_t firstLine = (rangeStart - heapStart) >> LINE_SHIFT;
+    size_t lastLine = (rangeEnd - heapStart + LINE_SIZE - 1) >> LINE_SHIFT;
+    for (size_t line = firstLine; line < lastLine; ++line) {
+        if (__atomic_load_n(__cj_sticky_logged_base + line, __ATOMIC_ACQUIRE) == 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
 {
     if (UNLIKELY(IsEdgeCompleteDroppedLine(address))) {
