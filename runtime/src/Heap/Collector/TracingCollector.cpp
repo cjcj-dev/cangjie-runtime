@@ -21,6 +21,14 @@
 
 namespace MapleRuntime {
 namespace {
+constexpr size_t kFrameGapSymbolBuckets = 64;
+constexpr size_t kFrameGapSymbolNameCap = 96;
+
+struct FrameGapSymbolBucket {
+    std::atomic<uint64_t> count{ 0 };
+    char name[kFrameGapSymbolNameCap]{};
+};
+
 struct FrameGapStats {
     std::atomic<uint64_t> framesTotal{ 0 };
     std::atomic<uint64_t> framesValid{ 0 };
@@ -29,12 +37,59 @@ struct FrameGapStats {
     std::atomic<uint64_t> skippedHeapRefSamples{ 0 };
     std::atomic<uint64_t> skippedCalleeSavedRegs{ 0 };
     std::atomic<uint64_t> samplePrinted{ 0 };
+    std::atomic<uint64_t> framesCovered{ 0 };
+    std::atomic<uint64_t> entrySkipped{ 0 };
+    std::atomic<uint64_t> nonEntrySkipped{ 0 };
+    std::atomic<uint64_t> entrySamples{ 0 };
+    std::atomic<uint64_t> nonEntrySamples{ 0 };
+    std::atomic<uint64_t> entryHits{ 0 };
+    std::atomic<uint64_t> nonEntryHits{ 0 };
+    std::atomic<uint64_t> maxDepthObserved{ 0 };
+    std::atomic<uint64_t> walksObserved{ 0 };
+    FrameGapSymbolBucket symbols[kFrameGapSymbolBuckets];
 };
 
 FrameGapStats& GetFrameGapStats()
 {
     static FrameGapStats* stats = new FrameGapStats();
     return *stats;
+}
+
+bool IsEntryBoundaryName(const char* name)
+{
+    if (name == nullptr || name[0] == '\0') {
+        return false;
+    }
+    return std::strcmp(name, "user.main") == 0 || std::strcmp(name, "cj_entry$") == 0 ||
+           std::strcmp(name, "cj_entry") == 0 || std::strstr(name, "cj_entry") != nullptr;
+}
+
+void RecordSkippedSymbol(FrameGapStats& stats, const char* name)
+{
+    if (name == nullptr || name[0] == '\0') {
+        name = "?";
+    }
+    for (size_t i = 0; i < kFrameGapSymbolBuckets; ++i) {
+        FrameGapSymbolBucket& bucket = stats.symbols[i];
+        uint64_t cur = bucket.count.load(std::memory_order_relaxed);
+        if (cur == 0) {
+            uint64_t expected = 0;
+            if (bucket.count.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
+                std::snprintf(bucket.name, kFrameGapSymbolNameCap, "%s", name);
+                return;
+            }
+            cur = expected;
+        }
+        if (std::strncmp(bucket.name, name, kFrameGapSymbolNameCap - 1) == 0) {
+            bucket.count.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    FrameGapSymbolBucket& overflow = stats.symbols[kFrameGapSymbolBuckets - 1];
+    if (overflow.name[0] == '\0') {
+        std::snprintf(overflow.name, kFrameGapSymbolNameCap, "%s", "<overflow>");
+    }
+    overflow.count.fetch_add(1, std::memory_order_relaxed);
 }
 
 bool FrameGapStatsEnabled()
@@ -50,7 +105,10 @@ bool FrameGapStatsEnabled()
                          std::fprintf(stderr,
                                       "FRAMEGAP_COUNTS frames_total=%zu frames_valid=%zu "
                                       "frames_skipped_invalid_map=%zu skipped_heap_ref_hits=%zu "
-                                      "skipped_heap_ref_samples=%zu skipped_callee_saved_regs=%zu\n",
+                                      "skipped_heap_ref_samples=%zu skipped_callee_saved_regs=%zu "
+                                      "frames_covered=%zu entry_skipped=%zu non_entry_skipped=%zu "
+                                      "entry_samples=%zu non_entry_samples=%zu entry_hits=%zu "
+                                      "non_entry_hits=%zu max_depth=%zu walks=%zu\n",
                                       static_cast<size_t>(stats.framesTotal.load(std::memory_order_relaxed)),
                                       static_cast<size_t>(stats.framesValid.load(std::memory_order_relaxed)),
                                       static_cast<size_t>(
@@ -59,7 +117,25 @@ bool FrameGapStatsEnabled()
                                       static_cast<size_t>(
                                           stats.skippedHeapRefSamples.load(std::memory_order_relaxed)),
                                       static_cast<size_t>(
-                                          stats.skippedCalleeSavedRegs.load(std::memory_order_relaxed)));
+                                          stats.skippedCalleeSavedRegs.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.framesCovered.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.entrySkipped.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.nonEntrySkipped.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.entrySamples.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.nonEntrySamples.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.entryHits.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.nonEntryHits.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.maxDepthObserved.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.walksObserved.load(std::memory_order_relaxed)));
+                         for (size_t i = 0; i < kFrameGapSymbolBuckets; ++i) {
+                             FrameGapSymbolBucket& bucket = stats.symbols[i];
+                             uint64_t count = bucket.count.load(std::memory_order_relaxed);
+                             if (count == 0 || bucket.name[0] == '\0') {
+                                 continue;
+                             }
+                             std::fprintf(stderr, "FRAMEGAP_SKIP_SYM count=%zu func=%s\n",
+                                          static_cast<size_t>(count), bucket.name);
+                         }
                      }) == 0,
                      "failed to register framegap report");
         return true;
@@ -77,6 +153,9 @@ void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapM
     size_t calleeRegs = 0;
     size_t stackSlots = 0;
     size_t stackHits = 0;
+    CString nameCs = frame.GetFuncName();
+    const char* name = nameCs.IsEmpty() ? "?" : nameCs.Str();
+    bool entryBoundary = IsEntryBoundaryName(name);
     for (RegisterNum reg = 0; reg < REGISTERS_COUNT; ++reg) {
         if (!regSlotsMap.HasReg(reg)) {
             continue;
@@ -108,22 +187,36 @@ void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapM
             samples += stackSlots;
         }
     }
+    stats.framesCovered.fetch_add(1, std::memory_order_relaxed);
     stats.skippedCalleeSavedRegs.fetch_add(calleeRegs, std::memory_order_relaxed);
     stats.skippedHeapRefSamples.fetch_add(samples, std::memory_order_relaxed);
     if (hits > 0) {
         stats.skippedHeapRefHits.fetch_add(hits, std::memory_order_relaxed);
     }
+    if (entryBoundary) {
+        stats.entrySkipped.fetch_add(1, std::memory_order_relaxed);
+        stats.entrySamples.fetch_add(samples, std::memory_order_relaxed);
+        if (hits > 0) {
+            stats.entryHits.fetch_add(hits, std::memory_order_relaxed);
+        }
+    } else {
+        stats.nonEntrySkipped.fetch_add(1, std::memory_order_relaxed);
+        stats.nonEntrySamples.fetch_add(samples, std::memory_order_relaxed);
+        if (hits > 0) {
+            stats.nonEntryHits.fetch_add(hits, std::memory_order_relaxed);
+        }
+    }
+    RecordSkippedSymbol(stats, name);
     uint64_t printed = stats.samplePrinted.fetch_add(1, std::memory_order_relaxed);
-    if (printed < 16) {
+    if (printed < 64 || (!entryBoundary && hits > 0) || (!entryBoundary && printed < 128)) {
         uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
         uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
-        CString name = frame.GetFuncName();
         std::fprintf(stderr,
                      "FRAMEGAP_SKIP sample=%zu start_ip=0x%zx frame_ip=0x%zx fa=0x%zx "
-                     "func=%s callee_regs=%zu stack_slots=%zu stack_hits=%zu "
+                     "func=%s entry=%d callee_regs=%zu stack_slots=%zu stack_hits=%zu "
                      "samples=%zu heap_hits=%zu map_valid=%d\n",
-                     static_cast<size_t>(printed), startIP, frameIP, frameAddress,
-                     name.IsEmpty() ? "?" : name.Str(), calleeRegs, stackSlots, stackHits, samples, hits,
+                     static_cast<size_t>(printed), startIP, frameIP, frameAddress, name,
+                     entryBoundary ? 1 : 0, calleeRegs, stackSlots, stackHits, samples, hits,
                      heapMap.IsValid() ? 1 : 0);
     }
     (void)heapMap;
