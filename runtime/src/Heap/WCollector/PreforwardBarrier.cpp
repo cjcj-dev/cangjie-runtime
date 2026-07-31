@@ -99,7 +99,7 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
                 return toObj;
             } else {
                 BaseObject* oldVersion = tmpField.GetTargetObject();
-                BaseObject* toObj = theCollector.ForwardObject(oldVersion);
+                BaseObject* toObj = theCollector.ForwardObject(MaybeStalePtr(oldVersion));
                 RefField<> newField(toObj);
                 (void)obj->CompareExchangeRefField(reinterpret_cast<RefField<false>&>(field), tmpField, newField);
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
