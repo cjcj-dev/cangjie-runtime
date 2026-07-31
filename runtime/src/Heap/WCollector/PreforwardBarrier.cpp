@@ -55,7 +55,7 @@ void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, 
 {
     if (obj != nullptr) {
         // note fix/untag dst would be better.
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [this, obj](RefField<false>& field) {
                 RefField<> oldField(field);
                 BaseObject* target = ReadReference(obj, field);
@@ -119,8 +119,9 @@ void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fi
     RefField<> newField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
-        DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newField.GetFieldValue());
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, GetTypeInfo(currentObject),
+             GetSize(currentObject), &field, newField.GetFieldValue());
     } else {
         DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
     }
@@ -133,8 +134,9 @@ BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<tru
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj,
+         GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
     return oldRef;
 }
@@ -162,14 +164,15 @@ bool PreforwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>&
 void PreforwardBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                         MAddress srcField, MIndex srcSize) const
 {
+    CurrentPtr currentDestination = UnsafeAssumeCurrent(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
+    if (!GetComponentTypeInfo(currentDestination)->IsStructType()) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
         return;
     }
 #endif
 
-    if (!dstObj->HasRefField()) {
+    if (!HasRefField(currentDestination)) {
         CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
@@ -180,7 +183,7 @@ void PreforwardBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, M
 
     MArray* srcArray = static_cast<MArray*>(srcObj);
     RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
-    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+    ForEachRefFieldInRange(UnsafeAssumeCurrent(srcArray), srcVisitor, srcField, srcField + srcSize);
 
     CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
 
