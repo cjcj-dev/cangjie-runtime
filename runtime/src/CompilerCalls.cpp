@@ -347,10 +347,10 @@ extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src,
 extern "C" TypeInfo* MCC_GetObjClass(const ObjectPtr obj)
 {
     // it may be better by installing load barrier.
-    return obj->GetTypeInfo();
+    return GetTypeInfo(UnsafeAssumeCurrent(obj));
 }
 
-extern "C" TypeInfo* MCC_GetTypeForAny(const ObjectPtr obj) { return obj->GetTypeInfo(); }
+extern "C" TypeInfo* MCC_GetTypeForAny(const ObjectPtr obj) { return GetTypeInfo(UnsafeAssumeCurrent(obj)); }
 
 extern "C" bool MCC_IsWrapperClassForAutoEnv(const TypeInfo* ti)
 {
