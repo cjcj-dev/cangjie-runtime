@@ -35,25 +35,6 @@ inline T0* MObject::CastNonNull(T1 o)
     return Cast<T0>(o);
 }
 
-ALWAYS_INLINE inline bool IsArray(CurrentPtr object) { return GetTypeInfo(object)->IsArrayType(); }
-
-ALWAYS_INLINE inline bool IsPrimitiveArray(CurrentPtr object)
-{
-    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
-    return componentTypeInfo == nullptr ? false : componentTypeInfo->IsPrimitiveType();
-}
-
-ALWAYS_INLINE inline bool IsStructArray(CurrentPtr object)
-{
-    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
-    return componentTypeInfo == nullptr ? false : (componentTypeInfo->IsStructType() || componentTypeInfo->IsTuple());
-}
-
-ALWAYS_INLINE inline bool IsSubType(CurrentPtr object, TypeInfo& mClass)
-{
-    return GetTypeInfo(object)->IsSubType(&mClass);
-}
-
 template<typename T>
 inline T MObject::Load(size_t offset) const
 {
