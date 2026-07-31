@@ -1359,7 +1359,7 @@ void WCollector::OracleMajorClosureVsMinorDead()
     RootVisitor finRoot = [&trySeed](ObjectRef& root) {
         trySeed(root.object, ReferrerKind::FINALIZER);
     };
-    VisitFinalizerRoots(finRoot);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(finRoot);
     collectorResources.GetFinalizerProcessor().VisitFinalizers(finRoot);
 
     RootVisitor concRoot = [&trySeed](ObjectRef& root) {
