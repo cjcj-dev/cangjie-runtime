@@ -1277,7 +1277,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
                 size_t offset = 0;
                 while (position < allocPtr) {
                     BaseObject* object = reinterpret_cast<BaseObject*>(position);
-                    size_t allocSize = RegionSpace::GetAllocSize(*object);
+                    size_t allocSize = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(object));
                     position += allocSize;
                     if (reinterpret_cast<uintptr_t>(object) >= coveredUpTo ||
                         retainedLiveInfo->IsSurvivedObject(offset)) {
