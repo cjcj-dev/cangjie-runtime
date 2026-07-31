@@ -20,7 +20,6 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Heap/Heap.h"
-#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -340,13 +339,10 @@ bool StickyLog::TryDropEdgeCompleteStoreAtSTW(size_t run)
         return false;
     }
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "edge-completeness store drop requires stopped mutators");
-    if (edgeCompleteCandidateWaitRuns < MAX_DROP_WAIT_RUNS) {
-        ++edgeCompleteCandidateWaitRuns;
-    }
-    if (edgeCompleteCandidateWaitRuns > MAX_DROP_WAIT_RUNS ||
-        edgeCompleteCandidateAttempts.load(std::memory_order_acquire) > MAX_DROP_CANDIDATES) {
+    if (edgeCompleteCandidateWaitRuns >= MAX_DROP_WAIT_RUNS) {
         return false;
     }
+    ++edgeCompleteCandidateWaitRuns;
 
     MAddress slot = edgeCompleteCandidateSlot.load(std::memory_order_acquire);
     if (slot == 0) {
