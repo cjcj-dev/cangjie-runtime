@@ -9,6 +9,7 @@
 #define MRT_SLOT_LIST_H
 
 #include "Common/BaseObject.h"
+
 namespace MapleRuntime {
 struct ObjectSlot {
     StateWord stateWord; // same with BaseObject::stateWord
