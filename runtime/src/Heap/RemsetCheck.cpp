@@ -365,26 +365,7 @@ void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObjec
                holderRegion->GetRegionStart(), targetRegion->GetRegionStart(), holderRegion->GetIdentityEpoch(),
                targetRegion->GetIdentityEpoch(), static_cast<uint8_t>(holderRegion->GetRegionType()), site,
                threadStickyLogEvent.exit, threadStickyLogEvent.heapStart, threadStickyLogEvent.heapSize,
-               threadStickyLogEvent.holderInHeapRange, 0 };
-    MAddress line = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
-    uint8_t byte = LoadLoggedByte(line);
-    bool dirty = LoadDirtyBit(reinterpret_cast<MAddress>(holder));
-    ClearWhenPendingEvent event;
-    event.sequence = ReserveClearWhenSequence();
-    event.run = GetClearWhenRun();
-    event.kind = ClearWhenEventKind::BARRIER_WRITE;
-    event.line = line;
-    event.regionStart = holderRegion->GetRegionStart();
-    event.regionSize = 0;
-    event.slot = slot;
-    event.byteBefore = byte;
-    event.byteAfter = byte;
-    event.dirtyBefore = dirty;
-    event.dirtyAfter = dirty;
-    event.hookSite = site;
-    event.stickyLogExit = edge.stickyLogExit;
-    event.logLineSource = LogLineSource::BARRIER;
-    edge.writeSequence = RecordPendingClearWhenEvent(event);
+               threadStickyLogEvent.holderInHeapRange, ReserveClearWhenSequence() };
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges[slot] = edge;
 }
