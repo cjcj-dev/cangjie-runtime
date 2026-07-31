@@ -1407,7 +1407,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     CHECK(rawPointerCount == 0);
     Collector& collector = Heap::GetHeap().GetCollector();
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector](BaseObject* obj) { return collector.ForwardObject(obj); });
+        [&collector](BaseObject* obj) { return collector.ForwardObject(MaybeStalePtr(obj)); });
 
     CHECK(forwarded);
     {
