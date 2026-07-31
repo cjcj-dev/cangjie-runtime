@@ -723,17 +723,23 @@ RemsetCheck::ClearedBy RemsetCheck::ClassifyClearedBy(const Edge& edge, const Li
     if (timeline == lineTimelines.end()) {
         return ClearedBy::NOT_OBSERVED;
     }
-    uint8_t byteAtConsume = LoadLoggedByte(line);
-    bool dirtyAtConsume = LoadDirtyBit(edge.holder);
     for (const ClearWhenEvent& event : timeline->second.events) {
         if (event.sequence <= edge.writeSequence) {
+            continue;
+        }
+        if (event.kind == ClearWhenEventKind::POSITIVE_CONTROL_CLEAR && event.slot == edge.slot) {
+            clearEvent = &event;
+            continue;
+        }
+        if (event.sequence > trace.consumeSequence) {
             continue;
         }
         if (event.kind == ClearWhenEventKind::CONSUME_START) {
             ++minorsSinceWrite;
         }
-        bool matches = !dirtyAtConsume ? event.dirtyBefore && !event.dirtyAfter
-                                       : byteAtConsume == 0 && event.byteBefore != 0 && event.byteAfter == 0;
+        bool matches = !trace.dirtyAtRoundStart ? event.dirtyBefore && !event.dirtyAfter
+                                                : trace.byteAtRoundStart == 0 && event.byteBefore != 0 &&
+                event.byteAfter == 0;
         if (matches) {
             clearEvent = &event;
         }
