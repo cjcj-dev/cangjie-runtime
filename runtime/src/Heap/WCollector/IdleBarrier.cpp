@@ -225,6 +225,9 @@ void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
     WriteStruct(nullptr, dst, dstLen, src, srcLen);
+    if (CanonicalWriteTable::Instance().IsEnabled()) {
+        gctib.ForEachBitmapWord(dst, [this](RefField<>& field) { CanonicalizeField(field); });
+    }
 }
 
 void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize, BaseObject* srcObj, MAddress src,
