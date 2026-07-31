@@ -9,6 +9,7 @@
 #define MRT_SLOT_LIST_H
 
 #include "Common/BaseObject.h"
+#include "Heap/GCDebugConfig.h"
 
 namespace MapleRuntime {
 struct ObjectSlot {
@@ -34,7 +35,7 @@ public:
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
-            CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
+            GCDebugConfig::FillFreePinnedPayload(start, size);
         }
     }
 

@@ -16,6 +16,7 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/GCDebugConfig.h"
 #include "Heap/StickyLog.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -421,6 +422,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
                    (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
                "sticky region clear must cover exactly the captured units");
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
+    GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
     region->InitFreeUnits();
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
@@ -442,6 +444,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
                    (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
                "sticky region clear must cover exactly the captured units");
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
+    GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
     region->InitFreeUnits();
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
@@ -550,6 +553,8 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
             if (releaseResources) {
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
+            GCDebugConfig::FillYoungReclaimedMemory(
+                regionStart, regionSize, region->GetRegionAllocatedSize());
             ++stats.reclaimedRegions;
             if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 stats.reclaimedBytes += ReleaseRegion(region);
