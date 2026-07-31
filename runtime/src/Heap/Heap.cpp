@@ -8,6 +8,7 @@
 #include "GCDebugConfig.h"
 #include "StickyLog.h"
 
+#include "Allocator/RegionSpace.h"
 #include "Collector/CollectorProxy.h"
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
@@ -182,7 +183,9 @@ MAddress HeapImpl::Allocate(size_t size, AllocType allocType)
             collectorProxy.GetCurrentCollector().RequestGC(GC_REASON_STRESS_MINOR, true);
         }
     }
-    return theSpace->Allocate(size, allocType);
+    MAddress address = theSpace->Allocate(size, allocType);
+    GCDebugConfig::ClearAllocatedMemory(address, RegionSpace::ToAllocSize(size));
+    return address;
 }
 
 bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
