@@ -15,6 +15,7 @@
 #include "Base/Globals.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Base/MemUtils.h"
 #include "Common/StateWord.h"
 
 namespace MapleRuntime {
@@ -145,6 +146,13 @@ bool GCDebugConfig::FillReclaimedMemory(uintptr_t start, size_t size)
         *cursor++ = clobberAddress;
     }
     return true;
+}
+
+void GCDebugConfig::ClearAllocatedMemory(uintptr_t start, size_t size)
+{
+    if (start != 0 && IsClobberEnabled()) {
+        MemorySet(start, size, 0, size);
+    }
 }
 
 bool GCDebugConfig::ShouldTriggerMinor()

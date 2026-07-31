@@ -26,6 +26,7 @@ public:
 
     static bool IsClobberEnabled() { return clobberEnabled.load(std::memory_order_relaxed); }
     static bool FillReclaimedMemory(uintptr_t start, size_t size);
+    static void ClearAllocatedMemory(uintptr_t start, size_t size);
     static bool ShouldTriggerMinor();
     static bool ShouldTriggerMajor();
     static void NoteStressMinorRequest();
