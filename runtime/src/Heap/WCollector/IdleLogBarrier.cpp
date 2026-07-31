@@ -13,7 +13,10 @@ ALWAYS_INLINE void IdleLogBarrier::LogObject(BaseObject* obj) const { CJ_MCC_Sti
 
 void IdleLogBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    LogObject(obj);
+    if (!StickyLog::Instance().ShouldDropEdgeCompleteStore(
+            obj, reinterpret_cast<MAddress>(&field), ref)) {
+        LogObject(obj);
+    }
     IdleBarrier::WriteReference(obj, field, ref);
 }
 
@@ -31,14 +34,20 @@ void IdleLogBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, M
 void IdleLogBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
                                           MemoryOrder order) const
 {
-    LogObject(obj);
+    if (!StickyLog::Instance().ShouldDropEdgeCompleteStore(
+            obj, reinterpret_cast<MAddress>(&field), ref)) {
+        LogObject(obj);
+    }
     IdleBarrier::AtomicWriteReference(obj, field, ref, order);
 }
 
 BaseObject* IdleLogBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
                                                 MemoryOrder order) const
 {
-    LogObject(obj);
+    if (!StickyLog::Instance().ShouldDropEdgeCompleteStore(
+            obj, reinterpret_cast<MAddress>(&field), ref)) {
+        LogObject(obj);
+    }
     return IdleBarrier::AtomicSwapReference(obj, field, ref, order);
 }
 
