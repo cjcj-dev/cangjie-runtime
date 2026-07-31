@@ -19,12 +19,13 @@
 #include "Allocator/RegionSpace.h"
 #include "CangjieRuntime.h"
 #include "Common/BaseObject.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/StickyLog.h"
-#include "HeapManager.h"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
+#include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 namespace {
@@ -177,7 +178,8 @@ struct Driver {
                 return -1;
             }
         }
-        BaseObject* obj = BaseObject::SetClassInfo(addr, g_holderTi);
+        BaseObject* obj = reinterpret_cast<BaseObject*>(addr);
+        obj->SetClassInfo(g_holderTi);
         // zero payload refs
         auto* slot0 = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
         slot0->SetTargetObject(nullptr);
@@ -266,12 +268,12 @@ struct Driver {
 
     void ForceMinor()
     {
-        HeapManager::RequestGC(GC_REASON_YOUNG, false);
+        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
     }
 
     void ForceMajor()
     {
-        HeapManager::RequestGC(GC_REASON_USER, false);
+        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_USER, false);
     }
 
     void Grow(uint32_t bytes)
