@@ -329,6 +329,7 @@ void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
         mutator.FlushDeferredLogObject();
         mutator.FlushClearWhenEvents();
     });
+    RemsetCheck::Instance().FinishReplayClearWhenEvents();
     if (syncGCPhase) { TransitionAllMutatorsToGCPhase(phase); }
 }
 
