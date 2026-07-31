@@ -41,6 +41,7 @@ public:
     bool IsMinorValidatorEnabled() const { return minorValidatorEnabled; }
     bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
     bool IsEdgeCompleteEnabled() const { return edgeCompleteEnabled; }
+    bool IsEdgeCompleteFakeMissEnabled() const { return edgeCompleteFakeMissEnabled; }
     size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
     uint32_t GetMajorInterval() const { return majorInterval; }
     // Region promotion age: a young region with live bytes ages until
@@ -53,9 +54,13 @@ public:
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
 
-    bool ShouldDropEdgeCompleteStore(BaseObject* holder, MAddress slot, BaseObject* target);
+    void RecordEdgeCompleteStoreCandidate(BaseObject* holder, MAddress slot, BaseObject* target);
+    bool TryDropEdgeCompleteStoreAtSTW(size_t run);
+    bool QueryEdgeCompleteLine(MAddress line, MAddress slot, BaseObject* target);
     bool IsEdgeCompleteDroppedEdge(MAddress slot, BaseObject* target) const;
+    bool IsEdgeCompleteFakeMissEdge(MAddress slot, BaseObject* target) const;
     void MarkEdgeCompleteDropCaught();
+    void MarkEdgeCompleteFakeMissCaught();
     bool RepairEdgeCompleteDroppedLine();
     void RecordEdgeCompleteRun(size_t oldObjects, size_t refFields, size_t edgesToYoung, size_t inRemset,
                                size_t missing);
@@ -66,19 +71,37 @@ public:
     }
     bool HasEdgeCompleteDroppedStore() const
     {
-        return edgeCompleteDroppedSlot.load(std::memory_order_acquire) != 0;
+        return edgeCompleteDropInjected.load(std::memory_order_acquire);
     }
     bool WasEdgeCompleteDropCaught() const
     {
         return edgeCompleteDropCaught.load(std::memory_order_acquire);
     }
+    size_t GetEdgeCompleteCandidateAttempts() const
+    {
+        return edgeCompleteCandidateAttempts.load(std::memory_order_acquire);
+    }
+    size_t GetEdgeCompleteCandidateRejects() const { return edgeCompleteCandidateRejects; }
+    size_t GetEdgeCompleteCandidateWaitRuns() const { return edgeCompleteCandidateWaitRuns; }
+    bool IsEdgeCompleteDropExhausted() const
+    {
+        return !HasEdgeCompleteDroppedStore() &&
+            (GetEdgeCompleteCandidateAttempts() >= MAX_DROP_CANDIDATES ||
+             GetEdgeCompleteCandidateWaitRuns() >= MAX_DROP_WAIT_RUNS);
+    }
+    bool HasEdgeCompleteFakeMiss() const { return edgeCompleteFakeMissSlot != 0; }
+    bool WasEdgeCompleteFakeMissCaught() const { return edgeCompleteFakeMissCaught; }
 
     using LoggedLineVisitor = std::function<bool(MAddress lineStart, MAddress lineEnd)>;
     // TODO: the minor collector will consume logged lines through this interface and rescan objects in each line.
     void RescanLoggedLines(const LoggedLineVisitor& visitor);
 
 private:
+    static constexpr size_t MAX_DROP_CANDIDATES = 50;
+    static constexpr size_t MAX_DROP_WAIT_RUNS = 20;
+
     bool IsEdgeCompleteDroppedLine(MAddress address) const;
+    void RejectEdgeCompleteStoreCandidate(size_t run, const char* reason);
 
     MemMap* loggedMap = nullptr;
     MemMap* dirtyRegionMap = nullptr;
@@ -91,16 +114,27 @@ private:
     bool minorValidatorEnabled = false;
     bool forceSlowPathEnabled = false;
     bool edgeCompleteEnabled = false;
+    bool edgeCompleteFakeMissEnabled = false;
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;
     uint8_t promoteAge = 1;
     size_t edgeCompleteDropN = 0;
     std::atomic<size_t> edgeCompleteEligibleStores{ 0 };
-    std::atomic<MAddress> edgeCompleteDroppedHolder{ 0 };
-    std::atomic<MAddress> edgeCompleteDroppedSlot{ 0 };
-    std::atomic<MAddress> edgeCompleteDroppedTarget{ 0 };
+    std::atomic<bool> edgeCompleteCandidateClaimed{ false };
+    std::atomic<MAddress> edgeCompleteCandidateHolder{ 0 };
+    std::atomic<MAddress> edgeCompleteCandidateSlot{ 0 };
+    std::atomic<MAddress> edgeCompleteCandidateTarget{ 0 };
+    std::atomic<size_t> edgeCompleteCandidateAttempts{ 0 };
+    size_t edgeCompleteCandidateRejects = 0;
+    size_t edgeCompleteCandidateWaitRuns = 0;
+    std::atomic<bool> edgeCompleteDropInjected{ false };
     std::atomic<MAddress> edgeCompleteDroppedLine{ 0 };
+    uint8_t edgeCompleteDroppedValue = 0;
     std::atomic<bool> edgeCompleteDropCaught{ false };
+    MAddress edgeCompleteFakeMissLine = 0;
+    MAddress edgeCompleteFakeMissSlot = 0;
+    MAddress edgeCompleteFakeMissTarget = 0;
+    bool edgeCompleteFakeMissCaught = false;
     size_t edgeCompleteRuns = 0;
     size_t edgeCompleteOldObjects = 0;
     size_t edgeCompleteRefFields = 0;
