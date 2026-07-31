@@ -1481,8 +1481,11 @@ void RemsetCheck::CheckVisitedRound(size_t run)
          missingByteAtRoundStartThisRound[1], missingByteAtRoundStartThisRound[2],
          missingDirtyAtRoundStartThisRound[0], missingDirtyAtRoundStartThisRound[1], missingInBufferThisRound,
          missingByte2WrittenByPreviousRoundThisRound);
-    VLOG(REPORT, "[CLEARWHEN] run=%zu edges=%zu missing=%zu", run, visitedRoundCandidates.size(),
-         clearWhenMissingThisRound);
+    VLOG(REPORT,
+         "[CLEARWHEN] run=%zu edges=%zu missing=%zu eventRingOverflows=%zu eventsDropped=%zu",
+         run, visitedRoundCandidates.size(), clearWhenMissingThisRound,
+         clearWhenEventRingOverflows.load(std::memory_order_relaxed),
+         clearWhenEventsDropped.load(std::memory_order_relaxed));
 
     visitedRoundActive = false;
     {
