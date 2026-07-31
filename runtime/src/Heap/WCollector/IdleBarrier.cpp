@@ -184,10 +184,12 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
 void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
-    field.SetTargetObject(ref);
+    BaseObject* canonical = CanonicalizeForWrite(ref);
+    field.SetTargetObject(canonical);
+    ValidatePublished(field.GetTargetObject());
     // R1 fix-set production (I5): edge key = field slot absolute address (H3).
     // Established on store; cleared after BulkForward (H4). plainsrc P1.
-    FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
+    FixEdgeSet::Instance().MaybeAdd(obj, &field, canonical);
 }
 
 void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
