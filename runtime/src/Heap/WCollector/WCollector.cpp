@@ -602,18 +602,19 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
     }
 }
 
-void WCollector::NormalizeTraceRegionObject(BaseObject* object)
+void WCollector::NormalizeTraceRegionObject(CurrentPtr currentObject)
 {
-    if (object == nullptr || !object->HasRefField()) {
+    BaseObject* object = currentObject;
+    if (object == nullptr || !HasRefField(currentObject)) {
         return;
     }
-    if (UNLIKELY(object->IsWeakRef())) {
+    if (UNLIKELY(IsWeakRef(currentObject))) {
         RefField<>* referentField =
             reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
         NormalizeTraceRegionRefField(object, *referentField, true);
         return;
     }
-    ForEachRefSlot(object, [this, object](RefField<>& field) {
+    ForEachRefSlot(currentObject, [this, object](RefField<>& field) {
         NormalizeTraceRegionRefField(object, field, false);
     });
 }
@@ -646,10 +647,11 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
             if (!IsSurvivedObject(obj)) {
                 return;
             }
-            if (!obj->HasRefField()) {
+            CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+            if (!HasRefField(currentObject)) {
                 return;
             }
-            ForEachRefSlot(obj, [this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
+            ForEachRefSlot(currentObject, [this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
         },
         false);
 }
