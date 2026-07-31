@@ -172,7 +172,7 @@ public:
         STRONG,
         WEAK_REFERENT,
     };
-    using ClassifiedRefSlotVisitor = std::function<void(RefSlotKind, BaseObject*, RefField<>&)>;
+    using ClassifiedRefSlotVisitor = std::function<void(RefSlotKind, CurrentPtr, RefField<>&)>;
 
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
         : Collector(), theAllocator(allocator), collectorResources(resources)
