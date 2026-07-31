@@ -52,7 +52,7 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
 {
     LocalRefFieldContainer refFields;
     if (obj != nullptr) {
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [this, obj, &refFields, dst, src, size](RefField<false>& field) {
                 if (reinterpret_cast<MAddress>(&field) < src || reinterpret_cast<MAddress>(&field) >= (src + size)) {
                     return;
@@ -117,7 +117,7 @@ void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen,
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
     if (obj != nullptr) {
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
                 MAddress oldValue = oldField.GetFieldValue();
@@ -196,8 +196,9 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
-        DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, GetTypeInfo(currentObject),
+             GetSize(currentObject), &field, oldValue, newField.GetFieldValue());
     } else {
         DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
     }
@@ -211,8 +212,9 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj,
+         GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     return oldRef;
 }
 
@@ -237,12 +239,13 @@ bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& 
 void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                        MAddress srcField, MIndex srcSize) const
 {
+    CurrentPtr currentDestination = UnsafeAssumeCurrent(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
-    if (!dstObj->HasRefField()) {
+    if (!HasRefField(currentDestination)) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);
         return;
     }
-    if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
+    if (!GetComponentTypeInfo(currentDestination)->IsStructType()) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
         return;
     }
@@ -259,7 +262,7 @@ void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MI
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);
     if (!inHeap) {
-        srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
+        ForEachRefFieldInRange(UnsafeAssumeCurrent(srcArray), srcVisitor, srcField, srcField + srcSize);
     }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
