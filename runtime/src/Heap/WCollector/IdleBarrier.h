@@ -40,6 +40,13 @@ public:
                       MIndex srcSize) const override;
     void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                          MIndex srcSize) const override;
+    void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
+
+private:
+    BaseObject* CanonicalizeForWrite(BaseObject* reference) const;
+    void ValidatePublished(BaseObject* reference) const;
+    void CanonicalizeField(RefField<false>& field) const;
+    void CanonicalizeCopiedStruct(BaseObject* layoutObject, MAddress dst, MAddress src, size_t size) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_IDLE_BARRIER_H
