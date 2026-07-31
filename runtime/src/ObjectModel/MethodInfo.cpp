@@ -212,7 +212,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
             return false;
         }
         base += sizeof(ObjRef);
-        if (!argObj->GetTypeInfo()->IsSubType(argType)) {
+        if (!GetTypeInfo(UnsafeAssumeCurrent(argObj))->IsSubType(argType)) {
             return false;
         }
     }
@@ -608,7 +608,7 @@ void* MethodInfo::ApplyCJMethod(ObjRef instanceObj, void* genericArgs, void* act
 DynamicMethodInfo::DynamicMethodInfo(ObjRef obj)
 {
     this->instanceObj = obj;
-    this->functionTi = obj->GetTypeInfo();
+    this->functionTi = GetTypeInfo(UnsafeAssumeCurrent(obj));
     TypeInfo* ti = nullptr;
     auto super = this->functionTi->GetSuperTypeInfo();
     if (this->functionTi->IsFunc()) {
