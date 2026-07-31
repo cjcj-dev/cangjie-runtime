@@ -1416,23 +1416,31 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    const bool minorOn = StickyLog::Instance().IsMinorEnabled();
+    if (allocPtr != 0 && minorOn) {
+        // A free-list pop revives an address inside a previously published
+        // pinned region. Make the already-published retained census scan the
+        // whole region, and latch the same boundary for a major that has
+        // stamped but not promoted yet. Both writes are idempotent and do not
+        // depend on which collector phase handed the slot to the mutator.
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
+        region->ResetCensusBoundary();
+        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
+    }
     // For making bitmap comform with live object count, do not mark object repeated.
     bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||
         mutatorPhase == GCPhase::GC_PHASE_TRACE ||
         mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-    // Sticky minor: a slot revived below its region's census boundary would be
-    // recorded dead by the published (or imminent) retained census. Marking is
-    // extended to exactly the windows where it cannot truncate a live trace:
+    // Keep the existing accounting marks in the windows where they cannot
+    // truncate a live trace. Retained-census completeness no longer depends on
+    // this phase classification; the consumer-side downgrade above covers
+    // every successful pop. The additional marking windows are:
     // after tracing completed (PREFORWARD/FORWARD — the mark is consumed by
     // the promote census and wiped by the next cycle's
     // AssemblePinnedGarbageCandidates before any tracer consults it), or
     // between cycles (IDLE with no GC in flight — the mark lands in the bitmap
-    // the published census aliases). Not marked: revivals while a cycle is in
-    // flight but the mutator still runs the idle barrier. In the pre-ENUM
-    // sliver that is harmless — a live revived object is reached and marked by
-    // the full trace itself; the post-epoch idle tail before promotion remains
-    // a documented residual micro-window.
-    bool censusSafeMarking = StickyLog::Instance().IsMinorEnabled() &&
+    // the published census aliases).
+    bool censusSafeMarking = minorOn &&
         (mutatorPhase == GCPhase::GC_PHASE_PREFORWARD || mutatorPhase == GCPhase::GC_PHASE_FORWARD ||
          (mutatorPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted()));
     if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {

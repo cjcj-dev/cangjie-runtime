@@ -227,11 +227,14 @@ public:
     // every live object below retainedLiveInfoCoveredUpTo has a mark in the
     // retained bitmap. Any code that materializes a live object below that
     // boundary afterwards (slot free-list revival, in-place geometry rewrites,
-    // any future in-place reuse) must do one of exactly two things:
-    // synchronously mark it (MarkObject + AddLiveByteCount, only in windows
-    // where the mark cannot be consumed by a live trace), or invalidate the
-    // census (ClearLiveInfo / ResetCensusBoundary). Publishing silence is how
-    // RescanRememberedSet comes to skip live holders forever (b316 family).
+    // any future in-place reuse) must use one of the complete dispositions:
+    // synchronously mark it while the active barrier closes its new edges
+    // (ENUM/TRACE/CLEAR_SATB_BUFFER); mark it after tracing has completed but
+    // before the census is published (PREFORWARD/FORWARD); or lower both the
+    // published retained boundary and any pending census boundary to the region
+    // start, making the whole region part of the unconditional remset scan.
+    // Publishing a marked-only prefix while omitting a revived holder makes
+    // RescanRememberedSet skip that holder in a later minor collection.
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();

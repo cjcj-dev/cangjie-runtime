@@ -46,8 +46,9 @@ struct FreePinnedSlotLists {
 
 private:
     // Single revive entry: RegionManager::AllocPinnedFromFreeList owns the
-    // census-revive protocol (mark in trace-safe windows or leave the trace to
-    // census the object; see RegionInfo::PreserveRetainedLiveInfo invariant).
+    // census-revive protocol (whole-region retained-scan downgrade, plus the
+    // phase-local accounting marks; see the RegionInfo retained-census
+    // invariant).
     // Keeping PopFront private makes any new consumer meet that protocol
     // explicitly instead of popping slots ad hoc.
     friend class RegionManager;
