@@ -5,10 +5,14 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "GCDebugConfig.h"
+#endif
 #include "StickyLog.h"
 
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "Allocator/RegionSpace.h"
+#endif
 #include "Collector/CollectorProxy.h"
 #include "Collector/CollectorResources.h"
 #include "Interpreter/Options.h"
@@ -170,6 +174,7 @@ private:
 
 static ImmortalWrapper<HeapImpl> g_heapInstance;
 
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 MAddress HeapImpl::Allocate(size_t size, AllocType allocType)
 {
     if (UNLIKELY(GCDebugConfig::IsStressEnabled()) && !IsGcThread() && IsGCEnabled()) {
@@ -187,6 +192,9 @@ MAddress HeapImpl::Allocate(size_t size, AllocType allocType)
     GCDebugConfig::ClearAllocatedMemory(address, RegionSpace::ToAllocSize(size));
     return address;
 }
+#else
+MAddress HeapImpl::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
+#endif
 
 bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
 {
@@ -218,19 +226,25 @@ void HeapImpl::Init(const HeapParam& param)
         }
     }
     collectorResources.Init();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     GCDebugConfig::ConfigureFromEnvironment();
+#endif
 }
 
 void HeapImpl::Fini()
 {
     collectorResources.Fini();
     collectorProxy.Fini();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     GCDebugConfig::DisableStress();
+#endif
     if (theSpace != nullptr) {
         delete theSpace;
         theSpace = nullptr;
     }
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     GCDebugConfig::Finalize();
+#endif
 }
 
 Collector& HeapImpl::GetCollector() { return collectorProxy.GetCurrentCollector(); }

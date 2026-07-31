@@ -14,7 +14,9 @@
 #include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "Heap/GCDebugConfig.h"
+#endif
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
@@ -1394,22 +1396,30 @@ void WCollector::DoYoungGarbageCollection()
 void WCollector::DoGarbageCollection()
 {
     StickyLog& stickyLog = StickyLog::Instance();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     if (IsYoungGCReason(gcReason) && stickyLog.IsMinorEnabled() &&
+#else
+    if (gcReason == GC_REASON_YOUNG && stickyLog.IsMinorEnabled() &&
+#endif
         minorRunsSinceMajor < stickyLog.GetMajorInterval()) {
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
         if (gcReason == GC_REASON_STRESS_MINOR) {
             GCDebugConfig::NoteStressMinorExecution(true);
         }
+#endif
         GetGCStats().lastCollectionWasYoung = true;
         DoYoungGarbageCollection();
         return;
     }
     // Reaching here means a full collection runs, even when the request said YOUNG
     // (the majorInterval promotion above); the throttle clocks key off this record.
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     if (gcReason == GC_REASON_STRESS_MINOR) {
         GCDebugConfig::NoteStressMinorExecution(false);
     } else if (gcReason == GC_REASON_STRESS_MAJOR) {
         GCDebugConfig::NoteStressMajorExecution();
     }
+#endif
     GetGCStats().lastCollectionWasYoung = false;
 
     if (stickyLog.IsMinorEnabled()) {

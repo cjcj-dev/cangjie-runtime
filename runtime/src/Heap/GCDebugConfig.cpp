@@ -77,7 +77,11 @@ void InitializeClobberGuard()
 {
     MemMap::Option option = MemMap::DEFAULT_OPTIONS;
     option.tag = "cangjie_gc_clobber_guard";
+#if defined(_WIN64)
     option.prot = MemMap::PROT_NONE;
+#else
+    option.prot = PROT_NONE;
+#endif
     option.protAll = true;
     clobberGuard = MemMap::MapMemory(MRT_PAGE_SIZE, MRT_PAGE_SIZE, option);
     clobberAddress = reinterpret_cast<uintptr_t>(clobberGuard->GetBaseAddr());

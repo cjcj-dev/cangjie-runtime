@@ -54,7 +54,11 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     // ScopedStopTheWorld stw;
 
     gcReason = reason;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     PreGarbageCollection(!IsYoungGCReason(reason));
+#else
+    PreGarbageCollection(reason != GC_REASON_YOUNG);
+#endif
     ScheduleTraceEvent(TRACE_EV_GC_START, -1, nullptr, 0);
     VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[gcReason].name, gcIndex);
     GCStats& gcStats = GetGCStats();
@@ -69,7 +73,11 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 
     PostGarbageCollection(gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     if (!IsYoungGCReason(reason)) {
+#else
+    if (reason != GC_REASON_YOUNG) {
+#endif
         UpdateGCStats();
     }
     uint64_t gcTimeNs = gcStats.gcEndTime - gcStats.gcStartTime;
@@ -79,7 +87,11 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     g_gcCount++;
     g_gcTotalTimeUs += (gcTimeNs / NS_PER_US);
     g_gcCollectedTotalBytes += gcStats.collectedBytes;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     if (!IsYoungGCReason(reason)) {
+#else
+    if (reason != GC_REASON_YOUNG) {
+#endif
         gcStats.collectionRate = rate;
     }
 }
