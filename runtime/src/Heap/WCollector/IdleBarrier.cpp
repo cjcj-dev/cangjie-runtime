@@ -260,7 +260,8 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
             if (inHeap) {
                 WriteReference(dstObj, *currentDstField, newRef);
             } else {
-                currentDstField->SetTargetObject(newRef);
+                currentDstField->SetTargetObject(CanonicalizeForWrite(newRef));
+                ValidatePublished(currentDstField->GetTargetObject());
             }
             currentDst += sizeof(RefField<false>);
             currentSrc += sizeof(RefField<false>);
@@ -276,7 +277,8 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
             if (inHeap) {
                 WriteReference(dstObj, *currentDstField, newRef);
             } else {
-                currentDstField->SetTargetObject(newRef);
+                currentDstField->SetTargetObject(CanonicalizeForWrite(newRef));
+                ValidatePublished(currentDstField->GetTargetObject());
             }
             currentDst -= sizeof(RefField<false>);
             currentSrc -= sizeof(RefField<false>);
