@@ -19,7 +19,7 @@ template<typename T, bool isAtomic>
 void Field<T, isAtomic>::SetFieldValue(const BaseObject* obj, T v, std::memory_order order)
 {
     DLOG(BARRIER, "write obj %p(%zu)+%zu field @%p 0x%zx -> 0x%zx", obj,
-         GetSize(UnsafeAssumeCurrent(obj)),
+         GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj))),
          BaseObject::FieldOffset(obj, this), this, value, v);
 
     if (isAtomic) {
