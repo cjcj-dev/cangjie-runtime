@@ -114,6 +114,13 @@ public:
     // release a large object when the size is greater than 4096KB.
     static constexpr size_t LARGE_OBJECT_RELEASE_THRESHOLD = 4096 * KB;
 
+    // youngAge occupies the top bits of the uint16 region-state bitfield
+    // (positions 10..12 after YOUNG_REGION_FLAG at 9); 3 bits leave the
+    // field's remaining capacity untouched. Public so the promotion-age knob
+    // (StickyLog) can clamp against the representable maximum.
+    static constexpr int32_t YOUNG_AGE_BITS = 3;
+    static constexpr uint8_t MAX_YOUNG_AGE = (1u << YOUNG_AGE_BITS) - 1;
+
     bool CompareExchangeRouteState(RouteState expected, RouteState newWord)
     {
 #if defined(__x86_64__)
@@ -1185,7 +1192,8 @@ public:
     }
     void SetYoungAge(uint8_t age)
     {
-        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, 1, age);
+        CHECK(age <= MAX_YOUNG_AGE);
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BITS, age);
     }
 
     RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
@@ -1469,7 +1477,11 @@ private:
                 uint8_t isEnqueued : 1;
                 uint8_t isResurrected : 1;
                 uint8_t isYoungRegion : 1;
-                uint8_t youngAge : 1;
+                // Region age in surviving minors; width must match
+                // YOUNG_AGE_BITS (promotion-age sweep needs ages above 1 —
+                // with a 1-bit field SetYoungAge(2) silently truncated to 0
+                // and the region could never promote).
+                uint8_t youngAge : YOUNG_AGE_BITS;
             };
             BitField<uint16_t> regionStateBitField;
         };

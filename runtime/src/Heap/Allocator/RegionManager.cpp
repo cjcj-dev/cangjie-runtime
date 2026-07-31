@@ -514,7 +514,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
 void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                                         const std::function<void(RegionInfo*)>& promoteVisitor)
 {
-    auto collect = [this, &stats, &promoteVisitor](RegionList& list, bool releaseResources) {
+    // Promotion age (default 1 = shipped behavior): regions with live bytes age
+    // until youngAge reaches the threshold, then the whole region is promoted.
+    const uint8_t promoteAge = StickyLog::Instance().GetPromoteAge();
+    auto collect = [this, &stats, &promoteVisitor, promoteAge](RegionList& list, bool releaseResources) {
         RegionInfo* region = list.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
@@ -523,8 +526,9 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 continue;
             }
             if (region->GetLiveByteCount() != 0) {
-                if (region->GetYoungAge() == 0) {
-                    region->SetYoungAge(1);
+                uint8_t age = region->GetYoungAge();
+                if (age < promoteAge) {
+                    region->SetYoungAge(age + 1);
                 } else {
                     region->PreserveRetainedLiveInfo();
                     region->SetYoungRegionFlag(0);
