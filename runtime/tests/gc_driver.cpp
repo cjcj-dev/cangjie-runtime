@@ -243,7 +243,35 @@ struct Driver {
         return static_cast<int>(slots.size() - 1);
     }
 
-    bool ValidIdx(uint32_t i) const { return i < slots.size() && slots[i].live && slots[i].obj != nullptr; }
+    bool LiveRegion(BaseObject* obj) const
+    {
+        if (obj == nullptr) {
+            return false;
+        }
+        RegionInfo* reg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion()) {
+            return false;
+        }
+        auto ty = reg->GetRegionType();
+        if (ty == RegionInfo::RegionType::FREE_REGION || ty == RegionInfo::RegionType::GARBAGE_REGION) {
+            return false;
+        }
+        return true;
+    }
+
+    bool ValidIdx(uint32_t i)
+    {
+        if (i >= slots.size() || !slots[i].live || slots[i].obj == nullptr) {
+            return false;
+        }
+        if (!LiveRegion(slots[i].obj)) {
+            slots[i].live = false;
+            slots[i].obj = nullptr;
+            slots[i].home = nullptr;
+            return false;
+        }
+        return true;
+    }
 
     RefField<>* SlotField(BaseObject* obj, uint32_t slotIdx)
     {
@@ -340,7 +368,9 @@ struct Driver {
                 continue;
             }
             RegionInfo* reg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(slots[i].obj));
-            if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion()) {
+            if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion() ||
+                reg->GetRegionType() == RegionInfo::RegionType::FREE_REGION ||
+                reg->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION) {
                 slots[i].live = false;
                 slots[i].obj = nullptr;
                 slots[i].home = nullptr;
@@ -439,7 +469,10 @@ struct Driver {
             BaseObject* holder = slots[i].obj;
             RegionInfo* hReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             // Region first: never touch object header on free/garbage units (SEGV).
-            if (hReg == nullptr || !hReg->IsValidRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion()) {
+            // FREE_REGION type and FREE_UNITS role are distinct fields — reject both.
+            if (hReg == nullptr || !hReg->IsValidRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion() ||
+                hReg->GetRegionType() == RegionInfo::RegionType::FREE_REGION ||
+                hReg->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION) {
                 slots[i].live = false;
                 slots[i].obj = nullptr;
                 continue;
