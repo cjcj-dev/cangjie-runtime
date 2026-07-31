@@ -227,8 +227,9 @@ void FinalizerProcessor::ProcessFinalizableList()
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
         RefField<> tmpField(reinterpret_cast<MAddress>(*itor));
         BaseObject* finalizeObjAddr = Heap::GetBarrier().ReadStaticRef(tmpField);
+        CurrentPtr currentFinalizeObject = UnsafeAssumeCurrent(finalizeObjAddr);
 
-        TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
+        TypeInfo* classInfo = GetTypeInfo(currentFinalizeObject);
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
         Mutator* mutator = ThreadLocal::GetMutator();
 
@@ -238,7 +239,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         mutator->SetManagedContext(true);
         DLOG(FINALIZE, "tid %u finalize object %p", tid, finalizeObjAddr);
         uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
-        ExecuteCangjieStub(finalizeObjAddr, finalizeObjAddr->GetTypeInfo(), 0, reinterpret_cast<void*>(finalizer),
+        ExecuteCangjieStub(finalizeObjAddr, GetTypeInfo(currentFinalizeObject), 0, reinterpret_cast<void*>(finalizer),
                            reinterpret_cast<void*>(threadData), 0);
         mutator->SetManagedContext(false);
 
