@@ -1236,6 +1236,16 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
 void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
 {
     StickyLog& stickyLog = StickyLog::Instance();
+    size_t run = minorTotalRuns + 1;
+    bool droppedThisRun = stickyLog.TryDropEdgeCompleteStoreAtSTW(run);
+    size_t regionsSeen = 0;
+    size_t regionsSkipped = 0;
+    size_t youngHolderRegions = 0;
+    size_t objectsSeen = 0;
+    size_t objectsSkippedInvalidHeader = 0;
+    size_t objectsWalked = 0;
+    size_t targetsSkippedRegionState = 0;
+    size_t targetsSkippedInvalidHeader = 0;
     size_t oldObjects = 0;
     size_t refFields = 0;
     size_t edgesToYoung = 0;
@@ -1243,65 +1253,114 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
     size_t missing = 0;
     size_t printedMissing = 0;
     bool dropCaughtThisRun = false;
+    bool fakeMissCaughtThisRun = false;
 
-    manager.ForEachObjUnsafe([&](BaseObject* holder) {
-        RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-        if (holderRegion->IsYoungRegion()) {
-            return;
+    for (uintptr_t regionAddress = manager.GetRegionHeapStart(); regionAddress < manager.GetInactiveZone();) {
+        RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(regionAddress);
+        regionAddress = holderRegion->GetRegionEnd();
+        ++regionsSeen;
+        if (!holderRegion->IsValidRegion() || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
+            ++regionsSkipped;
+            continue;
         }
-        ++oldObjects;
-        holder->ForEachRefField([&](RefField<>& field) {
-            ++refFields;
-            RefField<> value(field);
-            BaseObject* target = value.GetTargetObject();
-            if (!Heap::IsHeapAddress(target)) {
+        if (holderRegion->IsYoungRegion()) {
+            ++youngHolderRegions;
+            continue;
+        }
+        holderRegion->VisitAllObjects([&](BaseObject* holder) {
+            ++objectsSeen;
+            if (!holder->IsValidObject()) {
+                ++objectsSkippedInvalidHeader;
                 return;
             }
-            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (!targetRegion->IsYoungRegion()) {
-                return;
-            }
-            ++edgesToYoung;
-            MAddress holderLine = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
-            if (stickyLog.IsLoggedLine(holderLine)) {
-                ++inRemset;
-                return;
-            }
-            ++missing;
-            MAddress slot = reinterpret_cast<MAddress>(&field);
-            bool isDroppedEdge = stickyLog.IsEdgeCompleteDroppedEdge(slot, target);
-            if (isDroppedEdge) {
-                dropCaughtThisRun = true;
-                stickyLog.MarkEdgeCompleteDropCaught();
-            }
-            if (printedMissing < 20) {
-                VLOG(REPORT,
-                     "[EDGECOMPLETE-MISS] run=%zu holderType=%s holderRegion=%u slotOff=%zu targetRegion=%u "
-                     "phase=pre-remset reason=%s",
-                     minorTotalRuns + 1, holder->GetTypeInfo()->GetName(),
-                     static_cast<unsigned>(holderRegion->GetRegionType()), slot - reinterpret_cast<MAddress>(holder),
-                     static_cast<unsigned>(targetRegion->GetRegionType()),
-                     isDroppedEdge ? "posctrl-dropped-store" : "line-not-logged");
-                ++printedMissing;
-            }
+            ++objectsWalked;
+            ++oldObjects;
+            holder->ForEachRefField([&](RefField<>& field) {
+                ++refFields;
+                RefField<> value(field);
+                BaseObject* target = value.GetTargetObject();
+                if (!Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion =
+                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion == nullptr || !targetRegion->IsValidRegion() || targetRegion->IsFreeRegion() ||
+                    targetRegion->IsGarbageRegion() || !targetRegion->IsYoungRegion()) {
+                    ++targetsSkippedRegionState;
+                    return;
+                }
+                if (!target->IsValidObject()) {
+                    ++targetsSkippedInvalidHeader;
+                    return;
+                }
+                ++edgesToYoung;
+                MAddress holderLine = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
+                MAddress slot = reinterpret_cast<MAddress>(&field);
+                if (stickyLog.QueryEdgeCompleteLine(holderLine, slot, target)) {
+                    ++inRemset;
+                    return;
+                }
+                ++missing;
+                bool isDroppedEdge = stickyLog.IsEdgeCompleteDroppedEdge(slot, target);
+                bool isFakeMissEdge = stickyLog.IsEdgeCompleteFakeMissEdge(slot, target);
+                if (isDroppedEdge) {
+                    dropCaughtThisRun = true;
+                    stickyLog.MarkEdgeCompleteDropCaught();
+                }
+                if (isFakeMissEdge) {
+                    fakeMissCaughtThisRun = true;
+                    stickyLog.MarkEdgeCompleteFakeMissCaught();
+                }
+                if (isDroppedEdge || isFakeMissEdge || printedMissing < 20) {
+                    const char* reason = isFakeMissEdge ? "fakemiss-injected" :
+                        (isDroppedEdge ? "stw-dropped-store" : "line-not-logged");
+                    VLOG(REPORT,
+                         "[EDGECOMPLETE-MISS] run=%zu holderType=%s holderRegion=%u slotOff=%zu targetRegion=%u "
+                         "phase=pre-remset reason=%s slot=%#zx target=%p",
+                         run, holder->GetTypeInfo()->GetName(),
+                         static_cast<unsigned>(holderRegion->GetRegionType()),
+                         slot - reinterpret_cast<MAddress>(holder),
+                         static_cast<unsigned>(targetRegion->GetRegionType()), reason, slot, target);
+                    if (printedMissing < 20) {
+                        ++printedMissing;
+                    }
+                }
+            });
         });
-    });
+    }
 
     stickyLog.RecordEdgeCompleteRun(oldObjects, refFields, edgesToYoung, inRemset, missing);
     double pct = edgesToYoung == 0 ? 0.0 :
         static_cast<double>(missing) * 100.0 / static_cast<double>(edgesToYoung);
     VLOG(REPORT,
          "[EDGECOMPLETE] run=%zu oldObjs=%zu refFields=%zu edgesToYoung=%zu inRemset=%zu missing=%zu pct=%.6f",
-         minorTotalRuns + 1, oldObjects, refFields, edgesToYoung, inRemset, missing, pct);
+         run, oldObjects, refFields, edgesToYoung, inRemset, missing, pct);
+    VLOG(REPORT,
+         "[EDGECOMPLETE-FILTER] run=%zu regionsSkipped=%zu objsSkippedInvalidHeader=%zu objsWalked=%zu "
+         "regionsSeen=%zu youngHolderRegions=%zu objsSeen=%zu targetsSkippedRegionState=%zu "
+         "targetsSkippedInvalidHeader=%zu",
+         run, regionsSkipped, objectsSkippedInvalidHeader, objectsWalked, regionsSeen, youngHolderRegions,
+         objectsSeen, targetsSkippedRegionState, targetsSkippedInvalidHeader);
 
     bool repaired = stickyLog.RepairEdgeCompleteDroppedLine();
     if (stickyLog.GetEdgeCompleteDropN() != 0) {
         VLOG(REPORT,
-             "[EDGECOMPLETE-POSCTRL] run=%zu dropN=%zu eligibleStores=%zu dropped=%u caught=%u repaired=%u",
-             minorTotalRuns + 1, stickyLog.GetEdgeCompleteDropN(),
+             "[EDGECOMPLETE-STWDROP-RESULT] run=%zu dropN=%zu eligibleStores=%zu attempts=%zu rejects=%zu "
+             "waitRuns=%zu droppedThisRun=%u dropped=%u caughtThisRun=%u caught=%u repaired=%u exhausted=%u",
+             run, stickyLog.GetEdgeCompleteDropN(),
              stickyLog.GetEdgeCompleteEligibleStoreCount(),
+             stickyLog.GetEdgeCompleteCandidateAttempts(), stickyLog.GetEdgeCompleteCandidateRejects(),
+             stickyLog.GetEdgeCompleteCandidateWaitRuns(), static_cast<unsigned>(droppedThisRun),
              static_cast<unsigned>(stickyLog.HasEdgeCompleteDroppedStore()),
-             static_cast<unsigned>(dropCaughtThisRun), static_cast<unsigned>(repaired));
+             static_cast<unsigned>(dropCaughtThisRun), static_cast<unsigned>(stickyLog.WasEdgeCompleteDropCaught()),
+             static_cast<unsigned>(repaired), static_cast<unsigned>(stickyLog.IsEdgeCompleteDropExhausted()));
+    }
+    if (stickyLog.IsEdgeCompleteFakeMissEnabled()) {
+        VLOG(REPORT,
+             "[EDGECOMPLETE-FAKEMISS] run=%zu injected=%u caughtThisRun=%u caught=%u",
+             run, static_cast<unsigned>(stickyLog.HasEdgeCompleteFakeMiss()),
+             static_cast<unsigned>(fakeMissCaughtThisRun),
+             static_cast<unsigned>(stickyLog.WasEdgeCompleteFakeMissCaught()));
     }
 }
 
