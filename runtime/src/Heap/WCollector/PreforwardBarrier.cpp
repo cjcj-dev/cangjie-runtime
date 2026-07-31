@@ -120,6 +120,7 @@ void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fi
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        (void)currentObject;
         DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, GetTypeInfo(currentObject),
              GetSize(currentObject), &field, newField.GetFieldValue());
     } else {
@@ -135,6 +136,7 @@ BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<tru
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    (void)currentObject;
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj,
          GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
