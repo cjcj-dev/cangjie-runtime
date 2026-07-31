@@ -423,8 +423,22 @@ struct Driver {
                 continue;
             }
             BaseObject* holder = slots[i].obj;
+            // Reject stale table entries after reclaim/reuse.
+            if (holder->GetTypeInfo() != g_holderTi) {
+                slots[i].live = false;
+                slots[i].obj = nullptr;
+                continue;
+            }
             RegionInfo* hReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-            if (hReg == nullptr || !hReg->IsValidRegion() || hReg->IsGarbageRegion()) {
+            if (hReg == nullptr || !hReg->IsValidRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion()) {
+                continue;
+            }
+            // FREE_REGION type with leftover unit role is not a live old holder.
+            auto hTy = hReg->GetRegionType();
+            if (hTy == RegionInfo::RegionType::FREE_REGION ||
+                hTy == RegionInfo::RegionType::GARBAGE_REGION ||
+                hTy == RegionInfo::RegionType::FROM_REGION ||
+                hTy == RegionInfo::RegionType::LONE_FROM_REGION) {
                 continue;
             }
             if (hReg->IsYoungRegion()) {
@@ -435,8 +449,14 @@ struct Driver {
             if (target == nullptr || !Heap::IsHeapAddress(reinterpret_cast<MAddress>(target))) {
                 continue;
             }
+            if (target->GetTypeInfo() != g_holderTi) {
+                continue;
+            }
             RegionInfo* tReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (tReg == nullptr || !tReg->IsYoungRegion()) {
+            if (tReg == nullptr || !tReg->IsValidRegion() || tReg->IsGarbageRegion() || tReg->IsFreeRegion()) {
+                continue;
+            }
+            if (!tReg->IsYoungRegion()) {
                 continue;
             }
             ++oldToYoungEdges;
@@ -972,6 +992,9 @@ int main(int argc, char** argv)
 
     // Bind a mutator so IdleLogBarrier → CJ_MCC_StickyLogLine actually logs.
     Mutator* mut = MutatorManager::Instance().CreateMutator();
+    if (mut != nullptr) {
+        (void)mut->LeaveSaferegion();
+    }
     std::printf("GCDRIVER mutator=%p\n", static_cast<void*>(mut));
 
     auto& allocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
