@@ -7,6 +7,7 @@
 
 #include "IdleBarrier.h"
 
+#include "Heap/CanonicalWriteTable.h"
 #include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
@@ -17,6 +18,43 @@
 #include "securec.h"
 
 namespace MapleRuntime {
+BaseObject* IdleBarrier::CanonicalizeForWrite(BaseObject* reference) const
+{
+    CanonicalWriteTable& table = CanonicalWriteTable::Instance();
+    if (LIKELY(!table.IsEnabled())) {
+        return reference;
+    }
+    return table.Canonicalize(reference);
+}
+
+void IdleBarrier::ValidatePublished(BaseObject* reference) const
+{
+    CanonicalWriteTable::Instance().ValidatePublished(reference);
+}
+
+void IdleBarrier::CanonicalizeField(RefField<false>& field) const
+{
+    BaseObject* reference = field.GetTargetObject();
+    BaseObject* canonical = CanonicalizeForWrite(reference);
+    if (canonical != reference) {
+        field.SetTargetObject(canonical);
+    }
+    ValidatePublished(field.GetTargetObject());
+}
+
+void IdleBarrier::CanonicalizeCopiedStruct(BaseObject* layoutObject, MAddress dst, MAddress src, size_t size) const
+{
+    if (!CanonicalWriteTable::Instance().IsEnabled() || layoutObject == nullptr) {
+        return;
+    }
+    layoutObject->ForEachRefInStruct(
+        [this, dst, src](RefField<false>& sourceField) {
+            MAddress offset = reinterpret_cast<MAddress>(&sourceField) - src;
+            CanonicalizeField(*reinterpret_cast<RefField<false>*>(dst + offset));
+        },
+        src, src + size);
+}
+
 BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     do {
