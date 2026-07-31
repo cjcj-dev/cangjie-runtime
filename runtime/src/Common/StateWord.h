@@ -13,6 +13,7 @@
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
+class BaseObject;
 class TypeInfo;
 class ObjectState {
 public:
@@ -90,6 +91,7 @@ public:
     static constexpr uint64_t HIGH_ADDRESS_SHIFT = 32;
     static constexpr uint64_t HIGH_ADDRESS_MASK = (1ull << HIGH_ADDRESS_BIT_COUNT) - 1;
 
+private:
     TypeInfo* GetTypeInfo() const
     {
 #ifdef __arm__
@@ -101,6 +103,10 @@ public:
 #endif
         return reinterpret_cast<TypeInfo*>(address);
     }
+
+    friend class BaseObject;
+
+public:
 
     void SetTypeInfo(TypeInfo* newTypeInfo)
     {
