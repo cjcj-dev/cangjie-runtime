@@ -125,17 +125,18 @@ void RemsetCheck::ConfigureFromEnvironment(bool forceSlowPath)
         enabled && ReadRemsetCheckBoolean("MRT_VISITORHOOK_POSCTRL_FALSE_UNVISITED", false);
     trueUnvisitedControlEnabled =
         enabled && ReadRemsetCheckBoolean("MRT_VISITORHOOK_POSCTRL_TRUE_UNVISITED", false);
+    retain2SkipControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_RETAIN2SKIP_POSCTRL", false);
     CHECK_DETAIL(!enabled || forceSlowPath,
                  "MRT_REMSETCHECK=1 requires MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 so every measured write "
                  "reaches IdleLogBarrier");
     LOG(RTLOG_INFO,
         "remset check: enabled=%u hits=%u forceSlowPath=%u detectControl=%u produceControl=%u orphanControl=%u "
-        "stickyLogExitControl=%u falseUnvisitedControl=%u trueUnvisitedControl=%u",
+        "stickyLogExitControl=%u falseUnvisitedControl=%u trueUnvisitedControl=%u retain2SkipControl=%u",
         static_cast<unsigned>(enabled), static_cast<unsigned>(hitCountingEnabled),
         static_cast<unsigned>(forceSlowPath), static_cast<unsigned>(detectControlEnabled),
         static_cast<unsigned>(produceControlEnabled), static_cast<unsigned>(orphanControlEnabled),
         static_cast<unsigned>(stickyLogExitControlEnabled), static_cast<unsigned>(falseUnvisitedControlEnabled),
-        static_cast<unsigned>(trueUnvisitedControlEnabled));
+        static_cast<unsigned>(trueUnvisitedControlEnabled), static_cast<unsigned>(retain2SkipControlEnabled));
 }
 
 void RemsetCheck::RecordHookHit(HookSite site)
@@ -376,10 +377,13 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     visitedRoundCandidates.clear();
     visitedLines.clear();
     retain2SkippedLines.clear();
+    visitedRoundLineTraces.clear();
+    visitedRoundRegionLines.clear();
     for (size_t i = 0; i < VISITOR_HOOK_SITE_COUNT; ++i) {
         visitedRoundLineHits[i] = 0;
     }
     retain2SkippedThisRound = 0;
+    CHECK(!retain2SkipControlActive);
     if (young == 0) {
         ++youngZeroExcluded;
         VLOG(REPORT,
@@ -413,6 +417,48 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
                 candidates.push_back(it->second);
             }
             ++it;
+        }
+    }
+
+    for (const Edge& edge : candidates) {
+        MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+        uint8_t byte = LoadLoggedByte(line);
+        bool dirty = LoadDirtyBit(edge.holder);
+        bool buffered = bufferedLines.find(line) != bufferedLines.end();
+        auto retainedWrite = bufferRetainedWriteRuns.find(line);
+        bool writtenByPreviousRound = byte == 2 && retainedWrite != bufferRetainedWriteRuns.end() &&
+            retainedWrite->second + 1 == run;
+        if (byte != 2 && retainedWrite != bufferRetainedWriteRuns.end()) {
+            bufferRetainedWriteRuns.erase(retainedWrite);
+        }
+        auto inserted = visitedRoundLineTraces.emplace(
+            line, LineTrace{ edge.holderRegionStart, byte, dirty, buffered, false, false,
+                             writtenByPreviousRound, DirtyLinePath::NONE });
+        if (inserted.second) {
+            visitedRoundRegionLines[edge.holderRegionStart].push_back(line);
+        }
+    }
+
+    if (retain2SkipControlEnabled && !retain2SkipControlCaught) {
+        for (const Edge& edge : candidates) {
+            MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+            auto trace = visitedRoundLineTraces.find(line);
+            CHECK(trace != visitedRoundLineTraces.end());
+            if (trace->second.byteAtRoundStart != 1 || !trace->second.dirtyAtRoundStart ||
+                trace->second.inBuffer) {
+                continue;
+            }
+            retain2SkipControlPreviousByte = ExchangeLoggedByte(line, 2);
+            CHECK(retain2SkipControlPreviousByte == 1);
+            retain2SkipControlLine = line;
+            retain2SkipControlSlot = edge.slot;
+            retain2SkipControlActive = true;
+            VLOG(REPORT,
+                 "[RETAIN2SKIP-POSCTRL-SELECT] run=%zu line=%p slot=%p previousByte=%u dirty=1 inBuffer=0 "
+                 "setByte=2",
+                 run, reinterpret_cast<void*>(line), reinterpret_cast<void*>(edge.slot),
+                 static_cast<unsigned>(retain2SkipControlPreviousByte));
+            break;
         }
     }
 
