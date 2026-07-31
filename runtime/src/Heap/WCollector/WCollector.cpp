@@ -1412,6 +1412,7 @@ void WCollector::DoGarbageCollection()
     // Reaching here means a full collection runs, even when the request said YOUNG
     // (the majorInterval promotion above); the throttle clocks key off this record.
     GetGCStats().lastCollectionWasYoung = false;
+    RemsetCheck::Instance().RecordMajor(minorTotalRuns, minorRunsSinceMajor);
 
     if (stickyLog.IsMinorEnabled()) {
         ScopedStopTheWorld stw("sticky major allocation rollover");
@@ -1439,6 +1440,7 @@ void WCollector::DoGarbageCollection()
         ScopedStopTheWorld stw("advance sticky log epoch");
         SatbBuffer::Instance().DiscardStickyLogBuffer();
         StickyLog::Instance().BeginEpoch();
+        RemsetCheck::Instance().RecordBeginEpoch(minorTotalRuns);
     }
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);

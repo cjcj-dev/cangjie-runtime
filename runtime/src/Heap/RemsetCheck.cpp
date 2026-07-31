@@ -120,9 +120,29 @@ void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObjec
     }
     Edge edge{ reinterpret_cast<MAddress>(holder), slot, reinterpret_cast<MAddress>(target),
                holderRegion->GetRegionStart(), targetRegion->GetRegionStart(), holderRegion->GetIdentityEpoch(),
-               targetRegion->GetIdentityEpoch(), site };
+               targetRegion->GetIdentityEpoch(), static_cast<uint8_t>(holderRegion->GetRegionType()), site };
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges[slot] = edge;
+}
+
+void RemsetCheck::RecordMajor(size_t completedMinorRuns, size_t minorRunsSinceMajor)
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    ++majorCount;
+    VLOG(REPORT, "[REMSETCHECK-PHASE] event=major completedMinorRuns=%zu minorRunsSinceMajor=%zu total=%zu",
+         completedMinorRuns, minorRunsSinceMajor, majorCount);
+}
+
+void RemsetCheck::RecordBeginEpoch(size_t completedMinorRuns)
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    ++beginEpochCount;
+    VLOG(REPORT, "[REMSETCHECK-PHASE] event=BeginEpoch completedMinorRuns=%zu total=%zu", completedMinorRuns,
+         beginEpochCount);
 }
 
 bool RemsetCheck::Revalidate(const Edge& edge, RegionInfo*& holderRegion, RegionInfo*& targetRegion) const
@@ -330,21 +350,44 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     std::unordered_set<MAddress> orphanLines;
     std::array<size_t, HOOK_SITE_COUNT> siteEdges{};
     size_t missingThisRound = 0;
-    size_t missingSamples = 0;
+    size_t missingByteZeroThisRound = 0;
+    size_t missingOrphanThisRound = 0;
+    size_t missingDirtyNotBufferedThisRound = 0;
+    size_t missingOtherThisRound = 0;
     for (const Edge& edge : candidates) {
         MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
-        if (LoadLoggedByte(line) != 0 && !LoadDirtyBit(edge.holder)) {
+        uint8_t byte = LoadLoggedByte(line);
+        bool dirty = LoadDirtyBit(edge.holder);
+        bool buffered = bufferedLines.find(line) != bufferedLines.end();
+        if (byte != 0 && !dirty) {
             orphanLines.insert(line);
         }
         ++siteEdges[static_cast<size_t>(edge.site)];
         if (!checkerRecorded(edge, 0)) {
             ++missingThisRound;
-            if (missingSamples < 20) {
-                ++missingSamples;
-                VLOG(REPORT, "[REMSETCHECK-MISS] run=%zu reason=not-consumable holder=%p slot=%p target=%p",
-                     run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
-                     reinterpret_cast<void*>(edge.target));
+            if (byte == 0) {
+                ++missingByteZeroThisRound;
+            } else if (!dirty) {
+                ++missingOrphanThisRound;
+            } else if (!buffered) {
+                ++missingDirtyNotBufferedThisRound;
+            } else {
+                ++missingOtherThisRound;
             }
+            RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(edge.holder);
+            VLOG(REPORT,
+                 "[REMSETCHECK-MISS] run=%zu reason=not-consumable holder=%p slot=%p target=%p line=%p "
+                 "byte=%u dirty=%u buffered=%u holderRegion=%p holderRegionTypeAtRecord=%u "
+                 "holderRegionTypeAtCheck=%u holderRegionEpochAtRecord=%llu holderRegionEpochAtCheck=%llu "
+                 "site=%s",
+                 run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
+                 reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line), static_cast<unsigned>(byte),
+                 static_cast<unsigned>(dirty), static_cast<unsigned>(buffered),
+                 reinterpret_cast<void*>(holderRegion->GetRegionStart()),
+                 static_cast<unsigned>(edge.holderRegionType),
+                 static_cast<unsigned>(holderRegion->GetRegionType()),
+                 static_cast<unsigned long long>(edge.holderRegionEpoch),
+                 static_cast<unsigned long long>(holderRegion->GetIdentityEpoch()), HookSiteName(edge.site));
         }
     }
 
@@ -354,12 +397,22 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     edgesFromBarrier += candidates.size();
     revalidateDropped += droppedThisRound;
     missing += missingThisRound;
+    missingByteZero += missingByteZeroThisRound;
+    missingOrphan += missingOrphanThisRound;
+    missingDirtyNotBuffered += missingDirtyNotBufferedThisRound;
+    missingOther += missingOtherThisRound;
     orphanByteNonzeroDirtyZero += orphanLines.size();
     VLOG(REPORT,
          "[REMSETCHECK] run=%zu young=%zu excluded=0 edgesFromBarrier=%zu revalidateDropped=%zu missing=%zu "
-         "missingPct=%.6f orphanByteNonzeroDirtyZero=%zu bufferedLines=%zu",
+         "missingPct=%.6f orphanByteNonzeroDirtyZero=%zu bufferedLines=%zu missingByteZero=%zu "
+         "missingOrphan=%zu missingDirtyNotBuffered=%zu missingOther=%zu majorsSincePreviousMinor=%zu "
+         "beginEpochsSincePreviousMinor=%zu",
          run, young, candidates.size(), droppedThisRound, missingThisRound, missingPct, orphanLines.size(),
-         bufferedLines.size());
+         bufferedLines.size(), missingByteZeroThisRound, missingOrphanThisRound,
+         missingDirtyNotBufferedThisRound, missingOtherThisRound, majorCount - majorCountAtPreviousMinor,
+         beginEpochCount - beginEpochCountAtPreviousMinor);
+    majorCountAtPreviousMinor = majorCount;
+    beginEpochCountAtPreviousMinor = beginEpochCount;
     for (size_t i = 0; i < HOOK_SITE_COUNT; ++i) {
         if (siteEdges[i] != 0) {
             VLOG(REPORT, "[REMSETCHECK-SITE] run=%zu site=%s edges=%zu", run,
@@ -392,10 +445,12 @@ void RemsetCheck::Fini()
         VLOG(REPORT,
              "[REMSETCHECK-FINAL] runs=%zu young0Excluded=%zu edgesFromBarrier=%zu revalidateDropped=%zu "
              "missing=%zu missingPct=%.6f orphanByteNonzeroDirtyZero=%zu detectControlCaught=%u "
-             "produceControlCaught=%u orphanControlCaught=%u",
+             "produceControlCaught=%u orphanControlCaught=%u missingByteZero=%zu missingOrphan=%zu "
+             "missingDirtyNotBuffered=%zu missingOther=%zu majors=%zu beginEpochs=%zu",
              includedRuns, youngZeroExcluded, edgesFromBarrier, revalidateDropped, missing, missingPct,
              orphanByteNonzeroDirtyZero, static_cast<unsigned>(detectControlCaught),
-             static_cast<unsigned>(produceControlCaught), static_cast<unsigned>(orphanControlCaught));
+             static_cast<unsigned>(produceControlCaught), static_cast<unsigned>(orphanControlCaught),
+             missingByteZero, missingOrphan, missingDirtyNotBuffered, missingOther, majorCount, beginEpochCount);
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges.clear();

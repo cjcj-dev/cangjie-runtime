@@ -38,6 +38,8 @@ public:
     bool IsEnabled() const { return enabled; }
     void RecordHookHit(HookSite site);
     void RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObject* target, HookSite site);
+    void RecordMajor(size_t completedMinorRuns, size_t minorRunsSinceMajor);
+    void RecordBeginEpoch(size_t completedMinorRuns);
     void CheckRound(size_t run, size_t young);
     void Fini();
 
@@ -50,6 +52,7 @@ private:
         MAddress targetRegionStart;
         uint64_t holderRegionEpoch;
         uint64_t targetRegionEpoch;
+        uint8_t holderRegionType;
         HookSite site;
     };
 
@@ -84,7 +87,15 @@ private:
     size_t edgesFromBarrier = 0;
     size_t revalidateDropped = 0;
     size_t missing = 0;
+    size_t missingByteZero = 0;
+    size_t missingOrphan = 0;
+    size_t missingDirtyNotBuffered = 0;
+    size_t missingOther = 0;
     size_t orphanByteNonzeroDirtyZero = 0;
+    size_t majorCount = 0;
+    size_t beginEpochCount = 0;
+    size_t majorCountAtPreviousMinor = 0;
+    size_t beginEpochCountAtPreviousMinor = 0;
 };
 } // namespace MapleRuntime
 
