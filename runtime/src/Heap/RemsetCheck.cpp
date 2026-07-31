@@ -673,18 +673,22 @@ void RemsetCheck::CheckVisitedRound(size_t run)
     if (trueUnvisitedControlEnabled && !trueUnvisitedControlCaught) {
         for (const Edge& edge : visitedRoundCandidates) {
             MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
-            if (visited(edge) || retain2SkippedLines.find(line) == retain2SkippedLines.end()) {
+            if (visited(edge)) {
                 continue;
             }
             if (!checkerVisited(edge, 0)) {
                 trueUnvisitedControlCaught = true;
+                bool skippedByRetain2 = retain2SkippedLines.find(line) != retain2SkippedLines.end();
                 VLOG(REPORT,
-                     "[VISITORHOOK-MISS] run=%zu reason=true-unvisited-retain2 holder=%p slot=%p target=%p line=%p",
+                     "[VISITORHOOK-MISS] run=%zu reason=true-unvisited-control holder=%p slot=%p target=%p line=%p "
+                     "skippedByRetain2=%u",
                      run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
-                     reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line));
+                     reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line),
+                     static_cast<unsigned>(skippedByRetain2));
                 VLOG(REPORT,
-                     "[VISITORHOOK-POSCTRL-TRUE-UNVISITED] run=%zu caught=1 slot=%p line=%p retain2Skipped=1",
-                     run, reinterpret_cast<void*>(edge.slot), reinterpret_cast<void*>(line));
+                     "[VISITORHOOK-POSCTRL-TRUE-UNVISITED] run=%zu caught=1 slot=%p line=%p skippedByRetain2=%u",
+                     run, reinterpret_cast<void*>(edge.slot), reinterpret_cast<void*>(line),
+                     static_cast<unsigned>(skippedByRetain2));
             }
             break;
         }
