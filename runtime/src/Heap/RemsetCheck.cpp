@@ -175,7 +175,12 @@ void RemsetCheck::RecordStickyLogExit(StickyLogExit exit, BaseObject* object, MA
     threadStickyLogEvent.heapSize = heapSize;
     threadStickyLogEvent.holderInHeapRange = object != nullptr && address >= heapStart &&
         address - heapStart < heapSize;
-    stickyLogExitHits[index].fetch_add(1, std::memory_order_relaxed);
+    size_t previous = stickyLogExitHits[index].fetch_add(1, std::memory_order_relaxed);
+    if (previous == 0) {
+        VLOG(REPORT, "[BYTE0ROOT-EXIT-FIRST] exit=%s object=%p heapStart=%p heapSize=%zu inHeapRange=%u",
+             StickyLogExitName(exit), object, reinterpret_cast<void*>(heapStart), heapSize,
+             static_cast<unsigned>(threadStickyLogEvent.holderInHeapRange));
+    }
 }
 
 void RemsetCheck::RecordNoLogObjectCall(HookSite site)
@@ -185,7 +190,10 @@ void RemsetCheck::RecordNoLogObjectCall(HookSite site)
     }
     size_t index = static_cast<size_t>(site);
     CHECK(index < HOOK_SITE_COUNT);
-    noLogObjectCallHits[index].fetch_add(1, std::memory_order_relaxed);
+    size_t previous = noLogObjectCallHits[index].fetch_add(1, std::memory_order_relaxed);
+    if (previous == 0) {
+        VLOG(REPORT, "[BYTE0ROOT-NO-LOGOBJECT-FIRST] site=%s", HookSiteName(site));
+    }
 }
 
 size_t RemsetCheck::GetThreadLogObjectCallCount() const
