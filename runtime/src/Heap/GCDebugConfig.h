@@ -41,15 +41,6 @@ public:
         }
     }
     static void FillYoungReclaimedMemory(uintptr_t start, size_t size, size_t allocatedSize);
-    static ALWAYS_INLINE void FillFreePinnedPayload(uintptr_t start, size_t size)
-    {
-        if (UNLIKELY(IsClobberEnabled())) {
-            MemorySet(start, size, CLOBBER_PATTERN, size);
-        } else {
-            MemorySet(start, size, 0, size);
-        }
-    }
-
     static bool ShouldTriggerMinor();
     static bool ShouldTriggerMajor();
     static void NoteStressMinorRequest();
