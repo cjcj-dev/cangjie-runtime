@@ -170,12 +170,14 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
+    BaseObject* canonical = CanonicalizeForWrite(newRef);
 
     // oldRef and newRef must be the latest versions.
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
+        RefField<> newField(canonical);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
-            FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
+            ValidatePublished(field.GetTargetObject());
+            FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), canonical);
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
