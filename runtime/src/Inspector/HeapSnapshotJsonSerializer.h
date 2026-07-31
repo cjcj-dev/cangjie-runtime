@@ -33,18 +33,18 @@ public:
     void SerializeStackFrame(FrameInfo& frame, uint32_t frameIdx);
     void SerializeClassLoad(TypeInfo* klass, CjHeapDataStringId klassId, const u1 tag);
     void SerializeAllObjects();
-    void SerializeGlobalRoot(BaseObject*& obj, const u1 tag);
-    void SerializeUnknownRoot(BaseObject*& obj, const u1 tag);
-    void SerializeLocalRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 depth);
-    void SerializeThreadObjectRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 stackTraceIdx);
-    void SerializeObjectArray(BaseObject*& obj, const u1 tag);
-    void SerializeStructArray(BaseObject*& obj, const u1 tag);
-    void SerializePrimitiveArray(BaseObject*& obj, const u1 tag);
-    void SerializeInstance(BaseObject*& obj, const u1 tag);
+    void SerializeGlobalRoot(CurrentPtr obj, const u1 tag);
+    void SerializeUnknownRoot(CurrentPtr obj, const u1 tag);
+    void SerializeLocalRoot(CurrentPtr obj, const u1 tag, const u4 tid, const u4 depth);
+    void SerializeThreadObjectRoot(CurrentPtr obj, const u1 tag, const u4 tid, const u4 stackTraceIdx);
+    void SerializeObjectArray(CurrentPtr obj, const u1 tag);
+    void SerializeStructArray(CurrentPtr obj, const u1 tag);
+    void SerializePrimitiveArray(CurrentPtr obj, const u1 tag);
+    void SerializeInstance(CurrentPtr obj, const u1 tag);
     void SerializeClass(TypeInfo* klass, CjHeapDataStringId klassId, const u1 tag);
     void SerializeStructClass(TypeInfo* klass, CjHeapDataStringId klassId, const u1 tag);
     u4 GetId(CjHeapDataStringId klassId);
-    I8 GetObjType(BaseObject* obj);
+    I8 GetObjType(CurrentPtr obj);
 private:
     StreamWriter* writer = nullptr;
     std::unordered_map<CjHeapDataStringId, u4> stringIdxMap;
