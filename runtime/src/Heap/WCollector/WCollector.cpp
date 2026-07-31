@@ -1296,6 +1296,280 @@ void WCollector::ValidateYoungMarking()
     VLOG(REPORT, "[StickyMinor] validator reachable=%zu young=%zu failures=0", reachable.size(), youngReachable);
 }
 
+// DO NOT MERGE minoracle2: read-only major full-closure oracle vs minor dead young regions.
+// ⛔ Does NOT use IsSurvivedObject as a traversal filter.
+// Seeds = major root set (mutator / static / finalizer + concurrency / export / resurrected).
+// Trace via ForEachRefSlot + bare GetTargetObject only (no IsValidObject / Find*Version / GetAndTryTagObj).
+// Collide: young regions with liveBytes==0 (about to be reclaimed by CollectYoungGarbage).
+// Sampling: every 3rd minor (≈33% coverage target).
+void WCollector::OracleMajorClosureVsMinorDead()
+{
+    static size_t oracleInvokeCount = 0;
+    ++oracleInvokeCount;
+    // Sample every 3rd invocation (1,4,7,...) → expected coverage ≈ 33%.
+    if ((oracleInvokeCount % 3) != 1) {
+        return;
+    }
+
+    MRT_PHASE_TIMER("OracleMajorClosureVsMinorDead");
+    const uint64_t startNs = TimeUtil::NanoSeconds();
+
+    enum class ReferrerKind : uint8_t {
+        MUTATOR = 0,
+        STATIC = 1,
+        FINALIZER = 2,
+        HEAP = 3,
+        CONCURRENCY = 4,
+        EXPORT = 5,
+        RESURRECT = 6,
+        UNKNOWN = 7,
+    };
+    struct ParentInfo {
+        BaseObject* parent = nullptr;
+        ReferrerKind kind = ReferrerKind::UNKNOWN;
+    };
+
+    std::unordered_map<BaseObject*, ParentInfo> reachable;
+    std::vector<BaseObject*> pending;
+    reachable.reserve(1 << 20);
+    pending.reserve(1 << 16);
+
+    auto trySeed = [&reachable, &pending](BaseObject* obj, ReferrerKind kind) {
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return;
+        }
+        auto ins = reachable.emplace(obj, ParentInfo{ nullptr, kind });
+        if (ins.second) {
+            pending.push_back(obj);
+        }
+    };
+
+    // Major seeds (TracingCollector::DumpRoots / EnumAllCommonRoots family).
+    RootVisitor mutRoot = [&trySeed](ObjectRef& root) {
+        trySeed(root.object, ReferrerKind::MUTATOR);
+    };
+    MutatorManager::Instance().VisitAllMutators(
+        [&mutRoot](Mutator& mutator) { mutator.VisitMutatorRoots(mutRoot); });
+
+    RefFieldVisitor staticVisitor = [&trySeed](RefField<>& field) {
+        trySeed(field.GetTargetObject(), ReferrerKind::STATIC);
+    };
+    Heap::GetHeap().VisitStaticRoots(staticVisitor);
+
+    RootVisitor finRoot = [&trySeed](ObjectRef& root) {
+        trySeed(root.object, ReferrerKind::FINALIZER);
+    };
+    VisitFinalizerRoots(finRoot);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(finRoot);
+
+    RootVisitor concRoot = [&trySeed](ObjectRef& root) {
+        trySeed(root.object, ReferrerKind::CONCURRENCY);
+    };
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concRoot);
+
+    RootVisitor expRoot = [&trySeed](ObjectRef& root) {
+        trySeed(root.object, ReferrerKind::EXPORT);
+    };
+    Heap::GetHeap().VisitAllExportRoots(expRoot);
+
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* object : resurrectedExportObjectes) {
+            trySeed(object, ReferrerKind::RESURRECT);
+        }
+        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
+            trySeed(object, ReferrerKind::RESURRECT);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+        for (const auto& entry : cycleRefWorkStack) {
+            trySeed(entry.first, ReferrerKind::RESURRECT);
+            for (BaseObject* object : entry.second) {
+                trySeed(object, ReferrerKind::RESURRECT);
+            }
+        }
+    }
+    {
+        WorkStack enumRoots = NewWorkStack();
+        theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+        while (!enumRoots.empty()) {
+            BaseObject* object = enumRoots.back();
+            enumRoots.pop_back();
+            trySeed(object, ReferrerKind::MUTATOR);
+        }
+    }
+
+    // Full-heap reachability. Bare header non-zero gates holder expansion.
+    // ⛔ no IsSurvivedObject filter; ⛔ no IsValidObject / Find*Version / GetAndTryTagObj.
+    size_t zeroHdrSkip = 0;
+    size_t expanded = 0;
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+            continue;
+        }
+        uint64_t bareHdr = 0;
+        __builtin_memcpy(&bareHdr, object, sizeof(bareHdr));
+        if (bareHdr == 0) {
+            ++zeroHdrSkip;
+            continue;
+        }
+        TypeInfo* ti = object->GetTypeInfo();
+        if (ti == nullptr || !ti->HasRefField()) {
+            continue;
+        }
+        ++expanded;
+        ForEachRefSlot(object, [&reachable, &pending, object](RefField<>& field) {
+            BaseObject* target = field.GetTargetObject();
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            auto ins = reachable.emplace(target, ParentInfo{ object, ReferrerKind::HEAP });
+            if (ins.second) {
+                pending.push_back(target);
+            }
+        });
+    }
+
+    // Collide: young regions about to be reclaimed (IsYoungRegion && liveBytes==0).
+    // Linear size-step over ALL objects in those regions — no IsSurvivedObject.
+    size_t missedLive = 0;
+    size_t deadYoungRegions = 0;
+    size_t objsInDeadYoung = 0;
+    size_t refMut = 0;
+    size_t refStatic = 0;
+    size_t refFin = 0;
+    size_t refHeap = 0;
+    size_t refConc = 0;
+    size_t refExport = 0;
+    size_t refResurrect = 0;
+
+    auto kindName = [](ReferrerKind k) -> const char* {
+        switch (k) {
+            case ReferrerKind::MUTATOR: return "mutator";
+            case ReferrerKind::STATIC: return "static";
+            case ReferrerKind::FINALIZER: return "finalizer";
+            case ReferrerKind::HEAP: return "heap";
+            case ReferrerKind::CONCURRENCY: return "concurrency";
+            case ReferrerKind::EXPORT: return "export";
+            case ReferrerKind::RESURRECT: return "resurrect";
+            default: return "unknown";
+        }
+    };
+    auto bumpKind = [&](ReferrerKind k) {
+        switch (k) {
+            case ReferrerKind::MUTATOR: ++refMut; break;
+            case ReferrerKind::STATIC: ++refStatic; break;
+            case ReferrerKind::FINALIZER: ++refFin; break;
+            case ReferrerKind::HEAP: ++refHeap; break;
+            case ReferrerKind::CONCURRENCY: ++refConc; break;
+            case ReferrerKind::EXPORT: ++refExport; break;
+            case ReferrerKind::RESURRECT: ++refResurrect; break;
+            default: break;
+        }
+    };
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    const uintptr_t heapStart = manager.GetRegionHeapStart();
+    const uintptr_t heapLimit = manager.GetInactiveZone();
+
+    for (uintptr_t regionAddr = heapStart; regionAddr < heapLimit;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        if (!region->IsYoungRegion() || region->GetLiveByteCount() != 0) {
+            continue;
+        }
+        ++deadYoungRegions;
+
+        auto checkObj = [&](BaseObject* obj) {
+            if (obj == nullptr) {
+                return;
+            }
+            ++objsInDeadYoung;
+            auto it = reachable.find(obj);
+            if (it == reachable.end()) {
+                return;
+            }
+            // major-reachable but minor about to reclaim the whole region.
+            ++missedLive;
+            const ParentInfo& pi = it->second;
+            bumpKind(pi.kind);
+
+            if ((missedLive & (missedLive - 1)) != 0) {
+                return;
+            }
+            const char* objName = "<unknown>";
+            TypeInfo* oti = obj->GetTypeInfo();
+            if (oti != nullptr) {
+                objName = oti->GetName();
+            }
+            const char* parentName = "<root>";
+            if (pi.parent != nullptr) {
+                TypeInfo* pti = pi.parent->GetTypeInfo();
+                if (pti != nullptr) {
+                    parentName = pti->GetName();
+                } else {
+                    parentName = "<noparentti>";
+                }
+            }
+            VLOG(REPORT,
+                 "[MINORACLE] miss n=%zu obj=%p type=%s region=%p liveBytes=%zu "
+                 "referrer=%p referrerType=%s rootKind=%s",
+                 missedLive, obj, objName, region, region->GetLiveByteCount(),
+                 pi.parent, parentName, kindName(pi.kind));
+        };
+
+        if (region->IsLargeRegion()) {
+            BaseObject* obj = reinterpret_cast<BaseObject*>(region->GetRegionStart());
+            uint64_t bareHdr = 0;
+            __builtin_memcpy(&bareHdr, obj, sizeof(bareHdr));
+            if (bareHdr == 0) {
+                ++zeroHdrSkip;
+                continue;
+            }
+            checkObj(obj);
+            continue;
+        }
+        if (!region->IsSmallRegion()) {
+            continue;
+        }
+        uintptr_t position = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        while (position < allocPtr) {
+            BaseObject* obj = reinterpret_cast<BaseObject*>(position);
+            uint64_t bareHdr = 0;
+            __builtin_memcpy(&bareHdr, obj, sizeof(bareHdr));
+            if (bareHdr == 0) {
+                ++zeroHdrSkip;
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                ++zeroHdrSkip;
+                break;
+            }
+            checkObj(obj);
+            position += allocSize;
+        }
+    }
+
+    const uint64_t pauseUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    VLOG(REPORT,
+         "[MINORACLE] summary invoke=%zu reachable=%zu expanded=%zu missedLive=%zu "
+         "deadYoungRegions=%zu objsInDeadYoung=%zu zeroHdrSkip=%zu "
+         "refMut=%zu refStatic=%zu refFin=%zu refHeap=%zu refConc=%zu refExport=%zu refResurrect=%zu "
+         "pause=%zu us",
+         oracleInvokeCount, reachable.size(), expanded, missedLive, deadYoungRegions, objsInDeadYoung,
+         zeroHdrSkip, refMut, refStatic, refFin, refHeap, refConc, refExport, refResurrect,
+         static_cast<size_t>(pauseUs));
+}
+
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
@@ -1330,6 +1604,9 @@ void WCollector::DoYoungGarbageCollection()
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
+
+    // DO NOT MERGE minoracle2: major full-closure oracle vs minor dead young (still in STW).
+    OracleMajorClosureVsMinorDead();
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();

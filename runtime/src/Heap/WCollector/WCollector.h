@@ -221,6 +221,8 @@ private:
     void TraceYoungClosure(WorkStack& workStack);
     void RescanRememberedSet(WorkStack& workStack);
     void ValidateYoungMarking();
+    // DO NOT MERGE: major full-closure oracle vs minor reclaim candidates (read-only).
+    void OracleMajorClosureVsMinorDead();
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
