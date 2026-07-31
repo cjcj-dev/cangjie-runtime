@@ -231,7 +231,7 @@ void ExceptionManager::DumpException()
     std::vector<uint64_t>& liteFrameInfos = eWrapper.GetLiteFrameInfos();
     LOG(RTLOG_ERROR, "An exception has occurred:\n");
     MObject* exceptionObject = eWrapper.GetExceptionRef();
-    MangleNameHelper helper(exceptionObject->GetTypeInfo()->GetName());
+    MangleNameHelper helper(GetTypeInfo(UnsafeAssumeCurrent(exceptionObject))->GetName());
     CString clsName(helper.GetSimpleClassName());
     std::vector<StackTraceElement> stackTrace;
     StackManager::GetStackTraceByLiteFrameInfos(liteFrameInfos, stackTrace);
