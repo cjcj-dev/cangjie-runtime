@@ -67,7 +67,7 @@ private:
 public:
     void PushFront(BaseObject* slot)
     {
-        size_t size = slot->GetSize();
+        size_t size = GetSize(UnsafeAssumeCurrent(slot));
         switch (size) {
             case ATOMIC_OBJECT_SIZE:
                 freeAtomicSlotList.PushFront(slot);
