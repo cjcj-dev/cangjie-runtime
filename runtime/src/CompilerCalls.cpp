@@ -28,6 +28,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
+#include "Heap/CanonicalWriteTable.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/Heap.h"
@@ -302,7 +303,11 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         return;
     }
     if (!Heap::IsHeapAddress(obj)) {
-        field->SetTargetObject(ref);
+        if (CanonicalWriteTable::Instance().IsEnabled()) {
+            Heap::GetBarrier().WriteStaticRef(*field, ref);
+        } else {
+            field->SetTargetObject(ref);
+        }
         return;
     }
     Heap::GetBarrier().WriteReference(obj, *field, ref);
