@@ -9,6 +9,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/CanonicalWriteTable.h"
 #include "Heap/StickyLog.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -752,7 +753,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
         SatbBuffer::Instance().ReclaimALLPages();
     }
     PagePool::Instance().Trim();
-    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+    if (StickyLog::Instance().IsForceSlowPathEnabled() || CanonicalWriteTable::Instance().IsEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
     }
