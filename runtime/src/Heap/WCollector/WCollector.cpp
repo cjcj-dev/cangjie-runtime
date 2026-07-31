@@ -338,7 +338,7 @@ void WCollector::TraceObjectRefFields(CurrentPtr currentObject, WorkStack& workS
     ForEachRefSlot(currentObject, visitor);
 }
 
-BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObject, RefField<>& field)
+CurrentPtr WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObject, RefField<>& field)
 {
     BaseObject* obj = currentObject;
     RefField<> oldField(field);
@@ -349,7 +349,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObje
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                      targetObj, sourceKind, obj, GetTypeInfo(currentObject)->GetName(),
                      BaseObject::FieldOffset(obj, &field));
-        return targetObj;
+        return CurrentPtr(targetObj);
     }
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
@@ -360,7 +360,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObje
     BaseObject* latest = currentLatest;
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
-        return nullptr;
+        return CurrentPtr(nullptr);
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                  latest, sourceKind, obj, GetTypeInfo(currentObject)->GetName(), BaseObject::FieldOffset(obj, &field));
@@ -372,7 +372,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObje
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
             newField.GetFieldValue(), latest, GetTypeInfo(currentLatest), GetSize(currentLatest));
     }
-    return latest;
+    return currentLatest;
 }
 
 BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
