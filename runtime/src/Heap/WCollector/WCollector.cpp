@@ -113,6 +113,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
                                        BaseObject*& toObj) const
 {
     CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    (void)currentObject;
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
@@ -170,6 +171,7 @@ bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObje
 bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
 {
     CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    (void)currentObject;
     for (;;) {
         RefField<> oldRef(field);
         if (!oldRef.IsTagged()) {
@@ -265,6 +267,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     BaseObject* root = oldField.GetTargetObject();
     if (Heap::IsHeapAddress(root)) {
         CurrentPtr currentRoot = UnsafeAssumeCurrent(root);
+        (void)currentRoot;
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         RefField<> newField = GetAndTryTagRefField(root);
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
