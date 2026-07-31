@@ -252,6 +252,7 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
             return;
         }
         size_t lineIndex = (lineStart - heapStart) >> LINE_SHIFT;
+        RemsetCheck::Instance().RecordVisitedLine(lineStart, RemsetCheck::VisitorHookSite::BUFFER);
         uint8_t retained = visitor(lineStart, lineStart + LINE_SIZE) ? 2 : 0;
         __atomic_store_n(__cj_sticky_logged_base + lineIndex, retained, __ATOMIC_RELEASE);
     });
@@ -276,9 +277,13 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
                 if (logged == 0) {
                     continue;
                 }
+                MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
                 bool retain = logged == 2;
-                if (!retain) {
-                    MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
+                if (retain) {
+                    RemsetCheck::Instance().RecordRetain2SkippedLine(lineStart);
+                } else {
+                    RemsetCheck::Instance().RecordVisitedLine(lineStart,
+                                                              RemsetCheck::VisitorHookSite::DIRTY_REGION);
                     retain = visitor(lineStart, lineStart + LINE_SIZE);
                 }
                 __atomic_store_n(loggedByte, static_cast<uint8_t>(retain), __ATOMIC_RELEASE);
