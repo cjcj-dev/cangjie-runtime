@@ -23,6 +23,7 @@ class RemsetCheck {
 public:
     enum class HookSite : uint8_t {
         WRITE_REFERENCE,
+        WRITE_STATIC_REF,
         WRITE_STRUCT,
         ATOMIC_WRITE_REFERENCE,
         ATOMIC_SWAP_REFERENCE,
@@ -32,11 +33,28 @@ public:
         COUNT,
     };
 
+    enum class StickyLogExit : uint8_t {
+        NO_LOGOBJECT_CALL,
+        EXIT_A_NULL_OBJECT,
+        EXIT_B_ALREADY_LOGGED,
+        EXIT_C_NO_MUTATOR,
+        EXIT_D_OUT_OF_HEAP_RANGE,
+        EXIT_D_BASE_NULL,
+        EXIT_D_OTHER,
+        LOGGED,
+        COUNT,
+    };
+
     static RemsetCheck& Instance() noexcept;
 
     void ConfigureFromEnvironment(bool forceSlowPath);
     bool IsEnabled() const { return enabled; }
     void RecordHookHit(HookSite site);
+    void BeginLogObject();
+    void RecordStickyLogExit(StickyLogExit exit, BaseObject* object, MAddress heapStart, size_t heapSize);
+    void RecordNoLogObjectCall(HookSite site);
+    size_t GetThreadLogObjectCallCount() const;
+    void RunStickyLogExitPositiveControls(BaseObject* object);
     void RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObject* target, HookSite site);
     void RecordMajor(size_t completedMinorRuns, size_t minorRunsSinceMajor);
     void RecordBeginEpoch(size_t completedMinorRuns);
@@ -54,6 +72,10 @@ private:
         uint64_t targetRegionEpoch;
         uint8_t holderRegionType;
         HookSite site;
+        StickyLogExit stickyLogExit;
+        MAddress logHeapStart;
+        size_t logHeapSize;
+        bool holderInHeapRangeAtLog;
     };
 
     RemsetCheck() = default;
@@ -68,6 +90,7 @@ private:
     bool ExchangeDirtyBit(MAddress holder, bool value) const;
 
     static constexpr size_t HOOK_SITE_COUNT = static_cast<size_t>(HookSite::COUNT);
+    static constexpr size_t STICKY_LOG_EXIT_COUNT = static_cast<size_t>(StickyLogExit::COUNT);
 
     bool configured = false;
     bool enabled = false;
@@ -75,11 +98,15 @@ private:
     bool detectControlEnabled = false;
     bool produceControlEnabled = false;
     bool orphanControlEnabled = false;
+    bool stickyLogExitControlEnabled = false;
     bool detectControlCaught = false;
     bool produceControlCaught = false;
     bool orphanControlCaught = false;
     std::atomic<size_t> barrierHits{ 0 };
     std::atomic<size_t> hookHits[HOOK_SITE_COUNT]{};
+    std::atomic<size_t> stickyLogExitHits[STICKY_LOG_EXIT_COUNT]{};
+    std::atomic<size_t> noLogObjectCallHits[HOOK_SITE_COUNT]{};
+    std::atomic<bool> stickyLogExitControlStarted{ false };
     std::mutex edgeMutex;
     std::unordered_map<MAddress, Edge> edges;
     size_t includedRuns = 0;
@@ -96,6 +123,9 @@ private:
     size_t beginEpochCount = 0;
     size_t majorCountAtPreviousMinor = 0;
     size_t beginEpochCountAtPreviousMinor = 0;
+    size_t missingStickyLogExits[STICKY_LOG_EXIT_COUNT]{};
+    size_t missingHolderInHeapRange = 0;
+    size_t missingHolderOutOfHeapRange = 0;
 };
 } // namespace MapleRuntime
 

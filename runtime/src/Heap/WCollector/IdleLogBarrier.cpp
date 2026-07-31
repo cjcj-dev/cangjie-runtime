@@ -12,7 +12,13 @@
 #include "ObjectModel/MArray.h"
 
 namespace MapleRuntime {
-ALWAYS_INLINE void IdleLogBarrier::LogObject(BaseObject* obj) const { CJ_MCC_StickyLogLine(obj); }
+ALWAYS_INLINE void IdleLogBarrier::LogObject(BaseObject* obj) const
+{
+    RemsetCheck& check = RemsetCheck::Instance();
+    check.RunStickyLogExitPositiveControls(obj);
+    check.BeginLogObject();
+    CJ_MCC_StickyLogLine(obj);
+}
 
 void IdleLogBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
@@ -26,7 +32,10 @@ void IdleLogBarrier::WriteReference(BaseObject* obj, RefField<false>& field, Bas
 
 void IdleLogBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
+    RemsetCheck& check = RemsetCheck::Instance();
+    check.RecordHookHit(RemsetCheck::HookSite::WRITE_STATIC_REF);
     IdleBarrier::WriteStaticRef(field, ref);
+    check.RecordNoLogObjectCall(RemsetCheck::HookSite::WRITE_STATIC_REF);
 }
 
 void IdleLogBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -102,7 +111,12 @@ void IdleLogBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MInd
 
 void IdleLogBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
-    RemsetCheck::Instance().RecordHookHit(RemsetCheck::HookSite::WRITE_GENERIC);
+    RemsetCheck& check = RemsetCheck::Instance();
+    check.RecordHookHit(RemsetCheck::HookSite::WRITE_GENERIC);
+    size_t logObjectCallsBefore = check.GetThreadLogObjectCallCount();
     IdleBarrier::WriteGeneric(obj, fieldPtr, src, size);
+    if (check.GetThreadLogObjectCallCount() == logObjectCallsBefore) {
+        check.RecordNoLogObjectCall(RemsetCheck::HookSite::WRITE_GENERIC);
+    }
 }
 } // namespace MapleRuntime

@@ -19,6 +19,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/Heap.h"
 #include "Heap/StickyLog.h"
+#include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/MClass.inline.h"
@@ -26,6 +27,16 @@
 
 namespace MapleRuntime {
 namespace {
+struct ThreadStickyLogEvent {
+    RemsetCheck::StickyLogExit exit = RemsetCheck::StickyLogExit::NO_LOGOBJECT_CALL;
+    MAddress heapStart = 0;
+    size_t heapSize = 0;
+    bool holderInHeapRange = false;
+    size_t logObjectCallCount = 0;
+};
+
+thread_local ThreadStickyLogEvent threadStickyLogEvent;
+
 bool ReadRemsetCheckBoolean(const char* name, bool defaultValue)
 {
     const char* value = std::getenv(name);
@@ -48,6 +59,8 @@ const char* HookSiteName(RemsetCheck::HookSite site)
     switch (site) {
         case RemsetCheck::HookSite::WRITE_REFERENCE:
             return "WriteReference";
+        case RemsetCheck::HookSite::WRITE_STATIC_REF:
+            return "WriteStaticRef";
         case RemsetCheck::HookSite::WRITE_STRUCT:
             return "WriteStruct";
         case RemsetCheck::HookSite::ATOMIC_WRITE_REFERENCE:
@@ -61,6 +74,31 @@ const char* HookSiteName(RemsetCheck::HookSite site)
         case RemsetCheck::HookSite::WRITE_GENERIC:
             return "WriteGeneric";
         case RemsetCheck::HookSite::COUNT:
+            break;
+    }
+    return "unknown";
+}
+
+const char* StickyLogExitName(RemsetCheck::StickyLogExit exit)
+{
+    switch (exit) {
+        case RemsetCheck::StickyLogExit::NO_LOGOBJECT_CALL:
+            return "NO_LOGOBJECT_CALL";
+        case RemsetCheck::StickyLogExit::EXIT_A_NULL_OBJECT:
+            return "EXIT_A";
+        case RemsetCheck::StickyLogExit::EXIT_B_ALREADY_LOGGED:
+            return "EXIT_B";
+        case RemsetCheck::StickyLogExit::EXIT_C_NO_MUTATOR:
+            return "EXIT_C_NO_MUTATOR";
+        case RemsetCheck::StickyLogExit::EXIT_D_OUT_OF_HEAP_RANGE:
+            return "EXIT_D_TRYLOG_FALSE_OUT_OF_HEAP_RANGE";
+        case RemsetCheck::StickyLogExit::EXIT_D_BASE_NULL:
+            return "EXIT_D_TRYLOG_FALSE_BASE_NULL";
+        case RemsetCheck::StickyLogExit::EXIT_D_OTHER:
+            return "EXIT_D_TRYLOG_FALSE_OTHER";
+        case RemsetCheck::StickyLogExit::LOGGED:
+            return "LOGGED";
+        case RemsetCheck::StickyLogExit::COUNT:
             break;
     }
     return "unknown";
@@ -82,14 +120,17 @@ void RemsetCheck::ConfigureFromEnvironment(bool forceSlowPath)
     detectControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_REMSETCHECK_POSCTRL_DETECT", false);
     produceControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_REMSETCHECK_POSCTRL_PRODUCE", false);
     orphanControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_REMSETCHECK_POSCTRL_ORPHAN", false);
+    stickyLogExitControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_BYTE0ROOT_POSCTRL", false);
     CHECK_DETAIL(!enabled || forceSlowPath,
                  "MRT_REMSETCHECK=1 requires MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 so every measured write "
                  "reaches IdleLogBarrier");
     LOG(RTLOG_INFO,
-        "remset check: enabled=%u hits=%u forceSlowPath=%u detectControl=%u produceControl=%u orphanControl=%u",
+        "remset check: enabled=%u hits=%u forceSlowPath=%u detectControl=%u produceControl=%u orphanControl=%u "
+        "stickyLogExitControl=%u",
         static_cast<unsigned>(enabled), static_cast<unsigned>(hitCountingEnabled),
         static_cast<unsigned>(forceSlowPath), static_cast<unsigned>(detectControlEnabled),
-        static_cast<unsigned>(produceControlEnabled), static_cast<unsigned>(orphanControlEnabled));
+        static_cast<unsigned>(produceControlEnabled), static_cast<unsigned>(orphanControlEnabled),
+        static_cast<unsigned>(stickyLogExitControlEnabled));
 }
 
 void RemsetCheck::RecordHookHit(HookSite site)
@@ -101,6 +142,82 @@ void RemsetCheck::RecordHookHit(HookSite site)
     CHECK(index < HOOK_SITE_COUNT);
     barrierHits.fetch_add(1, std::memory_order_relaxed);
     hookHits[index].fetch_add(1, std::memory_order_relaxed);
+    if (enabled) {
+        threadStickyLogEvent.exit = StickyLogExit::NO_LOGOBJECT_CALL;
+        threadStickyLogEvent.heapStart = 0;
+        threadStickyLogEvent.heapSize = 0;
+        threadStickyLogEvent.holderInHeapRange = false;
+    }
+}
+
+void RemsetCheck::BeginLogObject()
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    ++threadStickyLogEvent.logObjectCallCount;
+    threadStickyLogEvent.exit = StickyLogExit::NO_LOGOBJECT_CALL;
+    threadStickyLogEvent.heapStart = 0;
+    threadStickyLogEvent.heapSize = 0;
+    threadStickyLogEvent.holderInHeapRange = false;
+}
+
+void RemsetCheck::RecordStickyLogExit(StickyLogExit exit, BaseObject* object, MAddress heapStart, size_t heapSize)
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    size_t index = static_cast<size_t>(exit);
+    CHECK(index < STICKY_LOG_EXIT_COUNT);
+    MAddress address = reinterpret_cast<MAddress>(object);
+    threadStickyLogEvent.exit = exit;
+    threadStickyLogEvent.heapStart = heapStart;
+    threadStickyLogEvent.heapSize = heapSize;
+    threadStickyLogEvent.holderInHeapRange = object != nullptr && address >= heapStart &&
+        address - heapStart < heapSize;
+    stickyLogExitHits[index].fetch_add(1, std::memory_order_relaxed);
+}
+
+void RemsetCheck::RecordNoLogObjectCall(HookSite site)
+{
+    if (LIKELY(!enabled)) {
+        return;
+    }
+    size_t index = static_cast<size_t>(site);
+    CHECK(index < HOOK_SITE_COUNT);
+    noLogObjectCallHits[index].fetch_add(1, std::memory_order_relaxed);
+}
+
+size_t RemsetCheck::GetThreadLogObjectCallCount() const
+{
+    return threadStickyLogEvent.logObjectCallCount;
+}
+
+void RemsetCheck::RunStickyLogExitPositiveControls(BaseObject* object)
+{
+    if (LIKELY(!stickyLogExitControlEnabled) || object == nullptr || Mutator::GetMutator() == nullptr) {
+        return;
+    }
+    bool expected = false;
+    if (!stickyLogExitControlStarted.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        return;
+    }
+    StickyLog& stickyLog = StickyLog::Instance();
+    BeginLogObject();
+    CJ_MCC_StickyLogLine(nullptr);
+    StickyLogExit exitA = threadStickyLogEvent.exit;
+    BeginLogObject();
+    CJ_MCC_StickyLogLine(reinterpret_cast<BaseObject*>(stickyLog.heapStart - 1));
+    StickyLogExit exitDOutOfRange = threadStickyLogEvent.exit;
+    BeginLogObject();
+    CJ_MCC_StickyLogLine(object);
+    StickyLogExit firstObjectExit = threadStickyLogEvent.exit;
+    BeginLogObject();
+    CJ_MCC_StickyLogLine(object);
+    StickyLogExit exitB = threadStickyLogEvent.exit;
+    VLOG(REPORT, "[BYTE0ROOT-POSCTRL] A=%s D_OUT=%s FIRST_OBJECT=%s B=%s",
+         StickyLogExitName(exitA), StickyLogExitName(exitDOutOfRange), StickyLogExitName(firstObjectExit),
+         StickyLogExitName(exitB));
 }
 
 void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObject* target, HookSite site)
@@ -120,7 +237,9 @@ void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObjec
     }
     Edge edge{ reinterpret_cast<MAddress>(holder), slot, reinterpret_cast<MAddress>(target),
                holderRegion->GetRegionStart(), targetRegion->GetRegionStart(), holderRegion->GetIdentityEpoch(),
-               targetRegion->GetIdentityEpoch(), static_cast<uint8_t>(holderRegion->GetRegionType()), site };
+               targetRegion->GetIdentityEpoch(), static_cast<uint8_t>(holderRegion->GetRegionType()), site,
+               threadStickyLogEvent.exit, threadStickyLogEvent.heapStart, threadStickyLogEvent.heapSize,
+               threadStickyLogEvent.holderInHeapRange };
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges[slot] = edge;
 }
@@ -354,6 +473,9 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     size_t missingOrphanThisRound = 0;
     size_t missingDirtyNotBufferedThisRound = 0;
     size_t missingOtherThisRound = 0;
+    std::array<size_t, STICKY_LOG_EXIT_COUNT> missingStickyLogExitsThisRound{};
+    size_t missingHolderInHeapRangeThisRound = 0;
+    size_t missingHolderOutOfHeapRangeThisRound = 0;
     for (const Edge& edge : candidates) {
         MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
         uint8_t byte = LoadLoggedByte(line);
@@ -365,6 +487,12 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
         ++siteEdges[static_cast<size_t>(edge.site)];
         if (!checkerRecorded(edge, 0)) {
             ++missingThisRound;
+            ++missingStickyLogExitsThisRound[static_cast<size_t>(edge.stickyLogExit)];
+            if (edge.holderInHeapRangeAtLog) {
+                ++missingHolderInHeapRangeThisRound;
+            } else {
+                ++missingHolderOutOfHeapRangeThisRound;
+            }
             if (byte == 0) {
                 ++missingByteZeroThisRound;
             } else if (!dirty) {
@@ -379,7 +507,7 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
                  "[REMSETCHECK-MISS] run=%zu reason=not-consumable holder=%p slot=%p target=%p line=%p "
                  "byte=%u dirty=%u buffered=%u holderRegion=%p holderRegionTypeAtRecord=%u "
                  "holderRegionTypeAtCheck=%u holderRegionEpochAtRecord=%llu holderRegionEpochAtCheck=%llu "
-                 "site=%s",
+                 "site=%s stickyLogExit=%s logHeapStart=%p logHeapSize=%zu holderInHeapRangeAtLog=%u",
                  run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
                  reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line), static_cast<unsigned>(byte),
                  static_cast<unsigned>(dirty), static_cast<unsigned>(buffered),
@@ -387,7 +515,36 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
                  static_cast<unsigned>(edge.holderRegionType),
                  static_cast<unsigned>(holderRegion->GetRegionType()),
                  static_cast<unsigned long long>(edge.holderRegionEpoch),
-                 static_cast<unsigned long long>(holderRegion->GetIdentityEpoch()), HookSiteName(edge.site));
+                 static_cast<unsigned long long>(holderRegion->GetIdentityEpoch()), HookSiteName(edge.site),
+                 StickyLogExitName(edge.stickyLogExit), reinterpret_cast<void*>(edge.logHeapStart), edge.logHeapSize,
+                 static_cast<unsigned>(edge.holderInHeapRangeAtLog));
+        }
+    }
+
+    StickyLog& stickyLog = StickyLog::Instance();
+    size_t validRegionCount = 0;
+    size_t recentFullRegionCount = 0;
+    for (MAddress address = stickyLog.heapStart; address < stickyLog.heapStart + stickyLog.heapSize;
+         address += RegionInfo::UNIT_SIZE) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+        if (region == nullptr || !region->IsValidRegion() || region->IsFreeRegion() ||
+            region->GetRegionStart() != address) {
+            continue;
+        }
+        ++validRegionCount;
+        if (region->GetRegionType() == RegionInfo::RegionType::RECENT_FULL_REGION) {
+            ++recentFullRegionCount;
+        }
+    }
+    VLOG(REPORT,
+         "[BYTE0ROOT-ROUND] run=%zu heapStart=%p heapSize=%zu validRegions=%zu recentFullRegions=%zu "
+         "holderInHeapRange=%zu holderOutOfHeapRange=%zu",
+         run, reinterpret_cast<void*>(stickyLog.heapStart), stickyLog.heapSize, validRegionCount,
+         recentFullRegionCount, missingHolderInHeapRangeThisRound, missingHolderOutOfHeapRangeThisRound);
+    for (size_t i = 0; i < STICKY_LOG_EXIT_COUNT; ++i) {
+        if (missingStickyLogExitsThisRound[i] != 0) {
+            VLOG(REPORT, "[BYTE0ROOT-EXIT] run=%zu exit=%s missing=%zu", run,
+                 StickyLogExitName(static_cast<StickyLogExit>(i)), missingStickyLogExitsThisRound[i]);
         }
     }
 
@@ -401,6 +558,11 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     missingOrphan += missingOrphanThisRound;
     missingDirtyNotBuffered += missingDirtyNotBufferedThisRound;
     missingOther += missingOtherThisRound;
+    missingHolderInHeapRange += missingHolderInHeapRangeThisRound;
+    missingHolderOutOfHeapRange += missingHolderOutOfHeapRangeThisRound;
+    for (size_t i = 0; i < STICKY_LOG_EXIT_COUNT; ++i) {
+        missingStickyLogExits[i] += missingStickyLogExitsThisRound[i];
+    }
     orphanByteNonzeroDirtyZero += orphanLines.size();
     VLOG(REPORT,
          "[REMSETCHECK] run=%zu young=%zu excluded=0 edgesFromBarrier=%zu revalidateDropped=%zu missing=%zu "
@@ -429,15 +591,49 @@ void RemsetCheck::Fini()
     if (hitCountingEnabled) {
         VLOG(REPORT,
              "[REMSETCHECK-BARRIER-HITS] total=%zu WriteReference=%zu WriteStruct=%zu AtomicWriteReference=%zu "
-             "AtomicSwapReference=%zu CompareAndSwapReference=%zu CopyStructArray=%zu WriteGeneric=%zu",
+             "WriteStaticRef=%zu AtomicSwapReference=%zu CompareAndSwapReference=%zu CopyStructArray=%zu "
+             "WriteGeneric=%zu",
              barrierHits.load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::WRITE_REFERENCE)].load(std::memory_order_relaxed),
+             hookHits[static_cast<size_t>(HookSite::WRITE_STATIC_REF)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::WRITE_STRUCT)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::ATOMIC_WRITE_REFERENCE)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::ATOMIC_SWAP_REFERENCE)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::COMPARE_AND_SWAP_REFERENCE)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::COPY_STRUCT_ARRAY)].load(std::memory_order_relaxed),
              hookHits[static_cast<size_t>(HookSite::WRITE_GENERIC)].load(std::memory_order_relaxed));
+        VLOG(REPORT,
+             "[BYTE0ROOT-ALL-EXITS] A=%zu B=%zu C_NO_MUTATOR=%zu D_OUT_OF_HEAP_RANGE=%zu D_BASE_NULL=%zu "
+             "D_OTHER=%zu LOGGED=%zu",
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_A_NULL_OBJECT)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_B_ALREADY_LOGGED)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_C_NO_MUTATOR)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_D_OUT_OF_HEAP_RANGE)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_D_BASE_NULL)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::EXIT_D_OTHER)].load(
+                 std::memory_order_relaxed),
+             stickyLogExitHits[static_cast<size_t>(StickyLogExit::LOGGED)].load(std::memory_order_relaxed));
+        VLOG(REPORT,
+             "[BYTE0ROOT-NO-LOGOBJECT] WriteReference=%zu WriteStaticRef=%zu WriteStruct=%zu "
+             "AtomicWriteReference=%zu AtomicSwapReference=%zu CompareAndSwapReference=%zu "
+             "CopyStructArray=%zu WriteGeneric=%zu",
+             noLogObjectCallHits[static_cast<size_t>(HookSite::WRITE_REFERENCE)].load(std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::WRITE_STATIC_REF)].load(std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::WRITE_STRUCT)].load(std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::ATOMIC_WRITE_REFERENCE)].load(
+                 std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::ATOMIC_SWAP_REFERENCE)].load(
+                 std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::COMPARE_AND_SWAP_REFERENCE)].load(
+                 std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::COPY_STRUCT_ARRAY)].load(
+                 std::memory_order_relaxed),
+             noLogObjectCallHits[static_cast<size_t>(HookSite::WRITE_GENERIC)].load(std::memory_order_relaxed));
     }
     if (enabled) {
         double missingPct = edgesFromBarrier == 0 ? 0.0 :
@@ -451,6 +647,19 @@ void RemsetCheck::Fini()
              orphanByteNonzeroDirtyZero, static_cast<unsigned>(detectControlCaught),
              static_cast<unsigned>(produceControlCaught), static_cast<unsigned>(orphanControlCaught),
              missingByteZero, missingOrphan, missingDirtyNotBuffered, missingOther, majorCount, beginEpochCount);
+        VLOG(REPORT,
+             "[BYTE0ROOT-FINAL] A=%zu B=%zu C_NO_MUTATOR=%zu D_OUT_OF_HEAP_RANGE=%zu D_BASE_NULL=%zu "
+             "D_OTHER=%zu NO_LOGOBJECT_CALL=%zu LOGGED=%zu HOLDER_IN_HEAP_RANGE=%zu "
+             "HOLDER_OUT_OF_HEAP_RANGE=%zu",
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_A_NULL_OBJECT)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_B_ALREADY_LOGGED)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_C_NO_MUTATOR)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_D_OUT_OF_HEAP_RANGE)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_D_BASE_NULL)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::EXIT_D_OTHER)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::NO_LOGOBJECT_CALL)],
+             missingStickyLogExits[static_cast<size_t>(StickyLogExit::LOGGED)], missingHolderInHeapRange,
+             missingHolderOutOfHeapRange);
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges.clear();
