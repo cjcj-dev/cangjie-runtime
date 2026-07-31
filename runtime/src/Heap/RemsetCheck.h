@@ -216,7 +216,7 @@ private:
     uint64_t RecordPendingClearWhenEvent(ClearWhenPendingEvent event);
     void ReplayClearWhenEventLocked(const ClearWhenPendingEvent& event);
     void RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
-                                    bool dirtyAfter);
+                                    bool dirtyAfter, uint64_t sequence = 0, size_t eventRun = 0);
     ClearedBy ClassifyClearedBy(const Edge& edge, const LineTrace& trace, const ClearWhenEvent*& clearEvent,
                                 size_t& minorsSinceWrite) const;
     void EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace, size_t run, bool visited);
