@@ -31,24 +31,9 @@ public:
     inline MIndex GetLength() const; // the number of elements
     inline void SetLength(MIndex number);
 
-    inline MIndex GetMArraySize() const; // overall size in bytes of this array
-    inline MSize GetElementSize() const; // in Bytes
-    inline MIndex GetContentSize() const;
-    inline bool IsPrimitiveArray() const;
-
-    // access array elements
-    template<typename T>
-    inline T GetPrimitiveElement(MIndex index) const;
-
-    template<typename T>
-    inline void SetPrimitiveElement(MIndex index, T value);
-
     inline ObjectPtr GetRefElement(MIndex index);
     inline void SetRefElement(MIndex index, const ObjectPtr mObj);
     inline U8* ConvertToCArray() const;
-    // this interface can only be called by array with reference fields.
-    void ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const;
-
 private:
     // use MIndex because length is the upper boundary of all indices
     MIndex length;
