@@ -176,10 +176,10 @@ MAddress HeapImpl::Allocate(size_t size, AllocType allocType)
         bool triggerMinor = GCDebugConfig::ShouldTriggerMinor();
         if (triggerMajor) {
             GCDebugConfig::NoteStressMajorRequest();
-            collectorProxy.RequestGC(GC_REASON_STRESS_MAJOR, true);
+            collectorProxy.GetCurrentCollector().RequestGC(GC_REASON_STRESS_MAJOR, true);
         } else if (triggerMinor) {
             GCDebugConfig::NoteStressMinorRequest();
-            collectorProxy.RequestGC(GC_REASON_STRESS_MINOR, true);
+            collectorProxy.GetCurrentCollector().RequestGC(GC_REASON_STRESS_MINOR, true);
         }
     }
     return theSpace->Allocate(size, allocType);
