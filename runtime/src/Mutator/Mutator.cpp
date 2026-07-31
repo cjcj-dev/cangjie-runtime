@@ -16,6 +16,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/RemsetCheck.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
@@ -219,7 +220,11 @@ void Mutator::FlushDeferredLogObject()
         MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
         for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
             MAddress loggedLine = 0;
-            (void)stickyLog.TryLogLine(lineStart, loggedLine);
+            bool dirtyBefore = false;
+            if (stickyLog.TryLogLine(lineStart, loggedLine, dirtyBefore)) {
+                RemsetCheck::Instance().RecordLoggedLineWrite(
+                    loggedLine, RemsetCheck::LogLineSource::DEFERRED_LOG_RING, dirtyBefore);
+            }
         }
     }
 }
