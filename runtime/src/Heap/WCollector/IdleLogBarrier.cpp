@@ -6,6 +6,7 @@
 
 #include "IdleLogBarrier.h"
 
+#include "Heap/Heap.h"
 #include "Heap/RemsetCheck.h"
 #include "Heap/StickyLog.h"
 #include "ObjectModel/MArray.h"
