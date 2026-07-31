@@ -37,6 +37,10 @@ public:
 
     static bool ShouldTriggerMinor();
     static bool ShouldTriggerMajor();
+    static void NoteStressMinorRequest();
+    static void NoteStressMajorRequest();
+    static void NoteStressMinorExecution(bool wasYoungCollection);
+    static void NoteStressMajorExecution();
 
 private:
     static std::atomic<bool> clobberEnabled;
@@ -46,6 +50,11 @@ private:
     static std::atomic<size_t> stressMajorInterval;
     static std::atomic<size_t> stressMinorAllocationCount;
     static std::atomic<size_t> stressMajorAllocationCount;
+    static std::atomic<size_t> stressMinorRequestCount;
+    static std::atomic<size_t> stressMajorRequestCount;
+    static std::atomic<size_t> stressMinorExecutionCount;
+    static std::atomic<size_t> stressMinorYoungExecutionCount;
+    static std::atomic<size_t> stressMajorExecutionCount;
 };
 } // namespace MapleRuntime
 

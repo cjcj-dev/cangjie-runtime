@@ -24,6 +24,11 @@ std::atomic<size_t> GCDebugConfig::stressMinorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMajorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMinorAllocationCount{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMajorAllocationCount{ 0 };
+std::atomic<size_t> GCDebugConfig::stressMinorRequestCount{ 0 };
+std::atomic<size_t> GCDebugConfig::stressMajorRequestCount{ 0 };
+std::atomic<size_t> GCDebugConfig::stressMinorExecutionCount{ 0 };
+std::atomic<size_t> GCDebugConfig::stressMinorYoungExecutionCount{ 0 };
+std::atomic<size_t> GCDebugConfig::stressMajorExecutionCount{ 0 };
 
 namespace {
 bool ReadBoolean(const char* name)
@@ -76,10 +81,25 @@ void GCDebugConfig::ConfigureFromEnvironment()
     stressMajorInterval.store(ReadInterval("MRT_GC_STRESS_MAJOR"), std::memory_order_relaxed);
     stressMinorAllocationCount.store(0, std::memory_order_relaxed);
     stressMajorAllocationCount.store(0, std::memory_order_relaxed);
+    stressMinorRequestCount.store(0, std::memory_order_relaxed);
+    stressMajorRequestCount.store(0, std::memory_order_relaxed);
+    stressMinorExecutionCount.store(0, std::memory_order_relaxed);
+    stressMinorYoungExecutionCount.store(0, std::memory_order_relaxed);
+    stressMajorExecutionCount.store(0, std::memory_order_relaxed);
 }
 
 void GCDebugConfig::DisableStress()
 {
+    size_t minorRequests = stressMinorRequestCount.load(std::memory_order_relaxed);
+    size_t majorRequests = stressMajorRequestCount.load(std::memory_order_relaxed);
+    if (minorRequests != 0 || majorRequests != 0) {
+        VLOG(REPORT,
+            "[GCStress] minorRequests=%zu minorExecutions=%zu minorYoungExecutions=%zu "
+            "majorRequests=%zu majorExecutions=%zu",
+            minorRequests, stressMinorExecutionCount.load(std::memory_order_relaxed),
+            stressMinorYoungExecutionCount.load(std::memory_order_relaxed), majorRequests,
+            stressMajorExecutionCount.load(std::memory_order_relaxed));
+    }
     stressMinorInterval.store(0, std::memory_order_relaxed);
     stressMajorInterval.store(0, std::memory_order_relaxed);
 }
@@ -133,5 +153,28 @@ bool GCDebugConfig::ShouldTriggerMinor()
 bool GCDebugConfig::ShouldTriggerMajor()
 {
     return IsIntervalReached(stressMajorAllocationCount, stressMajorInterval.load(std::memory_order_relaxed));
+}
+
+void GCDebugConfig::NoteStressMinorRequest()
+{
+    stressMinorRequestCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GCDebugConfig::NoteStressMajorRequest()
+{
+    stressMajorRequestCount.fetch_add(1, std::memory_order_relaxed);
+}
+
+void GCDebugConfig::NoteStressMinorExecution(bool wasYoungCollection)
+{
+    stressMinorExecutionCount.fetch_add(1, std::memory_order_relaxed);
+    if (wasYoungCollection) {
+        stressMinorYoungExecutionCount.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void GCDebugConfig::NoteStressMajorExecution()
+{
+    stressMajorExecutionCount.fetch_add(1, std::memory_order_relaxed);
 }
 } // namespace MapleRuntime
