@@ -31,6 +31,80 @@
 #include "Interpreter/InterpreterSpecific.h"
 
 namespace MapleRuntime {
+namespace {
+struct DeferredLogRingEntryStats {
+    std::atomic<uint64_t> normal{ 0 };
+    std::atomic<uint64_t> forwarded{ 0 };
+    std::atomic<uint64_t> other{ 0 };
+    std::atomic<uint64_t> invalidRegion{ 0 };
+    std::array<std::atomic<uint64_t>, 1U << 16U> otherStates{};
+};
+
+DeferredLogRingEntryStats& GetDeferredLogRingEntryStats()
+{
+    static DeferredLogRingEntryStats* stats = new DeferredLogRingEntryStats();
+    return *stats;
+}
+
+void PrintDeferredLogRingEntryStats()
+{
+    DeferredLogRingEntryStats& stats = GetDeferredLogRingEntryStats();
+    std::fprintf(stderr,
+                 "RING_ENTRY_COUNTS normal=%zu forwarded=%zu other=%zu invalid_region=%zu\n",
+                 static_cast<size_t>(stats.normal.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(stats.forwarded.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(stats.other.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(stats.invalidRegion.load(std::memory_order_relaxed)));
+    for (size_t state = 0; state < stats.otherStates.size(); ++state) {
+        size_t count = stats.otherStates[state].load(std::memory_order_relaxed);
+        if (count != 0) {
+            std::fprintf(stderr, "RING_ENTRY_OTHER_STATE state=%zu count=%zu\n", state, count);
+        }
+    }
+}
+
+bool DeferredLogRingEntryStatsEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_RINGFWD_STATS");
+        if (value == nullptr || std::strcmp(value, "1") != 0) {
+            return false;
+        }
+        (void)GetDeferredLogRingEntryStats();
+        CHECK_DETAIL(std::atexit(PrintDeferredLogRingEntryStats) == 0,
+                     "failed to register deferred log ring entry report");
+        return true;
+    }();
+    return enabled;
+}
+
+void CountDeferredLogRingEntry(BaseObject* object)
+{
+    if (!DeferredLogRingEntryStatsEnabled()) {
+        return;
+    }
+    DeferredLogRingEntryStats& stats = GetDeferredLogRingEntryStats();
+    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+        stats.invalidRegion.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (region == nullptr || !region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+        stats.invalidRegion.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    uint16_t state = object->GetObjectState().GetStateBits();
+    if (state == static_cast<uint16_t>(ObjectState::NORMAL)) {
+        stats.normal.fetch_add(1, std::memory_order_relaxed);
+    } else if (state == static_cast<uint16_t>(ObjectState::FORWARDED)) {
+        stats.forwarded.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        stats.other.fetch_add(1, std::memory_order_relaxed);
+        stats.otherStates[state].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+} // namespace
+
 extern "C" uintptr_t MRT_GetThreadLocalData()
 {
     uintptr_t tlDataAddr = reinterpret_cast<uintptr_t>(ThreadLocal::GetThreadLocalData());
@@ -214,6 +288,7 @@ void Mutator::FlushDeferredLogObject()
     StickyLog& stickyLog = StickyLog::Instance();
     for (size_t i = 0; i < count; ++i) {
         BaseObject* object = deferredLogRing[i];
+        CountDeferredLogRingEntry(object);
         MAddress objectStart = reinterpret_cast<MAddress>(object);
         MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
         MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
