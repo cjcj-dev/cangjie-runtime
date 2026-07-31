@@ -6,14 +6,145 @@
 
 #include "TracingCollector.h"
 
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/StickyLog.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "StackMap/StackMapTypeDef.h"
 
 namespace MapleRuntime {
+namespace {
+struct FrameGapStats {
+    std::atomic<uint64_t> framesTotal{ 0 };
+    std::atomic<uint64_t> framesValid{ 0 };
+    std::atomic<uint64_t> framesSkippedInvalidMap{ 0 };
+    std::atomic<uint64_t> skippedHeapRefHits{ 0 };
+    std::atomic<uint64_t> skippedHeapRefSamples{ 0 };
+    std::atomic<uint64_t> skippedCalleeSavedRegs{ 0 };
+    std::atomic<uint64_t> samplePrinted{ 0 };
+};
+
+FrameGapStats& GetFrameGapStats()
+{
+    static FrameGapStats* stats = new FrameGapStats();
+    return *stats;
+}
+
+bool FrameGapStatsEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_FRAMEGAP_STATS");
+        if (value == nullptr || std::strcmp(value, "1") != 0) {
+            return false;
+        }
+        (void)GetFrameGapStats();
+        CHECK_DETAIL(std::atexit([]() {
+                         FrameGapStats& stats = GetFrameGapStats();
+                         std::fprintf(stderr,
+                                      "FRAMEGAP_COUNTS frames_total=%zu frames_valid=%zu "
+                                      "frames_skipped_invalid_map=%zu skipped_heap_ref_hits=%zu "
+                                      "skipped_heap_ref_samples=%zu skipped_callee_saved_regs=%zu\n",
+                                      static_cast<size_t>(stats.framesTotal.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.framesValid.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(
+                                          stats.framesSkippedInvalidMap.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(stats.skippedHeapRefHits.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(
+                                          stats.skippedHeapRefSamples.load(std::memory_order_relaxed)),
+                                      static_cast<size_t>(
+                                          stats.skippedCalleeSavedRegs.load(std::memory_order_relaxed)));
+                     }) == 0,
+                     "failed to register framegap report");
+        return true;
+    }();
+    return enabled;
+}
+
+void ScanSkippedFrameForHeapRefs(const FrameInfo& frame, HeapReferenceMap& heapMap, RegSlotsMap& regSlotsMap)
+{
+    FrameGapStats& stats = GetFrameGapStats();
+    FrameAddress* fa = frame.mFrame.GetFA();
+    uintptr_t frameAddress = reinterpret_cast<uintptr_t>(fa);
+    size_t hits = 0;
+    size_t samples = 0;
+    size_t calleeRegs = 0;
+    size_t stackSlots = 0;
+    size_t stackHits = 0;
+    for (RegisterNum reg = 0; reg < REGISTERS_COUNT; ++reg) {
+        if (!regSlotsMap.HasReg(reg)) {
+            continue;
+        }
+        ++calleeRegs;
+        SlotAddress slot = regSlotsMap.addrMap[reg];
+        if (slot == nullptr) {
+            continue;
+        }
+        BaseObject* obj = slot->object;
+        ++samples;
+        if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+            ++hits;
+        }
+    }
+    if (fa != nullptr && fa->callerFrameAddress != nullptr) {
+        uintptr_t low = frameAddress;
+        uintptr_t high = reinterpret_cast<uintptr_t>(fa->callerFrameAddress);
+        if (high > low && (high - low) <= 4096U) {
+            for (uintptr_t p = low; p + sizeof(void*) <= high; p += sizeof(void*)) {
+                auto* word = reinterpret_cast<void* const*>(p);
+                void* val = *word;
+                ++stackSlots;
+                if (val != nullptr && Heap::IsHeapAddress(val)) {
+                    ++stackHits;
+                    ++hits;
+                }
+            }
+            samples += stackSlots;
+        }
+    }
+    stats.skippedCalleeSavedRegs.fetch_add(calleeRegs, std::memory_order_relaxed);
+    stats.skippedHeapRefSamples.fetch_add(samples, std::memory_order_relaxed);
+    if (hits > 0) {
+        stats.skippedHeapRefHits.fetch_add(hits, std::memory_order_relaxed);
+    }
+    uint64_t printed = stats.samplePrinted.fetch_add(1, std::memory_order_relaxed);
+    if (printed < 16) {
+        uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
+        uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
+        CString name = frame.GetFuncName();
+        std::fprintf(stderr,
+                     "FRAMEGAP_SKIP sample=%zu start_ip=0x%zx frame_ip=0x%zx fa=0x%zx "
+                     "func=%s callee_regs=%zu stack_slots=%zu stack_hits=%zu "
+                     "samples=%zu heap_hits=%zu map_valid=%d\n",
+                     static_cast<size_t>(printed), startIP, frameIP, frameAddress,
+                     name.IsEmpty() ? "?" : name.Str(), calleeRegs, stackSlots, stackHits, samples, hits,
+                     heapMap.IsValid() ? 1 : 0);
+    }
+    (void)heapMap;
+}
+
+void CountManagedFrameMap(const FrameInfo& frame, HeapReferenceMap& heapMap, RegSlotsMap& regSlotsMap)
+{
+    if (!FrameGapStatsEnabled()) {
+        return;
+    }
+    FrameGapStats& stats = GetFrameGapStats();
+    stats.framesTotal.fetch_add(1, std::memory_order_relaxed);
+    if (heapMap.IsValid()) {
+        stats.framesValid.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    stats.framesSkippedInvalidMap.fetch_add(1, std::memory_order_relaxed);
+    ScanSkippedFrameForHeapRefs(frame, heapMap, regSlotsMap);
+}
+} // namespace
+
 const size_t TracingCollector::MAX_MARKING_WORK_SIZE = 16; // fork task if bigger
 const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller
 
@@ -295,6 +426,7 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
     HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
+    CountManagedFrameMap(frame, heapMap, regSlotsMap);
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {

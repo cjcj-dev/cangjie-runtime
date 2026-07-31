@@ -35,6 +35,7 @@ namespace {
 struct DeferredLogRingEntryStats {
     std::atomic<uint64_t> normal{ 0 };
     std::atomic<uint64_t> forwarded{ 0 };
+    std::atomic<uint64_t> locked{ 0 };
     std::atomic<uint64_t> other{ 0 };
     std::atomic<uint64_t> invalidRegion{ 0 };
     std::array<std::atomic<uint64_t>, 1U << 16U> otherStates{};
@@ -50,9 +51,10 @@ void PrintDeferredLogRingEntryStats()
 {
     DeferredLogRingEntryStats& stats = GetDeferredLogRingEntryStats();
     std::fprintf(stderr,
-                 "RING_ENTRY_COUNTS normal=%zu forwarded=%zu other=%zu invalid_region=%zu\n",
+                 "RING_ENTRY_COUNTS normal=%zu forwarded=%zu locked=%zu other=%zu invalid_region=%zu\n",
                  static_cast<size_t>(stats.normal.load(std::memory_order_relaxed)),
                  static_cast<size_t>(stats.forwarded.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(stats.locked.load(std::memory_order_relaxed)),
                  static_cast<size_t>(stats.other.load(std::memory_order_relaxed)),
                  static_cast<size_t>(stats.invalidRegion.load(std::memory_order_relaxed)));
     for (size_t state = 0; state < stats.otherStates.size(); ++state) {
@@ -66,8 +68,11 @@ void PrintDeferredLogRingEntryStats()
 bool DeferredLogRingEntryStatsEnabled()
 {
     static const bool enabled = []() {
-        const char* value = std::getenv("MRT_RINGFWD_STATS");
-        if (value == nullptr || std::strcmp(value, "1") != 0) {
+        const char* ring = std::getenv("MRT_RINGFWD_STATS");
+        const char* frame = std::getenv("MRT_FRAMEGAP_STATS");
+        bool on = (ring != nullptr && std::strcmp(ring, "1") == 0) ||
+            (frame != nullptr && std::strcmp(frame, "1") == 0);
+        if (!on) {
             return false;
         }
         (void)GetDeferredLogRingEntryStats();
@@ -93,12 +98,15 @@ void CountDeferredLogRingEntry(BaseObject* object)
         stats.invalidRegion.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    uint16_t state = object->GetObjectState().GetStateBits();
-    if (state == static_cast<uint16_t>(ObjectState::NORMAL)) {
+    ObjectState::ObjectStateCode code = object->GetObjectState().GetStateCode();
+    if (code == ObjectState::NORMAL) {
         stats.normal.fetch_add(1, std::memory_order_relaxed);
-    } else if (state == static_cast<uint16_t>(ObjectState::FORWARDED)) {
+    } else if (code == ObjectState::FORWARDED) {
         stats.forwarded.fetch_add(1, std::memory_order_relaxed);
+    } else if (code == ObjectState::LOCKED) {
+        stats.locked.fetch_add(1, std::memory_order_relaxed);
     } else {
+        uint16_t state = object->GetObjectState().GetStateBits();
         stats.other.fetch_add(1, std::memory_order_relaxed);
         stats.otherStates[state].fetch_add(1, std::memory_order_relaxed);
     }
