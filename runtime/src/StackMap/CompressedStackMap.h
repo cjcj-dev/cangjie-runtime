@@ -137,32 +137,13 @@ public:
         }
     }
 
-    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC,
-                                             StackMapInvalidReason* invalidReason = nullptr) const
+    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC) const
     {
         StackMapTable stackMapTable(prologue.GetNextTable());
-        StackMapLookupResult lookupResult;
-        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC,
-                                             invalidReason == nullptr ? nullptr : &lookupResult);
+        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
         if (idxSet.slotIdx == 0 && idxSet.regIdx == 0 && idxSet.lineNumIdx == 0 &&
                 idxSet.stackRegIdx == 0 && idxSet.stackSlotIdx == 0) {
-            if (invalidReason != nullptr) {
-                switch (lookupResult) {
-                    case StackMapLookupResult::ZERO_ENTRIES:
-                        *invalidReason = StackMapInvalidReason::ZERO_ENTRIES;
-                        break;
-                    case StackMapLookupResult::PC_MISS:
-                        *invalidReason = StackMapInvalidReason::PC_MISS;
-                        break;
-                    case StackMapLookupResult::FOUND:
-                        *invalidReason = StackMapInvalidReason::ZERO_ROOT_INDICES;
-                        break;
-                }
-            }
             return CompressedStackMapEntry(false);
-        }
-        if (invalidReason != nullptr) {
-            *invalidReason = StackMapInvalidReason::NONE;
         }
         RegTable regTable(stackMapTable.GetNextTable());
         SlotTable slotTable(regTable.GetNextTable(), slotFormat);
@@ -170,6 +151,20 @@ public:
         DerivedPtrTable derivedTable(lineTable.GetNextTable(), stackMapTable.GetRegBitsLen(),
                                      stackMapTable.GetSlotBitsLen());
         return CompressedStackMapEntry(idxSet, regTable, slotTable, lineTable, derivedTable, true);
+    }
+
+    StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
+    {
+        StackMapTable stackMapTable(prologue.GetNextTable());
+        switch (stackMapTable.GetLookupResult(startPC, framePC)) {
+            case StackMapLookupResult::ZERO_ENTRIES:
+                return StackMapInvalidReason::ZERO_ENTRIES;
+            case StackMapLookupResult::PC_MISS:
+                return StackMapInvalidReason::PC_MISS;
+            case StackMapLookupResult::FOUND:
+                return StackMapInvalidReason::ZERO_ROOT_INDICES;
+        }
+        return StackMapInvalidReason::ZERO_ROOT_INDICES;
     }
 
 private:
