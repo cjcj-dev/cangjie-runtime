@@ -14,6 +14,7 @@
 #include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
+#include "Heap/RefStorageKind.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
