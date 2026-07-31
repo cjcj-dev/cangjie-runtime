@@ -609,6 +609,119 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
     }
 }
 
+void RemsetCheck::RecordVisitedLine(MAddress lineStart, VisitorHookSite site)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "visitor line recording requires stopped mutators");
+    CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
+    size_t index = static_cast<size_t>(site);
+    CHECK(index < VISITOR_HOOK_SITE_COUNT);
+    ++visitedLineHits[index];
+    ++visitedRoundLineHits[index];
+    visitedLines.insert(lineStart);
+}
+
+void RemsetCheck::RecordRetain2SkippedLine(MAddress lineStart)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "retained line recording requires stopped mutators");
+    CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
+    ++retain2Skipped;
+    ++retain2SkippedThisRound;
+    retain2SkippedLines.insert(lineStart);
+}
+
+void RemsetCheck::CheckVisitedRound(size_t run)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "visitor line check requires stopped mutators");
+    CHECK(run == visitedRoundRun);
+
+    auto visited = [this](const Edge& edge) {
+        MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+        return visitedLines.find(line) != visitedLines.end();
+    };
+    auto checkerVisited = [&visited](const Edge& edge, MAddress suppressedSlot) {
+        return edge.slot != suppressedSlot && visited(edge);
+    };
+
+    if (falseUnvisitedControlEnabled && !falseUnvisitedControlCaught) {
+        for (const Edge& edge : visitedRoundCandidates) {
+            if (!visited(edge)) {
+                continue;
+            }
+            if (!checkerVisited(edge, edge.slot)) {
+                falseUnvisitedControlCaught = true;
+                VLOG(REPORT,
+                     "[VISITORHOOK-MISS] run=%zu reason=false-unvisited-control holder=%p slot=%p target=%p",
+                     run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
+                     reinterpret_cast<void*>(edge.target));
+                VLOG(REPORT,
+                     "[VISITORHOOK-POSCTRL-FALSE-UNVISITED] run=%zu caught=1 slot=%p exactEdges=1",
+                     run, reinterpret_cast<void*>(edge.slot));
+            }
+            break;
+        }
+    }
+
+    if (trueUnvisitedControlEnabled && !trueUnvisitedControlCaught) {
+        for (const Edge& edge : visitedRoundCandidates) {
+            MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+            if (visited(edge) || retain2SkippedLines.find(line) == retain2SkippedLines.end()) {
+                continue;
+            }
+            if (!checkerVisited(edge, 0)) {
+                trueUnvisitedControlCaught = true;
+                VLOG(REPORT,
+                     "[VISITORHOOK-MISS] run=%zu reason=true-unvisited-retain2 holder=%p slot=%p target=%p line=%p",
+                     run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
+                     reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line));
+                VLOG(REPORT,
+                     "[VISITORHOOK-POSCTRL-TRUE-UNVISITED] run=%zu caught=1 slot=%p line=%p retain2Skipped=1",
+                     run, reinterpret_cast<void*>(edge.slot), reinterpret_cast<void*>(line));
+            }
+            break;
+        }
+    }
+
+    size_t missingNewThisRound = 0;
+    for (const Edge& edge : visitedRoundCandidates) {
+        if (checkerVisited(edge, 0)) {
+            continue;
+        }
+        ++missingNewThisRound;
+        MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+        bool skippedByRetain2 = retain2SkippedLines.find(line) != retain2SkippedLines.end();
+        VLOG(REPORT,
+             "[VISITORHOOK-MISS] run=%zu reason=unvisited holder=%p slot=%p target=%p line=%p "
+             "skippedByRetain2=%u site=%s",
+             run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
+             reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line),
+             static_cast<unsigned>(skippedByRetain2), HookSiteName(edge.site));
+    }
+    missingNewPredicate += missingNewThisRound;
+    long long delta = static_cast<long long>(visitedRoundOldMissing) - static_cast<long long>(missingNewThisRound);
+    VLOG(REPORT,
+         "[VISITORHOOK] run=%zu edgesFromBarrier=%zu missingOldPredicate=%zu missingNewPredicate=%zu "
+         "deltaOldMinusNew=%lld bufferVisitorCalls=%zu dirtyRegionVisitorCalls=%zu uniqueVisitedLines=%zu "
+         "retain2Skipped=%zu uniqueRetain2SkippedLines=%zu",
+         run, visitedRoundCandidates.size(), visitedRoundOldMissing, missingNewThisRound, delta,
+         visitedRoundLineHits[static_cast<size_t>(VisitorHookSite::BUFFER)],
+         visitedRoundLineHits[static_cast<size_t>(VisitorHookSite::DIRTY_REGION)], visitedLines.size(),
+         retain2SkippedThisRound, retain2SkippedLines.size());
+
+    visitedRoundActive = false;
+    visitedRoundCandidates.clear();
+    visitedLines.clear();
+    retain2SkippedLines.clear();
+}
+
 void RemsetCheck::Fini()
 {
     if (!configured) {
