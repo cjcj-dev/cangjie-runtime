@@ -318,14 +318,40 @@ struct Driver {
         manager->PromoteAllRegions();
     }
 
+    // After a collection, drop table entries whose home region was reclaimed.
+    void RefreshLiveness()
+    {
+        for (size_t i = 0; i < slots.size(); ++i) {
+            if (!slots[i].live || slots[i].obj == nullptr) {
+                continue;
+            }
+            RegionInfo* reg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(slots[i].obj));
+            if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion()) {
+                slots[i].live = false;
+                slots[i].obj = nullptr;
+                slots[i].home = nullptr;
+                continue;
+            }
+            // Object may have moved (forwarded) — driver does not chase; mark dead if header gone.
+            if (slots[i].obj->GetTypeInfo() != g_holderTi) {
+                slots[i].live = false;
+                slots[i].obj = nullptr;
+                slots[i].home = nullptr;
+            }
+        }
+    }
+
     void ForceMinor()
     {
+        // async=false ⇒ wait for completion (Collector.h)
         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_YOUNG, false);
+        RefreshLiveness();
     }
 
     void ForceMajor()
     {
         Heap::GetHeap().GetCollector().RequestGC(GC_REASON_USER, false);
+        RefreshLiveness();
     }
 
     void Grow(uint32_t bytes)
