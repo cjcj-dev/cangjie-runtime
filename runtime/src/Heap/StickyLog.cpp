@@ -19,6 +19,7 @@
 #include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
+#include "Heap/RemsetCheck.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -120,6 +121,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
     minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR", true);
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE", false);
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH", false);
+    RemsetCheck::Instance().ConfigureFromEnvironment(forceSlowPathEnabled);
     youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
@@ -176,6 +178,7 @@ void StickyLog::Init(MAddress start, size_t size)
 
 void StickyLog::Fini() noexcept
 {
+    RemsetCheck::Instance().Fini();
     __cj_sticky_logged_base = nullptr;
     __cj_sticky_heap_base = 0;
     __cj_sticky_heap_size = 0;
