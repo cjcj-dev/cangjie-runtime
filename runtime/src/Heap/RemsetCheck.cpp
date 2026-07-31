@@ -301,8 +301,21 @@ void RemsetCheck::RecordLoggedLineWrite(MAddress lineStart, LogLineSource source
     }
     HookSite hookSite = source == LogLineSource::BARRIER ? threadStickyLogEvent.hookSite : HookSite::COUNT;
     StickyLogExit exit = source == LogLineSource::BARRIER ? StickyLogExit::LOGGED : StickyLogExit::COUNT;
-    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::LOG_LINE, lineStart, region->GetRegionStart(), 0, 0,
-                                 0, 1, dirtyBefore, true, hookSite, exit, source };
+    ClearWhenPendingEvent event;
+    event.sequence = ReserveClearWhenSequence();
+    event.run = GetClearWhenRun();
+    event.kind = ClearWhenEventKind::LOG_LINE;
+    event.line = lineStart;
+    event.regionStart = region->GetRegionStart();
+    event.regionSize = 0;
+    event.slot = 0;
+    event.byteBefore = 0;
+    event.byteAfter = 1;
+    event.dirtyBefore = dirtyBefore;
+    event.dirtyAfter = true;
+    event.hookSite = hookSite;
+    event.stickyLogExit = exit;
+    event.logLineSource = source;
     (void)RecordPendingClearWhenEvent(event);
 }
 
@@ -356,9 +369,21 @@ void RemsetCheck::RecordBarrierEdge(BaseObject* holder, MAddress slot, BaseObjec
     MAddress line = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
     uint8_t byte = LoadLoggedByte(line);
     bool dirty = LoadDirtyBit(reinterpret_cast<MAddress>(holder));
-    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::BARRIER_WRITE, line,
-                                 holderRegion->GetRegionStart(), 0, slot, byte, byte, dirty, dirty, site,
-                                 edge.stickyLogExit, LogLineSource::BARRIER };
+    ClearWhenPendingEvent event;
+    event.sequence = ReserveClearWhenSequence();
+    event.run = GetClearWhenRun();
+    event.kind = ClearWhenEventKind::BARRIER_WRITE;
+    event.line = line;
+    event.regionStart = holderRegion->GetRegionStart();
+    event.regionSize = 0;
+    event.slot = slot;
+    event.byteBefore = byte;
+    event.byteAfter = byte;
+    event.dirtyBefore = dirty;
+    event.dirtyAfter = dirty;
+    event.hookSite = site;
+    event.stickyLogExit = edge.stickyLogExit;
+    event.logLineSource = LogLineSource::BARRIER;
     edge.writeSequence = RecordPendingClearWhenEvent(event);
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges[slot] = edge;
@@ -512,7 +537,7 @@ void RemsetCheck::RecordClearWhenEventDrop(bool firstOverflow)
     clearWhenEventsDropped.fetch_add(1, std::memory_order_relaxed);
 }
 
-uint64_t RemsetCheck::RecordPendingClearWhenEvent(ClearWhenPendingEvent event)
+uint64_t RemsetCheck::RecordPendingClearWhenEvent(ClearWhenPendingEvent& event)
 {
     if (event.sequence == 0) {
         event.sequence = ReserveClearWhenSequence();
@@ -652,9 +677,21 @@ void RemsetCheck::RecordClearUnavailableRegion(MAddress regionStart, size_t regi
     if (LIKELY(!enabled)) {
         return;
     }
-    ClearWhenPendingEvent event{ 0, 0, ClearWhenEventKind::CLEAR_UNAVAILABLE_REGION, 0, regionStart, regionSize,
-                                 0, 0, 0, false, false, HookSite::COUNT, StickyLogExit::COUNT,
-                                 LogLineSource::BARRIER };
+    ClearWhenPendingEvent event;
+    event.sequence = ReserveClearWhenSequence();
+    event.run = GetClearWhenRun();
+    event.kind = ClearWhenEventKind::CLEAR_UNAVAILABLE_REGION;
+    event.line = 0;
+    event.regionStart = regionStart;
+    event.regionSize = regionSize;
+    event.slot = 0;
+    event.byteBefore = 0;
+    event.byteAfter = 0;
+    event.dirtyBefore = false;
+    event.dirtyAfter = false;
+    event.hookSite = HookSite::COUNT;
+    event.stickyLogExit = StickyLogExit::COUNT;
+    event.logLineSource = LogLineSource::BARRIER;
     (void)RecordPendingClearWhenEvent(event);
 }
 
