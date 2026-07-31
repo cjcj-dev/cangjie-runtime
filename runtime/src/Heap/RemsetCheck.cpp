@@ -509,12 +509,13 @@ void RemsetCheck::RecordRescanDirtyClear(MAddress regionStart, size_t regionSize
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     MAddress regionEnd = regionStart + regionSize;
-    for (auto& entry : lineTimelines) {
-        if (entry.first < regionStart || entry.first >= regionEnd) {
+    for (MAddress line = regionStart; line < regionEnd; line += StickyLog::LINE_SIZE) {
+        auto entry = lineTimelines.find(line);
+        if (entry == lineTimelines.end()) {
             continue;
         }
-        uint8_t byte = LoadLoggedByte(entry.first);
-        (void)AppendClearWhenEventLocked(entry.first, entry.second.regionStart,
+        uint8_t byte = LoadLoggedByte(line);
+        (void)AppendClearWhenEventLocked(line, entry->second.regionStart,
                                          ClearWhenEventKind::RESCAN_DIRTY_CLEAR, byte, byte, true, false);
     }
 }
@@ -523,16 +524,17 @@ void RemsetCheck::RecordClearWhenRangeLocked(MAddress regionStart, size_t region
                                               bool dirtyAfter)
 {
     MAddress regionEnd = regionStart + regionSize;
-    for (auto& entry : lineTimelines) {
-        if (entry.first < regionStart || entry.first >= regionEnd) {
+    for (MAddress line = regionStart; line < regionEnd; line += StickyLog::LINE_SIZE) {
+        auto entry = lineTimelines.find(line);
+        if (entry == lineTimelines.end()) {
             continue;
         }
-        uint8_t byte = LoadLoggedByte(entry.first);
-        bool dirty = LoadDirtyBit(entry.first);
+        uint8_t byte = LoadLoggedByte(line);
+        bool dirty = LoadDirtyBit(line);
         if (byte == 0 && dirty == dirtyAfter) {
             continue;
         }
-        (void)AppendClearWhenEventLocked(entry.first, entry.second.regionStart, kind, byte, 0, dirty, dirtyAfter);
+        (void)AppendClearWhenEventLocked(line, entry->second.regionStart, kind, byte, 0, dirty, dirtyAfter);
     }
 }
 
