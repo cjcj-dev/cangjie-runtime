@@ -226,7 +226,7 @@ public:
     ~StackMapBuilder() = default;
 
     template<class MapType>
-    MapType Build(StackMapInvalidReason* invalidReason = nullptr) const
+    MapType Build() const
     {
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
@@ -244,11 +244,31 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
 #endif
-        auto entry = head.GetStackMapEntry(startPC, framePC, invalidReason);
+        auto entry = head.GetStackMapEntry(startPC, framePC);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
         }
         return MapType(true, stackBase, entry, std::move(closure));
+    }
+
+    template<class MapType>
+    MapType Build(StackMapInvalidReason* invalidReason) const
+    {
+        MapType map = Build<MapType>();
+        if (invalidReason == nullptr) {
+            return map;
+        }
+        if (map.IsValid()) {
+            *invalidReason = StackMapInvalidReason::NONE;
+            return map;
+        }
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        *invalidReason = head.GetInvalidReason(startPC, framePC);
+        return map;
     }
 
 protected:
@@ -260,14 +280,14 @@ protected:
 
 // specialization for MethodMap which avoids using malloc().
 template<>
-inline MethodMap StackMapBuilder::Build<MethodMap>(StackMapInvalidReason* invalidReason) const
+inline MethodMap StackMapBuilder::Build<MethodMap>() const
 {
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else
     auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
 #endif
-    auto entry = head.GetStackMapEntry(startPC, framePC, invalidReason);
+    auto entry = head.GetStackMapEntry(startPC, framePC);
     if (!entry.IsValid()) {
         return MethodMap(stackBase);
     }
