@@ -179,7 +179,7 @@ public:
     void ProcessRootLocal();
     void ProcessRootThreadObject();
     void ProcessRootFinalizer();
-    void ProcessHeapObject(BaseObject* roots);
+    void ProcessHeapObject(CurrentPtr roots);
     void ProcessRootClass(TypeInfo* klass);
     void ProcessStructClass(TypeInfo* klass);
 
@@ -187,10 +187,10 @@ public:
     void WriteUnknownRoot(BaseObject*& obj, const u1 tag);
     void WriteLocalRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 depth);
     void WriteThreadObjectRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 stackTraceIdx);
-    void WriteObjectArray(BaseObject*& obj, const u1 tag);
-    void WriteStructArray(BaseObject*& obj, const u1 tag);
-    void WritePrimitiveArray(BaseObject*& obj, const u1 tag);
-    void WriteInstance(BaseObject*& obj, const u1 tag);
+    void WriteObjectArray(CurrentPtr obj, const u1 tag);
+    void WriteStructArray(CurrentPtr obj, const u1 tag);
+    void WritePrimitiveArray(CurrentPtr obj, const u1 tag);
+    void WriteInstance(CurrentPtr obj, const u1 tag);
     void WriteClass(TypeInfo* klass, CjHeapDataStringId klassId, const u1 tag);
     void WriteStructClass(TypeInfo* klass, CjHeapDataStringId klassId, const u1 tag);
 
