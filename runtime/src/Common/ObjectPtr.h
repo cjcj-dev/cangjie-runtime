@@ -15,11 +15,13 @@ namespace MapleRuntime {
 class BaseObject;
 class Collector;
 class CollectorProxy;
+class Mutator;
 class WCollector;
 
 // A managed-object address whose current-version property has not been established.
 class MaybeStalePtr {
 public:
+    constexpr MaybeStalePtr() : pointer(nullptr) {}
     explicit constexpr MaybeStalePtr(BaseObject* object) : pointer(object) {}
 
 private:
@@ -27,6 +29,7 @@ private:
 
     friend class Collector;
     friend class CollectorProxy;
+    friend class Mutator;
     friend class WCollector;
 };
 
@@ -45,6 +48,7 @@ private:
 
     friend class Collector;
     friend class CollectorProxy;
+    friend class Mutator;
     friend class WCollector;
     friend CurrentPtr UnsafeAssumeCurrent(BaseObject* object);
 };
@@ -57,6 +61,8 @@ static_assert(std::is_trivially_copyable<MaybeStalePtr>::value, "MaybeStalePtr m
 static_assert(std::is_trivially_copyable<CurrentPtr>::value, "CurrentPtr must remain trivially copyable");
 static_assert(sizeof(MaybeStalePtr) == sizeof(BaseObject*), "MaybeStalePtr must remain pointer-sized");
 static_assert(sizeof(CurrentPtr) == sizeof(BaseObject*), "CurrentPtr must remain pointer-sized");
+static_assert(alignof(MaybeStalePtr) == alignof(BaseObject*), "MaybeStalePtr must retain pointer alignment");
+static_assert(alignof(CurrentPtr) == alignof(BaseObject*), "CurrentPtr must retain pointer alignment");
 } // namespace MapleRuntime
 
 #endif // MRT_OBJECT_PTR_H
