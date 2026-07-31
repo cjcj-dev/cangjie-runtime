@@ -14,6 +14,7 @@
 #include "Exception/Exception.h"
 #include "Heap/Allocator/Allocator.h"
 #include "Heap/Collector/GcInfos.h"
+#include "Heap/RemsetCheck.h"
 #include "LoaderManager.h"
 #include "Mutator/CJDeferredLogRingABI.h"
 #include "Mutator/ThreadLocal.h"
@@ -71,6 +72,7 @@ public:
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
         deferredLogRingIndex = 0;
+        InitClearWhenEventRing();
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -84,6 +86,7 @@ public:
         FlushDeferredLogObject();
         SatbBuffer::Instance().FlushQueue(satbNode);
         SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
+        FiniClearWhenEventRing();
 
 #ifdef INTERPRETER_ENABLED
         DestroyInterpreterPart();
@@ -397,6 +400,8 @@ public:
 
     void DeferLogObject(BaseObject* object);
     void FlushDeferredLogObject();
+    bool RecordClearWhenEvent(const RemsetCheck::ClearWhenPendingEvent& event);
+    void FlushClearWhenEvents();
 
     static constexpr size_t DEFERRED_LOG_RING_SIZE = CangjieDeferredLogRingABI::Capacity;
     static constexpr size_t DEFERRED_LOG_RING_OFFSET = sizeof(void*);
@@ -544,6 +549,8 @@ private:
         CHECK_DETAIL(stickyLogNode != nullptr, "failed to allocate sticky log node");
         CHECK_DETAIL(stickyLogNode->PushLine(line), "failed to record sticky line");
     }
+    void InitClearWhenEventRing();
+    void FiniClearWhenEventRing();
     ManagedList<BaseObject*>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc
     // ATTENTION: THE LAYOUT FOR GCPHASE MUST NOT BE CHANGED!
@@ -604,6 +611,9 @@ private:
         AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
+
+    RemsetCheck::ClearWhenPendingEvent* clearWhenEventRing = nullptr;
+    std::atomic<size_t> clearWhenEventRingIndex{ 0 };
 
 public:
 #ifdef INTERPRETER_ENABLED
