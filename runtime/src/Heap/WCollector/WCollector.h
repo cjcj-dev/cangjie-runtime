@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
+#include "Heap/CanonicalWriteTable.h"
 #include "Collector/CopyCollector.h"
 namespace MapleRuntime {
 
@@ -25,6 +26,10 @@ public:
     {
         DLOG(FORWARD, "reset fwd table");
         theSpace.PrepareFromSpace();
+
+        // PrepareFromSpace has just retired every previous ghost route. The
+        // independent IDLE write facts end at the same semantic boundary.
+        CanonicalWriteTable::Instance().Retire();
 
         ForwardDataManager::GetForwardDataManager().ClearPreviousForwardData();
     }
