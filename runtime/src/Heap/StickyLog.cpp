@@ -66,6 +66,22 @@ size_t ReadStickyPositiveInteger(const char* name, size_t defaultValue)
     return static_cast<size_t>(parsed);
 }
 
+size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
+{
+    const char* value = std::getenv(name);
+    if (value == nullptr) {
+        return defaultValue;
+    }
+    errno = 0;
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(value, &end, 10);
+    if (errno != 0 || end == value || *end != '\0' || parsed > std::numeric_limits<size_t>::max()) {
+        LOG(RTLOG_ERROR, "Unsupported %s=%s; using default %zu", name, value, defaultValue);
+        return defaultValue;
+    }
+    return static_cast<size_t>(parsed);
+}
+
 // Sticky minor remset is only complete when the main managed executable embeds the
 // compiler sticky-logged-map consumer (`__cj_sticky_logged_base`). Runtime defines
 // that symbol; scanning /proc/self/exe (not the runtime DSO) detects consumer code.
@@ -131,6 +147,9 @@ void StickyLog::ConfigureMinorFromEnvironment()
     size_t configuredPromoteAge = ReadStickyPositiveInteger("MRT_STICKY_MINOR_PROMOTE_AGE", 1);
     promoteAge = static_cast<uint8_t>(std::min(configuredPromoteAge,
         static_cast<size_t>(RegionInfo::MAX_YOUNG_AGE)));
+    evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 0),
+                                   static_cast<size_t>(100));
+    evacuationMaxRegions = ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_MAX_REGIONS", 8);
     // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
     // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
     // a harness that still aborts under this load; major-only matches sticky0 green path.
