@@ -79,7 +79,7 @@ void CjHeapData::ProcessHeap()
     (void)LookupStringId("RefFields");
     (void)LookupStringId("ValueField");
     //  dump object contents
-    auto dumpVisitor = [this](BaseObject* obj) { ProcessHeapObject(obj); };
+    auto dumpVisitor = [this](BaseObject* obj) { ProcessHeapObject(UnsafeAssumeCurrent(obj)); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
     CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
 }
@@ -207,17 +207,18 @@ bool CjHeapData::DumpHeap(int fd, bool needStopTheWorld)
     return true;
 }
 
-void CjHeapData::ProcessHeapObject(BaseObject* obj)
+void CjHeapData::ProcessHeapObject(CurrentPtr currentObject)
 {
+    BaseObject* obj = currentObject;
     if (obj == nullptr) {
         return;
     }
 
     DumpObject dumpObject = { obj, 0, 0, 0 };
 
-    if (obj->IsRawArray()) {
+    if (IsRawArray(currentObject)) {
         MArray* mArray = reinterpret_cast<MArray*>(obj);
-        TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+        TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentObject);
         if (componentTypeInfo->IsPrimitiveType()) {
             dumpObject.tag = TAG_PRIMITIVE_ARRAY_DUMP;
             auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -236,7 +237,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
                 dumpObject.tag = TAG_UNMOVABLE_STRUCT_ARRAY_DUMP;
             }
             dumpObjects.push_back(dumpObject);
-            ProcessStructClass(obj->GetTypeInfo());
+            ProcessStructClass(GetTypeInfo(currentObject));
             return;
         } else if (componentTypeInfo->IsObjectType() ||
                    componentTypeInfo->IsArrayType() ||
@@ -252,7 +253,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
         } else {
             LOG(RTLOG_ERROR, "array object %p has wrong component type", mArray);
         }
-    } else if (obj->GetTypeInfo()->IsVaildType()) {
+    } else if (GetTypeInfo(currentObject)->IsVaildType()) {
         dumpObject.tag = TAG_INSTANCE_DUMP;
         auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         if (regionInfo->IsPinnedRegion()) {
@@ -267,7 +268,7 @@ void CjHeapData::ProcessHeapObject(BaseObject* obj)
         LOG(RTLOG_ERROR, "object %p has wrong component type", obj);
         return;
     }
-    ProcessRootClass(obj->GetTypeInfo());
+    ProcessRootClass(GetTypeInfo(currentObject));
 }
 
 void CjHeapData::ProcessRootClass(TypeInfo* klass)
@@ -439,6 +440,7 @@ void CjHeapData::WriteAllStructClass()
 void CjHeapData::WriteAllObjects()
 {
     for (auto& objectInfo : dumpObjects) {
+        CurrentPtr currentObject = UnsafeAssumeCurrent(objectInfo.obj);
         switch (objectInfo.tag) {
             case TAG_ROOT_THREAD_OBJECT:
                 WriteThreadObjectRoot(objectInfo.obj, objectInfo.tag, objectInfo.threadId, 0);
@@ -455,23 +457,23 @@ void CjHeapData::WriteAllObjects()
             case TAG_OBJECT_ARRAY_DUMP:
             case TAG_LARGE_OBJECT_ARRAY_DUMP:
             case TAG_UNMOVABLE_OBJECT_ARRAY_DUMP:
-                WriteObjectArray(objectInfo.obj, objectInfo.tag);
+                WriteObjectArray(currentObject, objectInfo.tag);
                 break;
             case TAG_STRUCT_ARRAY_DUMP:
             case TAG_LARGE_STRUCT_ARRAY_DUMP:
             case TAG_UNMOVABLE_STRUCT_ARRAY_DUMP:
-                WriteStructArray(objectInfo.obj, objectInfo.tag);
+                WriteStructArray(currentObject, objectInfo.tag);
                 break;
             case TAG_PRIMITIVE_ARRAY_DUMP:
             case TAG_LARGE_PRIMITIVE_ARRAY_DUMP:
             case TAG_UNMOVABLE_PRIMITIVE_ARRAY_DUMP:
-                WritePrimitiveArray(objectInfo.obj, objectInfo.tag);
+                WritePrimitiveArray(currentObject, objectInfo.tag);
                 break;
             case TAG_INSTANCE_DUMP:
             case TAG_PINNED_INSTANCE_DUMP:
             case TAG_LARGE_INSTANCE_DUMP:
             case TAG_UNMOVABLE_INSTANCE_DUMP:
-                WriteInstance(objectInfo.obj, objectInfo.tag);
+                WriteInstance(currentObject, objectInfo.tag);
                 break;
             default:
                 break;
@@ -541,8 +543,9 @@ void CjHeapData::WriteThreadObjectRoot(BaseObject*& obj, const u1 tag, const u4 
  *     ID elements[num];   // elements
  *
  */
-void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
+void CjHeapData::WriteObjectArray(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     AddU1(tag);
     AddID(GetObjectId(obj));
     // take array length and content.
@@ -554,7 +557,7 @@ void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
         elements[i] = arrayContent[i].GetTargetObject();
     }
     AddU4(static_cast<u4>(arrayLengthVal));
-    AddU4(obj->GetTypeInfo()->GetUUID());
+    AddU4(GetTypeInfo(currentObject)->GetUUID());
     AddObjectIdList(elements);
 }
 
@@ -569,8 +572,9 @@ void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
  *
  */
 
-void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
+void CjHeapData::WriteStructArray(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     AddU1(tag);
     AddID(GetObjectId(obj));
     u4 num = 0;
@@ -584,19 +588,19 @@ void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentObject);
     GCTib gcTib = componentTypeInfo->GetGCTib();
     MAddress contentAddr = reinterpret_cast<Uptr>(mArray) + MArray::GetContentOffset();
     if (componentTypeInfo->HasRefField()) {
         elements.reserve(arrayLengthVal);
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             gcTib.ForEachBitmapWord(contentAddr, visitor);
-            contentAddr += mArray->GetElementSize();
+            contentAddr += GetElementSize(currentObject);
         }
     }
     AddU4(arrayLengthVal);
     AddU4(num);
-    AddU4(obj->GetTypeInfo()->GetUUID());
+    AddU4(GetTypeInfo(currentObject)->GetUUID());
     AddObjectIdList(elements);
 }
 
@@ -608,9 +612,10 @@ void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
  *     u1 type;         // element type
  */
 
-void CjHeapData::WritePrimitiveArray(BaseObject*& obj, const u1 tag)
+void CjHeapData::WritePrimitiveArray(CurrentPtr currentObject, const u1 tag)
 {
-    MSize componentSize = obj->GetTypeInfo()->GetComponentSize();
+    BaseObject* obj = currentObject;
+    MSize componentSize = GetTypeInfo(currentObject)->GetComponentSize();
     if (componentSize == 0) {
         return;
     }
@@ -688,11 +693,12 @@ void CjHeapData::WriteClass(TypeInfo* klass, CjHeapDataStringId klassId, const u
  *     u4 num;           // number of ref fields
  *     VAL entry[];      // ref contents in instance field values (this class, followed by super class, etc)
  */
-void CjHeapData::WriteInstance(BaseObject*& obj, const u1 tag)
+void CjHeapData::WriteInstance(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     AddU1(tag);
     AddID(GetObjectId(obj));
-    AddU4(obj->GetTypeInfo()->GetUUID());
+    AddU4(GetTypeInfo(currentObject)->GetUUID());
     u4 num = 0;
     std::vector<BaseObject*> elements;
 
@@ -701,9 +707,9 @@ void CjHeapData::WriteInstance(BaseObject*& obj, const u1 tag)
         num++;
     };
 
-    TypeInfo* currentClass = obj->GetTypeInfo();
-    if (obj->HasRefField()) {
-        elements.reserve(obj->GetTypeInfo()->GetFieldNum());
+    TypeInfo* currentClass = GetTypeInfo(currentObject);
+    if (HasRefField(currentObject)) {
+        elements.reserve(currentClass->GetFieldNum());
         GCTib gcTib = currentClass->GetGCTib();
         MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
         gcTib.ForEachBitmapWord(objAddr, visitor);
