@@ -75,7 +75,7 @@ size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
     errno = 0;
     char* end = nullptr;
     unsigned long long parsed = std::strtoull(value, &end, 10);
-    if (value[0] == '-' || errno != 0 || end == value || *end != '\0' ||
+    if (std::strchr(value, '-') != nullptr || errno != 0 || end == value || *end != '\0' ||
         parsed > std::numeric_limits<size_t>::max()) {
         LOG(RTLOG_ERROR, "Unsupported %s=%s; using default %zu", name, value, defaultValue);
         return defaultValue;
