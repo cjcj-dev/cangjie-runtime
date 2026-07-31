@@ -14,9 +14,9 @@
 
 #include "Allocator/MemMap.h"
 #include "Allocator/RegionInfo.h"
-#include "Base/ImmortalWrapper.h"
 #include "Base/Log.h"
 #include "Base/Panic.h"
+#include "Common/BaseObject.h"
 #include "Heap/Heap.h"
 #include "Heap/StickyLog.h"
 #include "Mutator/MutatorManager.h"
@@ -26,8 +26,6 @@
 
 namespace MapleRuntime {
 namespace {
-ImmortalWrapper<RemsetCheck> g_remsetCheck;
-
 bool ReadRemsetCheckBoolean(const char* name, bool defaultValue)
 {
     const char* value = std::getenv(name);
@@ -69,7 +67,11 @@ const char* HookSiteName(RemsetCheck::HookSite site)
 }
 } // namespace
 
-RemsetCheck& RemsetCheck::Instance() noexcept { return *g_remsetCheck; }
+RemsetCheck& RemsetCheck::Instance() noexcept
+{
+    static RemsetCheck instance;
+    return instance;
+}
 
 void RemsetCheck::ConfigureFromEnvironment(bool forceSlowPath)
 {
