@@ -22,13 +22,14 @@ const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regio
 // Legal null (high-live / raw-pin survivor still at from, ghost=0) keeps returning obj.
 // Illegal null (D: old tag + ghost already dispelled + from cleared) fails loudly here.
 // See reports/REPORT-nullenum.md LEGAL_NULL_SET; reports/REPORT-tagaba.md F5.
-BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
+CurrentPtr Collector::FindLatestVersion(MaybeStalePtr maybeStale) const
 {
+    BaseObject* obj = maybeStale.pointer;
     if (obj == nullptr) {
-        return nullptr;
+        return CurrentPtr(nullptr);
     }
 
-    BaseObject* to = FindToVersion(obj);
+    CurrentPtr to = FindToVersion(maybeStale);
     if (to != nullptr) {
         return to;
     }
@@ -36,7 +37,7 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
                  "FindLatestVersion: no to-version for invalid from-object %p "
                  "(stale old-tag after ghost dispel; do not fall back to from)",
                  obj);
-    return obj;
+    return CurrentPtr(obj);
 }
 
 const char* Collector::GetGCPhaseName(GCPhase phase)
