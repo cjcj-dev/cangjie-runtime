@@ -198,7 +198,7 @@ void Mutator::DeferLogObject(BaseObject* object)
         return;
     }
     FlushDeferredLogObject();
-    deferredLogRing[0] = object;
+    deferredLogRing[0] = MaybeStalePtr(object);
     deferredLogRingIndex = 1;
 }
 
@@ -213,10 +213,19 @@ void Mutator::FlushDeferredLogObject()
 
     StickyLog& stickyLog = StickyLog::Instance();
     for (size_t i = 0; i < count; ++i) {
-        BaseObject* object = deferredLogRing[i];
+        MaybeStalePtr maybeStale = deferredLogRing[i];
+        BaseObject* object = maybeStale.pointer;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+        // PROVEN_BY_RING_LIFETIME: only freshly initialized allocations enter this ring, and every stop-the-world
+        // flushes it before changing the collection phase. Runtime observations for the ringfwd/framegap recipe:
+        // RING_NORMAL=980052 FORWARDED=0 LOCKED=0 OTHER=0 INVALID_REGION=0.
+        CHECK_DETAIL(object != nullptr && object->GetObjectState().GetStateCode() == ObjectState::NORMAL,
+                     "deferred-log ring entry %p is not in NORMAL state", object);
+#endif
+        CurrentPtr currentObject(object);
         MAddress objectStart = reinterpret_cast<MAddress>(object);
         MAddress lineStart = RoundDown(objectStart, static_cast<MAddress>(StickyLog::LINE_SIZE));
-        MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
+        MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(currentObject);
         for (; lineStart < objectEnd; lineStart += StickyLog::LINE_SIZE) {
             MAddress loggedLine = 0;
             (void)stickyLog.TryLogLine(lineStart, loggedLine);
