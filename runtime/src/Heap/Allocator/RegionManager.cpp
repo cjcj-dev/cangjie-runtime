@@ -464,7 +464,7 @@ void RegionManager::ReassembleFromSpace()
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    region->AddLiveByteCount(obj->GetSize());
+    region->AddLiveByteCount(GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj))));
 }
 
 void RegionManager::AssembleSmallGarbageCandidates()
@@ -868,8 +868,9 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     region->VisitAllObjects([this, region, start, &garbageSize](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
         if (!region->IsSurvivedObject(offset)) {
-            size_t objSize = object->GetSize();
-            DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
+            CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+            size_t objSize = GetSize(currentObject);
+            DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, GetTypeInfo(currentObject), objSize);
             garbageSize += objSize;
             std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
             InvalidateFixEdgeRange(reinterpret_cast<MAddress>(object), objSize);
@@ -1284,12 +1285,13 @@ void RegionManager::CompactRegion(RegionInfo* region)
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
-        size_t size = currentObj->GetSize();
+        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        size_t size = GetSize(currentObject);
         size_t offset = currentPtr - regionStart;
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, GetTypeInfo(currentObject), size, toObj);
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
         }
@@ -1330,14 +1332,15 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
-        size_t size = currentObj->GetSize();
+        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        size_t size = GetSize(currentObject);
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
             if (toAddress == 0) {
                 break;
             }
             BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, GetTypeInfo(currentObject), size, toObj);
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
@@ -1352,11 +1355,12 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         CHECK(currentPtr >= regionStart);
         size_t offset = currentPtr - regionStart;
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
-        size_t size = currentObj->GetSize();
+        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        size_t size = GetSize(currentObject);
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, GetTypeInfo(currentObject), size, toObj);
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
