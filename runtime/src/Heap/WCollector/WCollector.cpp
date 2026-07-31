@@ -1322,6 +1322,7 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                     ++targetsSkippedInvalidHeader;
                     return;
                 }
+                TypeInfo* targetTypeInfo = target->GetTypeInfo();
                 ++edgesToYoung;
                 MAddress holderLine = reinterpret_cast<MAddress>(holder) & ~(StickyLog::LINE_SIZE - 1);
                 MAddress slot = reinterpret_cast<MAddress>(&field);
@@ -1393,6 +1394,19 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                         for (size_t i = 0; i < sizeof(censusWitnessTypes) / sizeof(censusWitnessTypes[0]); ++i) {
                             if (std::strstr(holderTypeName, censusWitnessTypes[i]) != nullptr) {
                                 ++censusWitnessCounts[i];
+                                VLOG(REPORT,
+                                     "[EDGEDECOMP-CENSUS-WITNESS-EDGE] run=%zu holderType=%s holder=%#zx "
+                                     "holderRegion=%u slotOff=%zu slot=%#zx targetTypeInfo=%p target=%p "
+                                     "targetRegion=%u rawPin=%u retainedState=%u snapshotValid=%u "
+                                     "coveredUpTo=%#zx censusSurvived=0 actuallyDead=undetermined "
+                                     "rootSource=unavailable",
+                                     run, holderTypeName, holderAddress,
+                                     static_cast<unsigned>(holderRegion->GetRegionType()), slot - holderAddress,
+                                     slot, targetTypeInfo, target,
+                                     static_cast<unsigned>(targetRegion->GetRegionType()),
+                                     static_cast<unsigned>(rawPin), static_cast<unsigned>(retainedState),
+                                     static_cast<unsigned>(snapshotValid), coveredUpTo);
+                                break;
                             }
                         }
                     } else if (!regionPending) {
@@ -1410,6 +1424,16 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                         ++e2Shapes[holderType][targetType];
                         rawPinUncovered += static_cast<size_t>(rawPin);
                     }
+                }
+                if (bucket == std::strstr(bucket, "E1_") || bucket == std::strstr(bucket, "E2_")) {
+                    VLOG(REPORT,
+                         "[EDGEDECOMP-E-EDGE] run=%zu bucket=%s holderType=%s holder=%#zx holderRegion=%u "
+                         "slotOff=%zu slot=%#zx targetTypeInfo=%p target=%p targetRegion=%u targetRegionInfo=%p "
+                         "targetIdentity=%llu actuallyDead=undetermined rootSource=unavailable",
+                         run, bucket, holder->GetTypeInfo()->GetName(), holderAddress,
+                         static_cast<unsigned>(holderRegion->GetRegionType()), slot - holderAddress, slot,
+                         targetTypeInfo, target, static_cast<unsigned>(targetRegion->GetRegionType()),
+                         targetRegion, static_cast<unsigned long long>(targetRegion->GetIdentityEpoch()));
                 }
                 bool isDroppedEdge = stickyLog.IsEdgeCompleteDroppedEdge(slot, target);
                 bool isFakeMissEdge = stickyLog.IsEdgeCompleteFakeMissEdge(slot, target);
