@@ -103,6 +103,21 @@ const char* StickyLogExitName(RemsetCheck::StickyLogExit exit)
     }
     return "unknown";
 }
+
+const char* DirtyLinePathName(RemsetCheck::DirtyLinePath path)
+{
+    switch (path) {
+        case RemsetCheck::DirtyLinePath::NONE:
+            return "none";
+        case RemsetCheck::DirtyLinePath::RETAIN2_SKIP:
+            return "retain2-skip";
+        case RemsetCheck::DirtyLinePath::VISITED:
+            return "visited";
+        case RemsetCheck::DirtyLinePath::BYTE0_CONTINUE:
+            return "byte0-continue";
+    }
+    return "unknown";
+}
 } // namespace
 
 RemsetCheck& RemsetCheck::Instance() noexcept
@@ -681,6 +696,53 @@ void RemsetCheck::RecordRetain2SkippedLine(MAddress lineStart)
     retain2SkippedLines.insert(lineStart);
 }
 
+void RemsetCheck::RecordBufferLineResult(MAddress lineStart, bool retained)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "buffer line result requires stopped mutators");
+    CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
+    if (retained) {
+        bufferRetainedWriteRuns[lineStart] = visitedRoundRun;
+    } else {
+        bufferRetainedWriteRuns.erase(lineStart);
+    }
+}
+
+void RemsetCheck::RecordDirtyRegionEntry(MAddress regionStart, bool accepted)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "dirty region recording requires stopped mutators");
+    auto regionLines = visitedRoundRegionLines.find(regionStart);
+    if (regionLines == visitedRoundRegionLines.end()) {
+        return;
+    }
+    for (MAddress line : regionLines->second) {
+        auto trace = visitedRoundLineTraces.find(line);
+        CHECK(trace != visitedRoundLineTraces.end());
+        trace->second.dirtyRegionConsidered = true;
+        trace->second.regionFiltered = !accepted;
+    }
+}
+
+void RemsetCheck::RecordDirtyLinePath(MAddress lineStart, DirtyLinePath path)
+{
+    if (LIKELY(!enabled) || !visitedRoundActive) {
+        return;
+    }
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "dirty line path recording requires stopped mutators");
+    CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
+    CHECK(path != DirtyLinePath::NONE);
+    bufferRetainedWriteRuns.erase(lineStart);
+    auto trace = visitedRoundLineTraces.find(lineStart);
+    if (trace != visitedRoundLineTraces.end()) {
+        trace->second.dirtyLinePath = path;
+    }
+}
+
 void RemsetCheck::CheckVisitedRound(size_t run)
 {
     if (LIKELY(!enabled) || !visitedRoundActive) {
@@ -741,19 +803,93 @@ void RemsetCheck::CheckVisitedRound(size_t run)
     }
 
     size_t missingNewThisRound = 0;
+    size_t retain2SkipMissingThisRound = 0;
+    size_t notInDirtyLoopMissingThisRound = 0;
+    size_t regionFilteredMissingThisRound = 0;
+    size_t otherPathMissingThisRound = 0;
+    size_t missingByteAtRoundStartThisRound[3]{};
+    size_t missingDirtyAtRoundStartThisRound[2]{};
+    size_t missingInBufferThisRound = 0;
+    size_t missingByte2WrittenByPreviousRoundThisRound = 0;
     for (const Edge& edge : visitedRoundCandidates) {
         if (checkerVisited(edge, 0)) {
             continue;
         }
         ++missingNewThisRound;
         MAddress line = edge.holder & ~(StickyLog::LINE_SIZE - 1);
+        auto trace = visitedRoundLineTraces.find(line);
+        CHECK(trace != visitedRoundLineTraces.end());
+        CHECK(trace->second.byteAtRoundStart <= 2);
+        ++missingByteAtRoundStartThisRound[trace->second.byteAtRoundStart];
+        ++missingByteAtRoundStart[trace->second.byteAtRoundStart];
+        size_t dirtyIndex = trace->second.dirtyAtRoundStart ? 1 : 0;
+        ++missingDirtyAtRoundStartThisRound[dirtyIndex];
+        ++missingDirtyAtRoundStart[dirtyIndex];
+        if (trace->second.inBuffer) {
+            ++missingInBufferThisRound;
+            ++missingInBuffer;
+        }
+        if (trace->second.byte2WrittenByPreviousRound) {
+            ++missingByte2WrittenByPreviousRoundThisRound;
+            ++missingByte2WrittenByPreviousRound;
+        }
+        const char* pathBucket = "other";
+        if (trace->second.dirtyLinePath == DirtyLinePath::RETAIN2_SKIP) {
+            pathBucket = "retain2-skip";
+            ++retain2SkipMissingThisRound;
+            ++retain2SkipMissing;
+        } else if (!trace->second.dirtyRegionConsidered) {
+            pathBucket = "not-in-dirty-loop";
+            ++notInDirtyLoopMissingThisRound;
+            ++notInDirtyLoopMissing;
+        } else if (trace->second.regionFiltered) {
+            pathBucket = "region-filtered";
+            ++regionFilteredMissingThisRound;
+            ++regionFilteredMissing;
+        } else {
+            ++otherPathMissingThisRound;
+            ++otherPathMissing;
+        }
         bool skippedByRetain2 = retain2SkippedLines.find(line) != retain2SkippedLines.end();
         VLOG(REPORT,
              "[VISITORHOOK-MISS] run=%zu reason=unvisited holder=%p slot=%p target=%p line=%p "
-             "skippedByRetain2=%u site=%s",
+             "skippedByRetain2=%u site=%s byteAtRoundStart=%u dirtyAtRoundStart=%u "
+             "dirtyRegionConsidered=%u regionFiltered=%u dirtyLinePath=%s pathBucket=%s inBuffer=%u "
+             "byte2WrittenByPreviousRound=%u",
              run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
              reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line),
-             static_cast<unsigned>(skippedByRetain2), HookSiteName(edge.site));
+             static_cast<unsigned>(skippedByRetain2), HookSiteName(edge.site),
+             static_cast<unsigned>(trace->second.byteAtRoundStart),
+             static_cast<unsigned>(trace->second.dirtyAtRoundStart),
+             static_cast<unsigned>(trace->second.dirtyRegionConsidered),
+             static_cast<unsigned>(trace->second.regionFiltered), DirtyLinePathName(trace->second.dirtyLinePath),
+             pathBucket, static_cast<unsigned>(trace->second.inBuffer),
+             static_cast<unsigned>(trace->second.byte2WrittenByPreviousRound));
+    }
+    if (retain2SkipControlActive) {
+        bool skipped = retain2SkippedLines.find(retain2SkipControlLine) != retain2SkippedLines.end();
+        bool lineVisited = visitedLines.find(retain2SkipControlLine) != visitedLines.end();
+        bool edgeMissing = false;
+        for (const Edge& edge : visitedRoundCandidates) {
+            if (edge.slot == retain2SkipControlSlot && !visited(edge)) {
+                edgeMissing = true;
+                break;
+            }
+        }
+        uint8_t byteAfterScan = ExchangeLoggedByte(retain2SkipControlLine, retain2SkipControlPreviousByte);
+        retain2SkipControlCaught = skipped && !lineVisited && edgeMissing;
+        VLOG(REPORT,
+             "[RETAIN2SKIP-POSCTRL] run=%zu fires=%u line=%p slot=%p retain2Skip=%u unvisited=%u missing=%u "
+             "byteAfterScan=%u restoredByte=%u",
+             run, static_cast<unsigned>(retain2SkipControlCaught),
+             reinterpret_cast<void*>(retain2SkipControlLine), reinterpret_cast<void*>(retain2SkipControlSlot),
+             static_cast<unsigned>(skipped), static_cast<unsigned>(!lineVisited),
+             static_cast<unsigned>(edgeMissing), static_cast<unsigned>(byteAfterScan),
+             static_cast<unsigned>(retain2SkipControlPreviousByte));
+        retain2SkipControlLine = 0;
+        retain2SkipControlSlot = 0;
+        retain2SkipControlPreviousByte = 0;
+        retain2SkipControlActive = false;
     }
     missingNewPredicate += missingNewThisRound;
     long long delta = static_cast<long long>(visitedRoundOldMissing) - static_cast<long long>(missingNewThisRound);
@@ -765,11 +901,22 @@ void RemsetCheck::CheckVisitedRound(size_t run)
          visitedRoundLineHits[static_cast<size_t>(VisitorHookSite::BUFFER)],
          visitedRoundLineHits[static_cast<size_t>(VisitorHookSite::DIRTY_REGION)], visitedLines.size(),
          retain2SkippedThisRound, retain2SkippedLines.size());
+    VLOG(REPORT,
+         "[RETAIN2SKIP] run=%zu missing=%zu retain2Skip=%zu notInDirtyLoop=%zu regionFiltered=%zu other=%zu "
+         "byteAtRoundStart0=%zu byteAtRoundStart1=%zu byteAtRoundStart2=%zu dirtyBit0=%zu dirtyBit1=%zu "
+         "inBuffer=%zu byte2WrittenByPreviousRound=%zu",
+         run, missingNewThisRound, retain2SkipMissingThisRound, notInDirtyLoopMissingThisRound,
+         regionFilteredMissingThisRound, otherPathMissingThisRound, missingByteAtRoundStartThisRound[0],
+         missingByteAtRoundStartThisRound[1], missingByteAtRoundStartThisRound[2],
+         missingDirtyAtRoundStartThisRound[0], missingDirtyAtRoundStartThisRound[1], missingInBufferThisRound,
+         missingByte2WrittenByPreviousRoundThisRound);
 
     visitedRoundActive = false;
     visitedRoundCandidates.clear();
     visitedLines.clear();
     retain2SkippedLines.clear();
+    visitedRoundLineTraces.clear();
+    visitedRoundRegionLines.clear();
 }
 
 void RemsetCheck::Fini()
@@ -859,6 +1006,15 @@ void RemsetCheck::Fini()
              visitedLineHits[static_cast<size_t>(VisitorHookSite::DIRTY_REGION)], retain2Skipped,
              static_cast<unsigned>(falseUnvisitedControlCaught),
              static_cast<unsigned>(trueUnvisitedControlCaught));
+        VLOG(REPORT,
+             "[RETAIN2SKIP-FINAL] missing=%zu retain2Skip=%zu notInDirtyLoop=%zu regionFiltered=%zu other=%zu "
+             "byteAtRoundStart0=%zu byteAtRoundStart1=%zu byteAtRoundStart2=%zu dirtyBit0=%zu dirtyBit1=%zu "
+             "inBuffer=%zu byte2WrittenByPreviousRound=%zu posctrlFires=%u",
+             missingNewPredicate, retain2SkipMissing, notInDirtyLoopMissing, regionFilteredMissing,
+             otherPathMissing, missingByteAtRoundStart[0], missingByteAtRoundStart[1],
+             missingByteAtRoundStart[2], missingDirtyAtRoundStart[0], missingDirtyAtRoundStart[1],
+             missingInBuffer, missingByte2WrittenByPreviousRound,
+             static_cast<unsigned>(retain2SkipControlCaught));
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges.clear();
