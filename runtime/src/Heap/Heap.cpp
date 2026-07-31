@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap.h"
+#include "GCDebugConfig.h"
 #include "StickyLog.h"
 
 #include "Collector/CollectorProxy.h"
@@ -200,10 +201,12 @@ void HeapImpl::Init(const HeapParam& param)
         }
     }
     collectorResources.Init();
+    GCDebugConfig::ConfigureFromEnvironment();
 }
 
 void HeapImpl::Fini()
 {
+    GCDebugConfig::DisableStress();
     collectorResources.Fini();
     collectorProxy.Fini();
     if (theSpace != nullptr) {
