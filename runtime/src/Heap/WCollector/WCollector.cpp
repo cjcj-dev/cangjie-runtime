@@ -16,6 +16,7 @@
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
+#include "Heap/RemsetCheck.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "securec.h"
 
@@ -1332,6 +1333,7 @@ void WCollector::DoYoungGarbageCollection()
         PushYoungObject(object, workStack);
     }
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
+    RemsetCheck::Instance().CheckRound(minorTotalRuns + 1, stats.candidateRegions);
     RescanRememberedSet(workStack);
     TraceYoungClosure(workStack);
 
