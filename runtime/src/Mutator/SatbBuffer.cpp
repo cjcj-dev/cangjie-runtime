@@ -7,6 +7,7 @@
 
 #include "SatbBuffer.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Mutator/MutatorManager.h"
 
 #include "Base/ImmortalWrapper.h"
 
@@ -89,6 +90,18 @@ void SatbBuffer::VisitStickyLogLines(const std::function<void(MAddress)>& visito
         head = head->next;
         oldHead->Clear();
         freeNodes.Push(oldHead);
+    }
+}
+
+void SatbBuffer::SnapshotStickyLogLines(std::vector<MAddress>& lines)
+{
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(),
+               "sticky log buffer snapshot requires stopped mutators");
+    std::lock_guard<std::mutex> lg(stickyRetiredNodes.safeLock);
+    for (Node* node = stickyRetiredNodes.head; node != nullptr; node = node->next) {
+        for (size_t i = node->index; i < Node::CONTAINER_CAPACITY; ++i) {
+            lines.push_back(reinterpret_cast<MAddress>(node->objectContainer[i]));
+        }
     }
 }
 

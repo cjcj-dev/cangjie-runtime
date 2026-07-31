@@ -8,6 +8,8 @@
 #ifndef MRT_SATB_BUFFER_H
 #define MRT_SATB_BUFFER_H
 
+#include <vector>
+
 #include "Base/Panic.h"
 #include "Common/PagePool.h"
 #include "Common/MarkWorkStack.h"
@@ -238,6 +240,7 @@ public:
     void FlushStickyLogQueue(Node*& node);
     void DiscardStickyLogBuffer();
     void VisitStickyLogLines(const std::function<void(MAddress)>& visitor);
+    void SnapshotStickyLogLines(std::vector<MAddress>& lines);
 
     // must not have thread racing
     void Init()
