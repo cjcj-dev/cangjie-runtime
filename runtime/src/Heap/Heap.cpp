@@ -26,6 +26,9 @@
 #if defined(__APPLE__)
 #include <mach/mach.h>
 #endif
+
+#pragma GCC poison UnsafeAssumeCurrent
+
 namespace MapleRuntime {
 Barrier** Heap::currentBarrierPtr = nullptr;
 Barrier* Heap::stwBarrierPtr = nullptr;
