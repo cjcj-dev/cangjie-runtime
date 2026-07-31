@@ -12,7 +12,7 @@
 #include <cstdint>
 
 namespace MapleRuntime {
-class GCDebugConfig {
+class __attribute__((visibility("hidden"))) GCDebugConfig {
 public:
     static constexpr uint8_t CLOBBER_PATTERN = 0xA5;
 
