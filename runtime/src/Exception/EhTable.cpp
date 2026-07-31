@@ -194,7 +194,8 @@ uint8_t EHTable::MatchActionTable(uint64_t actionEntryIdx, const ExceptionRef& e
                     break;
             }
             // Nullptr means matched all exception.
-            if (catchType == nullptr || exceptionRef->IsSubType(*(reinterpret_cast<TypeInfo*>(catchType)))) {
+            if (catchType == nullptr ||
+                IsSubType(UnsafeAssumeCurrent(exceptionRef), *(reinterpret_cast<TypeInfo*>(catchType)))) {
                 // Found a matching handler and return exception type index
                 return static_cast<uint8_t>(typeIndex);
             }
