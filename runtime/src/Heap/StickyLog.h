@@ -7,6 +7,7 @@
 #ifndef MRT_STICKY_LOG_H
 #define MRT_STICKY_LOG_H
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 
@@ -39,6 +40,7 @@ public:
     bool IsMinorEnabled() const { return minorEnabled; }
     bool IsMinorValidatorEnabled() const { return minorValidatorEnabled; }
     bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
+    bool IsEdgeCompleteEnabled() const { return edgeCompleteEnabled; }
     size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
     uint32_t GetMajorInterval() const { return majorInterval; }
     // Region promotion age: a young region with live bytes ages until
@@ -51,11 +53,33 @@ public:
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
 
+    bool ShouldDropEdgeCompleteStore(BaseObject* holder, MAddress slot, BaseObject* target);
+    bool IsEdgeCompleteDroppedEdge(MAddress slot, BaseObject* target) const;
+    void MarkEdgeCompleteDropCaught();
+    bool RepairEdgeCompleteDroppedLine();
+    void RecordEdgeCompleteRun(size_t oldObjects, size_t refFields, size_t edgesToYoung, size_t inRemset,
+                               size_t missing);
+    size_t GetEdgeCompleteDropN() const { return edgeCompleteDropN; }
+    size_t GetEdgeCompleteEligibleStoreCount() const
+    {
+        return edgeCompleteEligibleStores.load(std::memory_order_acquire);
+    }
+    bool HasEdgeCompleteDroppedStore() const
+    {
+        return edgeCompleteDroppedSlot.load(std::memory_order_acquire) != 0;
+    }
+    bool WasEdgeCompleteDropCaught() const
+    {
+        return edgeCompleteDropCaught.load(std::memory_order_acquire);
+    }
+
     using LoggedLineVisitor = std::function<bool(MAddress lineStart, MAddress lineEnd)>;
     // TODO: the minor collector will consume logged lines through this interface and rescan objects in each line.
     void RescanLoggedLines(const LoggedLineVisitor& visitor);
 
 private:
+    bool IsEdgeCompleteDroppedLine(MAddress address) const;
+
     MemMap* loggedMap = nullptr;
     MemMap* dirtyRegionMap = nullptr;
     MAddress heapStart = 0;
@@ -66,9 +90,23 @@ private:
     bool minorEnabled = false;
     bool minorValidatorEnabled = false;
     bool forceSlowPathEnabled = false;
+    bool edgeCompleteEnabled = false;
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;
     uint8_t promoteAge = 1;
+    size_t edgeCompleteDropN = 0;
+    std::atomic<size_t> edgeCompleteEligibleStores{ 0 };
+    std::atomic<MAddress> edgeCompleteDroppedHolder{ 0 };
+    std::atomic<MAddress> edgeCompleteDroppedSlot{ 0 };
+    std::atomic<MAddress> edgeCompleteDroppedTarget{ 0 };
+    std::atomic<MAddress> edgeCompleteDroppedLine{ 0 };
+    std::atomic<bool> edgeCompleteDropCaught{ false };
+    size_t edgeCompleteRuns = 0;
+    size_t edgeCompleteOldObjects = 0;
+    size_t edgeCompleteRefFields = 0;
+    size_t edgeCompleteEdgesToYoung = 0;
+    size_t edgeCompleteInRemset = 0;
+    size_t edgeCompleteMissing = 0;
 };
 } // namespace MapleRuntime
 

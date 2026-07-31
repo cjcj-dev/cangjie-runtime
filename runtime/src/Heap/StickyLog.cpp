@@ -19,6 +19,7 @@
 #include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -120,6 +121,15 @@ void StickyLog::ConfigureMinorFromEnvironment()
     minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR", true);
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE", false);
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH", false);
+    edgeCompleteEnabled = ReadStickyBoolean("MRT_EDGECOMPLETE", false);
+    edgeCompleteDropN = edgeCompleteEnabled ? ReadStickyPositiveInteger("MRT_EDGECOMPLETE_DROP_N", 0) : 0;
+    if (edgeCompleteDropN != 0) {
+        forceSlowPathEnabled = true;
+        LOG(RTLOG_WARNING,
+            "MRT_EDGECOMPLETE_DROP_N=%zu enables the runtime write-barrier path for the edge-completeness "
+            "positive control",
+            edgeCompleteDropN);
+    }
     youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
     size_t configuredMajorInterval = ReadStickyPositiveInteger("MRT_STICKY_MINOR_MAJOR_INTERVAL", 8);
     majorInterval = static_cast<uint32_t>(std::min(configuredMajorInterval,
@@ -176,6 +186,18 @@ void StickyLog::Init(MAddress start, size_t size)
 
 void StickyLog::Fini() noexcept
 {
+    if (edgeCompleteEnabled) {
+        double pct = edgeCompleteEdgesToYoung == 0 ? 0.0 :
+            static_cast<double>(edgeCompleteMissing) * 100.0 / static_cast<double>(edgeCompleteEdgesToYoung);
+        VLOG(REPORT,
+             "[EDGECOMPLETE-FINAL] runs=%zu oldObjs=%zu refFields=%zu edgesToYoung=%zu inRemset=%zu "
+             "missing=%zu pct=%.6f posctrlN=%zu eligibleStores=%zu dropped=%u caught=%u",
+             edgeCompleteRuns, edgeCompleteOldObjects, edgeCompleteRefFields, edgeCompleteEdgesToYoung,
+             edgeCompleteInRemset, edgeCompleteMissing, pct, edgeCompleteDropN,
+             edgeCompleteEligibleStores.load(std::memory_order_acquire),
+             static_cast<unsigned>(edgeCompleteDroppedSlot.load(std::memory_order_acquire) != 0),
+             static_cast<unsigned>(edgeCompleteDropCaught.load(std::memory_order_acquire)));
+    }
     __cj_sticky_logged_base = nullptr;
     __cj_sticky_heap_base = 0;
     __cj_sticky_heap_size = 0;
@@ -189,10 +211,33 @@ void StickyLog::Fini() noexcept
     minorEnabled = false;
     minorValidatorEnabled = false;
     forceSlowPathEnabled = false;
+    edgeCompleteEnabled = false;
+    edgeCompleteDropN = 0;
+    edgeCompleteEligibleStores.store(0, std::memory_order_release);
+    edgeCompleteDroppedHolder.store(0, std::memory_order_release);
+    edgeCompleteDroppedSlot.store(0, std::memory_order_release);
+    edgeCompleteDroppedTarget.store(0, std::memory_order_release);
+    edgeCompleteDroppedLine.store(0, std::memory_order_release);
+    edgeCompleteDropCaught.store(false, std::memory_order_release);
+    edgeCompleteRuns = 0;
+    edgeCompleteOldObjects = 0;
+    edgeCompleteRefFields = 0;
+    edgeCompleteEdgesToYoung = 0;
+    edgeCompleteInRemset = 0;
+    edgeCompleteMissing = 0;
+}
+
+bool StickyLog::IsEdgeCompleteDroppedLine(MAddress address) const
+{
+    MAddress droppedLine = edgeCompleteDroppedLine.load(std::memory_order_acquire);
+    return droppedLine != 0 && (address & ~(LINE_SIZE - 1)) == droppedLine;
 }
 
 bool StickyLog::IsLoggedLine(MAddress address) const
 {
+    if (UNLIKELY(IsEdgeCompleteDroppedLine(address))) {
+        return false;
+    }
     if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {
         return false;
     }
@@ -202,6 +247,9 @@ bool StickyLog::IsLoggedLine(MAddress address) const
 
 bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
 {
+    if (UNLIKELY(IsEdgeCompleteDroppedLine(address))) {
+        return false;
+    }
     if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {
         return false;
     }
@@ -217,6 +265,71 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
     __atomic_fetch_or(dirtyByte, static_cast<uint8_t>(1U << (regionIndex % 8)), __ATOMIC_RELEASE);
     lineStart = heapStart + (lineIndex << LINE_SHIFT);
     return true;
+}
+
+bool StickyLog::ShouldDropEdgeCompleteStore(BaseObject* holder, MAddress slot, BaseObject* target)
+{
+    if (LIKELY(edgeCompleteDropN == 0) || holder == nullptr || !Heap::IsHeapAddress(holder) ||
+        !Heap::IsHeapAddress(target)) {
+        return false;
+    }
+    RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (holderRegion->IsYoungRegion() || !targetRegion->IsYoungRegion() ||
+        IsLoggedLine(reinterpret_cast<MAddress>(holder))) {
+        return false;
+    }
+    size_t store = edgeCompleteEligibleStores.fetch_add(1, std::memory_order_acq_rel) + 1;
+    if (store != edgeCompleteDropN) {
+        return false;
+    }
+    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
+    MAddress targetAddress = reinterpret_cast<MAddress>(target);
+    MAddress holderLine = holderAddress & ~(LINE_SIZE - 1);
+    edgeCompleteDroppedHolder.store(holderAddress, std::memory_order_release);
+    edgeCompleteDroppedSlot.store(slot, std::memory_order_release);
+    edgeCompleteDroppedTarget.store(targetAddress, std::memory_order_release);
+    edgeCompleteDroppedLine.store(holderLine, std::memory_order_release);
+    size_t lineIndex = (holderLine - heapStart) >> LINE_SHIFT;
+    __atomic_store_n(__cj_sticky_logged_base + lineIndex, 0, __ATOMIC_RELEASE);
+    VLOG(REPORT,
+         "[EDGECOMPLETE-POSCTRL-DROP] n=%zu holder=%p slot=%#zx target=%p holderRegion=%u targetRegion=%u",
+         store, holder, slot, target, static_cast<unsigned>(holderRegion->GetRegionType()),
+         static_cast<unsigned>(targetRegion->GetRegionType()));
+    return true;
+}
+
+bool StickyLog::IsEdgeCompleteDroppedEdge(MAddress slot, BaseObject* target) const
+{
+    return slot == edgeCompleteDroppedSlot.load(std::memory_order_acquire) &&
+        reinterpret_cast<MAddress>(target) == edgeCompleteDroppedTarget.load(std::memory_order_acquire);
+}
+
+void StickyLog::MarkEdgeCompleteDropCaught()
+{
+    edgeCompleteDropCaught.store(true, std::memory_order_release);
+}
+
+bool StickyLog::RepairEdgeCompleteDroppedLine()
+{
+    MAddress droppedLine = edgeCompleteDroppedLine.exchange(0, std::memory_order_acq_rel);
+    if (droppedLine == 0) {
+        return false;
+    }
+    MAddress lineStart = 0;
+    (void)TryLogLine(droppedLine, lineStart);
+    return true;
+}
+
+void StickyLog::RecordEdgeCompleteRun(size_t oldObjects, size_t refFields, size_t edgesToYoung, size_t inRemset,
+                                      size_t missing)
+{
+    ++edgeCompleteRuns;
+    edgeCompleteOldObjects += oldObjects;
+    edgeCompleteRefFields += refFields;
+    edgeCompleteEdgesToYoung += edgesToYoung;
+    edgeCompleteInRemset += inRemset;
+    edgeCompleteMissing += missing;
 }
 
 void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
