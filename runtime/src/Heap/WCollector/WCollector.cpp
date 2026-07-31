@@ -1285,6 +1285,7 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
     bool fakeMissCaughtThisRun = false;
 
     for (uintptr_t regionAddress = manager.GetRegionHeapStart(); regionAddress < manager.GetInactiveZone();) {
+        MAddress holderRegionAddress = regionAddress;
         RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(regionAddress);
         regionAddress = holderRegion->GetRegionEnd();
         ++regionsSeen;
@@ -1418,9 +1419,6 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                         size_t targetType = static_cast<size_t>(targetRegion->GetRegionType());
                         ++e1Shapes[holderType][targetType];
                         rawPinUncovered += static_cast<size_t>(rawPin);
-                        MAddress holderRegionAddress = __cj_sticky_heap_base +
-                            ((holderAddress - __cj_sticky_heap_base) / RegionInfo::UNIT_SIZE) *
-                                RegionInfo::UNIT_SIZE;
                         uint8_t loggedByte = stickyLog.GetLoggedByte(holderAddress);
                         bool dirtyBit = stickyLog.IsDirtyRegion(holderAddress);
                         VLOG(REPORT,

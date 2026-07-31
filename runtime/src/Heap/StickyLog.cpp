@@ -265,7 +265,11 @@ bool StickyLog::IsDirtyRegion(MAddress address) const
     if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || dirtyRegionMap == nullptr)) {
         return false;
     }
-    size_t regionIndex = (address - heapStart) / RegionInfo::UNIT_SIZE;
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+    if (region == nullptr) {
+        return false;
+    }
+    size_t regionIndex = (region->GetRegionStart() - heapStart) / RegionInfo::UNIT_SIZE;
     uint8_t* dirtyByte = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr()) + regionIndex / 8;
     uint8_t mask = static_cast<uint8_t>(1U << (regionIndex % 8));
     return (__atomic_load_n(dirtyByte, __ATOMIC_ACQUIRE) & mask) != 0;
