@@ -33,7 +33,7 @@ static constexpr int64_t INVALID_THREAD_ID = -1LL;
 
 void ReleaseNativeResource(BaseObject* obj)
 {
-    TypeInfo* typeInfo = obj->GetTypeInfo();
+    TypeInfo* typeInfo = GetTypeInfo(UnsafeAssumeCurrent(obj));
     // Future is a template, so only the first 24 characters are compared
     if (typeInfo->IsFutureClass()) {
         int waitQueue = reinterpret_cast<CJFuture*>(obj)->isWaitQueueInit;
