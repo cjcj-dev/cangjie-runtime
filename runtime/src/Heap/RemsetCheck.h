@@ -132,7 +132,9 @@ private:
     std::unordered_set<MAddress> visitedLines;
     std::unordered_set<MAddress> retain2SkippedLines;
     size_t visitedLineHits[VISITOR_HOOK_SITE_COUNT]{};
+    size_t visitedRoundLineHits[VISITOR_HOOK_SITE_COUNT]{};
     size_t retain2Skipped = 0;
+    size_t retain2SkippedThisRound = 0;
     size_t includedRuns = 0;
     size_t youngZeroExcluded = 0;
     size_t edgesFromBarrier = 0;
