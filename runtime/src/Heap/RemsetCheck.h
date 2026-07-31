@@ -112,7 +112,7 @@ public:
         LogLineSource logLineSource;
     };
 
-    static constexpr size_t CLEAR_WHEN_EVENT_RING_CAPACITY = 262144;
+    static constexpr size_t CLEAR_WHEN_EVENT_RING_CAPACITY = 2097152;
 
     static RemsetCheck& Instance() noexcept;
 
