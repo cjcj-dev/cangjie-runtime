@@ -318,11 +318,14 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
+    void InvalidateFixEdgeRange(MAddress start, size_t size);
+
     size_t CollectRegion(RegionInfo* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
 
+        InvalidateFixEdgeRange(region->GetRegionStart(), region->GetRegionSize());
         region->LockWriteRegion();
         // GARBAGE invalidates the snapshot domain only. OHOS advances identity later in
         // InitFreeUnits; non-OHOS keeps the installed route valid until actual reclaim.

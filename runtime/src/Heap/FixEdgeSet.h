@@ -11,6 +11,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <map>
 #include <mutex>
 #include <vector>
 
@@ -20,29 +21,35 @@
 namespace MapleRuntime {
 class BaseObject;
 
-// R1 edge fix-set (REPORT-holderidx I5 + P-G): concurrent bag of ref-field slot
-// absolute addresses produced at store (and optional Trace) time; consumed only
-// by BulkForwardHolderRefs under STW. Key = edge (field slot), not line/region/obj.
+// R1 edge fix-set (REPORT-holderidx I5 + P-G): concurrent index of ref-field
+// offsets grouped by their holder identity. Heap slots are never retained as
+// bare addresses: copy/reclaim paths relocate or invalidate the holder carrier.
 //
-// Lifetime: entry established on runtime heap-ref store (or Trace plain→from);
-// invalidated by Clear() at end of BulkForward (same major, after ForwardFromSpace).
-// No cross-major retention. Mutator Add vs STW Visit/Clear: STW excludes mutators.
+// Lifetime: entry established on runtime heap-ref store (or Trace plain→from),
+// relocated or invalidated with its holder, then cleared at the end of the same
+// major's BulkForward. Add/copy/reclaim are mutex-serialized; VisitAndClear is STW.
 class FixEdgeSet {
 public:
     static FixEdgeSet& Instance() noexcept;
 
-    // Register a heap ref slot that was just written (or Trace-observed).
-    // slotAddr = absolute address of RefField<> storage (edge key).
+    // Register a process-lifetime slot without a heap holder (static roots).
     void Add(MAddress slotAddr);
 
     // Register when newRef is already From/GhostFrom (I5), or — when GC phase is
     // active (phase > INIT, slow-path barriers only) — any cross-region heap ref
     // store (E6 (i)-narrow). Idle does not widen. holder may be null (static root).
-    // Skips stores into from/ghost holders (slot would evacuate).
+    // Skips stores into holders that are already from/ghost; carriers registered
+    // earlier are relocated by CopyObject when their holder evacuates.
     void MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newRef);
 
-    // STW-only: visit each registered slot once (best-effort unique via sort+unique).
-    using SlotVisitor = std::function<void(RefField<>& field)>;
+    // Collector copy/reclaim hooks. RelocateHolder rebases all indexed field offsets
+    // and removes carriers overwritten by the destination range. InvalidateRange
+    // closes the carrier lifetime before storage is reclaimed or reused.
+    void RelocateHolder(MAddress from, MAddress to, size_t size);
+    void InvalidateRange(MAddress start, size_t size);
+
+    // STW-only: visit each registered slot once (unique within each holder).
+    using SlotVisitor = std::function<void(BaseObject* holder, RefField<>& field)>;
     void VisitAndClear(const SlotVisitor& visitor);
 
     size_t SizeApprox() const { return count.load(std::memory_order_relaxed); }
@@ -76,19 +83,29 @@ public:
     size_t FromTargetRegistered() const { return fromTargetRegistered.load(std::memory_order_relaxed); }
 
 private:
+    struct HolderEntry {
+        size_t holderSize;
+        uint64_t regionIdentityEpoch;
+        std::vector<size_t> fieldOffsets;
+        MAddress relocationSource{ 0 };
+    };
+
     FixEdgeSet() = default;
     ~FixEdgeSet() = default;
     FixEdgeSet(const FixEdgeSet&) = delete;
     FixEdgeSet& operator=(const FixEdgeSet&) = delete;
 
-    void FlushLocked();
-
-    static constexpr size_t LOCAL_CAP = 256;
+    void AddHolder(MAddress holder, size_t holderSize, size_t fieldOffset, uint64_t regionIdentityEpoch);
+    size_t InvalidateRangeLocked(MAddress start, size_t size);
 
     std::mutex mutex;
-    std::vector<MAddress> slots;
+    std::map<MAddress, HolderEntry> holders;
+    std::vector<MAddress> staticSlots;
     std::atomic<size_t> count{ 0 };
+    std::atomic<size_t> heapSlotCount{ 0 };
     std::atomic<size_t> e9GateSkipCount{ 0 };
+    // Carrier rebasing makes NO_FACT structurally zero. Keep the field only for
+    // log-schema continuity; escaped-carrier fail-stop is the missing-hook guard.
     std::atomic<size_t> copyDstFactCount{ 0 };
     std::atomic<size_t> copyDstNoFactCount{ 0 };
     std::atomic<size_t> copyDstStaleTargetCount{ 0 };
@@ -98,6 +115,8 @@ private:
     std::atomic<size_t> copyDstConstPoolDomainStaleTargetCount{ 0 };
     std::atomic<size_t> crossRegionRegistered{ 0 };
     std::atomic<size_t> fromTargetRegistered{ 0 };
+    std::atomic<size_t> relocatedSlots{ 0 };
+    std::atomic<size_t> invalidatedSlots{ 0 };
 };
 } // namespace MapleRuntime
 

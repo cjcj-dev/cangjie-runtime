@@ -129,6 +129,17 @@ struct RegionBitmap {
         return ret;
     }
 
+    // Positive control for the minor-evacuation bitmap completeness guard.
+    // Deliberately leave cached liveBytes unchanged so the guard must compare
+    // the actual bitmap words rather than trusting the producer's counter.
+    bool ClearObjectStartForPositiveControl(size_t start)
+    {
+        size_t wordIndex = (start / kMarkedBytesPerBit) / kBitsPerWord;
+        size_t bitIndex = (start / kMarkedBytesPerBit) % kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << bitIndex;
+        return (markWords[wordIndex].fetch_and(~mask, std::memory_order_acq_rel) & mask) != 0;
+    }
+
     struct PreMaskInfo {
         int8_t partIndex;
         uint64_t mask;

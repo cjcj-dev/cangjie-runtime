@@ -225,11 +225,14 @@ private:
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
-    void RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding);
+    void RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
+                             const MinorRegionSet* evacuatedRegions = nullptr);
     void PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const;
-    bool FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding) const;
-    void FixMinorRootSlots(const MinorForwardTable& forwarding);
-    void FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding);
+    bool FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding,
+                               const MinorRegionSet& evacuatedRegions) const;
+    void FixMinorRootSlots(const MinorForwardTable& forwarding, const MinorRegionSet& evacuatedRegions);
+    void FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding,
+                             const MinorRegionSet& evacuatedRegions);
     void EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::vector<RegionInfo*>& toRegions);
     void ValidateYoungMarking();
     void DoYoungGarbageCollection();
