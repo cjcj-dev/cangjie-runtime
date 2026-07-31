@@ -280,7 +280,7 @@ public:
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
     virtual void TraceObjectRefFields(CurrentPtr obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) { std::abort(); }
+    virtual CurrentPtr GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) { std::abort(); }
     void ForEachStrongRefSlot(CurrentPtr obj, const ClassifiedRefSlotVisitor& visitor);
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
