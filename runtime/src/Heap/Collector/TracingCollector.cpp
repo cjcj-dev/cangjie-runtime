@@ -543,7 +543,7 @@ void TracingCollector::FindUselessExternObjects()
             if (IsMarkedObject(*listIt)) {
                 listIt = ls.erase(listIt);
             } else {
-                MarkObject(*listIt);
+                MarkObject(UnsafeAssumeCurrent(*listIt));
                 listIt++;
             }
         }
@@ -692,12 +692,13 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
             continue;
         }
 
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
         ++resurrectdObjects;
-        ResurrectObject(obj, offset, regionInfo);
+        ResurrectObject(currentObject, offset, regionInfo);
 
         // try to copy object child refs into work stack.
-        if (obj->HasRefField()) {
-            TraceObjectRefFields(obj, workStack);
+        if (HasRefField(currentObject)) {
+            TraceObjectRefFields(currentObject, workStack);
         }
     }
     markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
@@ -742,7 +743,7 @@ void TracingCollector::DumpHeap(const CString& tag)
     // dump roots
     DumpRoots(FRAGMENT);
     // dump object contents
-    auto dumpVisitor = [](BaseObject* obj) { obj->DumpObject(FRAGMENT); };
+    auto dumpVisitor = [](BaseObject* obj) { DumpObject(UnsafeAssumeCurrent(obj), FRAGMENT); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
     CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
 
@@ -750,7 +751,7 @@ void TracingCollector::DumpHeap(const CString& tag)
     DLOG(FRAGMENT, "Print Type information");
     std::set<TypeInfo*> classinfoSet;
     auto assembleClassInfoVisitor = [&classinfoSet](BaseObject* obj) {
-        TypeInfo* classInfo = obj->GetTypeInfo();
+        TypeInfo* classInfo = GetTypeInfo(UnsafeAssumeCurrent(obj));
         // No need to check the result of insertion, because there are multiple-insertions.
         (void)classinfoSet.insert(classInfo);
     };
