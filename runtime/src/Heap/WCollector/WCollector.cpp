@@ -1149,17 +1149,38 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
-            ForEachStrongRefSlot(object,
-                [this, &workStack, &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+            // P1 edgewitness: consume before GetAndTryTagObj (exclaudit WEAK-RANK-2).
+            // Same control flow as ForEachStrongRefSlot, with OnConsume inserted first.
+            if (object->HasRefField()) {
+                if (UNLIKELY(object->IsWeakRef())) {
+                    RefField<>* referentField =
+                        reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(object) + TYPEINFO_PTR_SIZE);
+                    EdgeWitness::Instance().OnConsume(object, referentField);
+                    BaseObject* target =
+                        GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, object, *referentField);
                     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
-                        minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
+                        minorRescannedFields.insert(reinterpret_cast<MAddress>(referentField));
                     }
                     if (Heap::IsHeapAddress(target) &&
                         RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                         retainLine = true;
                     }
                     PushYoungObject(target, workStack);
-                });
+                } else {
+                    ForEachRefSlot(object, [this, object, &workStack, &retainLine](RefField<>& field) {
+                        EdgeWitness::Instance().OnConsume(object, &field);
+                        BaseObject* target = GetAndTryTagObj(RefSlotKind::STRONG, object, field);
+                        if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+                            minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
+                        }
+                        if (Heap::IsHeapAddress(target) &&
+                            RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
+                            retainLine = true;
+                        }
+                        PushYoungObject(target, workStack);
+                    });
+                }
+            }
         };
         LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
         RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
