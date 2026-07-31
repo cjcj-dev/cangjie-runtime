@@ -8,13 +8,14 @@
 #include "MArray.inline.h"
 
 namespace MapleRuntime {
-void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd) const
+void ForEachRefFieldInRange(CurrentPtr object, const RefFieldVisitor& visitor, MAddress fieldStart, MIndex fieldEnd)
 {
-    TypeInfo* componentTi = GetComponentTypeInfo();
+    MArray* array = static_cast<MArray*>(static_cast<BaseObject*>(object));
+    TypeInfo* componentTi = GetComponentTypeInfo(object);
     MIndex size = fieldEnd - fieldStart;
     if (componentTi->IsStructType()) {
         GCTib gcTib = componentTi->GetGCTib();
-        size_t elementSize = GetElementSize();
+        size_t elementSize = GetElementSize(object);
         CHECK(elementSize != 0);
         MIndex limit = size / elementSize;
         for (MIndex i = 0; i < limit; ++i) {
@@ -28,7 +29,7 @@ void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fie
             visitor(arrayContent[i]);
         }
     } else {
-        LOG(RTLOG_FATAL, "array object %p has wrong component type", this);
+        LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
     }
 }
 } // namespace MapleRuntime
