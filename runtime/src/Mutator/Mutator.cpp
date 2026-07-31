@@ -7,6 +7,10 @@
 
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <new>
 #if defined(_WIN64)
 #define NOGDI
 #include <windows.h>
@@ -201,6 +205,58 @@ void Mutator::DeferLogObject(BaseObject* object)
     FlushDeferredLogObject();
     deferredLogRing[0] = object;
     deferredLogRingIndex = 1;
+}
+
+void Mutator::InitClearWhenEventRing()
+{
+    const char* enabled = std::getenv("MRT_REMSETCHECK");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+    if (clearWhenEventRing == nullptr) {
+        clearWhenEventRing = new (std::nothrow)
+            RemsetCheck::ClearWhenPendingEvent[RemsetCheck::CLEAR_WHEN_EVENT_RING_CAPACITY]();
+        CHECK_DETAIL(clearWhenEventRing != nullptr, "failed to allocate clear timing event ring");
+    }
+    clearWhenEventRingIndex.store(0, std::memory_order_relaxed);
+}
+
+void Mutator::FiniClearWhenEventRing()
+{
+    delete[] clearWhenEventRing;
+    clearWhenEventRing = nullptr;
+    clearWhenEventRingIndex.store(0, std::memory_order_relaxed);
+}
+
+bool Mutator::RecordClearWhenEvent(const RemsetCheck::ClearWhenPendingEvent& event)
+{
+    if (clearWhenEventRing == nullptr) {
+        RemsetCheck::Instance().RecordClearWhenEventDrop(false);
+        return false;
+    }
+    size_t index = clearWhenEventRingIndex.fetch_add(1, std::memory_order_relaxed);
+    if (index >= RemsetCheck::CLEAR_WHEN_EVENT_RING_CAPACITY) {
+        RemsetCheck::Instance().RecordClearWhenEventDrop(index == RemsetCheck::CLEAR_WHEN_EVENT_RING_CAPACITY);
+        return false;
+    }
+    RemsetCheck::ClearWhenPendingEvent unpublished = event;
+    unpublished.sequence = 0;
+    clearWhenEventRing[index] = unpublished;
+    __atomic_store_n(&clearWhenEventRing[index].sequence, event.sequence, __ATOMIC_RELEASE);
+    return true;
+}
+
+void Mutator::FlushClearWhenEvents()
+{
+    if (clearWhenEventRing == nullptr) {
+        return;
+    }
+    size_t recorded = clearWhenEventRingIndex.exchange(0, std::memory_order_acq_rel);
+    size_t count = std::min(recorded, RemsetCheck::CLEAR_WHEN_EVENT_RING_CAPACITY);
+    RemsetCheck::Instance().ReplayClearWhenEvents(clearWhenEventRing, count);
+    for (size_t i = 0; i < count; ++i) {
+        __atomic_store_n(&clearWhenEventRing[i].sequence, static_cast<uint64_t>(0), __ATOMIC_RELAXED);
+    }
 }
 
 void Mutator::FlushDeferredLogObject()
