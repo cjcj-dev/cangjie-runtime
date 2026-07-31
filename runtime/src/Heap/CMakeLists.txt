@@ -9,6 +9,7 @@ set(SRC_LIST
     "GcThreadPool.cpp"
     "StickyLog.cpp"
     "FixEdgeSet.cpp"
+    "CanonicalWriteTable.cpp"
     "ForwardFactTable.cpp"
     "RelocationDiagnosticTable.cpp"
 )
