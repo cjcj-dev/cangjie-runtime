@@ -14,7 +14,6 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Base/MemUtils.h"
 #include "Common/BaseObject.h"
 
 namespace MapleRuntime {
@@ -105,13 +104,6 @@ void GCDebugConfig::DisableStress()
     stressMajorInterval.store(0, std::memory_order_relaxed);
 }
 
-void GCDebugConfig::FillReclaimedMemory(uintptr_t start, size_t size)
-{
-    if (UNLIKELY(IsClobberEnabled())) {
-        MemorySet(start, size, CLOBBER_PATTERN, size);
-    }
-}
-
 void GCDebugConfig::FillYoungReclaimedMemory(uintptr_t start, size_t size, size_t allocatedSize)
 {
     uintptr_t controlTarget = 0;
@@ -135,15 +127,6 @@ void GCDebugConfig::FillYoungReclaimedMemory(uintptr_t start, size_t size, size_
     uintptr_t readTarget = IsClobberEnabled() ? observed : controlTarget;
     volatile uint8_t value = *reinterpret_cast<volatile uint8_t*>(readTarget);
     (void)value;
-}
-
-void GCDebugConfig::FillFreePinnedPayload(uintptr_t start, size_t size)
-{
-    if (UNLIKELY(IsClobberEnabled())) {
-        MemorySet(start, size, CLOBBER_PATTERN, size);
-    } else {
-        MemorySet(start, size, 0, size);
-    }
 }
 
 bool GCDebugConfig::ShouldTriggerMinor()

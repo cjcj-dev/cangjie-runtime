@@ -11,6 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "Base/Macros.h"
+#include "Base/MemUtils.h"
+
 namespace MapleRuntime {
 class __attribute__((visibility("hidden"))) GCDebugConfig {
 public:
@@ -31,9 +34,21 @@ public:
         return clobberPositiveControlEnabled.load(std::memory_order_relaxed);
     }
 
-    static void FillReclaimedMemory(uintptr_t start, size_t size);
+    static ALWAYS_INLINE void FillReclaimedMemory(uintptr_t start, size_t size)
+    {
+        if (UNLIKELY(IsClobberEnabled())) {
+            MemorySet(start, size, CLOBBER_PATTERN, size);
+        }
+    }
     static void FillYoungReclaimedMemory(uintptr_t start, size_t size, size_t allocatedSize);
-    static void FillFreePinnedPayload(uintptr_t start, size_t size);
+    static ALWAYS_INLINE void FillFreePinnedPayload(uintptr_t start, size_t size)
+    {
+        if (UNLIKELY(IsClobberEnabled())) {
+            MemorySet(start, size, CLOBBER_PATTERN, size);
+        } else {
+            MemorySet(start, size, 0, size);
+        }
+    }
 
     static bool ShouldTriggerMinor();
     static bool ShouldTriggerMajor();
