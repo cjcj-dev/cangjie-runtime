@@ -203,8 +203,9 @@ bool StickyLog::IsLoggedLine(MAddress address) const
     return *reinterpret_cast<volatile uint8_t*>(__cj_sticky_logged_base + lineIndex) != 0;
 }
 
-bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
+bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart, bool& dirtyBefore) const
 {
+    dirtyBefore = false;
     if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {
         return false;
     }
@@ -217,7 +218,9 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
     RegionInfo* region = RegionInfo::GetRegionInfoAt(address);
     size_t regionIndex = (region->GetRegionStart() - heapStart) / RegionInfo::UNIT_SIZE;
     uint8_t* dirtyByte = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr()) + regionIndex / 8;
-    __atomic_fetch_or(dirtyByte, static_cast<uint8_t>(1U << (regionIndex % 8)), __ATOMIC_RELEASE);
+    uint8_t dirtyMask = static_cast<uint8_t>(1U << (regionIndex % 8));
+    uint8_t oldDirtyByte = __atomic_fetch_or(dirtyByte, dirtyMask, __ATOMIC_RELEASE);
+    dirtyBefore = (oldDirtyByte & dirtyMask) != 0;
     lineStart = heapStart + (lineIndex << LINE_SHIFT);
     return true;
 }
@@ -228,6 +231,7 @@ void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
                "sticky region clear is outside heap");
     MRT_ASSERT((regionStart & (LINE_SIZE - 1)) == 0 && (regionSize & (LINE_SIZE - 1)) == 0,
                "sticky region clear is not line aligned");
+    RemsetCheck::Instance().RecordClearUnavailableRegion(regionStart, regionSize);
     size_t firstLine = (regionStart - heapStart) >> LINE_SHIFT;
     size_t lineCount = regionSize >> LINE_SHIFT;
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base + firstLine), lineCount, 0, lineCount);
@@ -239,6 +243,7 @@ void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
 void StickyLog::BeginEpoch()
 {
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "sticky epoch may only advance while mutators are stopped");
+    RemsetCheck::Instance().RecordBeginEpochClear();
     MemorySet(reinterpret_cast<uintptr_t>(__cj_sticky_logged_base), loggedByteCount, 0, loggedByteCount);
     MemorySet(reinterpret_cast<uintptr_t>(dirtyRegionMap->GetBaseAddr()), dirtyRegionByteCount, 0,
               dirtyRegionByteCount);
@@ -256,7 +261,10 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
         bool retain = visitor(lineStart, lineStart + LINE_SIZE);
         RemsetCheck::Instance().RecordBufferLineResult(lineStart, retain);
         uint8_t retained = retain ? 2 : 0;
+        uint8_t logged = __atomic_load_n(__cj_sticky_logged_base + lineIndex, __ATOMIC_ACQUIRE);
         __atomic_store_n(__cj_sticky_logged_base + lineIndex, retained, __ATOMIC_RELEASE);
+        RemsetCheck::Instance().RecordRescanByteWrite(
+            lineStart, RemsetCheck::RescanWritePath::BUFFER, logged, retained);
     });
 
     uint8_t* dirtyBytes = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr());
@@ -295,12 +303,19 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
                     RemsetCheck::Instance().RecordDirtyLinePath(lineStart, RemsetCheck::DirtyLinePath::VISITED);
                     retain = visitor(lineStart, lineStart + LINE_SIZE);
                 }
-                __atomic_store_n(loggedByte, static_cast<uint8_t>(retain), __ATOMIC_RELEASE);
+                uint8_t retained = static_cast<uint8_t>(retain);
+                __atomic_store_n(loggedByte, retained, __ATOMIC_RELEASE);
+                RemsetCheck::Instance().RecordRescanByteWrite(
+                    lineStart, RemsetCheck::RescanWritePath::DIRTY_REGION, logged, retained);
                 regionRetained |= retain;
             }
         }
         if (!regionRetained) {
-            __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~mask), __ATOMIC_RELEASE);
+            uint8_t oldDirtyByte =
+                __atomic_fetch_and(dirtyByte, static_cast<uint8_t>(~mask), __ATOMIC_RELEASE);
+            size_t recordedRegionSize = accepted ? region->GetRegionSize() : RegionInfo::UNIT_SIZE;
+            RemsetCheck::Instance().RecordRescanDirtyClear(
+                regionAddress, recordedRegionSize, (oldDirtyByte & mask) != 0);
         }
     }
 }
@@ -327,7 +342,9 @@ extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)
         return;
     }
     MAddress lineStart = 0;
-    if (stickyLog.TryLogLine(address, lineStart)) {
+    bool dirtyBefore = false;
+    if (stickyLog.TryLogLine(address, lineStart, dirtyBefore)) {
+        check.RecordLoggedLineWrite(lineStart, RemsetCheck::LogLineSource::BARRIER, dirtyBefore);
         mutator->RememberLineInStickyLogBuffer(lineStart);
         check.RecordStickyLogExit(RemsetCheck::StickyLogExit::LOGGED, object, __cj_sticky_heap_base,
                                   __cj_sticky_heap_size);
