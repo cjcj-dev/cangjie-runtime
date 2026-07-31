@@ -1369,7 +1369,10 @@ void WCollector::DoYoungGarbageCollection()
                         return;
                     }
                     MAddress lineStart = 0;
-                    if (stickyLog.TryLogLine(reinterpret_cast<MAddress>(object), lineStart)) {
+                    bool dirtyBefore = false;
+                    if (stickyLog.TryLogLine(reinterpret_cast<MAddress>(object), lineStart, dirtyBefore)) {
+                        RemsetCheck::Instance().RecordLoggedLineWrite(
+                            lineStart, RemsetCheck::LogLineSource::PROMOTION, dirtyBefore);
                         satbBuffer.EnsureGoodStickyNode(promotionNode);
                         CHECK_DETAIL(promotionNode != nullptr && promotionNode->PushLine(lineStart),
                                      "failed to remember promoted source line");
