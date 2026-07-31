@@ -76,6 +76,8 @@ public:
         LOG_LINE,
         BARRIER_WRITE,
         CONSUME_START,
+        VISIT_BUFFER,
+        VISIT_DIRTY_REGION,
         RESCAN_BUFFER_WRITE,
         RESCAN_DIRTY_WRITE,
         RESCAN_DIRTY_CLEAR,
@@ -92,6 +94,21 @@ public:
         BEGIN_EPOCH,
         POSITIVE_CONTROL,
         NOT_OBSERVED,
+        COUNT,
+    };
+
+    enum class ClearPath : uint8_t {
+        BUFFER,
+        DIRTY_BYTE,
+        DIRTY_REGION,
+        UNKNOWN,
+        COUNT,
+    };
+
+    enum class ClearVisitClass : uint8_t {
+        AFTER_VISIT,
+        WITHOUT_VISIT,
+        UNDETERMINED,
         COUNT,
     };
 
@@ -188,6 +205,7 @@ private:
         StickyLogExit stickyLogExit;
         LogLineSource logLineSource;
         MAddress slot;
+        size_t regionNonzeroLines;
     };
 
     struct LineTimeline {
@@ -213,7 +231,8 @@ private:
                                         HookSite hookSite = HookSite::COUNT,
                                         StickyLogExit stickyLogExit = StickyLogExit::COUNT,
                                         LogLineSource logLineSource = LogLineSource::BARRIER, MAddress slot = 0,
-                                        uint64_t sequence = 0, size_t eventRun = 0);
+                                        uint64_t sequence = 0, size_t eventRun = 0,
+                                        size_t regionNonzeroLines = 0);
     uint64_t RecordPendingClearWhenEvent(ClearWhenPendingEvent& event);
     void ReplayClearWhenEventLocked(const ClearWhenPendingEvent& event);
     void RecordClearWhenRangeLocked(MAddress regionStart, size_t regionSize, ClearWhenEventKind kind,
@@ -225,6 +244,17 @@ private:
     static constexpr size_t HOOK_SITE_COUNT = static_cast<size_t>(HookSite::COUNT);
     static constexpr size_t STICKY_LOG_EXIT_COUNT = static_cast<size_t>(StickyLogExit::COUNT);
     static constexpr size_t VISITOR_HOOK_SITE_COUNT = static_cast<size_t>(VisitorHookSite::COUNT);
+    static constexpr size_t CLEAR_PATH_COUNT = static_cast<size_t>(ClearPath::COUNT);
+    static constexpr size_t CLEAR_VISIT_CLASS_COUNT = static_cast<size_t>(ClearVisitClass::COUNT);
+
+    struct ClearedWithoutVisitEdge {
+        MAddress line;
+        MAddress slot;
+        uint64_t writeSequence;
+        uint64_t clearSequence;
+        size_t clearRun;
+        size_t recoveredRun;
+    };
 
     bool configured = false;
     bool enabled = false;
@@ -292,6 +322,15 @@ private:
     size_t clearWhenAllEdgesOneMinor = 0;
     size_t clearWhenAllEdgesMultipleMinors = 0;
     size_t clearWhenAllEdgesClearedAfterWrite = 0;
+    size_t clearVisitCounts[CLEAR_PATH_COUNT][CLEAR_VISIT_CLASS_COUNT]{};
+    std::vector<ClearedWithoutVisitEdge> clearedWithoutVisitEdges;
+    std::unordered_map<MAddress, std::vector<size_t>> clearedWithoutVisitByLine;
+    std::unordered_set<uint64_t> dirtyClearedNonzeroSequences;
+    size_t laterRecovered = 0;
+    size_t dirtyClearedNonzeroRegions = 0;
+    size_t dirtyClearedNonzeroLines = 0;
+    bool bufferAfterVisitControlCaught = false;
+    bool dirtyRegionWithoutVisitControlCaught = false;
     size_t includedRuns = 0;
     size_t youngZeroExcluded = 0;
     size_t edgesFromBarrier = 0;

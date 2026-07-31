@@ -143,6 +143,10 @@ const char* ClearWhenEventKindName(RemsetCheck::ClearWhenEventKind kind)
             return "barrier-write";
         case RemsetCheck::ClearWhenEventKind::CONSUME_START:
             return "consume-start";
+        case RemsetCheck::ClearWhenEventKind::VISIT_BUFFER:
+            return "visitor-buffer";
+        case RemsetCheck::ClearWhenEventKind::VISIT_DIRTY_REGION:
+            return "visitor-dirty-region";
         case RemsetCheck::ClearWhenEventKind::RESCAN_BUFFER_WRITE:
             return "RescanLoggedLines-buffer";
         case RemsetCheck::ClearWhenEventKind::RESCAN_DIRTY_WRITE:
@@ -481,7 +485,7 @@ uint64_t RemsetCheck::AppendClearWhenEventLocked(MAddress line, MAddress regionS
                                                   uint8_t byteBefore, uint8_t byteAfter, bool dirtyBefore,
                                                   bool dirtyAfter, HookSite hookSite, StickyLogExit stickyLogExit,
                                                   LogLineSource logLineSource, MAddress slot, uint64_t sequence,
-                                                  size_t eventRun)
+                                                  size_t eventRun, size_t regionNonzeroLines)
 {
     if (sequence == 0) {
         sequence = ReserveClearWhenSequence();
@@ -496,7 +500,8 @@ uint64_t RemsetCheck::AppendClearWhenEventLocked(MAddress line, MAddress regionS
         timeline.regionStart = regionStart;
     }
     timeline.events.push_back(ClearWhenEvent{ sequence, eventRun, kind, byteBefore, byteAfter, dirtyBefore,
-                                              dirtyAfter, hookSite, stickyLogExit, logLineSource, slot });
+                                              dirtyAfter, hookSite, stickyLogExit, logLineSource, slot,
+                                              regionNonzeroLines });
     return sequence;
 }
 
@@ -607,6 +612,14 @@ void RemsetCheck::RecordRescanDirtyClear(MAddress regionStart, size_t regionSize
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     MAddress regionEnd = regionStart + regionSize;
+    size_t regionNonzeroLines = 0;
+    for (MAddress line = regionStart; line < regionEnd; line += StickyLog::LINE_SIZE) {
+        if (LoadLoggedByte(line) != 0) {
+            ++regionNonzeroLines;
+        }
+    }
+    uint64_t sequence = ReserveClearWhenSequence();
+    size_t eventRun = GetClearWhenRun();
     for (MAddress line = regionStart; line < regionEnd; line += StickyLog::LINE_SIZE) {
         auto entry = lineTimelines.find(line);
         if (entry == lineTimelines.end()) {
@@ -614,7 +627,9 @@ void RemsetCheck::RecordRescanDirtyClear(MAddress regionStart, size_t regionSize
         }
         uint8_t byte = LoadLoggedByte(line);
         (void)AppendClearWhenEventLocked(line, entry->second.regionStart,
-                                         ClearWhenEventKind::RESCAN_DIRTY_CLEAR, byte, byte, true, false);
+                                         ClearWhenEventKind::RESCAN_DIRTY_CLEAR, byte, byte, true, false,
+                                         HookSite::COUNT, StickyLogExit::COUNT, LogLineSource::BARRIER, 0,
+                                         sequence, eventRun, regionNonzeroLines);
     }
 }
 
@@ -746,6 +761,8 @@ RemsetCheck::ClearedBy RemsetCheck::ClassifyClearedBy(const Edge& edge, const Li
         case ClearWhenEventKind::LOG_LINE:
         case ClearWhenEventKind::BARRIER_WRITE:
         case ClearWhenEventKind::CONSUME_START:
+        case ClearWhenEventKind::VISIT_BUFFER:
+        case ClearWhenEventKind::VISIT_DIRTY_REGION:
         case ClearWhenEventKind::POSITIVE_CONTROL_RESTORE:
             return ClearedBy::NOT_OBSERVED;
     }
@@ -765,6 +782,72 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
     if (clearEvent != nullptr && clearEvent->run < run && minorsSinceWrite > 1) {
         ++missingClearAfterMiddleMinor;
     }
+    ClearPath clearPath = ClearPath::UNKNOWN;
+    if (clearEvent != nullptr) {
+        switch (clearEvent->kind) {
+            case ClearWhenEventKind::RESCAN_BUFFER_WRITE:
+                clearPath = ClearPath::BUFFER;
+                break;
+            case ClearWhenEventKind::RESCAN_DIRTY_WRITE:
+                clearPath = ClearPath::DIRTY_BYTE;
+                break;
+            case ClearWhenEventKind::RESCAN_DIRTY_CLEAR:
+                clearPath = ClearPath::DIRTY_REGION;
+                break;
+            default:
+                break;
+        }
+    }
+    bool visitedInClearRun = false;
+    if (clearEvent != nullptr && timeline != lineTimelines.end()) {
+        for (const ClearWhenEvent& event : timeline->second.events) {
+            if (event.run == clearEvent->run &&
+                (event.kind == ClearWhenEventKind::VISIT_BUFFER ||
+                 event.kind == ClearWhenEventKind::VISIT_DIRTY_REGION)) {
+                visitedInClearRun = true;
+                break;
+            }
+        }
+    }
+    ClearVisitClass clearVisitClass = ClearVisitClass::UNDETERMINED;
+    if (clearEvent != nullptr) {
+        clearVisitClass = visitedInClearRun ? ClearVisitClass::AFTER_VISIT : ClearVisitClass::WITHOUT_VISIT;
+    }
+    if (clearEvent != nullptr && clearEvent->kind == ClearWhenEventKind::POSITIVE_CONTROL_CLEAR) {
+        if (!visitedInClearRun && clearEvent->byteBefore == clearEvent->byteAfter && clearEvent->dirtyBefore &&
+            !clearEvent->dirtyAfter) {
+            dirtyRegionWithoutVisitControlCaught = true;
+            VLOG(REPORT,
+                 "[LOSTORCONSUMED-POSCTRL-DIRTY-REGION] fires=1 run=%zu line=%p slot=%p clearSequence=%llu",
+                 run, reinterpret_cast<void*>(line), reinterpret_cast<void*>(edge.slot),
+                 static_cast<unsigned long long>(clearEvent->sequence));
+        }
+    } else {
+        ++clearVisitCounts[static_cast<size_t>(clearPath)][static_cast<size_t>(clearVisitClass)];
+        if (clearPath == ClearPath::BUFFER && clearVisitClass == ClearVisitClass::AFTER_VISIT &&
+            !bufferAfterVisitControlCaught) {
+            bufferAfterVisitControlCaught = true;
+            VLOG(REPORT,
+                 "[LOSTORCONSUMED-POSCTRL-BUFFER] fires=1 run=%zu line=%p slot=%p clearSequence=%llu",
+                 run, reinterpret_cast<void*>(line), reinterpret_cast<void*>(edge.slot),
+                 static_cast<unsigned long long>(clearEvent->sequence));
+        }
+        if (clearVisitClass == ClearVisitClass::WITHOUT_VISIT) {
+            size_t index = clearedWithoutVisitEdges.size();
+            clearedWithoutVisitEdges.push_back(ClearedWithoutVisitEdge{
+                line, edge.slot, edge.writeSequence, clearEvent->sequence, clearEvent->run, 0 });
+            clearedWithoutVisitByLine[line].push_back(index);
+        }
+        if (clearPath == ClearPath::DIRTY_REGION && clearEvent->regionNonzeroLines != 0 &&
+            dirtyClearedNonzeroSequences.insert(clearEvent->sequence).second) {
+            ++dirtyClearedNonzeroRegions;
+            dirtyClearedNonzeroLines += clearEvent->regionNonzeroLines;
+            VLOG(REPORT,
+                 "[LOSTORCONSUMED-DIRTY-NONZERO] clearSequence=%llu clearRun=%zu regionNonzeroLines=%zu",
+                 static_cast<unsigned long long>(clearEvent->sequence), clearEvent->run,
+                 clearEvent->regionNonzeroLines);
+        }
+    }
     uint64_t firstLogSequence = 0;
     size_t firstEventIndex = 0;
     if (timeline != lineTimelines.end()) {
@@ -783,7 +866,7 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
          "[CLEARWHEN-EDGE] run=%zu holder=%p slot=%p target=%p line=%p startRun=%zu startByte=%u "
          "startDirty=%u firstLogSequence=%llu writeSequence=%llu writeSite=%s writeExit=%s "
          "consumeSequence=%llu consumeByte=%u consumeDirty=%u enteredDirtyLoop=%u visitorVisited=%u "
-         "minorsSinceWrite=%zu clearedBy=%s clearSequence=%llu clearRun=%zu",
+             "minorsSinceWrite=%zu clearedBy=%s clearSequence=%llu clearRun=%zu visitedInClearRun=%u",
          run, reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
          reinterpret_cast<void*>(edge.target), reinterpret_cast<void*>(line),
          timeline == lineTimelines.end() ? 0 : timeline->second.startRun,
@@ -795,7 +878,7 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
          static_cast<unsigned>(trace.dirtyAtRoundStart), static_cast<unsigned>(trace.dirtyRegionConsidered),
          static_cast<unsigned>(visited), minorsSinceWrite, ClearedByName(clearedBy),
          static_cast<unsigned long long>(clearEvent == nullptr ? 0 : clearEvent->sequence),
-         clearEvent == nullptr ? 0 : clearEvent->run);
+         clearEvent == nullptr ? 0 : clearEvent->run, static_cast<unsigned>(visitedInClearRun));
     if (timeline == lineTimelines.end()) {
         return;
     }
@@ -809,13 +892,14 @@ void RemsetCheck::EmitClearWhenTimeline(const Edge& edge, const LineTrace& trace
         }
         VLOG(REPORT,
              "[CLEARWHEN-EVENT] run=%zu slot=%p line=%p sequence=%llu eventRun=%zu kind=%s byte=%u->%u "
-             "dirty=%u->%u hookSite=%s stickyExit=%s logSource=%s eventSlot=%p",
+             "dirty=%u->%u hookSite=%s stickyExit=%s logSource=%s eventSlot=%p regionNonzeroLines=%zu",
              run, reinterpret_cast<void*>(edge.slot), reinterpret_cast<void*>(line),
              static_cast<unsigned long long>(event.sequence), event.run, ClearWhenEventKindName(event.kind),
              static_cast<unsigned>(event.byteBefore), static_cast<unsigned>(event.byteAfter),
              static_cast<unsigned>(event.dirtyBefore), static_cast<unsigned>(event.dirtyAfter),
              HookSiteName(event.hookSite), StickyLogExitName(event.stickyLogExit),
-             LogLineSourceName(event.logLineSource), reinterpret_cast<void*>(event.slot));
+             LogLineSourceName(event.logLineSource), reinterpret_cast<void*>(event.slot),
+             event.regionNonzeroLines);
     }
 }
 
@@ -1171,13 +1255,46 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
 
 void RemsetCheck::RecordVisitedLine(MAddress lineStart, VisitorHookSite site)
 {
-    if (LIKELY(!enabled) || !visitedRoundActive) {
+    if (LIKELY(!enabled)) {
         return;
     }
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "visitor line recording requires stopped mutators");
     CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
     size_t index = static_cast<size_t>(site);
     CHECK(index < VISITOR_HOOK_SITE_COUNT);
+    size_t visitRun = GetClearWhenRun();
+    auto pending = clearedWithoutVisitByLine.find(lineStart);
+    if (pending != clearedWithoutVisitByLine.end()) {
+        for (size_t pendingIndex : pending->second) {
+            ClearedWithoutVisitEdge& edge = clearedWithoutVisitEdges[pendingIndex];
+            if (visitRun > edge.clearRun && edge.recoveredRun == 0) {
+                edge.recoveredRun = visitRun;
+                ++laterRecovered;
+                VLOG(REPORT,
+                     "[LOSTORCONSUMED-LATER-RECOVERED] line=%p slot=%p writeSequence=%llu clearSequence=%llu "
+                     "clearRun=%zu recoveredRun=%zu",
+                     reinterpret_cast<void*>(edge.line), reinterpret_cast<void*>(edge.slot),
+                     static_cast<unsigned long long>(edge.writeSequence),
+                     static_cast<unsigned long long>(edge.clearSequence), edge.clearRun, edge.recoveredRun);
+            }
+        }
+        clearedWithoutVisitByLine.erase(pending);
+    }
+    {
+        std::lock_guard<std::mutex> lg(edgeMutex);
+        auto timeline = lineTimelines.find(lineStart);
+        if (timeline != lineTimelines.end()) {
+            uint8_t byte = LoadLoggedByte(lineStart);
+            bool dirty = LoadDirtyBit(lineStart);
+            ClearWhenEventKind kind = site == VisitorHookSite::BUFFER ? ClearWhenEventKind::VISIT_BUFFER
+                                                                      : ClearWhenEventKind::VISIT_DIRTY_REGION;
+            (void)AppendClearWhenEventLocked(lineStart, timeline->second.regionStart, kind, byte, byte, dirty,
+                                             dirty);
+        }
+    }
+    if (!visitedRoundActive) {
+        return;
+    }
     ++visitedLineHits[index];
     ++visitedRoundLineHits[index];
     visitedLines.insert(lineStart);
@@ -1590,6 +1707,52 @@ void RemsetCheck::Fini()
              clearedByCounts[static_cast<size_t>(ClearedBy::NOT_OBSERVED)], missingClearAfterMiddleMinor,
              clearWhenAllEdgesOneMinor, clearWhenAllEdgesMultipleMinors, clearWhenAllEdgesClearedAfterWrite,
              static_cast<unsigned>(clearWhenControlCaught), CLEAR_WHEN_EVENT_RING_CAPACITY,
+             clearWhenEventRingOverflows.load(std::memory_order_relaxed),
+             clearWhenEventsDropped.load(std::memory_order_relaxed));
+        size_t clearedAfterVisit = 0;
+        size_t clearedWithoutVisit = 0;
+        size_t clearVisitUndetermined = 0;
+        for (size_t path = 0; path < CLEAR_PATH_COUNT; ++path) {
+            clearedAfterVisit += clearVisitCounts[path][static_cast<size_t>(ClearVisitClass::AFTER_VISIT)];
+            clearedWithoutVisit += clearVisitCounts[path][static_cast<size_t>(ClearVisitClass::WITHOUT_VISIT)];
+            clearVisitUndetermined += clearVisitCounts[path][static_cast<size_t>(ClearVisitClass::UNDETERMINED)];
+        }
+        size_t laterUndetermined = clearedWithoutVisitEdges.size() - laterRecovered;
+        VLOG(REPORT,
+             "[LOSTORCONSUMED-FINAL] edges=%zu CLEARED_AFTER_VISIT=%zu CLEARED_WITHOUT_VISIT=%zu "
+             "undetermined=%zu buffer=%zu/%zu/%zu dirtyByte=%zu/%zu/%zu dirtyRegion=%zu/%zu/%zu "
+             "unknownPath=%zu/%zu/%zu LATER_RECOVERED=%zu laterUndetermined=%zu "
+             "DIRTY_CLEARED_WITH_NONZERO_BYTES=%zu/%zu POSCTRL_buffer=%u POSCTRL_dirtyRegionWithoutVisit=%u "
+             "EVENTRING_OVERFLOW=%zu EVENTS_DROPPED=%zu",
+             clearedAfterVisit + clearedWithoutVisit + clearVisitUndetermined, clearedAfterVisit,
+             clearedWithoutVisit, clearVisitUndetermined,
+             clearVisitCounts[static_cast<size_t>(ClearPath::BUFFER)]
+                             [static_cast<size_t>(ClearVisitClass::AFTER_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::BUFFER)]
+                             [static_cast<size_t>(ClearVisitClass::WITHOUT_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::BUFFER)]
+                             [static_cast<size_t>(ClearVisitClass::UNDETERMINED)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_BYTE)]
+                             [static_cast<size_t>(ClearVisitClass::AFTER_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_BYTE)]
+                             [static_cast<size_t>(ClearVisitClass::WITHOUT_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_BYTE)]
+                             [static_cast<size_t>(ClearVisitClass::UNDETERMINED)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_REGION)]
+                             [static_cast<size_t>(ClearVisitClass::AFTER_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_REGION)]
+                             [static_cast<size_t>(ClearVisitClass::WITHOUT_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::DIRTY_REGION)]
+                             [static_cast<size_t>(ClearVisitClass::UNDETERMINED)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::UNKNOWN)]
+                             [static_cast<size_t>(ClearVisitClass::AFTER_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::UNKNOWN)]
+                             [static_cast<size_t>(ClearVisitClass::WITHOUT_VISIT)],
+             clearVisitCounts[static_cast<size_t>(ClearPath::UNKNOWN)]
+                             [static_cast<size_t>(ClearVisitClass::UNDETERMINED)],
+             laterRecovered, laterUndetermined, dirtyClearedNonzeroRegions, dirtyClearedNonzeroLines,
+             static_cast<unsigned>(bufferAfterVisitControlCaught),
+             static_cast<unsigned>(dirtyRegionWithoutVisitControlCaught),
              clearWhenEventRingOverflows.load(std::memory_order_relaxed),
              clearWhenEventsDropped.load(std::memory_order_relaxed));
         for (const auto& entry : missingMinorsSinceWrite) {
