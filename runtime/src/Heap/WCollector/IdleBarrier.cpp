@@ -335,4 +335,15 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
 #endif
 }
+
+void IdleBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+{
+    Barrier::WriteGeneric(obj, fieldPtr, src, size);
+    if (!CanonicalWriteTable::Instance().IsEnabled() || Heap::IsHeapAddress(obj) ||
+        (obj != nullptr && !obj->HasRefField()) || src == nullptr) {
+        return;
+    }
+    CanonicalizeCopiedStruct(src, reinterpret_cast<MAddress>(fieldPtr),
+                             reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE, size);
+}
 } // namespace MapleRuntime
