@@ -220,6 +220,7 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
     void RescanRememberedSet(WorkStack& workStack);
+    void ValidateEdgeCompleteness(RegionManager& manager);
     void ValidateYoungMarking();
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
