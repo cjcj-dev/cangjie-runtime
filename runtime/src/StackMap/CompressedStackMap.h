@@ -23,6 +23,13 @@
 #include "StackMap/StackMapX86.h"
 #endif
 namespace MapleRuntime {
+enum class StackMapInvalidReason : U8 {
+    NONE,
+    ZERO_ENTRIES,
+    PC_MISS,
+    ZERO_ROOT_INDICES,
+};
+
 class CompressedStackMapEntry {
 public:
     CompressedStackMapEntry(const IdxSet& idx, const RegTable& reg, const SlotTable& slot, const LineNumTable& lineNum,
@@ -130,13 +137,32 @@ public:
         }
     }
 
-    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC) const
+    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC,
+                                             StackMapInvalidReason* invalidReason = nullptr) const
     {
         StackMapTable stackMapTable(prologue.GetNextTable());
-        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
+        StackMapLookupResult lookupResult;
+        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC,
+                                             invalidReason == nullptr ? nullptr : &lookupResult);
         if (idxSet.slotIdx == 0 && idxSet.regIdx == 0 && idxSet.lineNumIdx == 0 &&
                 idxSet.stackRegIdx == 0 && idxSet.stackSlotIdx == 0) {
+            if (invalidReason != nullptr) {
+                switch (lookupResult) {
+                    case StackMapLookupResult::ZERO_ENTRIES:
+                        *invalidReason = StackMapInvalidReason::ZERO_ENTRIES;
+                        break;
+                    case StackMapLookupResult::PC_MISS:
+                        *invalidReason = StackMapInvalidReason::PC_MISS;
+                        break;
+                    case StackMapLookupResult::FOUND:
+                        *invalidReason = StackMapInvalidReason::ZERO_ROOT_INDICES;
+                        break;
+                }
+            }
             return CompressedStackMapEntry(false);
+        }
+        if (invalidReason != nullptr) {
+            *invalidReason = StackMapInvalidReason::NONE;
         }
         RegTable regTable(stackMapTable.GetNextTable());
         SlotTable slotTable(regTable.GetNextTable(), slotFormat);
