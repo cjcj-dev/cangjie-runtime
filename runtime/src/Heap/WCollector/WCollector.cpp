@@ -1424,6 +1424,15 @@ void WCollector::DoGarbageCollection()
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     if (gcReason == GC_REASON_STRESS_MINOR) {
         GCDebugConfig::NoteStressMinorExecution(false);
+        if (!stickyLog.IsMinorEnabled()) {
+            static constexpr char message[] =
+                "*** [GCStress] EXPLICIT MINOR REQUEST EXECUTED AS FULL: sticky minor is disabled ***\n";
+            (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        } else {
+            static constexpr char message[] =
+                "*** [GCStress] EXPLICIT MINOR REQUEST EXECUTED AS FULL: major interval reached ***\n";
+            (void)write(STDERR_FILENO, message, sizeof(message) - 1);
+        }
     } else if (gcReason == GC_REASON_STRESS_MAJOR) {
         GCDebugConfig::NoteStressMajorExecution();
     }
