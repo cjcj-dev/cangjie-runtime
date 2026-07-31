@@ -5,6 +5,7 @@
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 #include "Heap.h"
+#include "CanonicalWriteTable.h"
 #include "StickyLog.h"
 
 #include "Collector/CollectorProxy.h"
@@ -178,6 +179,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 void HeapImpl::Init(const HeapParam& param)
 {
     theSpace->Init(param);
+    CanonicalWriteTable::Instance().ConfigureFromEnvironment();
     StickyLog::Instance().ConfigureMinorFromEnvironment();
     bool stickyLogBarrierEnabled = InitStickyLogBarrierEnabled() || StickyLog::Instance().IsMinorEnabled();
     StickyLog::Instance().Enable(stickyLogBarrierEnabled);
