@@ -142,9 +142,11 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     } else {
         DLOG(BARRIER, "atomic write static ref@%p: %p", &field, newRef);
     }
-    field.SetTargetObject(newRef, order);
+    BaseObject* canonical = CanonicalizeForWrite(newRef);
+    field.SetTargetObject(canonical, order);
+    ValidatePublished(field.GetTargetObject());
     // R1 fix-set: register edge after successful store (plainsrc P2).
-    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), canonical);
 }
 
 BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
