@@ -799,6 +799,16 @@ void RemsetCheck::Fini()
              missingStickyLogExits[static_cast<size_t>(StickyLogExit::NO_LOGOBJECT_CALL)],
              missingStickyLogExits[static_cast<size_t>(StickyLogExit::LOGGED)], missingHolderInHeapRange,
              missingHolderOutOfHeapRange);
+        long long visitorDelta = static_cast<long long>(missing) - static_cast<long long>(missingNewPredicate);
+        VLOG(REPORT,
+             "[VISITORHOOK-FINAL] runs=%zu young0Excluded=%zu edgesFromBarrier=%zu missingOldPredicate=%zu "
+             "missingNewPredicate=%zu deltaOldMinusNew=%lld bufferVisitorCalls=%zu dirtyRegionVisitorCalls=%zu "
+             "retain2Skipped=%zu falseUnvisitedControlCaught=%u trueUnvisitedControlCaught=%u",
+             includedRuns, youngZeroExcluded, edgesFromBarrier, missing, missingNewPredicate, visitorDelta,
+             visitedLineHits[static_cast<size_t>(VisitorHookSite::BUFFER)],
+             visitedLineHits[static_cast<size_t>(VisitorHookSite::DIRTY_REGION)], retain2Skipped,
+             static_cast<unsigned>(falseUnvisitedControlCaught),
+             static_cast<unsigned>(trueUnvisitedControlCaught));
     }
     std::lock_guard<std::mutex> lg(edgeMutex);
     edges.clear();
