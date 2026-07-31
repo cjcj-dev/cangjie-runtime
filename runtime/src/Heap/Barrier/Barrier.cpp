@@ -99,8 +99,9 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     if (obj != nullptr) {
-        DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, field.GetFieldValue(), ref);
+        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, GetTypeInfo(currentObject),
+             GetSize(currentObject), &field, field.GetFieldValue(), ref);
     } else {
         DLOG(BARRIER, "atomic write static ref@%p: %#zx -> %p", &field, field.GetFieldValue(), ref);
     }
@@ -114,8 +115,9 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+    DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj,
+         GetTypeInfo(currentObject), GetSize(currentObject), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
     return oldRef;
 }
 
@@ -178,7 +180,7 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
     size_t dstSize = size;
     size_t srcSize = size;
     if (obj != nullptr) {
-        obj->ForEachRefInStruct(
+        ForEachRefInStruct(UnsafeAssumeCurrent(obj),
             [this, obj](RefField<false>& field) {
                 // MAddress bias = reinterpret_cast<MAddress>(&field) - reinterpret_cast<MAddress>(src);
                 // RefField<false>* dstField = reinterpret_cast<RefField<false>*>(dst + bias);
@@ -208,7 +210,8 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
 
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
-    if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
+    if ((obj != nullptr && !HasRefField(UnsafeAssumeCurrent(obj))) ||
+        (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
                               reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
                               size) == EOK,
