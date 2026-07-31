@@ -14,6 +14,7 @@
 #include "Base/SysCall.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
+#include "Heap/GCDebugConfig.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
@@ -1403,12 +1404,20 @@ void WCollector::DoGarbageCollection()
     StickyLog& stickyLog = StickyLog::Instance();
     if (IsYoungGCReason(gcReason) && stickyLog.IsMinorEnabled() &&
         minorRunsSinceMajor < stickyLog.GetMajorInterval()) {
+        if (gcReason == GC_REASON_STRESS_MINOR) {
+            GCDebugConfig::NoteStressMinorExecution(true);
+        }
         GetGCStats().lastCollectionWasYoung = true;
         DoYoungGarbageCollection();
         return;
     }
     // Reaching here means a full collection runs, even when the request said YOUNG
     // (the majorInterval promotion above); the throttle clocks key off this record.
+    if (gcReason == GC_REASON_STRESS_MINOR) {
+        GCDebugConfig::NoteStressMinorExecution(false);
+    } else if (gcReason == GC_REASON_STRESS_MAJOR) {
+        GCDebugConfig::NoteStressMajorExecution();
+    }
     GetGCStats().lastCollectionWasYoung = false;
 
     if (stickyLog.IsMinorEnabled()) {
