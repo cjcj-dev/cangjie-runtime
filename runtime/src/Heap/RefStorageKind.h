@@ -7,8 +7,6 @@
 #ifndef MRT_REF_STORAGE_KIND_H
 #define MRT_REF_STORAGE_KIND_H
 
-#include <array>
-#include <cstddef>
 #include <cstdint>
 
 namespace MapleRuntime {
@@ -102,44 +100,35 @@ constexpr RefStorageDisposition GetRefStorageDisposition(RefStorageKind kind)
     return RefStorageDisposition::NOT_NEEDED_ASSUMED;
 }
 
-constexpr std::array<RefStorageKind, 18> REF_STORAGE_KINDS = {
-    RefStorageKind::MUTATOR_EXCEPTION,
-    RefStorageKind::MUTATOR_RAW_OBJECT,
-    RefStorageKind::MUTATOR_LOCAL_FINALIZER_QUEUE,
-    RefStorageKind::MUTATOR_DEFERRED_LOG_RING,
-    RefStorageKind::SATB_BUFFER,
-    RefStorageKind::STICKY_LOG_BUFFER,
-    RefStorageKind::WEAK_REFERENCE_QUEUE,
-    RefStorageKind::ALLOC_BUFFER_ROOTS,
-    RefStorageKind::STATIC_ROOT_TABLE,
-    RefStorageKind::EXPORT_ROOT_TABLE,
-    RefStorageKind::CONCURRENCY_MODEL_ROOTS,
-    RefStorageKind::FINALIZER_QUEUES,
-    RefStorageKind::FIX_EDGE_SET,
-    RefStorageKind::FORWARD_FACT_TABLE,
-    RefStorageKind::RELOCATION_DIAGNOSTIC_TABLE,
-    RefStorageKind::DISCOVERED_EXTERN_OBJECTS,
-    RefStorageKind::CYCLE_REFERENCE_WORK_STACK,
-    RefStorageKind::RESURRECTED_EXPORT_OBJECTS,
-};
-
-constexpr size_t CountRefStorageDisposition(RefStorageDisposition disposition)
-{
-    size_t count = 0;
-    for (RefStorageKind kind : REF_STORAGE_KINDS) {
-        if (GetRefStorageDisposition(kind) == disposition) {
-            ++count;
-        }
-    }
-    return count;
-}
-
-static_assert(CountRefStorageDisposition(RefStorageDisposition::FORWARDED) == 16,
+static_assert(GetRefStorageDisposition(RefStorageKind::MUTATOR_EXCEPTION) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::MUTATOR_RAW_OBJECT) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::MUTATOR_LOCAL_FINALIZER_QUEUE) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::SATB_BUFFER) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::WEAK_REFERENCE_QUEUE) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::ALLOC_BUFFER_ROOTS) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::STATIC_ROOT_TABLE) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::EXPORT_ROOT_TABLE) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::CONCURRENCY_MODEL_ROOTS) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::FINALIZER_QUEUES) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::FIX_EDGE_SET) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::FORWARD_FACT_TABLE) == RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::RELOCATION_DIAGNOSTIC_TABLE) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::DISCOVERED_EXTERN_OBJECTS) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::CYCLE_REFERENCE_WORK_STACK) ==
+                      RefStorageDisposition::FORWARDED &&
+                  GetRefStorageDisposition(RefStorageKind::RESURRECTED_EXPORT_OBJECTS) ==
+                      RefStorageDisposition::FORWARDED,
               "every reference storage kind needs an existing forwarding, rebase, transfer, or clear site");
-static_assert(CountRefStorageDisposition(RefStorageDisposition::NOT_NEEDED_PROVEN) == 2,
+static_assert(GetRefStorageDisposition(RefStorageKind::MUTATOR_DEFERRED_LOG_RING) ==
+                      RefStorageDisposition::NOT_NEEDED_PROVEN &&
+                  GetRefStorageDisposition(RefStorageKind::STICKY_LOG_BUFFER) ==
+                      RefStorageDisposition::NOT_NEEDED_PROVEN,
               "reference storage kinds that need no forwarding must carry bounded evidence");
-static_assert(CountRefStorageDisposition(RefStorageDisposition::NOT_NEEDED_ASSUMED) == 0,
-              "an assumed reference storage disposition requires a decision before registration");
 } // namespace MapleRuntime
 
 #endif // MRT_REF_STORAGE_KIND_H
