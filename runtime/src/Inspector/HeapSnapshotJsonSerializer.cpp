@@ -267,6 +267,7 @@ void CjHeapDataForIDE::SerializeAllObjects()
     writer->WriteContinueString("\\\"OBJECTS\\\":[");
     bool isFirstElement = true;
     for (auto& objectInfo : dumpObjects) {
+        CurrentPtr currentObject = UnsafeAssumeCurrent(objectInfo.obj);
         if (!isFirstElement) {
             writer->WriteChar(',');
         } else {
@@ -274,37 +275,37 @@ void CjHeapDataForIDE::SerializeAllObjects()
         }
         switch (objectInfo.tag) {
             case TAG_ROOT_THREAD_OBJECT:
-                SerializeThreadObjectRoot(objectInfo.obj, objectInfo.tag, objectInfo.threadId, 0);
+                SerializeThreadObjectRoot(currentObject, objectInfo.tag, objectInfo.threadId, 0);
                 break;
             case TAG_ROOT_LOCAL:
-                SerializeLocalRoot(objectInfo.obj, objectInfo.tag, objectInfo.threadId, objectInfo.frameNum);
+                SerializeLocalRoot(currentObject, objectInfo.tag, objectInfo.threadId, objectInfo.frameNum);
                 break;
             case TAG_ROOT_GLOBAL:
-                SerializeGlobalRoot(objectInfo.obj, objectInfo.tag);
+                SerializeGlobalRoot(currentObject, objectInfo.tag);
                 break;
             case TAG_ROOT_UNKNOWN:
-                SerializeUnknownRoot(objectInfo.obj, objectInfo.tag);
+                SerializeUnknownRoot(currentObject, objectInfo.tag);
                 break;
             case TAG_OBJECT_ARRAY_DUMP:
             case TAG_LARGE_OBJECT_ARRAY_DUMP:
             case TAG_UNMOVABLE_OBJECT_ARRAY_DUMP:
-                SerializeObjectArray(objectInfo.obj, objectInfo.tag);
+                SerializeObjectArray(currentObject, objectInfo.tag);
                 break;
             case TAG_STRUCT_ARRAY_DUMP:
             case TAG_LARGE_STRUCT_ARRAY_DUMP:
             case TAG_UNMOVABLE_STRUCT_ARRAY_DUMP:
-                SerializeStructArray(objectInfo.obj, objectInfo.tag);
+                SerializeStructArray(currentObject, objectInfo.tag);
                 break;
             case TAG_PRIMITIVE_ARRAY_DUMP:
             case TAG_LARGE_PRIMITIVE_ARRAY_DUMP:
             case TAG_UNMOVABLE_PRIMITIVE_ARRAY_DUMP:
-                SerializePrimitiveArray(objectInfo.obj, objectInfo.tag);
+                SerializePrimitiveArray(currentObject, objectInfo.tag);
                 break;
             case TAG_INSTANCE_DUMP:
             case TAG_PINNED_INSTANCE_DUMP:
             case TAG_LARGE_INSTANCE_DUMP:
             case TAG_UNMOVABLE_INSTANCE_DUMP:
-                SerializeInstance(objectInfo.obj, objectInfo.tag);
+                SerializeInstance(currentObject, objectInfo.tag);
                 break;
             default:
                 break;
@@ -318,8 +319,9 @@ void CjHeapDataForIDE::SerializeAllObjects()
  *     u1 tag;     //denoting the type of this sub-record
  *     ID objId;   // object ID
  */
-void CjHeapDataForIDE::SerializeGlobalRoot(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializeGlobalRoot(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -327,7 +329,7 @@ void CjHeapDataForIDE::SerializeGlobalRoot(BaseObject*& obj, const u1 tag)
     writer->WriteChar(',');
     CjHeapDataID objAddr = (reinterpret_cast<CjHeapDataID>(obj));
     u4 id = GetId(objAddr);
-    CString name = obj->GetTypeInfo()->GetName();
+    CString name = GetTypeInfo(currentObject)->GetName();
     writer->WriteNumber(id);
     writer->WriteChar(']');
 }
@@ -337,8 +339,9 @@ void CjHeapDataForIDE::SerializeGlobalRoot(BaseObject*& obj, const u1 tag)
  *     u1 tag;     // denoting the type of this sub-record
  *     ID objId;   // object ID
  */
-void CjHeapDataForIDE::SerializeUnknownRoot(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializeUnknownRoot(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -357,8 +360,9 @@ void CjHeapDataForIDE::SerializeUnknownRoot(BaseObject*& obj, const u1 tag)
  *     u4 threadIdx;   // thread serial number
  *     u4 frame;       // frame number in stack trace (-1 for empty)
  */
-void CjHeapDataForIDE::SerializeLocalRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 depth)
+void CjHeapDataForIDE::SerializeLocalRoot(CurrentPtr currentObject, const u1 tag, const u4 tid, const u4 depth)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -382,8 +386,10 @@ void CjHeapDataForIDE::SerializeLocalRoot(BaseObject*& obj, const u1 tag, const 
  *     u4 stackTraceIdx;   // stack trace serial number
  *
  */
-void CjHeapDataForIDE::SerializeThreadObjectRoot(BaseObject*& obj, const u1 tag, const u4 tid, const u4 stackTraceIdx)
+void CjHeapDataForIDE::SerializeThreadObjectRoot(CurrentPtr currentObject, const u1 tag, const u4 tid,
+                                                 const u4 stackTraceIdx)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -433,8 +439,9 @@ void CjHeapDataForIDE::SerializeClass(TypeInfo* ti, CjHeapDataStringId klassId, 
  *     ID elements[num];   // elements
  *
  */
-void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializeObjectArray(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -460,7 +467,7 @@ void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
     }
     writer->WriteNumber(num);
     writer->WriteChar(',');
-    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(obj->GetTypeInfo())));
+    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(GetTypeInfo(currentObject))));
     writer->WriteChar(',');
     writer->WriteChar('[');
     bool isFirstElement = true;
@@ -489,8 +496,9 @@ void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
  *
  */
 
-void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializeStructArray(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -509,13 +517,13 @@ void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentObject);
     GCTib gcTib = componentTypeInfo->GetGCTib();
     MAddress contentAddr = reinterpret_cast<Uptr>(mArray) + MArray::GetContentOffset();
     if (componentTypeInfo->HasRefField()) {
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             gcTib.ForEachBitmapWord(contentAddr, visitor);
-            contentAddr += mArray->GetElementSize();
+            contentAddr += GetElementSize(currentObject);
         }
     }
 
@@ -523,7 +531,7 @@ void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
     writer->WriteChar(',');
     writer->WriteNumber(num);
     writer->WriteChar(',');
-    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(obj->GetTypeInfo())));
+    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(GetTypeInfo(currentObject))));
     writer->WriteChar(',');
     writer->WriteChar('[');
     bool isFirstElement = true;
@@ -549,8 +557,9 @@ void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
  *     u1 type;         // element type
  */
 
-void CjHeapDataForIDE::SerializePrimitiveArray(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializePrimitiveArray(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -563,7 +572,7 @@ void CjHeapDataForIDE::SerializePrimitiveArray(BaseObject*& obj, const u1 tag)
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     writer->WriteNumber(mArray->GetLength());
     writer->WriteChar(',');
-    MSize componentSize = obj->GetTypeInfo()->GetComponentSize();
+    MSize componentSize = GetTypeInfo(currentObject)->GetComponentSize();
     switch (componentSize) {
         // bool:1 bytes
         case 1:
@@ -615,8 +624,9 @@ void CjHeapDataForIDE::SerializeStructClass(TypeInfo* ti, CjHeapDataStringId kla
  *     u4 num;           // number of ref fields
  *     VAL entry[];      // ref contents in instance field values (this class, followed by super class, etc)
  */
-void CjHeapDataForIDE::SerializeInstance(BaseObject*& obj, const u1 tag)
+void CjHeapDataForIDE::SerializeInstance(CurrentPtr currentObject, const u1 tag)
 {
+    BaseObject* obj = currentObject;
     writer->WriteChar('[');
     writer->WriteNumber(tag);
     writer->WriteChar(',');
@@ -625,7 +635,7 @@ void CjHeapDataForIDE::SerializeInstance(BaseObject*& obj, const u1 tag)
     u4 id = GetId(reinterpret_cast<CjHeapDataID>(obj));
     writer->WriteNumber(id);
     writer->WriteChar(',');
-    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(obj->GetTypeInfo())));
+    writer->WriteNumber(GetId(reinterpret_cast<CjHeapDataID>(GetTypeInfo(currentObject))));
     writer->WriteChar(',');
     u4 num = 0;
     std::stack<u4> VAL;
@@ -633,8 +643,8 @@ void CjHeapDataForIDE::SerializeInstance(BaseObject*& obj, const u1 tag)
         VAL.push(GetId(reinterpret_cast<CjHeapDataID>(fieldAddr.GetTargetObject())));
         num++;
     };
-    TypeInfo* currentClass = obj->GetTypeInfo();
-    if (obj->HasRefField()) {
+    TypeInfo* currentClass = GetTypeInfo(currentObject);
+    if (HasRefField(currentObject)) {
         GCTib gcTib = currentClass->GetGCTib();
         MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
         gcTib.ForEachBitmapWord(objAddr, visitor);
@@ -665,11 +675,12 @@ CjHeapData::u4 CjHeapDataForIDE::GetId(CjHeapDataStringId klassId)
     return stringIdxMap[klassId];
 }
 
-I8 CjHeapDataForIDE::GetObjType(BaseObject* obj)
+I8 CjHeapDataForIDE::GetObjType(CurrentPtr currentObject)
 {
+    BaseObject* obj = currentObject;
     I8 objType = TypeKind::TYPE_KIND_NOTHING;
     if (obj != nullptr) {
-        TypeInfo* typeInfo = obj->GetTypeInfo();
+        TypeInfo* typeInfo = GetTypeInfo(currentObject);
         if (typeInfo != nullptr) {
             objType = typeInfo->GetType();
         }
