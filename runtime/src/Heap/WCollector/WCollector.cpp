@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "Base/SysCall.h"
+#include "Heap/EdgeWitness.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
@@ -811,6 +812,8 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
         if (isInterior && interiorRewritten != nullptr) {
             ++(*interiorRewritten);
         }
+        // P3: rewrite witnessed (edgewitness read-only).
+        EdgeWitness::Instance().OnRewritten(holder, &field);
         DLOG(FIX, "r1route2 fix holder %p field@%p: %#zx => %#zx -> %p (from %p interior_offset=%zu)", holder,
              &field, oldField.GetFieldValue(), newField.GetFieldValue(), toObj, target, interiorOffset);
     }
@@ -914,6 +917,7 @@ void WCollector::BulkForwardHolderRefs()
         VLOG(REPORT, "[MISSBUCKET_B3_ROUTE] route_state=%u count=%zu stage=BulkForward", routeState.first,
              routeState.second);
     }
+    EdgeWitness::Instance().DumpAndReset("BulkForward");
 }
 
 void WCollector::PostTrace()
@@ -1231,6 +1235,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         }
         return retainLine;
     });
+    EdgeWitness::Instance().DumpAndReset("RescanRememberedSet");
 }
 
 void WCollector::ValidateYoungMarking()

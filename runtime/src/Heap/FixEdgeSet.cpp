@@ -10,6 +10,7 @@
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/EdgeWitness.h"
 #include "Heap/Heap.h"
 #include "Mutator/MutatorManager.h"
 
@@ -61,12 +62,14 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
     if (RegionInfo::InGhostFromRegion(newRef)) {
         fromTargetRegistered.fetch_add(1, std::memory_order_relaxed);
         Add(reinterpret_cast<MAddress>(slot));
+        EdgeWitness::Instance().OnRegistered(holder, slot);
         return;
     }
     RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(newRef));
     if (targetRegion != nullptr && targetRegion->IsFromRegion()) {
         fromTargetRegistered.fetch_add(1, std::memory_order_relaxed);
         Add(reinterpret_cast<MAddress>(slot));
+        EdgeWitness::Instance().OnRegistered(holder, slot);
         return;
     }
     // E6 (i)-narrow: only while GC phase is active (phase > INIT ⇒ mutator already
@@ -85,6 +88,7 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
     }
     crossRegionRegistered.fetch_add(1, std::memory_order_relaxed);
     Add(reinterpret_cast<MAddress>(slot));
+    EdgeWitness::Instance().OnRegistered(holder, slot);
 }
 
 void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)

@@ -9,6 +9,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/EdgeWitness.h"
 #include "Heap/StickyLog.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -204,11 +205,15 @@ void TracingCollector::ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRef
     }
     if (UNLIKELY(obj->IsWeakRef())) {
         RefField<>* referentField = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+        // P1 witness before GetAndTryTagObj (edgewitness: record only, no filter).
+        EdgeWitness::Instance().OnConsume(obj, referentField);
         visitor(RefSlotKind::WEAK_REFERENT,
                 GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, obj, *referentField), *referentField);
         return;
     }
     ForEachRefSlot(obj, [this, obj, &visitor](RefField<>& field) {
+        // P1: real consumer path, before GetAndTryTagObj (exclaudit WEAK-RANK-2).
+        EdgeWitness::Instance().OnConsume(obj, &field);
         visitor(RefSlotKind::STRONG, GetAndTryTagObj(RefSlotKind::STRONG, obj, field), field);
     });
 }
