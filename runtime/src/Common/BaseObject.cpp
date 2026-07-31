@@ -49,7 +49,7 @@ void BaseObject::DumpObject(int logtype, bool isSimple) const
 
 static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, const RefFieldVisitor& visitor)
 {
-    GCTib gcTib = obj->GetGCTib();
+    GCTib gcTib = GetGCTib(UnsafeAssumeCurrent(obj));
     // gcTib record payload data, skip the TypeInfo
     MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     gcTib.ForEachBitmapWord(objAddr, visitor);
@@ -60,14 +60,15 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
 {
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
+    CurrentPtr currentArray = UnsafeAssumeCurrent(mArray);
     MIndex arrayLengthVal = mArray->GetLength();
-    TypeInfo* componentTypeInfo = mArray->GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentArray);
     if (componentTypeInfo->IsStructType()) {
         GCTib gcTib = componentTypeInfo->GetGCTib();
         MAddress contentAddr = reinterpret_cast<Uptr>(mArray) + MArray::GetContentOffset();
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             gcTib.ForEachBitmapWord(contentAddr, visitor);
-            contentAddr += mArray->GetElementSize();
+            contentAddr += GetElementSize(currentArray);
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
@@ -109,12 +110,13 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
 {
     // take array length and content.
     MArray* mArray = static_cast<MArray*>(this);
+    CurrentPtr currentArray = UnsafeAssumeCurrent(mArray);
     MIndex arrayLen = mArray->GetLength();
-    TypeInfo* component = mArray->GetComponentTypeInfo();
+    TypeInfo* component = GetComponentTypeInfo(currentArray);
     if (component->IsStructType()) {
         GCTib gcTib = component->GetGCTib();
         MAddress contentAddr = reinterpret_cast<Uptr>(this) + MArray::GetContentOffset();
-        size_t contentSize = mArray->GetElementSize();
+        size_t contentSize = GetElementSize(currentArray);
         // MIndex is enough to describe the size;
         MIndex startIndex = static_cast<MIndex>((aggStart - contentAddr) / contentSize);
         size_t alignedStart = startIndex * contentSize + contentAddr;
@@ -141,7 +143,7 @@ size_t BaseObject::GetSize() const
     TypeInfo* kls = GetTypeInfo();
     if (kls->IsArrayType()) {
         const MArray* mArray = reinterpret_cast<const MArray*>(this);
-        size_t size = mArray->GetMArraySize();
+        size_t size = GetMArraySize(UnsafeAssumeCurrent(const_cast<MArray*>(mArray)));
         return MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
     } else {
         return MapleRuntime::AlignUp<size_t>(kls->GetInstanceSize() + TYPEINFO_PTR_SIZE,
