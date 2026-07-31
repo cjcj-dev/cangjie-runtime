@@ -79,7 +79,7 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
     }
 }
 
-void ReportSkippedStackMapCounts(uint64_t gcIndex)
+void ReportSkippedStackMapCounts()
 {
     size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
     size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
@@ -88,9 +88,9 @@ void ReportSkippedStackMapCounts(uint64_t gcIndex)
         return;
     }
     LOG(RTLOG_ERROR,
-        "GC stack map warning: gc_index=%llu SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+        "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
         "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
-        static_cast<unsigned long long>(gcIndex), zeroEntries, pcMiss, zeroRootIndices);
+        zeroEntries, pcMiss, zeroRootIndices);
 }
 } // namespace
 
@@ -826,7 +826,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
-    ReportSkippedStackMapCounts(gcIndex);
+    ReportSkippedStackMapCounts();
     // release pages in PagePool
     if (StickyLog::Instance().IsEnabled()) {
         ScopedStopTheWorld stw("reclaim sticky log nodes", true, GCPhase::GC_PHASE_RECLAIM_SATB_NODE);
