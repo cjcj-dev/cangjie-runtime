@@ -212,12 +212,22 @@ struct Driver {
             std::printf("GCDRIVER alloc FAIL take-region kind=%u\n", kind);
             return -1;
         }
+        // TakeRegion leaves FREE_REGION type; mutator path would Prepend as THREAD_LOCAL.
+        // Publish type so observer/E1 shape reporting is meaningful.
+        if (kind == static_cast<uint32_t>(AllocKind::PINNED)) {
+            region->SetRegionType(RegionInfo::RegionType::RECENT_PINNED_REGION);
+        } else if (kind == static_cast<uint32_t>(AllocKind::LARGE)) {
+            region->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
+        } else {
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        }
         MAddress addr = region->Alloc(objSize);
         if (addr == 0) {
             region = manager->TakeRegion(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
             if (region == nullptr) {
                 return -1;
             }
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
             addr = region->Alloc(objSize);
             if (addr == 0) {
                 return -1;
@@ -252,8 +262,7 @@ struct Driver {
         if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion()) {
             return false;
         }
-        auto ty = reg->GetRegionType();
-        if (ty == RegionInfo::RegionType::FREE_REGION || ty == RegionInfo::RegionType::GARBAGE_REGION) {
+        if (reg->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION) {
             return false;
         }
         return true;
@@ -369,7 +378,6 @@ struct Driver {
             }
             RegionInfo* reg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(slots[i].obj));
             if (reg == nullptr || !reg->IsValidRegion() || reg->IsGarbageRegion() || reg->IsFreeRegion() ||
-                reg->GetRegionType() == RegionInfo::RegionType::FREE_REGION ||
                 reg->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION) {
                 slots[i].live = false;
                 slots[i].obj = nullptr;
@@ -444,6 +452,8 @@ struct Driver {
             slots.push_back(s);
             ++allocCount;
         }
+        // Region is full after pack — match production RECENT_FULL transition.
+        reg->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
     }
 
     // Independent remset observer: walk live table slots; for each old→young ref,
@@ -469,9 +479,9 @@ struct Driver {
             BaseObject* holder = slots[i].obj;
             RegionInfo* hReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             // Region first: never touch object header on free/garbage units (SEGV).
-            // FREE_REGION type and FREE_UNITS role are distinct fields — reject both.
+            // Note: FREE_REGION *type* is the TakeRegion default before list publish;
+            // driver now sets THREAD_LOCAL/RECENT_* after take. Still reject free *role*.
             if (hReg == nullptr || !hReg->IsValidRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion() ||
-                hReg->GetRegionType() == RegionInfo::RegionType::FREE_REGION ||
                 hReg->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION) {
                 slots[i].live = false;
                 slots[i].obj = nullptr;
