@@ -1302,7 +1302,7 @@ extern "C" const char* MCC_GetEnumConstructorName(EnumCtorInfo* ti)
 
 extern "C" EnumCtorInfo* MCC_GetEnumConstructorInfoFromAny(ObjRef obj)
 {
-    TypeInfo* ti = obj->GetTypeInfo();
+    TypeInfo* ti = GetTypeInfo(UnsafeAssumeCurrent(obj));
     if (!ti->IsEnum() && !ti->IsTempEnum()) {
         return nullptr;
     }
@@ -1436,7 +1436,7 @@ extern "C" ObjRef MCC_NewAndInitEnumTupleObject(TypeInfo* ti, void* args)
 
 extern "C" ObjRef MCC_GetAssociatedValues(ObjRef obj, TypeInfo* arrayTi)
 {
-    TypeInfo* ti = obj->GetTypeInfo();
+    TypeInfo* ti = GetTypeInfo(UnsafeAssumeCurrent(obj));
     U16 fieldNum = ti->GetFieldNum();
     // For enum and temp enum, except zero-sized enum, fields include the tag,
     // but the tag is not part of associated values, need skip the tag.
