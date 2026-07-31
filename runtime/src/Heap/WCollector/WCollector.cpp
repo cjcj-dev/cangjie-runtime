@@ -1158,10 +1158,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
-        if (MarkObject(object)) {
+        CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+        if (MarkObject(currentObject)) {
             continue;
         }
-        object->ForEachRefField([this, &workStack](RefField<>& field) {
+        ForEachRefField(currentObject, [this, &workStack](RefField<>& field) {
             PushYoungObject(ResolveMinorReference(field), workStack);
         });
     }
@@ -1712,7 +1713,7 @@ void WCollector::DoGarbageCollection()
             // Soft path for all slots: never GetAndTryTagObj hard-CHECK during
             // post-Flip normalize (5d8fa1f2 WEAK_MSG was strong RawArray holders
             // hitting a message that always said "weak object").
-            NormalizeTraceRegionObject(object);
+            NormalizeTraceRegionObject(UnsafeAssumeCurrent(object));
         });
         manager.HandleTraceRegions();
     }
@@ -1731,7 +1732,7 @@ void WCollector::MarkNewObject(BaseObject* obj)
     GCPhase mutatorPhase = Mutator::GetMutator()->GetMutatorPhase();
     if (UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_TRACE) ||
         UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
-        MarkObject(obj);
+        MarkObject(CurrentPtr(obj));
     }
 }
 
