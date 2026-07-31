@@ -311,6 +311,14 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
                      EOK,
                  "memmove_s failed");
 
+    if (CanonicalWriteTable::Instance().IsEnabled()) {
+        RefFieldVisitor canonicalizeVisitor = [this, dstField, srcField](RefField<false>& sourceRef) {
+            MAddress offset = reinterpret_cast<MAddress>(&sourceRef) - srcField;
+            CanonicalizeField(*reinterpret_cast<RefField<false>*>(dstField + offset));
+        };
+        srcArray->ForEachRefFieldInRange(canonicalizeVisitor, srcField, srcField + srcSize);
+    }
+
     // E2: bulk struct-array copy leaves plain refs in dst slots; register each
     // so BulkForward can close plain→from/ghost edges (I5/P-G).
     if (Heap::IsHeapAddress(dstObj)) {
