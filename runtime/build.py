@@ -330,6 +330,8 @@ def build_target(cmake_command, args=None):
     build_jobs = os.environ.get("CANGJIE_BUILD_JOBS", "8")
     if args and args.gcc_toolchain and args.target == "native":
         cmake_command.append("-DBUILD_GCC_TOOLCHAIN={}".format(args.gcc_toolchain))
+    if args and args.gc_debug_equipment:
+        cmake_command.append("-DCANGJIE_GC_DEBUG_EQUIPMENT=ON")
     try:
         subprocess.run(cmake_command, check=True)
 
@@ -442,6 +444,11 @@ if __name__ == "__main__":
     )
     b.add_argument(
         "--gcc-toolchain", dest="gcc_toolchain", help="Specify GCC toolchain for Clang to use"
+    )
+    b.add_argument(
+        "--gc-debug-equipment",
+        action="store_true",
+        help="Compile allocation-frequency and reclaimed-memory debugging equipment"
     )
 
     i = sub.add_parser("install", help="install the project")
