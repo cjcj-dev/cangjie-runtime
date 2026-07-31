@@ -40,12 +40,17 @@ public:
                       MIndex srcSize) const override;
     void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                          MIndex srcSize) const override;
+    __attribute__((visibility("hidden")))
     void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
 
 private:
+    __attribute__((visibility("hidden")))
     BaseObject* CanonicalizeForWrite(BaseObject* reference) const;
+    __attribute__((visibility("hidden")))
     void ValidatePublished(BaseObject* reference) const;
+    __attribute__((visibility("hidden")))
     void CanonicalizeField(RefField<false>& field) const;
+    __attribute__((visibility("hidden")))
     void CanonicalizeCopiedStruct(BaseObject* layoutObject, MAddress dst, MAddress src, size_t size) const;
 };
 } // namespace MapleRuntime
