@@ -153,12 +153,14 @@ BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
                                              MemoryOrder order) const
 {
     // newRef must be the latest versions.
-    MAddress oldValue = field.Exchange(newRef, order);
+    BaseObject* canonical = CanonicalizeForWrite(newRef);
+    MAddress oldValue = field.Exchange(canonical, order);
+    ValidatePublished(field.GetTargetObject());
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(order), newRef);
-    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(order), canonical);
+    FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), canonical);
     return oldRef;
 }
 
