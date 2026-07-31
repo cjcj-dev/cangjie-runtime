@@ -1440,6 +1440,15 @@ void WCollector::DoGarbageCollection()
     } else {
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     }
+    if (CanonicalWriteTable::Instance().IsPositiveControlEnabled()) {
+        BaseObject* source = CanonicalWriteTable::Instance().GetPositiveControlSource();
+        CHECK_DETAIL(source != nullptr,
+                     "canonical write positive control requires at least one non-overlapping relocation fact");
+        RefField<false> positiveField(static_cast<BaseObject*>(nullptr));
+        CanonicalWriteTable::Instance().ArmPositiveControl();
+        Heap::GetBarrier().WriteStaticRef(positiveField, source);
+        CHECK_DETAIL(false, "canonical write positive control was not observed by the publication validator");
+    }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
