@@ -16,5 +16,7 @@ set(SRC_LIST
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
+add_library(RefStorageKindCheck OBJECT "RefStorageKindCheck.cpp")
+target_compile_options(RefStorageKindCheck PRIVATE -Werror=switch-enum)
 add_library(WCollector STATIC ${SRC_LIST})
-target_compile_options(WCollector PRIVATE -Werror=switch-enum)
+add_dependencies(WCollector RefStorageKindCheck)
