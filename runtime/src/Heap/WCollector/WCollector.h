@@ -56,7 +56,7 @@ public:
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
     void TraceRefField(CurrentPtr obj, RefField<>& ref, WorkStack& workStack) const;
     void TraceObjectRefFields(CurrentPtr obj, WorkStack& workStack) override;
-    BaseObject* GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) override;
+    CurrentPtr GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) override;
     CurrentPtr ForwardObject(MaybeStalePtr fromVersion) override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
