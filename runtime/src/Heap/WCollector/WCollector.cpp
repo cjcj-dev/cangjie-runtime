@@ -1335,6 +1335,7 @@ void WCollector::DoYoungGarbageCollection()
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
     RemsetCheck::Instance().CheckRound(minorTotalRuns + 1, stats.candidateRegions);
     RescanRememberedSet(workStack);
+    RemsetCheck::Instance().CheckVisitedRound(minorTotalRuns + 1);
     TraceYoungClosure(workStack);
 
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
