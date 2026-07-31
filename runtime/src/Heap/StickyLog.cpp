@@ -253,7 +253,9 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
         }
         size_t lineIndex = (lineStart - heapStart) >> LINE_SHIFT;
         RemsetCheck::Instance().RecordVisitedLine(lineStart, RemsetCheck::VisitorHookSite::BUFFER);
-        uint8_t retained = visitor(lineStart, lineStart + LINE_SIZE) ? 2 : 0;
+        bool retain = visitor(lineStart, lineStart + LINE_SIZE);
+        RemsetCheck::Instance().RecordBufferLineResult(lineStart, retain);
+        uint8_t retained = retain ? 2 : 0;
         __atomic_store_n(__cj_sticky_logged_base + lineIndex, retained, __ATOMIC_RELEASE);
     });
 
@@ -268,22 +270,29 @@ void StickyLog::RescanLoggedLines(const LoggedLineVisitor& visitor)
         MAddress regionAddress = heapStart + regionIndex * RegionInfo::UNIT_SIZE;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddress);
         bool regionRetained = false;
-        if (region->IsValidRegion() && region->GetRegionStart() == regionAddress) {
+        bool accepted = region->IsValidRegion() && region->GetRegionStart() == regionAddress;
+        RemsetCheck::Instance().RecordDirtyRegionEntry(regionAddress, accepted);
+        if (accepted) {
             size_t firstLine = (regionAddress - heapStart) >> LINE_SHIFT;
             size_t lineCount = region->GetRegionSize() >> LINE_SHIFT;
             for (size_t lineOffset = 0; lineOffset < lineCount; ++lineOffset) {
                 uint8_t* loggedByte = __cj_sticky_logged_base + firstLine + lineOffset;
                 uint8_t logged = __atomic_load_n(loggedByte, __ATOMIC_ACQUIRE);
+                MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
                 if (logged == 0) {
+                    RemsetCheck::Instance().RecordDirtyLinePath(
+                        lineStart, RemsetCheck::DirtyLinePath::BYTE0_CONTINUE);
                     continue;
                 }
-                MAddress lineStart = regionAddress + (lineOffset << LINE_SHIFT);
                 bool retain = logged == 2;
                 if (retain) {
                     RemsetCheck::Instance().RecordRetain2SkippedLine(lineStart);
+                    RemsetCheck::Instance().RecordDirtyLinePath(
+                        lineStart, RemsetCheck::DirtyLinePath::RETAIN2_SKIP);
                 } else {
                     RemsetCheck::Instance().RecordVisitedLine(lineStart,
                                                               RemsetCheck::VisitorHookSite::DIRTY_REGION);
+                    RemsetCheck::Instance().RecordDirtyLinePath(lineStart, RemsetCheck::DirtyLinePath::VISITED);
                     retain = visitor(lineStart, lineStart + LINE_SIZE);
                 }
                 __atomic_store_n(loggedByte, static_cast<uint8_t>(retain), __ATOMIC_RELEASE);
