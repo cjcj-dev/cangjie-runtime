@@ -1440,10 +1440,10 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                 }
                 if (bucket == std::strstr(bucket, "E1_") || bucket == std::strstr(bucket, "E2_")) {
                     VLOG(REPORT,
-                         "[EDGEDECOMP-E-EDGE] run=%zu bucket=%s holderType=%s holder=%#zx holderRegion=%u "
+                         "[EDGEDECOMP-E-EDGE] run=%zu bucket=%s holderTypeInfo=%p holder=%#zx holderRegion=%u "
                          "slotOff=%zu slot=%#zx targetTypeInfo=%p target=%p targetRegion=%u targetRegionInfo=%p "
                          "targetIdentity=%llu actuallyDead=undetermined rootSource=unavailable",
-                         run, bucket, holder->GetTypeInfo()->GetName(), holderAddress,
+                         run, bucket, holder->GetTypeInfo(), holderAddress,
                          static_cast<unsigned>(holderRegion->GetRegionType()), slot - holderAddress, slot,
                          targetTypeInfo, target, static_cast<unsigned>(targetRegion->GetRegionType()),
                          targetRegion, static_cast<unsigned long long>(targetRegion->GetIdentityEpoch()));
@@ -1466,11 +1466,11 @@ void WCollector::ValidateEdgeCompleteness(RegionManager& manager)
                     const char* reason = isFakeMissEdge ? "fakemiss-injected" :
                         (isDroppedEdge ? "stw-dropped-store" : "line-not-logged");
                     VLOG(REPORT,
-                         "[EDGECOMPLETE-MISS] run=%zu holderType=%s holderRegion=%u slotOff=%zu targetRegion=%u "
+                         "[EDGECOMPLETE-MISS] run=%zu holderTypeInfo=%p holderRegion=%u slotOff=%zu targetRegion=%u "
                          "phase=pre-remset reason=%s bucket=%s retainedState=%u snapshotValid=%u "
                          "coveredUpTo=%#zx holder=%#zx regionPending=%u holderIntersectPending=%u "
                          "censusKnown=%u censusSurvived=%u rawPin=%u slot=%#zx target=%p",
-                         run, holder->GetTypeInfo()->GetName(),
+                         run, holder->GetTypeInfo(),
                          static_cast<unsigned>(holderRegion->GetRegionType()),
                          slot - reinterpret_cast<MAddress>(holder),
                          static_cast<unsigned>(targetRegion->GetRegionType()), reason, bucket,
