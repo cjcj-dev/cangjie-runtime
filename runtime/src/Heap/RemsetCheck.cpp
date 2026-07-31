@@ -370,6 +370,16 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
         return;
     }
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(), "remset check requires stopped mutators");
+    CHECK(!visitedRoundActive);
+    visitedRoundRun = run;
+    visitedRoundOldMissing = 0;
+    visitedRoundCandidates.clear();
+    visitedLines.clear();
+    retain2SkippedLines.clear();
+    for (size_t i = 0; i < VISITOR_HOOK_SITE_COUNT; ++i) {
+        visitedRoundLineHits[i] = 0;
+    }
+    retain2SkippedThisRound = 0;
     if (young == 0) {
         ++youngZeroExcluded;
         VLOG(REPORT,
@@ -378,6 +388,7 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
              run);
         return;
     }
+    visitedRoundActive = true;
 
     std::vector<MAddress> bufferedLineVector;
     SatbBuffer::Instance().SnapshotStickyLogLines(bufferedLineVector);
@@ -533,6 +544,8 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
                  static_cast<unsigned>(edge.holderInHeapRangeAtLog));
         }
     }
+    visitedRoundCandidates = candidates;
+    visitedRoundOldMissing = missingThisRound;
 
     StickyLog& stickyLog = StickyLog::Instance();
     size_t validRegionCount = 0;
