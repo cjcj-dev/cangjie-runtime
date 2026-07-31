@@ -128,7 +128,8 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
         uintptr_t allocPtr = GetRegionAllocPtr();
         while (position < allocPtr) {
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
-            size_t size = RegionSpace::GetAllocSize(*reinterpret_cast<BaseObject*>(position));
+            size_t size = RegionSpace::GetAllocSize(
+                UnsafeAssumeCurrent(reinterpret_cast<BaseObject*>(position)));
             func(reinterpret_cast<BaseObject*>(position));
             position += size;
         }
@@ -151,7 +152,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 
         while (position < allocPtr) {
             BaseObject* obj = reinterpret_cast<BaseObject*>(position);
-            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            size_t allocSize = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(obj));
             position += allocSize;
             if (IsSurvivedObject(offset) && !func(obj)) { return false; }
             offset += allocSize;
@@ -1237,7 +1238,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     size_t toRegion1Waste = toRegion1Capacity;
     BaseObject* leftObject = nullptr;
     (void)region->VisitLiveObjectsUntilFalse([&toRegion1Waste, &leftObject](BaseObject* obj) {
-        size_t objSz = RegionSpace::GetAllocSize(*obj);
+        size_t objSz = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(obj));
         if (toRegion1Waste >= objSz) {
             toRegion1Waste -= objSz;
             return true;
