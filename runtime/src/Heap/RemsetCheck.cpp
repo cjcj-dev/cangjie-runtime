@@ -258,6 +258,9 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
         return LoadLoggedByte(line) != 0 &&
             (LoadDirtyBit(edge.holder) || bufferedLines.find(line) != bufferedLines.end());
     };
+    auto checkerRecorded = [&recorded](const Edge& edge, MAddress suppressedSlot) {
+        return edge.slot != suppressedSlot && recorded(edge);
+    };
     auto emitControlMiss = [run](const char* control, const Edge& edge) {
         VLOG(REPORT, "[REMSETCHECK-MISS] run=%zu reason=%s holder=%p slot=%p target=%p", run, control,
              reinterpret_cast<void*>(edge.holder), reinterpret_cast<void*>(edge.slot),
@@ -269,7 +272,7 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
             if (!recorded(edge)) {
                 continue;
             }
-            bool checkerQuery = false;
+            bool checkerQuery = checkerRecorded(edge, edge.slot);
             if (!checkerQuery) {
                 detectControlCaught = true;
                 emitControlMiss("detect-control", edge);
@@ -334,7 +337,7 @@ void RemsetCheck::CheckRound(size_t run, size_t young)
             orphanLines.insert(line);
         }
         ++siteEdges[static_cast<size_t>(edge.site)];
-        if (!recorded(edge)) {
+        if (!checkerRecorded(edge, 0)) {
             ++missingThisRound;
             if (missingSamples < 20) {
                 ++missingSamples;
