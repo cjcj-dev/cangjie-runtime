@@ -220,7 +220,7 @@ private:
     };
 
     BaseObject* ResolveMinorReference(RefField<>& field) const;
-    void VisitMinorRootSlots(const RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
+    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
