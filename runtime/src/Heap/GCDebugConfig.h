@@ -19,6 +19,12 @@ public:
     static void ConfigureFromEnvironment();
     static void DisableStress();
 
+    static bool IsStressEnabled()
+    {
+        return stressMinorInterval.load(std::memory_order_relaxed) != 0 ||
+            stressMajorInterval.load(std::memory_order_relaxed) != 0;
+    }
+
     static bool IsClobberEnabled() { return clobberEnabled.load(std::memory_order_relaxed); }
     static bool IsClobberPositiveControlEnabled()
     {
