@@ -704,7 +704,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj);
+            BaseObject* toObj = collector.ForwardObject(MaybeStalePtr(oldObj));
             if (oldObj != toObj) { refFieldAddr.SetTargetObject(toObj); }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
@@ -716,7 +716,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
-            BaseObject* toObj = collector.ForwardObject(oldObj);
+            BaseObject* toObj = collector.ForwardObject(MaybeStalePtr(oldObj));
             if (oldObj != toObj) { root.object = toObj; }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
@@ -734,7 +734,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             collector.IsUnmovableFromObject(fromVersion)) {
             return;
         }
-        BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
+        BaseObject* toVersion = collector.FindLatestVersion(MaybeStalePtr(fromVersion));
         if (fromVersion != toVersion) {
             DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) + (derivedPtr - basePtr);
             derivedPtr = toDerived;
