@@ -296,35 +296,35 @@ extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)
     RemsetCheck& check = RemsetCheck::Instance();
     StickyLog& stickyLog = StickyLog::Instance();
     if (object == nullptr) {
-        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_A_NULL_OBJECT, object, stickyLog.heapStart,
-                                  stickyLog.heapSize);
+        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_A_NULL_OBJECT, object, __cj_sticky_heap_base,
+                                  __cj_sticky_heap_size);
         return;
     }
     MAddress address = reinterpret_cast<MAddress>(object);
     if (LIKELY(stickyLog.IsLoggedLine(address))) {
-        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_B_ALREADY_LOGGED, object, stickyLog.heapStart,
-                                  stickyLog.heapSize);
+        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_B_ALREADY_LOGGED, object, __cj_sticky_heap_base,
+                                  __cj_sticky_heap_size);
         return;
     }
     Mutator* mutator = Mutator::GetMutator();
     if (UNLIKELY(mutator == nullptr)) {
-        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_C_NO_MUTATOR, object, stickyLog.heapStart,
-                                  stickyLog.heapSize);
+        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::EXIT_C_NO_MUTATOR, object, __cj_sticky_heap_base,
+                                  __cj_sticky_heap_size);
         return;
     }
     MAddress lineStart = 0;
     if (stickyLog.TryLogLine(address, lineStart)) {
         mutator->RememberLineInStickyLogBuffer(lineStart);
-        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::LOGGED, object, stickyLog.heapStart,
-                                  stickyLog.heapSize);
+        check.RecordStickyLogExit(RemsetCheck::StickyLogExit::LOGGED, object, __cj_sticky_heap_base,
+                                  __cj_sticky_heap_size);
         return;
     }
     RemsetCheck::StickyLogExit exit = RemsetCheck::StickyLogExit::EXIT_D_OTHER;
-    if (address < stickyLog.heapStart || address - stickyLog.heapStart >= stickyLog.heapSize) {
+    if (address < __cj_sticky_heap_base || address - __cj_sticky_heap_base >= __cj_sticky_heap_size) {
         exit = RemsetCheck::StickyLogExit::EXIT_D_OUT_OF_HEAP_RANGE;
     } else if (__cj_sticky_logged_base == nullptr) {
         exit = RemsetCheck::StickyLogExit::EXIT_D_BASE_NULL;
     }
-    check.RecordStickyLogExit(exit, object, stickyLog.heapStart, stickyLog.heapSize);
+    check.RecordStickyLogExit(exit, object, __cj_sticky_heap_base, __cj_sticky_heap_size);
 }
 } // namespace MapleRuntime
