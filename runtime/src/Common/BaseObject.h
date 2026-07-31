@@ -159,6 +159,25 @@ ALWAYS_INLINE inline size_t GetSize(CurrentPtr object)
     return static_cast<BaseObject*>(object)->GetSize();
 }
 
+ALWAYS_INLINE inline bool IsArray(CurrentPtr object) { return GetTypeInfo(object)->IsArrayType(); }
+
+ALWAYS_INLINE inline bool IsPrimitiveArray(CurrentPtr object)
+{
+    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
+    return componentTypeInfo == nullptr ? false : componentTypeInfo->IsPrimitiveType();
+}
+
+ALWAYS_INLINE inline bool IsStructArray(CurrentPtr object)
+{
+    TypeInfo* componentTypeInfo = GetTypeInfo(object)->GetComponentTypeInfo();
+    return componentTypeInfo == nullptr ? false : (componentTypeInfo->IsStructType() || componentTypeInfo->IsTuple());
+}
+
+ALWAYS_INLINE inline bool IsSubType(CurrentPtr object, TypeInfo& typeInfo)
+{
+    return GetTypeInfo(object)->IsSubType(&typeInfo);
+}
+
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
 ALWAYS_INLINE inline void DumpObject(CurrentPtr object, int logtype, bool isSimple = false)
 {
