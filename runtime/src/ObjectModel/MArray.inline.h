@@ -53,6 +53,12 @@ ALWAYS_INLINE inline MIndex GetMArraySize(CurrentPtr object)
     return MArray::GetContentOffset() + GetContentSize(object);
 }
 
+ALWAYS_INLINE inline void ForEachRefFieldInRange(CurrentPtr object, const RefFieldVisitor& visitor,
+                                                 MAddress fieldStart, MIndex fieldEnd)
+{
+    static_cast<MArray*>(static_cast<BaseObject*>(object))->ForEachRefFieldInRange(visitor, fieldStart, fieldEnd);
+}
+
 inline ObjectPtr MArray::GetRefElement(MIndex index)
 {
     RefField<>& ref = GetRefField(MArray::GetContentOffset() + RefField<>::GetSize() * index);
