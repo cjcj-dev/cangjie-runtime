@@ -226,7 +226,7 @@ public:
     ~StackMapBuilder() = default;
 
     template<class MapType>
-    MapType Build() const
+    MapType Build(StackMapInvalidReason* invalidReason = nullptr) const
     {
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
@@ -244,7 +244,7 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
 #endif
-        auto entry = head.GetStackMapEntry(startPC, framePC);
+        auto entry = head.GetStackMapEntry(startPC, framePC, invalidReason);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
         }
@@ -260,14 +260,14 @@ protected:
 
 // specialization for MethodMap which avoids using malloc().
 template<>
-inline MethodMap StackMapBuilder::Build<MethodMap>() const
+inline MethodMap StackMapBuilder::Build<MethodMap>(StackMapInvalidReason* invalidReason) const
 {
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else
     auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr, funcDesc);
 #endif
-    auto entry = head.GetStackMapEntry(startPC, framePC);
+    auto entry = head.GetStackMapEntry(startPC, framePC, invalidReason);
     if (!entry.IsValid()) {
         return MethodMap(stackBase);
     }
