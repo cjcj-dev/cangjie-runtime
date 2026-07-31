@@ -308,9 +308,10 @@ int IsPendingSafePoint(DYN_ThreadLocalData tlData)
 void ThrowException(DYN_ObjRef exception)
 {
     ExceptionRef exceptionRef = static_cast<ExceptionRef>(exception);
+    CurrentPtr currentException = UnsafeAssumeCurrent(exceptionRef);
     DLOG(INTERPRETER, "ThrowException: exception=%p, type=%s", exceptionRef,
-        (exceptionRef != nullptr && exceptionRef->GetTypeInfo() != nullptr) ?
-        exceptionRef->GetTypeInfo()->GetName() : "<null>");
+        (exceptionRef != nullptr && GetTypeInfo(currentException) != nullptr) ?
+        GetTypeInfo(currentException)->GetName() : "<null>");
 
     ExceptionManager::ThrowException(exceptionRef);
 }
@@ -345,12 +346,13 @@ int InstanceOf(DYN_ObjRef ref, struct DYN_TypeInfo* ti)
     DLOG(INTERPRETER, "InstanceOf: ref=%p, typeInfo=%p", ref, ti);
 
     MObject* obj = static_cast<MObject*>(ref);
+    CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
     TypeInfo* tinfo = reinterpret_cast<TypeInfo*>(ti);
 
-    DLOG(INTERPRETER, "  obj type is %s", obj->GetTypeInfo()->GetName());
+    DLOG(INTERPRETER, "  obj type is %s", GetTypeInfo(currentObject)->GetName());
     DLOG(INTERPRETER, "  type to check is %s", tinfo->GetName());
 
-    return obj->IsSubType(*tinfo) ? 1 : 0;
+    return IsSubType(currentObject, *tinfo) ? 1 : 0;
 }
 
 int IsSubType(struct DYN_TypeInfo* typeInfo, struct DYN_TypeInfo* superTypeInfo)
