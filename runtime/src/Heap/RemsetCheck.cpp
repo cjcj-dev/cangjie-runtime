@@ -296,7 +296,7 @@ void RemsetCheck::RecordLoggedLineWrite(MAddress lineStart, LogLineSource source
     }
     CHECK((lineStart & (StickyLog::LINE_SIZE - 1)) == 0);
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(lineStart);
-    if (region == nullptr) {
+    if (region == nullptr || region->IsYoungRegion()) {
         return;
     }
     HookSite hookSite = source == LogLineSource::BARRIER ? threadStickyLogEvent.hookSite : HookSite::COUNT;
