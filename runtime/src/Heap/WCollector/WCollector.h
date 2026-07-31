@@ -9,6 +9,7 @@
 #define MRT_WCOLLECTOR_H
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
@@ -194,6 +195,9 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    using MinorForwardTable = std::unordered_map<BaseObject*, BaseObject*>;
+    using MinorRegionSet = std::unordered_set<RegionInfo*>;
+
     struct BulkMissBuckets {
         size_t b1LegitIdentity = 0;
         size_t b2LegitOther = 0;
@@ -216,10 +220,17 @@ private:
     };
 
     BaseObject* ResolveMinorReference(RefField<>& field) const;
+    void VisitMinorRootSlots(const RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
+    void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
-    void RescanRememberedSet(WorkStack& workStack);
+    void RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding);
+    void PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const;
+    bool FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding) const;
+    void FixMinorRootSlots(const MinorForwardTable& forwarding);
+    void FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding);
+    void EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::vector<RegionInfo*>& toRegions);
     void ValidateYoungMarking();
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
