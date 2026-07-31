@@ -206,18 +206,20 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
-            bool wasMarked = collector.MarkObject(obj);
+            CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+            bool wasMarked = collector.MarkObject(currentObject);
             if (!wasMarked) {
                 nNewlyMarked++;
-                if (!obj->HasRefField()) {
+                if (!HasRefField(currentObject)) {
                     continue;
                 }
-                collector.ForEachStrongRefSlot(obj,
-                    [this, obj](TracingCollector::RefSlotKind kind, BaseObject* target, RefField<>&) {
+                collector.ForEachStrongRefSlot(currentObject,
+                    [this, obj](TracingCollector::RefSlotKind kind, CurrentPtr currentTarget, RefField<>&) {
+                        BaseObject* target = currentTarget;
                         if (kind == TracingCollector::RefSlotKind::WEAK_REFERENT) {
                             if (target != nullptr) {
                                 DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &target, target);
-                                collector.TraceObjectRefFields(target, workStack);
+                                collector.TraceObjectRefFields(currentTarget, workStack);
                                 WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
                             } // If referent is none, the corresponding weakref does not need to be recorded.
                             return;
@@ -242,9 +244,10 @@ private:
     TracingCollector::WorkStack workStack;
 };
 
-void TracingCollector::ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& visitor)
+void TracingCollector::ForEachRefSlot(CurrentPtr currentObject, const RefFieldVisitor& visitor)
 {
-    TypeInfo* typeInfo = obj->GetTypeInfo();
+    BaseObject* obj = currentObject;
+    TypeInfo* typeInfo = GetTypeInfo(currentObject);
     if (!typeInfo->HasRefField()) {
         return;
     }
@@ -252,11 +255,11 @@ void TracingCollector::ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& vi
     if (UNLIKELY(typeInfo->IsRawArray())) {
         MArray* array = reinterpret_cast<MArray*>(obj);
         MIndex arrayLength = array->GetLength();
-        TypeInfo* componentTypeInfo = array->GetComponentTypeInfo();
+        TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentObject);
         if (componentTypeInfo->IsStructType()) {
             GCTib gcTib = componentTypeInfo->GetGCTib();
             MAddress contentAddr = reinterpret_cast<Uptr>(array) + MArray::GetContentOffset();
-            size_t elementSize = array->GetElementSize();
+            size_t elementSize = GetElementSize(currentObject);
             for (MIndex i = 0; i < arrayLength; ++i) {
                 gcTib.ForEachBitmapWord(contentAddr, visitor);
                 contentAddr += elementSize;
@@ -274,22 +277,23 @@ void TracingCollector::ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& vi
     }
 
     MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-    obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
+    GetGCTib(currentObject).ForEachBitmapWord(contentAddr, visitor);
 }
 
-void TracingCollector::ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRefSlotVisitor& visitor)
+void TracingCollector::ForEachStrongRefSlot(CurrentPtr currentObject, const ClassifiedRefSlotVisitor& visitor)
 {
-    if (!obj->HasRefField()) {
+    BaseObject* obj = currentObject;
+    if (!HasRefField(currentObject)) {
         return;
     }
-    if (UNLIKELY(obj->IsWeakRef())) {
+    if (UNLIKELY(IsWeakRef(currentObject))) {
         RefField<>* referentField = reinterpret_cast<RefField<>*>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
         visitor(RefSlotKind::WEAK_REFERENT,
-                GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, obj, *referentField), *referentField);
+                GetAndTryTagObj(RefSlotKind::WEAK_REFERENT, currentObject, *referentField), *referentField);
         return;
     }
-    ForEachRefSlot(obj, [this, obj, &visitor](RefField<>& field) {
-        visitor(RefSlotKind::STRONG, GetAndTryTagObj(RefSlotKind::STRONG, obj, field), field);
+    ForEachRefSlot(currentObject, [this, currentObject, &visitor](RefField<>& field) {
+        visitor(RefSlotKind::STRONG, GetAndTryTagObj(RefSlotKind::STRONG, currentObject, field), field);
     });
 }
 
@@ -308,7 +312,7 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
-            bool wasMarked = collector.MarkObject(obj);
+            bool wasMarked = collector.MarkObject(UnsafeAssumeCurrent(obj));
             if (!wasMarked) {
                 collector.DFSTraceExportObject(obj);
             }
