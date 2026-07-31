@@ -216,6 +216,15 @@ public:
 
     MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
 
+    // INVARIANT — a retained census, once published as SNAPSHOT_VALID, asserts:
+    // every live object below retainedLiveInfoCoveredUpTo has a mark in the
+    // retained bitmap. Any code that materializes a live object below that
+    // boundary afterwards (slot free-list revival, in-place geometry rewrites,
+    // any future in-place reuse) must do one of exactly two things:
+    // synchronously mark it (MarkObject + AddLiveByteCount, only in windows
+    // where the mark cannot be consumed by a live trace), or invalidate the
+    // census (ClearLiveInfo / ResetCensusBoundary). Publishing silence is how
+    // RescanRememberedSet comes to skip live holders forever (b316 family).
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();

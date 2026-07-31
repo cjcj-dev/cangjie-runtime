@@ -44,6 +44,13 @@ struct FreePinnedSlotLists {
     SlotList freeAtomicSlotList;
     SlotList freeSyncSlotList;
 
+private:
+    // Single revive entry: RegionManager::AllocPinnedFromFreeList owns the
+    // census-revive protocol (mark in trace-safe windows or leave the trace to
+    // census the object; see RegionInfo::PreserveRetainedLiveInfo invariant).
+    // Keeping PopFront private makes any new consumer meet that protocol
+    // explicitly instead of popping slots ad hoc.
+    friend class RegionManager;
     uintptr_t PopFront(size_t size)
     {
         switch (size) {
@@ -56,6 +63,7 @@ struct FreePinnedSlotLists {
         }
     }
 
+public:
     void PushFront(BaseObject* slot)
     {
         size_t size = slot->GetSize();

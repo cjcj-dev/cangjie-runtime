@@ -26,17 +26,6 @@ public:
         head = headSlot;
     }
 
-    uintptr_t PopFront(size_t size)
-    {
-        if (head == nullptr || size != reinterpret_cast<BaseObject*>(head)->GetSize()) {
-            return 0;
-        }
-        ObjectSlot* allocSlot = head;
-        head = head->next;
-        allocSlot->next = nullptr;
-        return reinterpret_cast<uintptr_t>(allocSlot);
-    }
-
     void Clear() { head = nullptr; }
 
     // Clear the rest memory of slot object if the slot object size is greater than ObjectSlot(16 Bytes).
@@ -50,6 +39,23 @@ public:
     }
 
 private:
+    // Popping a slot revives memory inside a region whose retained census may
+    // already record that address as dead (see the census invariant at
+    // RegionInfo::PreserveRetainedLiveInfo). Only the guarded revive entry —
+    // RegionManager::AllocPinnedFromFreeList via FreePinnedSlotLists — may pop,
+    // so a new reuse path cannot be added without meeting the invariant.
+    friend struct FreePinnedSlotLists;
+    uintptr_t PopFront(size_t size)
+    {
+        if (head == nullptr || size != reinterpret_cast<BaseObject*>(head)->GetSize()) {
+            return 0;
+        }
+        ObjectSlot* allocSlot = head;
+        head = head->next;
+        allocSlot->next = nullptr;
+        return reinterpret_cast<uintptr_t>(allocSlot);
+    }
+
     ObjectSlot* head = nullptr;
 };
 } // namespace MapleRuntime
