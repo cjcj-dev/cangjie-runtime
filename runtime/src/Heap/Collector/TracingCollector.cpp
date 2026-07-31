@@ -51,7 +51,8 @@ void ResetSkippedStackMapCounts()
     g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
 }
 
-void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP)
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                                          uintptr_t frameIP)
 {
     std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
     switch (reason) {
