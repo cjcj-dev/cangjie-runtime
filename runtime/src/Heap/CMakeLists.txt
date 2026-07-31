@@ -7,6 +7,7 @@
 set(SRC_LIST
     "Heap.cpp"
     "GcThreadPool.cpp"
+    "GCDebugConfig.cpp"
     "StickyLog.cpp"
     "FixEdgeSet.cpp"
     "ForwardFactTable.cpp"
