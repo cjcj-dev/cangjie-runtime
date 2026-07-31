@@ -273,12 +273,26 @@ struct Driver {
         if (Mutator::GetMutator() == nullptr) {
             MutatorManager::Instance().CreateMutator();
         }
-        RefField<>& f = *SlotField(slots[holderIdx].obj, slotIdx);
-        Heap::GetBarrier().WriteReference(slots[holderIdx].obj, f, slots[targetIdx].obj);
+        BaseObject* holder = slots[holderIdx].obj;
+        RefField<>& f = *SlotField(holder, slotIdx);
+        Heap::GetBarrier().WriteReference(holder, f, slots[targetIdx].obj);
         slots[holderIdx].lastStoreWasBarrier = true;
         slots[holderIdx].lastStoreWasPlain = false;
         ++storeCount;
         ++barrierStoreCount;
+        // Immediate post-store observation: did the barrier leave a logged line?
+        bool nowLogged = StickyLog::Instance().IsLoggedLine(reinterpret_cast<MAddress>(holder));
+        if (trackStepTrace) {
+            RegionInfo* hReg = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            std::printf("[GCDRIVER-BARRIER] holderIdx=%u loggedNow=%d young=%d regType=%u\n",
+                holderIdx, nowLogged ? 1 : 0,
+                (hReg && hReg->IsYoungRegion()) ? 1 : 0,
+                hReg ? static_cast<unsigned>(hReg->GetRegionType()) : 999u);
+        }
+        if (!nowLogged) {
+            // Barrier did not log (mutator missing, young holder, or already-consumed path).
+            // Still counts as barrier-origin edge for hit criterion.
+        }
     }
 
     void Drop(uint32_t idx)
