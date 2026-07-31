@@ -8,6 +8,7 @@
 #ifndef MRT_BASE_OBJECT_H
 #define MRT_BASE_OBJECT_H
 
+#include "Common/ObjectPtr.h"
 #include "Common/StateWord.h"
 #include "ObjectModel/Field.h"
 #include "ObjectModel/MClass.inline.h"
@@ -17,25 +18,7 @@
 namespace MapleRuntime {
 class BaseObject {
 public:
-    TypeInfo* GetTypeInfo() const;
-
-    inline bool HasRefField() const { return GetTypeInfo()->HasRefField(); }
-
-    inline bool IsWeakRef() const { return GetTypeInfo()->IsWeakRefType(); }
-
     inline bool IsValidObject() const { return stateWord.IsValidStateWord(); }
-
-    inline bool IsRawArray() const { return GetTypeInfo()->IsRawArray(); }
-
-    inline TypeInfo* GetComponentTypeInfo() const { return GetTypeInfo()->GetComponentTypeInfo(); }
-
-    inline GCTib GetGCTib() const { return GetTypeInfo()->GetGCTib(); }
-
-    void ForEachRefField(const RefFieldVisitor& visitor);
-
-    void ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
-    // size in bytes
-    size_t GetSize() const;
 
     size_t GetSize(TypeInfo* kls) const;
 
@@ -98,14 +81,82 @@ private:
     // We cannot explicit construct BaseObject and destruct it
     BaseObject() = delete;
     ~BaseObject() = delete;
+
+    TypeInfo* GetTypeInfo() const;
+    inline bool HasRefField() const { return GetTypeInfo()->HasRefField(); }
+    inline bool IsWeakRef() const { return GetTypeInfo()->IsWeakRefType(); }
+    inline bool IsRawArray() const { return GetTypeInfo()->IsRawArray(); }
+    inline TypeInfo* GetComponentTypeInfo() const { return GetTypeInfo()->GetComponentTypeInfo(); }
+    inline GCTib GetGCTib() const { return GetTypeInfo()->GetGCTib(); }
+    void ForEachRefField(const RefFieldVisitor& visitor);
+    void ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
+    // size in bytes
+    size_t GetSize() const;
+
     void ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
     void ForEachAggRefFieldInNonArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd) const;
+
+    friend TypeInfo* GetTypeInfo(CurrentPtr object);
+    friend bool HasRefField(CurrentPtr object);
+    friend bool IsWeakRef(CurrentPtr object);
+    friend bool IsRawArray(CurrentPtr object);
+    friend TypeInfo* GetComponentTypeInfo(CurrentPtr object);
+    friend GCTib GetGCTib(CurrentPtr object);
+    friend void ForEachRefField(CurrentPtr object, const RefFieldVisitor& visitor);
+    friend void ForEachRefInStruct(CurrentPtr object, const RefFieldVisitor& visitor, MAddress aggStart,
+                                   MAddress aggEnd);
+    friend size_t GetSize(CurrentPtr object);
 
     // The only contract between Managed Heap and other modules
     StateWord stateWord;
 };
 
-using ObjectPtr = BaseObject*;
+ALWAYS_INLINE inline TypeInfo* GetTypeInfo(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->GetTypeInfo();
+}
+
+ALWAYS_INLINE inline bool HasRefField(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->HasRefField();
+}
+
+ALWAYS_INLINE inline bool IsWeakRef(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->IsWeakRef();
+}
+
+ALWAYS_INLINE inline bool IsRawArray(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->IsRawArray();
+}
+
+ALWAYS_INLINE inline TypeInfo* GetComponentTypeInfo(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->GetComponentTypeInfo();
+}
+
+ALWAYS_INLINE inline GCTib GetGCTib(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->GetGCTib();
+}
+
+ALWAYS_INLINE inline void ForEachRefField(CurrentPtr object, const RefFieldVisitor& visitor)
+{
+    static_cast<BaseObject*>(object)->ForEachRefField(visitor);
+}
+
+ALWAYS_INLINE inline void ForEachRefInStruct(CurrentPtr object, const RefFieldVisitor& visitor, MAddress aggStart,
+                                             MAddress aggEnd)
+{
+    static_cast<BaseObject*>(object)->ForEachRefInStruct(visitor, aggStart, aggEnd);
+}
+
+ALWAYS_INLINE inline size_t GetSize(CurrentPtr object)
+{
+    return static_cast<BaseObject*>(object)->GetSize();
+}
+
 using ObjectVisitor = std::function<void(ObjectPtr)>;
 
 // ObjectRef aims to express a reference to object which is not a reference field and
