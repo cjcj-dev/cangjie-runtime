@@ -186,12 +186,18 @@ void HeapImpl::Init(const HeapParam& param)
     idlePhaseBarrier = stickyLogBarrierEnabled ? static_cast<Barrier*>(&idleLogBarrier) : &idleBarrier;
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
-    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+    if (StickyLog::Instance().IsForceSlowPathEnabled() || CanonicalWriteTable::Instance().IsEnabled()) {
         SetGCPhase(GCPhase::GC_PHASE_ENUM);
         InstallBarrier(GCPhase::GC_PHASE_IDLE);
-        LOG(RTLOG_WARNING,
-            "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
-            "barriers; compiler sticky metadata is not required and performance is not production representative");
+        if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+            LOG(RTLOG_WARNING,
+                "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
+                "barriers; compiler sticky metadata is not required and performance is not production representative");
+        }
+        if (CanonicalWriteTable::Instance().IsEnabled()) {
+            LOG(RTLOG_WARNING,
+                "MRT_CANONICAL_WRITE routes compiler write fast paths through the runtime IDLE barrier");
+        }
     } else if (!StickyLog::Instance().IsMinorEnabled()) {
         // Only the explicit escape hatch; auto-disabled(no consumer) already warned in StickyLog.
         const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
