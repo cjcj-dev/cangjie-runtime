@@ -1749,45 +1749,49 @@ void WCollector::ProcessFinalizers()
 CurrentPtr WCollector::ForwardObject(MaybeStalePtr maybeStale)
 {
     BaseObject* obj = maybeStale.pointer;
-    BaseObject* to = TryForwardObject(obj);
-    return CurrentPtr((to != nullptr) ? to : obj);
+    CurrentPtr to = TryForwardObject(maybeStale);
+    return static_cast<BaseObject*>(to) != nullptr ? to : CurrentPtr(obj);
 }
 
-BaseObject* WCollector::TryForwardObject(BaseObject* obj)
+CurrentPtr WCollector::TryForwardObject(MaybeStalePtr maybeStale)
 {
+    BaseObject* obj = maybeStale.pointer;
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
-        return nullptr;
+        return CurrentPtr(nullptr);
     }
     const uint64_t expectedEpoch = region->GetIdentityEpoch();
 
     if (fwdTable.RouteRegion(region)) {
         if (region->TryLockReadFromRegion()) {
-            BaseObject* toVersion = ForwardObjectImpl(obj, region, expectedEpoch);
+            CurrentPtr toVersion = ForwardObjectImpl(maybeStale, region, expectedEpoch);
             region->UnlockReadFromRegion();
             return toVersion;
         } else {
-            return GetForwardPointer(obj, region, expectedEpoch);
+            return GetForwardPointer(maybeStale, region, expectedEpoch);
         }
     } else if (region->IsCompacted()) {
-        return GetForwardPointer(obj, region, expectedEpoch);
+        return GetForwardPointer(maybeStale, region, expectedEpoch);
     }
-    return nullptr;
+    return CurrentPtr(nullptr);
 }
 
-__attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
-    BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
+__attribute__((visibility("hidden"))) CurrentPtr WCollector::ForwardObjectImpl(
+    MaybeStalePtr maybeStale, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
+    BaseObject* obj = maybeStale.pointer;
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
     do {
         StateWord oldWord = obj->GetStateWord();
 
         // 1. object has already been forwarded
         if (obj->IsForwarded()) {
-            auto toObj = GetForwardPointer(obj, ghostFromRegion, expectedEpoch);
+            CurrentPtr currentToObject = GetForwardPointer(maybeStale, ghostFromRegion, expectedEpoch);
+            BaseObject* toObj = currentToObject;
             CHECK_DETAIL(toObj != nullptr, "route epoch changed before reading forwarded object %p", obj);
-            DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
-            return toObj;
+            DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, GetTypeInfo(currentToObject),
+                 GetSize(currentToObject));
+            return currentToObject;
         }
 
         // 2. object is being forwarded, spin until it is forwarded (or gets its own forwarded address)
@@ -1798,26 +1802,28 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectImpl(
 
         // 3. hope we can forward this object
         if (obj->TryLockObject(oldWord)) {
-            return ForwardObjectExclusive(obj, ghostFromRegion, expectedEpoch);
+            // The successful CAS from oldWord proves that obj still names the current version.
+            return ForwardObjectExclusive(CurrentPtr(obj), ghostFromRegion, expectedEpoch);
         }
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
-    return nullptr;
+    return CurrentPtr(nullptr);
 }
 
-__attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclusive(
-    BaseObject* obj, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
+__attribute__((visibility("hidden"))) CurrentPtr WCollector::ForwardObjectExclusive(
+    CurrentPtr currentObject, RegionInfo* ghostFromRegion, uint64_t expectedEpoch)
 {
-    size_t size = RegionSpace::GetAllocSize(*obj);
+    BaseObject* obj = currentObject;
+    size_t size = RegionSpace::ToAllocSize(GetSize(currentObject));
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     BaseObject* toObj = space.GetRegionManager().RouteObject(obj, ghostFromRegion, expectedEpoch);
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
-    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
+    DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, GetTypeInfo(currentObject), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
-    return toObj;
+    return CurrentPtr(toObj);
 }
 
 void WCollector::CollectSmallSpace()
