@@ -1299,6 +1299,162 @@ void WCollector::ValidateYoungMarking()
     VLOG(REPORT, "[StickyMinor] validator reachable=%zu young=%zu failures=0", reachable.size(), youngReachable);
 }
 
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+// Independent checkmark (Go gccheckmark style).
+// Why independent of minor:
+// - Seeds use major-style root enumeration (mutator/static/concurrency/finalizer/
+//   export/resurrected/cycle/alloc-buffer) plus a full linear walk of non-young
+//   regions via VisitOldRegionsForCheckmark — not StickyLog remset, not
+//   RescanRememberedSet, not retained live bitmaps, not IsSurvivedObject.
+// - Young-object liveness is read only as the comparison oracle against minor's
+//   mark bitmap (IsMarkedObject); the second pass never consults minor's root
+//   visitor (VisitMinorRoots) or remset consumer.
+// - Therefore a root/remset hole that blinds both minor and ValidateYoungMarking
+//   can still surface here when an old→young edge exists in an unscanned old
+//   object body.
+void WCollector::CheckmarkYoungMarking()
+{
+    if (!GCDebugConfig::IsCheckmarkEnabled()) {
+        return;
+    }
+    uint64_t startNs = TimeUtil::NanoSeconds();
+    std::unordered_set<BaseObject*> reachable;
+    std::vector<BaseObject*> pending;
+
+    auto pushRoot = [&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(object);
+        }
+    };
+    auto pushField = [this, &pushRoot](RefField<>& field) {
+        pushRoot(ResolveMinorReference(field));
+    };
+    RootVisitor rawRootVisitor = [&pushField](ObjectRef& root) {
+        pushField(reinterpret_cast<RefField<>&>(root));
+    };
+    RefFieldVisitor fieldVisitor = [&pushField](RefField<>& field) { pushField(field); };
+
+    // Major-style roots (same categories as EnumAllCommonRoots + export + finalizers).
+    MutatorManager::Instance().VisitAllMutators(
+        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(rawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* object : resurrectedExportObjectes) {
+            pushRoot(object);
+        }
+        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
+            pushRoot(object);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+        for (const auto& entry : cycleRefWorkStack) {
+            pushRoot(entry.first);
+            for (BaseObject* object : entry.second) {
+                pushRoot(object);
+            }
+        }
+    }
+    // Alloc-buffer roots were already MergeRoots'd into the minor work stack and
+    // cleared before TraceYoungClosure; re-merge would be empty. Mutator STW roots
+    // above cover the live set that major EnumAllCommonRoots would see.
+
+    // Independent old→young edge discovery: full object walk of non-young regions.
+    // ⛔ no RescanRememberedSet, no StickyLog, no retained bitmap, no IsSurvivedObject.
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    size_t oldRegionsScanned = 0;
+    size_t oldObjectsScanned = 0;
+    manager.VisitOldRegionsForCheckmark(
+        [this, &pushRoot, &oldRegionsScanned, &oldObjectsScanned](RegionInfo* region) {
+            ++oldRegionsScanned;
+            region->VisitAllObjects([this, &pushRoot, &oldObjectsScanned](BaseObject* object) {
+                ++oldObjectsScanned;
+                if (!Heap::IsHeapAddress(object)) {
+                    return;
+                }
+                object->ForEachRefField([this, &pushRoot](RefField<>& field) {
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (!Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion =
+                        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion->IsYoungRegion()) {
+                        pushRoot(target);
+                    }
+                });
+            });
+        });
+
+    size_t youngReachable = 0;
+    size_t youngMissed = 0;
+    size_t youngExtra = 0; // reserved; comparison is one-sided (oracle-live, minor-unmarked)
+    BaseObject* injectVictim = nullptr;
+
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!Heap::IsHeapAddress(object) || !reachable.insert(object).second) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        if (region->IsYoungRegion()) {
+            ++youngReachable;
+            if (GCDebugConfig::IsCheckmarkInjectMissEnabled() && injectVictim == nullptr &&
+                region->IsMarkedObject(object)) {
+                // Positive control: pretend minor missed this live young object once.
+                injectVictim = object;
+            }
+            bool minorMarked = region->IsMarkedObject(object);
+            if (injectVictim == object) {
+                minorMarked = false;
+            }
+            if (!minorMarked) {
+                ++youngMissed;
+                unsigned typeId = 0;
+                const char* typeName = "<unknown>";
+                TypeInfo* ti = object->GetTypeInfo();
+                if (ti != nullptr) {
+                    typeId = static_cast<unsigned>(static_cast<unsigned char>(ti->GetType()));
+                    typeName = ti->GetName();
+                }
+                VLOG(REPORT,
+                     "[GCCheckmark] DIVERGENCE dir=oracle-live/minor-unmarked obj=%p typeId=%u "
+                     "type=%s region=%p regionType=%u youngAge=%u liveBytes=%zu",
+                     object, typeId, typeName, region, region->GetRegionType(),
+                     static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount());
+            }
+        }
+        object->ForEachRefField([this, &pending](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (Heap::IsHeapAddress(target)) {
+                pending.push_back(target);
+            }
+        });
+    }
+
+    uint64_t wallUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
+    VLOG(REPORT,
+         "[GCCheckmark] summary reachable=%zu young=%zu missed=%zu extra=%zu "
+         "oldRegions=%zu oldObjects=%zu wallUs=%zu inject=%u",
+         reachable.size(), youngReachable, youngMissed, youngExtra, oldRegionsScanned,
+         oldObjectsScanned, wallUs, static_cast<unsigned>(injectVictim != nullptr));
+    if (youngMissed != 0) {
+        CHECK_DETAIL(false,
+                     "[GCCheckmark] %zu young object(s) reachable by independent path but unmarked by minor",
+                     youngMissed);
+    }
+}
+#endif
+
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
@@ -1333,6 +1489,10 @@ void WCollector::DoYoungGarbageCollection()
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
     }
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // After minor mark, before reclaim: independent checkmark path.
+    CheckmarkYoungMarking();
+#endif
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();

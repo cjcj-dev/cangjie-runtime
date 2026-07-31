@@ -533,6 +533,31 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+void RegionManager::VisitOldRegionsForCheckmark(const std::function<void(RegionInfo*)>& visitor)
+{
+    auto walk = [&visitor](RegionList& list) {
+        list.VisitAllRegions([&visitor](RegionInfo* region) {
+            if (region == nullptr || !region->IsValidRegion() || region->IsFreeRegion() ||
+                region->IsGarbageRegion() || region->IsYoungRegion()) {
+                return;
+            }
+            visitor(region);
+        });
+    };
+    walk(tlRegionList);
+    walk(recentFullRegionList);
+    walk(fullTraceRegions);
+    walk(unmovableFromRegionList);
+    walk(recentPinnedRegionList);
+    walk(oldPinnedRegionList);
+    walk(rawPointerPinnedRegionList);
+    walk(oldLargeRegionList);
+    walk(recentLargeRegionList);
+    walk(largeTraceRegions);
+}
+#endif
+
 void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                                         const std::function<void(RegionInfo*)>& promoteVisitor)
 {

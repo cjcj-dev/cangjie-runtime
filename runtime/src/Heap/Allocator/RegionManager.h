@@ -281,6 +281,11 @@ public:
     void CollectYoungGarbage(YoungCollectionStats& stats, const std::function<void(RegionInfo*)>& promoteVisitor);
     void StampCensusBoundaries();
     void PromoteAllRegions();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // Independent checkmark: walk non-young regions that can hold old→young edges.
+    // Not remset / retained-bitmap filtered. Observational only.
+    void VisitOldRegionsForCheckmark(const std::function<void(RegionInfo*)>& visitor);
+#endif
 
     void MergeRawPointerPinnedRegions()
     {
