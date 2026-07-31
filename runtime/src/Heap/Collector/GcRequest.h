@@ -33,9 +33,16 @@ enum GCReason : uint32_t {
     GC_REASON_NATIVE_SYNC, // Just wait one gc request to reduce native heap consumption.
     GC_REASON_FORCE,       // force gc is triggered when runtime triggers gc actively.
     GC_REASON_YOUNG,       // Young-region allocation reaches the sticky minor threshold.
+    GC_REASON_STRESS_MINOR, // Allocation-frequency request for a young collection.
+    GC_REASON_STRESS_MAJOR, // Allocation-frequency request for a full collection.
     GC_REASON_MAX,
     GC_REASON_INVALID = std::numeric_limits<uint32_t>::max(),
 };
+
+inline bool IsYoungGCReason(GCReason reason)
+{
+    return reason == GC_REASON_YOUNG || reason == GC_REASON_STRESS_MINOR;
+}
 
 struct GCRequest {
     const GCReason reason;

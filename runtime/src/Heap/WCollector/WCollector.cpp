@@ -1393,7 +1393,7 @@ void WCollector::DoYoungGarbageCollection()
 void WCollector::DoGarbageCollection()
 {
     StickyLog& stickyLog = StickyLog::Instance();
-    if (gcReason == GC_REASON_YOUNG && stickyLog.IsMinorEnabled() &&
+    if (IsYoungGCReason(gcReason) && stickyLog.IsMinorEnabled() &&
         minorRunsSinceMajor < stickyLog.GetMajorInterval()) {
         GetGCStats().lastCollectionWasYoung = true;
         DoYoungGarbageCollection();

@@ -169,7 +169,19 @@ private:
 
 static ImmortalWrapper<HeapImpl> g_heapInstance;
 
-MAddress HeapImpl::Allocate(size_t size, AllocType allocType) { return theSpace->Allocate(size, allocType); }
+MAddress HeapImpl::Allocate(size_t size, AllocType allocType)
+{
+    if (UNLIKELY(GCDebugConfig::IsStressEnabled()) && !IsGcThread() && IsGCEnabled()) {
+        bool triggerMajor = GCDebugConfig::ShouldTriggerMajor();
+        bool triggerMinor = GCDebugConfig::ShouldTriggerMinor();
+        if (triggerMajor) {
+            collectorProxy.RequestGC(GC_REASON_STRESS_MAJOR, false);
+        } else if (triggerMinor) {
+            collectorProxy.RequestGC(GC_REASON_STRESS_MINOR, false);
+        }
+    }
+    return theSpace->Allocate(size, allocType);
+}
 
 bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool safe) const
 {
