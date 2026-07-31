@@ -7,19 +7,18 @@
 #include "GCDebugConfig.h"
 
 #include <cerrno>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 
+#include "Allocator/MemMap.h"
+#include "Base/Globals.h"
 #include "Base/Log.h"
 #include "Base/LogFile.h"
-#include "Common/BaseObject.h"
+#include "Common/StateWord.h"
 
 namespace MapleRuntime {
 std::atomic<bool> GCDebugConfig::clobberEnabled{ false };
-std::atomic<bool> GCDebugConfig::clobberPositiveControlEnabled{ false };
-std::atomic<bool> GCDebugConfig::clobberPositiveControlRan{ false };
 std::atomic<size_t> GCDebugConfig::stressMinorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMajorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMinorAllocationCount{ 0 };
@@ -31,6 +30,9 @@ std::atomic<size_t> GCDebugConfig::stressMinorYoungExecutionCount{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMajorExecutionCount{ 0 };
 
 namespace {
+MemMap* clobberGuard = nullptr;
+uintptr_t clobberAddress = 0;
+
 bool ReadBoolean(const char* name)
 {
     const char* value = std::getenv(name);
@@ -69,14 +71,32 @@ bool IsIntervalReached(std::atomic<size_t>& count, size_t interval)
     size_t allocation = count.fetch_add(1, std::memory_order_relaxed) + 1;
     return allocation % interval == 0;
 }
+
+void InitializeClobberGuard()
+{
+    MemMap::Option option = MemMap::DEFAULT_OPTIONS;
+    option.tag = "cangjie_gc_clobber_guard";
+    option.prot = MemMap::PROT_NONE;
+    option.protAll = true;
+    clobberGuard = MemMap::MapMemory(MRT_PAGE_SIZE, MRT_PAGE_SIZE, option);
+    clobberAddress = reinterpret_cast<uintptr_t>(clobberGuard->GetBaseAddr());
+    CHECK_DETAIL(clobberAddress != 0, "clobber guard must not use the null address");
+#if UINTPTR_MAX > UINT32_MAX
+    constexpr uintptr_t addressMask = (static_cast<uintptr_t>(1) << StateWord::ADDRESS_BIT_COUNT) - 1;
+    CHECK_DETAIL((clobberAddress & ~addressMask) == 0,
+        "clobber guard address %#zx does not survive the 48-bit managed-reference encoding", clobberAddress);
+#endif
+    VLOG(REPORT, "[GCClobber] guard=[%#zx,%#zx) encoded=%#zx",
+        clobberAddress, clobberAddress + MRT_PAGE_SIZE, clobberAddress);
+}
 } // namespace
 
 void GCDebugConfig::ConfigureFromEnvironment()
 {
     clobberEnabled.store(ReadBoolean("MRT_GC_CLOBBER"), std::memory_order_relaxed);
-    clobberPositiveControlEnabled.store(
-        ReadBoolean("MRT_GC_CLOBBER_POSITIVE_CONTROL"), std::memory_order_relaxed);
-    clobberPositiveControlRan.store(false, std::memory_order_relaxed);
+    if (IsClobberEnabled()) {
+        InitializeClobberGuard();
+    }
     stressMinorInterval.store(ReadInterval("MRT_GC_STRESS_MINOR"), std::memory_order_relaxed);
     stressMajorInterval.store(ReadInterval("MRT_GC_STRESS_MAJOR"), std::memory_order_relaxed);
     stressMinorAllocationCount.store(0, std::memory_order_relaxed);
@@ -86,6 +106,13 @@ void GCDebugConfig::ConfigureFromEnvironment()
     stressMinorExecutionCount.store(0, std::memory_order_relaxed);
     stressMinorYoungExecutionCount.store(0, std::memory_order_relaxed);
     stressMajorExecutionCount.store(0, std::memory_order_relaxed);
+}
+
+void GCDebugConfig::Finalize()
+{
+    MemMap::DestroyMemMap(clobberGuard);
+    clobberAddress = 0;
+    clobberEnabled.store(false, std::memory_order_relaxed);
 }
 
 void GCDebugConfig::DisableStress()
@@ -104,29 +131,20 @@ void GCDebugConfig::DisableStress()
     stressMajorInterval.store(0, std::memory_order_relaxed);
 }
 
-void GCDebugConfig::FillYoungReclaimedMemory(uintptr_t start, size_t size, size_t allocatedSize)
+bool GCDebugConfig::FillReclaimedMemory(uintptr_t start, size_t size)
 {
-    uintptr_t controlTarget = 0;
-    bool runPositiveControl = allocatedSize >= sizeof(uintptr_t) && IsClobberPositiveControlEnabled() &&
-        !clobberPositiveControlRan.exchange(true, std::memory_order_relaxed);
-    if (runPositiveControl) {
-        controlTarget = reinterpret_cast<uintptr_t>(reinterpret_cast<BaseObject*>(start)->GetTypeInfo());
+    if (!IsClobberEnabled()) {
+        return false;
     }
-
-    FillReclaimedMemory(start, size);
-    if (!runPositiveControl) {
-        return;
+    CHECK_DETAIL(clobberAddress != 0, "clobber guard is not initialized");
+    CHECK_DETAIL(start % alignof(uintptr_t) == 0 && size % sizeof(uintptr_t) == 0,
+        "clobber range [%#zx+%zu) must be word aligned", start, size);
+    uintptr_t* cursor = reinterpret_cast<uintptr_t*>(start);
+    uintptr_t* end = cursor + size / sizeof(uintptr_t);
+    while (cursor != end) {
+        *cursor++ = clobberAddress;
     }
-
-    uintptr_t observed = *reinterpret_cast<volatile uintptr_t*>(start);
-    std::fprintf(stderr,
-        "[GCClobberPositiveControl] reclaimed=%p observed=%#zx fill=%#x enabled=%u\n",
-        reinterpret_cast<void*>(start), observed, static_cast<unsigned int>(CLOBBER_PATTERN),
-        static_cast<unsigned int>(IsClobberEnabled()));
-    std::fflush(stderr);
-    uintptr_t readTarget = IsClobberEnabled() ? observed : controlTarget;
-    volatile uint8_t value = *reinterpret_cast<volatile uint8_t*>(readTarget);
-    (void)value;
+    return true;
 }
 
 bool GCDebugConfig::ShouldTriggerMinor()
