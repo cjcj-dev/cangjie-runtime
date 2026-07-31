@@ -223,13 +223,14 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         return;
     }
 
-    BaseObject* latest = nullptr;
+    CurrentPtr currentLatest(nullptr);
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(MaybeStalePtr(targetObj));
+        currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        latest = field.GetTargetObject();
+        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
     }
+    BaseObject* latest = currentLatest;
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -239,13 +240,13 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
-             latest->GetTypeInfo(), latest->GetSize());
+             GetTypeInfo(currentLatest), GetSize(currentLatest));
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(),
-             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+             newField.GetFieldValue(), latest, GetTypeInfo(currentLatest), GetSize(currentLatest));
     } else {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
-             latest->GetTypeInfo(), latest->GetSize());
+             GetTypeInfo(currentLatest), GetSize(currentLatest));
     }
     rootSet.push_back(latest);
 }
@@ -263,55 +264,59 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     }
     BaseObject* root = oldField.GetTargetObject();
     if (Heap::IsHeapAddress(root)) {
+        CurrentPtr currentRoot = UnsafeAssumeCurrent(root);
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         RefField<> newField = GetAndTryTagRefField(root);
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-            DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
+            DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, GetSize(currentRoot));
         } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(),
-                 newField.GetFieldValue(), root, root->GetTypeInfo(), root->GetSize());
+                 newField.GetFieldValue(), root, GetTypeInfo(currentRoot), GetSize(currentRoot));
         } else {
             DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(), root,
-                 root->GetTypeInfo(), root->GetSize());
+                 GetTypeInfo(currentRoot), GetSize(currentRoot));
         }
         rootSet.push_back(root);
     }
 }
 
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
-void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
+void WCollector::TraceRefField(CurrentPtr currentObject, RefField<>& field, WorkStack& workStack) const
 {
+    BaseObject* obj = currentObject;
     RefField<> oldField(field);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
-                     targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                     targetObj, obj, GetTypeInfo(currentObject)->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
             workStack.push_back(targetObj);
         }
         return;
     }
 
-    BaseObject* latest = nullptr;
+    CurrentPtr currentLatest(nullptr);
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(MaybeStalePtr(targetObj));
+        currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        latest = field.GetTargetObject();
+        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
     }
+    BaseObject* latest = currentLatest;
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd", latest,
-                 obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                 obj, GetTypeInfo(currentObject)->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
+        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, GetTypeInfo(currentLatest),
+             GetSize(currentLatest));
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+             newField.GetFieldValue(), latest, GetTypeInfo(currentLatest), GetSize(currentLatest));
     }
 
     // R1 I4 Trace complement: plain→from observed at scan; register so BulkForward
@@ -325,41 +330,47 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 }
 
-void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+void WCollector::TraceObjectRefFields(CurrentPtr currentObject, WorkStack& workStack)
 {
-    auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
-    ForEachRefSlot(obj, visitor);
+    auto visitor = [this, currentObject, &workStack](RefField<>& field) {
+        TraceRefField(currentObject, field, workStack);
+    };
+    ForEachRefSlot(currentObject, visitor);
 }
 
-BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObject, RefField<>& field)
 {
+    BaseObject* obj = currentObject;
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
-    BaseObject* latest = nullptr;
+    CurrentPtr currentLatest(nullptr);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
-                     targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                     targetObj, sourceKind, obj, GetTypeInfo(currentObject)->GetName(),
+                     BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
     if (IsOldPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(MaybeStalePtr(targetObj));
+        currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        latest = field.GetTargetObject();
+        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
     }
+    BaseObject* latest = currentLatest;
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
-                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                 latest, sourceKind, obj, GetTypeInfo(currentObject)->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
+        DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, GetTypeInfo(currentLatest),
+             GetSize(currentLatest));
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-            newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+            newField.GetFieldValue(), latest, GetTypeInfo(currentLatest), GetSize(currentLatest));
     }
     return latest;
 }
