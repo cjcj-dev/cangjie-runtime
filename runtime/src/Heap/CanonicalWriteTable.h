@@ -31,6 +31,7 @@ public:
 
     void ConfigureFromEnvironment();
     bool IsEnabled() const { return mode != Mode::OFF; }
+    bool HasActiveFacts() const { return active.load(std::memory_order_acquire); }
     bool IsValidationEnabled() const { return mode == Mode::VALIDATE || mode == Mode::POSITIVE_CONTROL; }
     bool IsPositiveControlEnabled() const { return mode == Mode::POSITIVE_CONTROL; }
 

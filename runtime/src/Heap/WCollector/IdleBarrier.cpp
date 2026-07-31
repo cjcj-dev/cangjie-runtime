@@ -44,7 +44,7 @@ void IdleBarrier::CanonicalizeField(RefField<false>& field) const
 
 void IdleBarrier::CanonicalizeCopiedStruct(BaseObject* layoutObject, MAddress dst, MAddress src, size_t size) const
 {
-    if (!CanonicalWriteTable::Instance().IsEnabled() || layoutObject == nullptr) {
+    if (!CanonicalWriteTable::Instance().HasActiveFacts() || layoutObject == nullptr) {
         return;
     }
     layoutObject->ForEachRefInStruct(
@@ -225,7 +225,7 @@ void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
     WriteStruct(nullptr, dst, dstLen, src, srcLen);
-    if (CanonicalWriteTable::Instance().IsEnabled()) {
+    if (CanonicalWriteTable::Instance().HasActiveFacts()) {
         gctib.ForEachBitmapWord(dst, [this](RefField<>& field) { CanonicalizeField(field); });
     }
 }
@@ -311,7 +311,7 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
                      EOK,
                  "memmove_s failed");
 
-    if (CanonicalWriteTable::Instance().IsEnabled()) {
+    if (CanonicalWriteTable::Instance().HasActiveFacts()) {
         RefFieldVisitor canonicalizeVisitor = [this, dstField, srcField](RefField<false>& sourceRef) {
             MAddress offset = reinterpret_cast<MAddress>(&sourceRef) - srcField;
             CanonicalizeField(*reinterpret_cast<RefField<false>*>(dstField + offset));
@@ -339,7 +339,7 @@ void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
 void IdleBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
     Barrier::WriteGeneric(obj, fieldPtr, src, size);
-    if (!CanonicalWriteTable::Instance().IsEnabled() || Heap::IsHeapAddress(obj) ||
+    if (!CanonicalWriteTable::Instance().HasActiveFacts() || Heap::IsHeapAddress(obj) ||
         (obj != nullptr && !obj->HasRefField()) || src == nullptr) {
         return;
     }
