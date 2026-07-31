@@ -121,16 +121,21 @@ void RemsetCheck::ConfigureFromEnvironment(bool forceSlowPath)
     produceControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_REMSETCHECK_POSCTRL_PRODUCE", false);
     orphanControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_REMSETCHECK_POSCTRL_ORPHAN", false);
     stickyLogExitControlEnabled = enabled && ReadRemsetCheckBoolean("MRT_BYTE0ROOT_POSCTRL", false);
+    falseUnvisitedControlEnabled =
+        enabled && ReadRemsetCheckBoolean("MRT_VISITORHOOK_POSCTRL_FALSE_UNVISITED", false);
+    trueUnvisitedControlEnabled =
+        enabled && ReadRemsetCheckBoolean("MRT_VISITORHOOK_POSCTRL_TRUE_UNVISITED", false);
     CHECK_DETAIL(!enabled || forceSlowPath,
                  "MRT_REMSETCHECK=1 requires MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 so every measured write "
                  "reaches IdleLogBarrier");
     LOG(RTLOG_INFO,
         "remset check: enabled=%u hits=%u forceSlowPath=%u detectControl=%u produceControl=%u orphanControl=%u "
-        "stickyLogExitControl=%u",
+        "stickyLogExitControl=%u falseUnvisitedControl=%u trueUnvisitedControl=%u",
         static_cast<unsigned>(enabled), static_cast<unsigned>(hitCountingEnabled),
         static_cast<unsigned>(forceSlowPath), static_cast<unsigned>(detectControlEnabled),
         static_cast<unsigned>(produceControlEnabled), static_cast<unsigned>(orphanControlEnabled),
-        static_cast<unsigned>(stickyLogExitControlEnabled));
+        static_cast<unsigned>(stickyLogExitControlEnabled), static_cast<unsigned>(falseUnvisitedControlEnabled),
+        static_cast<unsigned>(trueUnvisitedControlEnabled));
 }
 
 void RemsetCheck::RecordHookHit(HookSite site)
