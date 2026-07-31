@@ -37,22 +37,11 @@ public:
     static inline T0* CastNonNull(T1 o);
 
 private:
-    // Property queries consume the object-header type and are exposed only
-    // through the CurrentPtr overloads in MObject.inline.h.
-    inline bool IsSubType(TypeInfo& ti);
-    inline bool IsArray() const;
-    inline bool IsPrimitiveArray() const;
-    inline bool IsStructArray() const;
-
     MObject() = delete;
     ~MObject() = delete;
     MObject(MObject&&) = delete;
     MObject& operator=(MObject&&) = delete;
 
-    friend bool IsSubType(CurrentPtr object, TypeInfo& typeInfo);
-    friend bool IsArray(CurrentPtr object);
-    friend bool IsPrimitiveArray(CurrentPtr object);
-    friend bool IsStructArray(CurrentPtr object);
 }; // class MObject
 } // namespace MapleRuntime
 #endif // MRT_MOBJECT_H
