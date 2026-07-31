@@ -15,6 +15,7 @@
 #include <set>
 #include <vector>
 
+#include "Common/ObjectPtr.h"
 #include "GcRequest.h"
 #include "GcStats.h"
 
@@ -76,13 +77,13 @@ public:
 
     virtual GCStats& GetGCStats() { std::abort(); }
 
-    virtual BaseObject* ForwardObject(BaseObject*) { std::abort(); }
+    virtual CurrentPtr ForwardObject(MaybeStalePtr) { std::abort(); }
 
     virtual bool ShouldIgnoreRequest(GCRequest& quest) = 0;
     virtual bool IsFromObject(BaseObject*) const { std::abort(); }
     virtual bool IsGhostFromObject(BaseObject*) const { std::abort(); }
     virtual bool IsUnmovableFromObject(BaseObject*) const { std::abort(); }
-    virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
+    virtual CurrentPtr FindToVersion(MaybeStalePtr obj) const = 0;
 
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
     virtual bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
@@ -98,7 +99,7 @@ public:
 
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
-    BaseObject* FindLatestVersion(BaseObject* obj) const;
+    CurrentPtr FindLatestVersion(MaybeStalePtr obj) const;
 
 protected:
     virtual void RequestGCInternal(GCReason, bool) { std::abort(); }
