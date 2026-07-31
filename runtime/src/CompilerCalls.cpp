@@ -606,8 +606,9 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
         return nullptr;
     }
+    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
     for (MIndex i = 0; i < size; ++i) {
-        array->SetPrimitiveElement(i, static_cast<int64_t>(liteFrameInfos[i]));
+        SetPrimitiveElement(currentArray, i, static_cast<int64_t>(liteFrameInfos[i]));
     }
     return array;
 }
@@ -633,8 +634,9 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
     std.className = ObjectManager::NewKnownWidthArray(
         stackTrace.className.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.className != nullptr) {
+        CurrentPtr currentClassName = UnsafeAssumeCurrent(std.className);
         for (MIndex i = 0; i < stackTrace.className.Length(); ++i) {
-            std.className->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.className[i]));
+            SetPrimitiveElement(currentClassName, i, static_cast<int8_t>(stackTrace.className[i]));
         }
     } else {
         VLOG(REPORT, "Decoding stack trace class name %s length %zu failed and throw OutOfMemoryError",
@@ -645,8 +647,9 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
     std.fileName = ObjectManager::NewKnownWidthArray(
         stackTrace.fileName.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.fileName != nullptr) {
+        CurrentPtr currentFileName = UnsafeAssumeCurrent(std.fileName);
         for (MIndex i = 0; i < stackTrace.fileName.Length(); ++i) {
-            std.fileName->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.fileName[i]));
+            SetPrimitiveElement(currentFileName, i, static_cast<int8_t>(stackTrace.fileName[i]));
         }
     } else {
         VLOG(REPORT, "Decoding stack trace file name %s length %zu failed and throw OutOfMemoryError",
@@ -658,8 +661,9 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         ObjectManager::NewKnownWidthArray(stackTrace.methodName.Length(), charArray,
                                           ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.methodName != nullptr) {
+        CurrentPtr currentMethodName = UnsafeAssumeCurrent(std.methodName);
         for (MIndex i = 0; i < stackTrace.methodName.Length(); ++i) {
-            std.methodName->SetPrimitiveElement(i, static_cast<int8_t>(stackTrace.methodName[i]));
+            SetPrimitiveElement(currentMethodName, i, static_cast<int8_t>(stackTrace.methodName[i]));
         }
     } else {
         VLOG(REPORT, "Decoding stack trace method name %s length %zu failed and throw OutOfMemoryError",
@@ -684,8 +688,9 @@ static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString na
     if (array == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateCharArrayFromCString: nullptr array");
     }
+    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
     for (MIndex i = 0; i < name.Length(); ++i) {
-        array->SetPrimitiveElement(i, static_cast<int8_t>(name[i]));
+        SetPrimitiveElement(currentArray, i, static_cast<int8_t>(name[i]));
     }
     return array;
 }
@@ -709,6 +714,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
     if (trace == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateStackTrace: nullptr array");
     }
+    CurrentPtr currentTrace = UnsafeAssumeCurrent(trace);
     int stackIndex = 0;
     for (auto frame : srcSracks) {
         // skip native frame
@@ -729,7 +735,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
         frameData.lineNumber = lineNumber;
 
         // push frame to stack array
-        MSize elementSize = trace->GetElementSize();
+        MSize elementSize = GetElementSize(currentTrace);
         MAddress dstAddr = reinterpret_cast<Uptr>(trace) + MArray::GetContentOffset() + elementSize * stackIndex;
         Heap::GetBarrier().WriteStruct(trace, dstAddr, elementSize,
                                        reinterpret_cast<MAddress>(&frameData), elementSize);
@@ -769,6 +775,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
     if (allRecords == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("GetAllThreadSnapshot: nullptr array");
     }
+    CurrentPtr currentRecords = UnsafeAssumeCurrent(allRecords);
     int recordIndex = 0;
     for (const auto &record : records) {
         ThreadSnapshot snapshot;
@@ -779,7 +786,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
         snapshot.state = record->GetThreadState();
 
         // push snapshot to record array
-        MSize elementSize = allRecords->GetElementSize();
+        MSize elementSize = GetElementSize(currentRecords);
         MAddress dstAddr =
             reinterpret_cast<Uptr>(allRecords) + MArray::GetContentOffset() + elementSize * recordIndex;
         Heap::GetBarrier().WriteStruct(allRecords, dstAddr, elementSize,
