@@ -262,35 +262,37 @@ public:
         return RegionSpace::IsMarkedObject(obj) || RegionSpace::IsResurrectedObject(obj);
     }
     void DFSTraceExportObject(BaseObject* exportObj);
-    virtual bool MarkObject(BaseObject* obj) const
+    virtual bool MarkObject(CurrentPtr currentObject) const
     {
+        BaseObject* obj = currentObject;
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         
         bool marked = regionInfo->MarkObject(obj);
         if (!marked) {
-            size_t objSize = obj->GetSize();
+            size_t objSize = GetSize(currentObject);
             regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
-                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
+                DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, GetTypeInfo(currentObject), objSize);
             }
         }
         return marked;
     }
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) { std::abort(); }
-    void ForEachStrongRefSlot(BaseObject* obj, const ClassifiedRefSlotVisitor& visitor);
+    virtual void TraceObjectRefFields(CurrentPtr obj, WorkStack& workStack) { std::abort(); }
+    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, CurrentPtr obj, RefField<>& field) { std::abort(); }
+    void ForEachStrongRefSlot(CurrentPtr obj, const ClassifiedRefSlotVisitor& visitor);
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
-    virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
+    virtual bool ResurrectObject(CurrentPtr currentObject, size_t offset, RegionInfo* regionInfo)
     {
+        BaseObject* obj = currentObject;
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
-            size_t objSize = obj->GetSize();
+            size_t objSize = GetSize(currentObject);
             regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
-                VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
+                VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, GetTypeInfo(currentObject), objSize);
             }
         }
         return resurrected;
@@ -320,7 +322,7 @@ public:
     static const size_t MIN_MARKING_WORK_SIZE;
 
 protected:
-    static void ForEachRefSlot(BaseObject* obj, const RefFieldVisitor& visitor);
+    static void ForEachRefSlot(CurrentPtr obj, const RefFieldVisitor& visitor);
     void RequestGCInternal(GCReason reason, bool async) override { collectorResources.RequestGC(reason, async); }
 
     Allocator& theAllocator;
