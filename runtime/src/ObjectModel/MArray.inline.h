@@ -31,28 +31,26 @@ inline U8* MArray::ConvertToCArray() const
     return reinterpret_cast<uint8_t*>(reinterpret_cast<Uptr>(this) + MArray::GetContentOffset());
 }
 
-inline MIndex MArray::GetMArraySize() const { return (MArray::GetContentOffset() + GetContentSize()); }
-
-inline MSize MArray::GetElementSize() const
+ALWAYS_INLINE inline MSize GetElementSize(CurrentPtr object)
 {
-    TypeInfo* componentTypeInfo = GetComponentTypeInfo();
+    TypeInfo* componentTypeInfo = GetComponentTypeInfo(object);
     if (componentTypeInfo->IsRef()) {
         return sizeof(BaseObject*);
     }
     return componentTypeInfo->GetComponentSize();
 }
 
-inline MIndex MArray::GetContentSize() const
+ALWAYS_INLINE inline MIndex GetContentSize(CurrentPtr object)
 {
-    auto len = GetLength();
-    auto elementSize = GetElementSize();
+    MArray* array = static_cast<MArray*>(static_cast<BaseObject*>(object));
+    auto len = array->GetLength();
+    auto elementSize = GetElementSize(object);
     return elementSize * len;
 }
 
-inline bool MArray::IsPrimitiveArray() const
+ALWAYS_INLINE inline MIndex GetMArraySize(CurrentPtr object)
 {
-    TypeInfo* componentTypeInfo = GetTypeInfo()->GetComponentTypeInfo();
-    return componentTypeInfo == nullptr ? false : componentTypeInfo->IsPrimitiveType();
+    return MArray::GetContentOffset() + GetContentSize(object);
 }
 
 inline ObjectPtr MArray::GetRefElement(MIndex index)
@@ -68,18 +66,20 @@ inline void MArray::SetRefElement(MIndex index, const ObjectPtr mObj)
 }
 
 template<typename T>
-inline T MArray::GetPrimitiveElement(MIndex index) const
+ALWAYS_INLINE inline T GetPrimitiveElement(CurrentPtr object, MIndex index)
 {
-    Field<T>& field = GetField<T>(MArray::GetContentOffset() + GetElementSize() * index);
+    BaseObject* array = object;
+    Field<T>& field = array->GetField<T>(MArray::GetContentOffset() + GetElementSize(object) * index);
     // normally we do not barrier for reading primitive fields.
     return field.GetFieldValue();
 }
 
 template<typename T>
-inline void MArray::SetPrimitiveElement(MIndex index, T value)
+ALWAYS_INLINE inline void SetPrimitiveElement(CurrentPtr object, MIndex index, T value)
 {
-    Field<T>& field = GetField<T>(MArray::GetContentOffset() + GetElementSize() * index);
-    Heap::GetBarrier().WriteField(this, field, value);
+    BaseObject* array = object;
+    Field<T>& field = array->GetField<T>(MArray::GetContentOffset() + GetElementSize(object) * index);
+    Heap::GetBarrier().WriteField(array, field, value);
 }
 
 static inline MIndex CalculateArraySize(MIndex nElems, const U32 elemBytes)
