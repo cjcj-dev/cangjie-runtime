@@ -14,6 +14,8 @@ class IdleLogBarrier : public IdleBarrier {
 public:
     explicit IdleLogBarrier(Collector& collector) : IdleBarrier(collector) {}
 
+    const char* GetBarrierName() const override { return "IdleLogBarrier"; }
+
     void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const override;
     void WriteStaticRef(RefField<false>& field, BaseObject* ref) const override;
     void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const override;

@@ -14,7 +14,111 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
+#include <atomic>
+#include <cstdlib>
+
 namespace MapleRuntime {
+namespace {
+std::atomic<uint64_t> g_i2ViolationCount{0};
+
+// MRT_I2_ENFORCE:
+//   unset / "1" / "always" → always-check fail-closed (default; structural guarantee)
+//   "debug"                → check only when MRT_DEBUG==1 (release = CONVENTION only)
+//   "count"                → count violations, do not abort (positive-control arm)
+//   "0" / "off"            → no check (baseline measurement arm only)
+enum class I2EnforceMode : uint8_t { OFF = 0, COUNT = 1, DEBUG_ONLY = 2, ALWAYS = 3 };
+
+I2EnforceMode ResolveI2EnforceMode()
+{
+    static I2EnforceMode mode = [] {
+        const char* env = std::getenv("MRT_I2_ENFORCE");
+        if (env == nullptr || env[0] == '\0' || env[0] == '1' ||
+            (env[0] == 'a' /* always */)) {
+            return I2EnforceMode::ALWAYS;
+        }
+        if (env[0] == '0' || env[0] == 'o' /* off */) {
+            return I2EnforceMode::OFF;
+        }
+        if (env[0] == 'c' /* count */) {
+            return I2EnforceMode::COUNT;
+        }
+        if (env[0] == 'd' /* debug */) {
+            return I2EnforceMode::DEBUG_ONLY;
+        }
+        return I2EnforceMode::ALWAYS;
+    }();
+    return mode;
+}
+
+bool I2CheckActive()
+{
+    switch (ResolveI2EnforceMode()) {
+        case I2EnforceMode::OFF:
+            return false;
+        case I2EnforceMode::COUNT:
+        case I2EnforceMode::ALWAYS:
+            return true;
+        case I2EnforceMode::DEBUG_ONLY:
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+            return true;
+#else
+            return false;
+#endif
+    }
+    return true;
+}
+
+bool I2ShouldAbort()
+{
+    return ResolveI2EnforceMode() == I2EnforceMode::ALWAYS ||
+           ResolveI2EnforceMode() == I2EnforceMode::DEBUG_ONLY;
+}
+} // namespace
+
+uint64_t Barrier::I2ViolationCount() { return g_i2ViolationCount.load(std::memory_order_relaxed); }
+
+void Barrier::ResetI2ViolationCount() { g_i2ViolationCount.store(0, std::memory_order_relaxed); }
+
+BaseObject* Barrier::EnsureMutatorExit(BaseObject* holder, const void* slot, BaseObject* target,
+                                       const char* exitLabel) const
+{
+    return EnsureMutatorExitImpl(holder, slot, target, GetBarrierName(), exitLabel);
+}
+
+BaseObject* Barrier::EnsureMutatorExitImpl(BaseObject* holder, const void* slot, BaseObject* target,
+                                           const char* barrierName, const char* exitLabel) const
+{
+    if (target == nullptr || !I2CheckActive()) {
+        return target;
+    }
+    // Non-heap pointers (stack/static blobs) are outside object-state encoding.
+    if (!Heap::IsHeapAddress(target)) {
+        return target;
+    }
+    const ObjectState::ObjectStateCode state = target->GetObjectState().GetStateCode();
+    if (LIKELY(state == ObjectState::NORMAL)) {
+        return target;
+    }
+    g_i2ViolationCount.fetch_add(1, std::memory_order_relaxed);
+    const GCPhase phase = theCollector.GetGCPhase();
+    const char* phaseName = Collector::GetGCPhaseName(phase);
+    if (I2ShouldAbort()) {
+        CHECK_DETAIL(false,
+                     "I2 exit: non-NORMAL object reached mutator. "
+                     "holder=%p slot=%p target=%p state=%u phase=%s(%u) barrier=%s exit=%s",
+                     holder, slot, target, static_cast<unsigned>(state), phaseName,
+                     static_cast<unsigned>(phase), barrierName != nullptr ? barrierName : "?",
+                     exitLabel != nullptr ? exitLabel : "?");
+    }
+    // count mode: leave a diagnostic line but keep running for positive-control arms.
+    Logger::GetLogger().FormatLog(
+        RTLOG_ERROR, true,
+        "I2 exit (count): holder=%p slot=%p target=%p state=%u phase=%s(%u) barrier=%s exit=%s",
+        holder, slot, target, static_cast<unsigned>(state), phaseName, static_cast<unsigned>(phase),
+        barrierName != nullptr ? barrierName : "?", exitLabel != nullptr ? exitLabel : "?");
+    return target;
+}
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -65,10 +169,10 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
 {
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return EnsureMutatorExit(obj, &field, toVersion, "ReadReference");
     } else {
         BaseObject* target = field.GetTargetObject();
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "ReadReference");
     }
 }
 
@@ -76,10 +180,10 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-        return toVersion;
+        return EnsureMutatorExit(obj, &field, toVersion, "ReadWeakRef");
     } else {
         BaseObject* target = field.GetTargetObject();
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "ReadWeakRef");
     }
 }
 
@@ -88,10 +192,10 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(nullptr, field, toVersion)) {
         DLOG(BARRIER, "read static ref@%p: 0x%zx -> %p", &field, field.GetFieldValue(), toVersion);
-        return toVersion;
+        return EnsureMutatorExit(nullptr, &field, toVersion, "ReadStaticRef");
     } else {
         BaseObject* target = field.GetTargetObject();
-        return target;
+        return EnsureMutatorExit(nullptr, &field, target, "ReadStaticRef");
     }
 }
 
@@ -131,7 +235,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 
     BaseObject* target = tmpField.GetTargetObject();
     DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-    return target;
+    return EnsureMutatorExit(obj, &field, target, "AtomicReadReference");
 }
 
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,

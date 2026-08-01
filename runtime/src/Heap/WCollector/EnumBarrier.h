@@ -16,6 +16,8 @@ class EnumBarrier : public IdleBarrier {
 public:
     explicit EnumBarrier(Collector& collector) : IdleBarrier(collector) {}
 
+    const char* GetBarrierName() const override { return "EnumBarrier"; }
+
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
     BaseObject* ReadStaticRef(RefField<false>& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;

@@ -7,6 +7,7 @@
 
 #include "IdleBarrier.h"
 
+#include "Heap/Collector/Collector.h"
 #include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
@@ -19,24 +20,33 @@
 namespace MapleRuntime {
 BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    do {
+    // Bound retries: both TryUpdate and TryUntag fail when the slot is still tagged
+    // but FindToVersion returned nullptr (ghost cleared) or CAS lost a race. A bare
+    // while(true) would spin forever under that joint failure; fail-closed instead.
+    constexpr int kMaxIdleReadRetries = 64;
+    for (int attempt = 0; attempt < kMaxIdleReadRetries; ++attempt) {
         RefField<> oldField(field);
         if (LIKELY(!oldField.IsTagged())) {
-            return oldField.GetTargetObject();
+            return EnsureMutatorExit(obj, &field, oldField.GetTargetObject(), "ReadReference.plain");
         }
         BaseObject* toVersion = nullptr;
         if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
             DLOG(BARRIER, "update obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
-            return toVersion;
+            return EnsureMutatorExit(obj, &field, toVersion, "ReadReference.update");
         }
 
         BaseObject* target = nullptr;
         if (theCollector.TryUntagRefField(obj, field, target)) {
             DLOG(BARRIER, "untag obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-            return target;
+            return EnsureMutatorExit(obj, &field, target, "ReadReference.untag");
         }
-    } while (true);
-    // unreachable path.
+    }
+    RefField<> stuck(field);
+    CHECK_DETAIL(false,
+                 "IdleBarrier::ReadReference stuck: holder=%p slot=%p value=%#zx phase=%s "
+                 "(TryUpdate+TryUntag both failed for %d attempts; not BY-DESIGN)",
+                 obj, &field, stuck.GetFieldValue(),
+                 Collector::GetGCPhaseName(theCollector.GetGCPhase()), kMaxIdleReadRetries);
     return nullptr;
 }
 
@@ -54,13 +64,13 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     // note TryUpdateRefField and TryUntagRefField are all atomic operations.
     if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
         DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
-        return toVersion;
+        return EnsureMutatorExit(obj, &field, toVersion, "AtomicReadReference.update");
     }
 
     BaseObject* target = nullptr;
     if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
         DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.untag");
     }
 
     target = ReadReference(nullptr, oldField);

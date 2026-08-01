@@ -16,6 +16,8 @@ class ForwardBarrier : public IdleBarrier {
 public:
     explicit ForwardBarrier(Collector& collector) : IdleBarrier(collector) {}
 
+    const char* GetBarrierName() const override { return "ForwardBarrier"; }
+
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
     BaseObject* ReadStaticRef(RefField<false>& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;

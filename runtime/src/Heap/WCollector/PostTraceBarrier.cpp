@@ -22,7 +22,7 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
     if (tmpField.IsTagged()) {
         CHECK(theCollector.IsCurrentPointer(tmpField));
     }
-    return tmpField.GetTargetObject();
+    return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference");
 }
 
 BaseObject* PostTraceBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
@@ -45,7 +45,7 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
         *referentAddr = nullptr; // set referent field as null
         return nullptr;
     }
-    return tmpField.GetTargetObject();
+    return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadWeakRef");
 }
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
@@ -167,19 +167,19 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
     if (theCollector.IsCurrentPointer(oldField)) {
         target = oldField.GetTargetObject();
         DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.current");
     }
 
     BaseObject* toVersion = nullptr;
     // note TryUpdateRefField and TryUntagRefField are all atomic operations.
     if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
         DLOG(TBARRIER, "iatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
-        return toVersion;
+        return EnsureMutatorExit(obj, &field, toVersion, "AtomicReadReference.update");
     }
 
     if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
         DLOG(TBARRIER, "jatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.untag");
     }
 
     target = ReadReference(nullptr, oldField);

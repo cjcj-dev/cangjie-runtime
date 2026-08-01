@@ -23,10 +23,10 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
 {
     RefField<> tmpField(field);
     if (LIKELY(!tmpField.IsTagged())) {
-        return tmpField.GetTargetObject();
+        return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference.plain");
     }
     if (theCollector.IsCurrentPointer(tmpField)) {
-        return tmpField.GetTargetObject();
+        return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference.current");
     }
     if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* fromVersion = tmpField.GetTargetObject();
@@ -37,9 +37,9 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         } else {
             target = fromVersion;
         }
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "ReadReference.old");
     }
-    return tmpField.GetTargetObject();
+    return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference.fallback");
 }
 
 BaseObject* EnumBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
@@ -215,7 +215,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     if (theCollector.IsCurrentPointer(oldField)) {
         target = oldField.GetTargetObject();
         DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
+        return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.current");
     }
 
     target = ReadReference(nullptr, oldField);

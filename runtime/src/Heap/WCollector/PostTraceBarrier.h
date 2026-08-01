@@ -16,6 +16,8 @@ class PostTraceBarrier : public IdleBarrier {
 public:
     explicit PostTraceBarrier(Collector& collector) : IdleBarrier(collector) {}
 
+    const char* GetBarrierName() const override { return "PostTraceBarrier"; }
+
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
     BaseObject* ReadStaticRef(RefField<false>& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;

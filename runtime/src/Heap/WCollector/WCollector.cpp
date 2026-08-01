@@ -188,6 +188,13 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         }
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
+        // Extra-B: IsValidObject does not reject FORWARDED. Refuse non-NORMAL here so
+        // "check passed" cannot hand a dead from-copy to the mutator (I2).
+        // Does not alter IsValidObject / IsVaildType criteria (user order).
+        const ObjectState::ObjectStateCode state = target->GetObjectState().GetStateCode();
+        CHECK_DETAIL(state == ObjectState::NORMAL,
+                     "TryUntagRefField would hand over non-NORMAL target %p state=%u at field %p holder=%p",
+                     target, static_cast<unsigned>(state), &field, obj);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
@@ -366,6 +373,20 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
+    auto ensureRawExit = [](BaseObject* target, ObjectRef& r) -> BaseObject* {
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return target;
+        }
+        const ObjectState::ObjectStateCode state = target->GetObjectState().GetStateCode();
+        if (LIKELY(state == ObjectState::NORMAL)) {
+            return target;
+        }
+        CHECK_DETAIL(false,
+                     "I2 exit: ForwardUpdateRawRef non-NORMAL root=%p target=%p state=%u phase=%s",
+                     &r, target, static_cast<unsigned>(state),
+                     Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()));
+        return target;
+    };
     if (IsCurrentPointer(oldField)) {
         if (IsGhostFromObject(oldObj)) {
             BaseObject* toVersion = TryForwardObject(oldObj);
@@ -374,7 +395,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-                return toVersion;
+                return ensureRawExit(toVersion, root);
             }
             CHECK(!IsCurrentPointer(refField));
         } else {
@@ -382,12 +403,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
-                return oldObj;
+                return ensureRawExit(oldObj, root);
             }
         }
     }
 
-    return oldObj;
+    return ensureRawExit(oldObj, root);
 }
 void WCollector::PreforwardAllExportFromRoots()
 {

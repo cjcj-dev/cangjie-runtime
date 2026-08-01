@@ -60,7 +60,19 @@ public:
     virtual void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const;
     virtual void ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size) const;
 
+    // I2 exit check: mutator-bound ObjectPtr must be NORMAL (or null).
+    // barrierName is the concrete Read* exit label for phase/barrier diagnosis.
+    virtual const char* GetBarrierName() const { return "Barrier"; }
+    BaseObject* EnsureMutatorExit(BaseObject* holder, const void* slot, BaseObject* target,
+                                  const char* exitLabel) const;
+
+    static uint64_t I2ViolationCount();
+    static void ResetI2ViolationCount();
+
 protected:
+    // Fail-closed when non-NORMAL reaches a mutator exit. Count is always updated.
+    BaseObject* EnsureMutatorExitImpl(BaseObject* holder, const void* slot, BaseObject* target,
+                                      const char* barrierName, const char* exitLabel) const;
     class LocalRefFieldContainer {
     public:
         // multi-thread unsafe.

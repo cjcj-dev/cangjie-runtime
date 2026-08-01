@@ -24,7 +24,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
     do {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+            return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference.plain");
         }
         CHECK(!theCollector.IsOldPointer(tmpField));
         if (theCollector.IsCurrentPointer(tmpField)) {
@@ -32,10 +32,10 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             BaseObject* toObj = nullptr;
             if (theCollector.IsUnmovableFromObject(target)) {
                 if (theCollector.TryUntagRefField(obj, field, target)) {
-                    return target;
+                    return EnsureMutatorExit(obj, &field, target, "ReadReference.untag");
                 }
             } else if (theCollector.TryForwardRefField(obj, field, toObj)) {
-                return toObj;
+                return EnsureMutatorExit(obj, &field, toObj, "ReadReference.forward");
             }
         }
     } while (true);
@@ -84,14 +84,14 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         if (theCollector.IsUnmovableFromObject(target)) {
             if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<>&>(field), target)) {
                 DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-                return target;
+                return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.untag");
             }
         } else {
             BaseObject* to = nullptr;
             // note TryForwardRefField is atomic operation.
             if (theCollector.TryForwardRefField(obj, reinterpret_cast<RefField<false>&>(field), to)) {
                 DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), to);
-                return to;
+                return EnsureMutatorExit(obj, &field, to, "AtomicReadReference.forward");
             }
         }
     }

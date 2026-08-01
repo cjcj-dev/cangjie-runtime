@@ -16,6 +16,8 @@ class IdleBarrier : public Barrier {
 public:
     explicit IdleBarrier(Collector& collector) : Barrier(collector) {}
 
+    const char* GetBarrierName() const override { return "IdleBarrier"; }
+
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
     BaseObject* ReadStaticRef(RefField<false>& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;

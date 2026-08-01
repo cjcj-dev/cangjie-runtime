@@ -24,19 +24,19 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     do {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+            return EnsureMutatorExit(obj, &field, tmpField.GetTargetObject(), "ReadReference.plain");
         }
         CHECK(!theCollector.IsOldPointer(tmpField));
         if (theCollector.IsCurrentPointer(tmpField)) {
             BaseObject* target = tmpField.GetTargetObject();
             if (theCollector.IsUnmovableFromObject(target)) {
                 if (theCollector.TryUntagRefField(obj, field, target)) {
-                    return target;
+                    return EnsureMutatorExit(obj, &field, target, "ReadReference.untag");
                 }
             } else {
                 BaseObject* toObj = nullptr;
                 if (theCollector.TryForwardRefField(obj, field, toObj)) {
-                    return toObj;
+                    return EnsureMutatorExit(obj, &field, toObj, "ReadReference.forward");
                 }
             }
         }
@@ -89,21 +89,21 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         if (theCollector.IsUnmovableFromObject(target)) {
             if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<>&>(field), target)) {
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-                return target;
+                return EnsureMutatorExit(obj, &field, target, "AtomicReadReference.untag");
             }
         } else {
             BaseObject* toObj = nullptr;
             // note TryForwardRefField is atomic operation.
             if (theCollector.TryForwardRefField(obj, reinterpret_cast<RefField<false>&>(field), toObj)) {
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
-                return toObj;
+                return EnsureMutatorExit(obj, &field, toObj, "AtomicReadReference.forward");
             } else {
                 BaseObject* oldVersion = tmpField.GetTargetObject();
                 BaseObject* toObj = theCollector.ForwardObject(oldVersion);
                 RefField<> newField(toObj);
                 (void)obj->CompareExchangeRefField(reinterpret_cast<RefField<false>&>(field), tmpField, newField);
                 DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
-                return toObj;
+                return EnsureMutatorExit(obj, &field, toObj, "AtomicReadReference.forward-fallback");
             }
         }
     }
