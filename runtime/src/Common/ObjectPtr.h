@@ -56,6 +56,8 @@ private:
     friend CurrentPtr ProvenByPinnedSlot(BaseObject* object);
     friend CurrentPtr ProvenByNonOldBranch(BaseObject* object);
     friend CurrentPtr ProvenByTypedReceiver(BaseObject* object);
+    friend CurrentPtr ProvenByBarrierRead(BaseObject* object);
+    friend CurrentPtr ProvenByWorkStack(BaseObject* object);
     friend CurrentPtr UnsafeAssumeCurrent(BaseObject* object);
 };
 
@@ -70,6 +72,10 @@ ALWAYS_INLINE inline CurrentPtr ProvenByPinnedSlot(BaseObject* object) { return 
 ALWAYS_INLINE inline CurrentPtr ProvenByNonOldBranch(BaseObject* object) { return CurrentPtr(object); }
 // Member body reached only through a CurrentPtr friend wrapper (receiver already typed).
 ALWAYS_INLINE inline CurrentPtr ProvenByTypedReceiver(BaseObject* object) { return CurrentPtr(object); }
+// Barrier ReadStaticRef/ReadReference resolves to the current version before returning.
+ALWAYS_INLINE inline CurrentPtr ProvenByBarrierRead(BaseObject* object) { return CurrentPtr(object); }
+// Work-stack entries are only pushed after enum/tag/region proof established currentness.
+ALWAYS_INLINE inline CurrentPtr ProvenByWorkStack(BaseObject* object) { return CurrentPtr(object); }
 
 using ObjectPtr = BaseObject*;
 
