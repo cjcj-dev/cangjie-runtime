@@ -20,6 +20,8 @@
 
 namespace MapleRuntime {
 std::atomic<bool> GCDebugConfig::clobberEnabled{ false };
+std::atomic<bool> GCDebugConfig::checkmarkEnabled{ false };
+std::atomic<bool> GCDebugConfig::checkmarkInjectMissEnabled{ false };
 std::atomic<size_t> GCDebugConfig::stressMinorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMajorInterval{ 0 };
 std::atomic<size_t> GCDebugConfig::stressMinorAllocationCount{ 0 };
@@ -101,6 +103,12 @@ void GCDebugConfig::ConfigureFromEnvironment()
     clobberEnabled.store(ReadBoolean("MRT_GC_CLOBBER"), std::memory_order_relaxed);
     if (IsClobberEnabled()) {
         InitializeClobberGuard();
+    }
+    checkmarkEnabled.store(ReadBoolean("MRT_GC_CHECKMARK"), std::memory_order_relaxed);
+    checkmarkInjectMissEnabled.store(ReadBoolean("MRT_GC_CHECKMARK_INJECT_MISS"), std::memory_order_relaxed);
+    if (IsCheckmarkEnabled()) {
+        VLOG(REPORT, "[GCCheckmark] enabled inject_miss=%u",
+             static_cast<unsigned>(IsCheckmarkInjectMissEnabled()));
     }
     stressMinorInterval.store(ReadInterval("MRT_GC_STRESS_MINOR"), std::memory_order_relaxed);
     stressMajorInterval.store(ReadInterval("MRT_GC_STRESS_MAJOR"), std::memory_order_relaxed);

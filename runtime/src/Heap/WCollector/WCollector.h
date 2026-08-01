@@ -235,6 +235,10 @@ private:
                              const MinorRegionSet& evacuatedRegions);
     void EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::vector<RegionInfo*>& toRegions);
     void ValidateYoungMarking();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // Independent post-minor checkmark (MRT_GC_CHECKMARK). Observational only.
+    void CheckmarkYoungMarking();
+#endif
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>

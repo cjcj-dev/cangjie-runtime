@@ -25,6 +25,11 @@ public:
     }
 
     static bool IsClobberEnabled() { return clobberEnabled.load(std::memory_order_relaxed); }
+    static bool IsCheckmarkEnabled() { return checkmarkEnabled.load(std::memory_order_relaxed); }
+    static bool IsCheckmarkInjectMissEnabled()
+    {
+        return checkmarkInjectMissEnabled.load(std::memory_order_relaxed);
+    }
     static bool FillReclaimedMemory(uintptr_t start, size_t size);
     static void ClearAllocatedMemory(uintptr_t start, size_t size);
     static bool ShouldTriggerMinor();
@@ -36,6 +41,8 @@ public:
 
 private:
     static std::atomic<bool> clobberEnabled;
+    static std::atomic<bool> checkmarkEnabled;
+    static std::atomic<bool> checkmarkInjectMissEnabled;
     static std::atomic<size_t> stressMinorInterval;
     static std::atomic<size_t> stressMajorInterval;
     static std::atomic<size_t> stressMinorAllocationCount;
