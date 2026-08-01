@@ -570,18 +570,21 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
     }
 
     BaseObject* latest = nullptr;
+    bool softFallback = false;
     if (IsCurrentPointer(oldField)) {
         latest = raw;
     } else if (IsOldPointer(oldField)) {
         latest = FindToVersion(raw);
         if (latest == nullptr) {
-            latest = raw;
+            latest = raw; // soft fallback; may be non-NORMAL after ghost dispel
+            softFallback = true;
         }
     } else {
         // Untagged: may still be a from-object whose route is live until Unbind.
         latest = FindToVersion(raw);
         if (latest == nullptr) {
-            latest = raw;
+            latest = raw; // soft fallback; may be non-NORMAL after ghost dispel
+            softFallback = true;
         }
     }
 
@@ -591,6 +594,18 @@ void WCollector::NormalizeTraceRegionRefField(BaseObject* holder, RefField<>& fi
         DLOG(FIX, "normalize clear weak referent@%p (holder %p)", referentAddr, holder);
         *referentAddr = nullptr;
     };
+
+    // Soft fallback after FindToVersion null: only keep raw when still NORMAL.
+    // Ghost dispel clears route while from may remain FORWARDED — same shape as non-heap.
+    if (softFallback && raw->GetObjectState().GetStateCode() != ObjectState::NORMAL) {
+        if (isWeakReferent) {
+            clearWeak();
+            return;
+        }
+        DLOG(FIX, "normalize skip non-NORMAL soft-fallback strong holder %p field@%p target %p", holder, &field,
+             latest);
+        return;
+    }
 
     if (!Heap::IsHeapAddress(latest)) {
         if (isWeakReferent) {
