@@ -12,8 +12,6 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
-#include <atomic>
-#include <cstdlib>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -34,7 +32,7 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
 // Old-tag null to-version: same contract as EnumBarrier (fail-closed on FORWARDED /
-// invalid from; legal unmoved survivor only). Posctrl via MRT_ENUMFIX_POSCTRL=1.
+// invalid from; legal unmoved survivor only). See EnumBarrier.cpp ResolveEnumOldNullTo.
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
@@ -49,25 +47,8 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         if (toVersion != nullptr) {
             return toVersion;
         }
-        // Mirror EnumBarrier::ResolveEnumOldNullTo (EnumBarrier.cpp) — keep Trace
-        // and Enum on the same fail-closed contract for old-tag residual edges.
-        static std::atomic<size_t> g_traceNullToTotal{ 0 };
-        static std::atomic<size_t> g_traceNullToFwd{ 0 };
-        size_t n = g_traceNullToTotal.fetch_add(1, std::memory_order_relaxed) + 1;
-        const bool isFwd = fromVersion != nullptr && fromVersion->IsForwarded();
-        if (isFwd) {
-            (void)g_traceNullToFwd.fetch_add(1, std::memory_order_relaxed);
-        }
-        if ((n & (n - 1)) == 0) {
-            VLOG(REPORT, "[TraceBarrier] nullto n=%zu fwd=%zu from=%p", n,
-                 g_traceNullToFwd.load(std::memory_order_relaxed), fromVersion);
-        }
-        const char* env = std::getenv("MRT_ENUMFIX_POSCTRL");
-        const bool posctrl = (env != nullptr && env[0] == '1' && env[1] == '\0');
-        if (posctrl) {
-            return fromVersion;
-        }
-        CHECK_DETAIL(!isFwd,
+        // Cold path only: null to-version after ghost gate (RegionInfo.h:718-722).
+        CHECK_DETAIL(fromVersion == nullptr || !fromVersion->IsForwarded(),
                      "TraceBarrier ReadReference: null to-version for FORWARDED from-object %p "
                      "(ghost gate / cleared route; do not hand off from-version)",
                      fromVersion);
