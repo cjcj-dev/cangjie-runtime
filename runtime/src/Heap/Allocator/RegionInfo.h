@@ -486,8 +486,9 @@ public:
         SetResurrectedRegionFlag(0);
     }
 
-    bool MarkObject(const BaseObject* obj)
+    bool MarkObject(CurrentPtr currentObject)
     {
+        BaseObject* obj = currentObject;
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);
@@ -495,7 +496,7 @@ public:
             }
             return true;
         }
-        U32 objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj)));
+        U32 objSize = GetSize(currentObject);
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
@@ -519,8 +520,9 @@ public:
         return marked;
     }
 
-    bool ResurrectObject(const BaseObject* obj, size_t offset)
+    bool ResurrectObject(CurrentPtr currentObject, size_t offset)
     {
+        BaseObject* obj = currentObject;
         if (IsLargeRegion()) {
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
@@ -528,7 +530,7 @@ public:
             }
             return true;
         }
-        U32 objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj)));
+        U32 objSize = GetSize(currentObject);
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocResurrectBitmap()->MarkBits(offset, objSize, regionSize);
         CHECK(IsResurrectedObject(offset));
@@ -544,7 +546,9 @@ public:
             }
             return true;
         }
-        U32 objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj)));
+        // SATB enqueue only needs geometry; member GetSize is the pre-typed path used by
+        // region-local bitmaps when the holder is not yet a CurrentPtr.
+        U32 objSize = const_cast<BaseObject*>(obj)->GetSize();
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         CHECK(regionSize > 0);
         bool marked = GetOrAllocEnqueueBitmap()->MarkBits(offset, objSize, regionSize);

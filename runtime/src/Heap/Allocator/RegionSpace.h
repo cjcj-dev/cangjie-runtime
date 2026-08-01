@@ -198,10 +198,11 @@ public:
     void PrepareTrace() { regionManager.PrepareTrace(); }
     void FeedHungryBuffers() override;
 
-    static bool MarkObject(const BaseObject* obj)
+    static bool MarkObject(CurrentPtr currentObject)
     {
+        BaseObject* obj = currentObject;
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->MarkObject(obj);
+        return regionInfo->MarkObject(currentObject);
     }
 
     static bool IsMarkedObject(const BaseObject* obj)

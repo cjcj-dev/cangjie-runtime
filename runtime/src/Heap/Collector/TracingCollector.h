@@ -267,7 +267,7 @@ public:
         BaseObject* obj = currentObject;
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         
-        bool marked = regionInfo->MarkObject(obj);
+        bool marked = regionInfo->MarkObject(currentObject);
         if (!marked) {
             size_t objSize = GetSize(currentObject);
             regionInfo->AddLiveByteCount(objSize);
@@ -287,7 +287,7 @@ public:
     virtual bool ResurrectObject(CurrentPtr currentObject, size_t offset, RegionInfo* regionInfo)
     {
         BaseObject* obj = currentObject;
-        bool resurrected = regionInfo->ResurrectObject(obj, offset);
+        bool resurrected = regionInfo->ResurrectObject(currentObject, offset);
         if (!resurrected) {
             size_t objSize = GetSize(currentObject);
             regionInfo->AddLiveByteCount(objSize);
