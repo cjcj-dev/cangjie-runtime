@@ -44,6 +44,8 @@ std::atomic<size_t> g_f3SeenOld{ 0 };
 std::atomic<size_t> g_f3CasOk{ 0 };
 std::atomic<size_t> g_f3CasPlain{ 0 };
 std::atomic<size_t> g_f3CasTagged{ 0 }; // must stay 0 after F-2 fix (always write plain)
+// Counterfactual: how many CAS would have written IsTagged under old GetAndTryTagRefField.
+std::atomic<size_t> g_f3WouldHaveTagged{ 0 };
 std::atomic<size_t> g_f3NullToFallback{ 0 };
 std::atomic<size_t> g_f3NullToRouted{ 0 };
 std::atomic<size_t> g_f3SkipSame{ 0 };
@@ -530,8 +532,13 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         }
     }
     // F3 contract (WCollector.h:243-244): rewrite IsOldPointer to plain/to.
-    // ⛔ Do not call GetAndTryTagRefField: IsFromObject(latest) would stamp current-tag;
-    // FlipTagID later turns that into old-tag with no second F3 pass (gcsm03 F-1/F-2).
+    // ⛔ Do not call GetAndTryTagRefField for the write: IsFromObject(latest) would
+    // stamp current-tag; FlipTagID later turns that into old-tag with no second F3
+    // pass (gcsm03 F-1/F-2). Still probe the old helper for positive-control counts.
+    RefField<> wouldTag = GetAndTryTagRefField(latest);
+    if (wouldTag.IsTagged()) {
+        (void)g_f3WouldHaveTagged.fetch_add(1, std::memory_order_relaxed);
+    }
     RefField<> newField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         (void)g_f3SkipSame.fetch_add(1, std::memory_order_relaxed);
@@ -653,6 +660,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     g_f3CasOk.store(0, std::memory_order_relaxed);
     g_f3CasPlain.store(0, std::memory_order_relaxed);
     g_f3CasTagged.store(0, std::memory_order_relaxed);
+    g_f3WouldHaveTagged.store(0, std::memory_order_relaxed);
     g_f3NullToFallback.store(0, std::memory_order_relaxed);
     g_f3NullToRouted.store(0, std::memory_order_relaxed);
     g_f3SkipSame.store(0, std::memory_order_relaxed);
@@ -692,10 +700,11 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     const size_t casOk = g_f3CasOk.load(std::memory_order_relaxed);
     const size_t casPlain = g_f3CasPlain.load(std::memory_order_relaxed);
     const size_t casTagged = g_f3CasTagged.load(std::memory_order_relaxed);
+    const size_t wouldTag = g_f3WouldHaveTagged.load(std::memory_order_relaxed);
     VLOG(REPORT,
-         "[F3] seen_old=%zu cas_ok=%zu cas_plain=%zu cas_tagged=%zu routed=%zu null_fallback=%zu "
-         "skip_same=%zu reject_fwd=%zu",
-         seen, casOk, casPlain, casTagged, g_f3NullToRouted.load(std::memory_order_relaxed),
+         "[F3] seen_old=%zu cas_ok=%zu cas_plain=%zu cas_tagged=%zu would_have_tagged=%zu "
+         "routed=%zu null_fallback=%zu skip_same=%zu reject_fwd=%zu",
+         seen, casOk, casPlain, casTagged, wouldTag, g_f3NullToRouted.load(std::memory_order_relaxed),
          g_f3NullToFallback.load(std::memory_order_relaxed), g_f3SkipSame.load(std::memory_order_relaxed),
          g_f3RejectFwd.load(std::memory_order_relaxed));
     // Post-fix invariant: F3 must never re-stamp current-tag (Flip would recreate old).
