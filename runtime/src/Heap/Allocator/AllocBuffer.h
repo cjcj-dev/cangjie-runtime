@@ -11,6 +11,7 @@
 #include <functional>
 
 #include "Common/MarkWorkStack.h"
+#include "ObjectModel/RefField.h"
 #include "RegionList.h"
 
 namespace MapleRuntime {
@@ -47,7 +48,12 @@ public:
     void CommitRawPointerRegions();
 
     // record stack roots in allocBuffer so that mutator can concurrently enumerate roots without lock.
-    void PushRoot(BaseObject* root) { stackRoots.emplace_back(root); }
+    void PushRoot(BaseObject* root)
+    {
+        // Stack roots may arrive as tagged RefField words; only the 48-bit address is a
+        // BaseObject*. Untag here so MergeRoots/trace never see non-canonical pointers.
+        stackRoots.emplace_back(RefField<>(reinterpret_cast<MAddress>(root)).GetTargetObject());
+    }
 
     // move the stack roots to other container so that other threads can visit them.
     template<class WorkStack>

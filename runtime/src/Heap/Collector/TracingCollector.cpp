@@ -206,6 +206,11 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
+            // Defensive untag: non-canonical tagged words must not enter MarkObject/ForEachBitmapWord.
+            obj = RefField<>(reinterpret_cast<MAddress>(obj)).GetTargetObject();
+            if (obj == nullptr) {
+                continue;
+            }
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 nNewlyMarked++;
