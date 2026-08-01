@@ -100,7 +100,7 @@ for file in "$main_bin" "$control_bin"; do
 done
 [[ -d "$sdk" ]] || die "missing SDK directory: $sdk"
 cmp -s "$main_source" "$control_source" || die 'fixture sources are not byte-identical'
-strings -a "$runtime_so" | grep -q 'MRT_GC_STRESS_MINOR' || die 'runtime lacks the deterministic fixture control'
+grep -a -q 'MRT_GC_STRESS_MINOR' "$runtime_so" || die 'runtime lacks the deterministic fixture control'
 
 main_consumers=$(readelf -Ws "$main_bin" 2>/dev/null | grep -c '__cj_sticky_logged_base' || true)
 control_consumers=$(readelf -Ws "$control_bin" 2>/dev/null | grep -c '__cj_sticky_logged_base' || true)
