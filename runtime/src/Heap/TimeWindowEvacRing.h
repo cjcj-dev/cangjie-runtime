@@ -14,12 +14,12 @@
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
-// timewindow measure: ring of ForwardObjectExclusive from-addresses.
-// Only path that sets ObjectState::FORWARDED on from-version.
-// Observation only. CAP=1M covers major forward volume under stress.
+// timewindow measure: durable exact-from set for ForwardObjectExclusive only.
+// Storage mmap'd on first Record (SO stays lean). Observation only.
 class TimeWindowEvacRing {
 public:
-    static constexpr size_t CAP = 1u << 20; // 1M
+    static constexpr size_t HASH_CAP = 1u << 23; // 8M slots (~64MB)
+    static constexpr size_t RING_CAP = 1u << 16; // 64K detail for preState
 
     struct Entry {
         uintptr_t from = 0;
@@ -30,11 +30,12 @@ public:
 
     static TimeWindowEvacRing& Instance() noexcept;
 
-    // Call only from EvacuateYoungRegions after CopyObject (minor path).
     void Record(BaseObject* from, BaseObject* to, size_t size) noexcept;
     bool Lookup(uintptr_t addr, Entry* out) const noexcept;
 
     uint64_t TotalRecorded() const noexcept { return total_.load(std::memory_order_relaxed); }
+    uint64_t HashInserts() const noexcept { return hashInserts_.load(std::memory_order_relaxed); }
+    uint64_t HashFullDrops() const noexcept { return hashFullDrops_.load(std::memory_order_relaxed); }
 
 private:
     TimeWindowEvacRing() = default;
@@ -42,9 +43,15 @@ private:
     TimeWindowEvacRing(const TimeWindowEvacRing&) = delete;
     TimeWindowEvacRing& operator=(const TimeWindowEvacRing&) = delete;
 
+    void EnsureStorage() noexcept;
+
     std::atomic<uint64_t> seq_{ 0 };
     std::atomic<uint64_t> total_{ 0 };
-    Entry slots_[CAP];
+    std::atomic<uint64_t> hashInserts_{ 0 };
+    std::atomic<uint64_t> hashFullDrops_{ 0 };
+    std::atomic<int> ready_{ 0 };
+    Entry* slots_ = nullptr;
+    std::atomic<uintptr_t>* fromHash_ = nullptr;
 };
 
 void PrintTimeWindowEvacLookup(const void* siAddr) noexcept;
