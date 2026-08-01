@@ -33,8 +33,8 @@ private:
     friend class WCollector;
 };
 
-// A managed-object address produced by a current-version canonicalizer or an
-// explicitly audited UnsafeAssumeCurrent call.
+// A managed-object address produced by a current-version canonicalizer, an
+// explicitly audited UnsafeAssumeCurrent call, or audited carrier checks.
 class CurrentPtr {
 public:
     // Dropping the current-version proof does not create one, so this direction
@@ -50,6 +50,7 @@ private:
     friend class CollectorProxy;
     friend class Mutator;
     friend class WCollector;
+    friend CurrentPtr ProvenByCarrierChecks(BaseObject* object);
     friend CurrentPtr UnsafeAssumeCurrent(BaseObject* object);
 };
 

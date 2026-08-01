@@ -20,6 +20,10 @@
 #include "Mutator/MutatorManager.h"
 
 namespace MapleRuntime {
+// VisitAndClear calls this only after proving that the carrier still names an
+// allocated object in the same valid, non-source region identity.
+ALWAYS_INLINE inline CurrentPtr ProvenByCarrierChecks(BaseObject* object) { return CurrentPtr(object); }
+
 FixEdgeSet& FixEdgeSet::Instance() noexcept
 {
     static FixEdgeSet instance;
@@ -81,7 +85,7 @@ void FixEdgeSet::MaybeAdd(BaseObject* holder, RefField<>* slot, BaseObject* newR
             return;
         }
         holderAddress = reinterpret_cast<MAddress>(holder);
-        holderSize = RegionSpace::GetAllocSize(*holder);
+        holderSize = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(holder));
         MAddress slotAddress = reinterpret_cast<MAddress>(slot);
         CHECK_DETAIL(slotAddress >= holderAddress && slotAddress + sizeof(RefField<>) <= holderAddress + holderSize,
                      "FixEdgeSet field is outside holder holder=%p size=%zu field=%p",
@@ -274,14 +278,15 @@ void FixEdgeSet::VisitAndClear(const SlotVisitor& visitor)
                      "FixEdgeSet holder carrier outside allocation frontier holder=%p size=%zu region=%p",
                      reinterpret_cast<void*>(holderAddress), entry.holderSize, holderRegion);
         BaseObject* holder = reinterpret_cast<BaseObject*>(holderAddress);
-        CHECK_DETAIL(RegionSpace::GetAllocSize(*holder) == entry.holderSize,
+        CurrentPtr currentHolder = ProvenByCarrierChecks(holder);
+        CHECK_DETAIL(RegionSpace::GetAllocSize(currentHolder) == entry.holderSize,
                      "FixEdgeSet holder size changed without relocation holder=%p expected=%zu actual=%zu",
-                     holder, entry.holderSize, RegionSpace::GetAllocSize(*holder));
+                     holder, entry.holderSize, RegionSpace::GetAllocSize(currentHolder));
         std::sort(entry.fieldOffsets.begin(), entry.fieldOffsets.end());
         entry.fieldOffsets.erase(std::unique(entry.fieldOffsets.begin(), entry.fieldOffsets.end()),
                                  entry.fieldOffsets.end());
         const bool wasRelocated = entry.relocationSource != 0;
-        TypeInfo* holderType = wasRelocated ? holder->GetTypeInfo() : nullptr;
+        TypeInfo* holderType = wasRelocated ? GetTypeInfo(currentHolder) : nullptr;
         for (size_t offset : entry.fieldOffsets) {
             CHECK_DETAIL(offset + sizeof(RefField<>) <= entry.holderSize,
                          "FixEdgeSet field offset outside holder holder=%p size=%zu offset=%zu",
