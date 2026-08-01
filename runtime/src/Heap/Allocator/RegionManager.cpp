@@ -129,7 +129,7 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
         while (position < allocPtr) {
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
             size_t size = RegionSpace::GetAllocSize(
-                UnsafeAssumeCurrent(reinterpret_cast<BaseObject*>(position)));
+                ProvenByRegionWalk(reinterpret_cast<BaseObject*>(position)));
             func(reinterpret_cast<BaseObject*>(position));
             position += size;
         }
@@ -152,7 +152,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 
         while (position < allocPtr) {
             BaseObject* obj = reinterpret_cast<BaseObject*>(position);
-            size_t allocSize = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(obj));
+            size_t allocSize = RegionSpace::GetAllocSize(ProvenByRegionWalk(obj));
             position += allocSize;
             if (IsSurvivedObject(offset) && !func(obj)) { return false; }
             offset += allocSize;
@@ -465,7 +465,8 @@ void RegionManager::ReassembleFromSpace()
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    region->AddLiveByteCount(GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj))));
+    // Live-byte census is only fed from current-version mark/resurrect paths.
+    region->AddLiveByteCount(GetSize(ProvenByRegionWalk(const_cast<BaseObject*>(obj))));
 }
 
 void RegionManager::AssembleSmallGarbageCandidates()
@@ -869,7 +870,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     region->VisitAllObjects([this, region, start, &garbageSize](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
         if (!region->IsSurvivedObject(offset)) {
-            CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+            CurrentPtr currentObject = ProvenByRegionWalk(object);
             size_t objSize = GetSize(currentObject);
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, GetTypeInfo(currentObject), objSize);
             garbageSize += objSize;
@@ -1238,7 +1239,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     size_t toRegion1Waste = toRegion1Capacity;
     BaseObject* leftObject = nullptr;
     (void)region->VisitLiveObjectsUntilFalse([&toRegion1Waste, &leftObject](BaseObject* obj) {
-        size_t objSz = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(obj));
+        size_t objSz = RegionSpace::GetAllocSize(ProvenByRegionWalk(obj));
         if (toRegion1Waste >= objSz) {
             toRegion1Waste -= objSz;
             return true;
@@ -1286,7 +1287,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
-        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        CurrentPtr currentObject = ProvenByRegionWalk(currentObj);
         size_t size = GetSize(currentObject);
         size_t offset = currentPtr - regionStart;
         if (region->IsSurvivedObject(offset)) {
@@ -1333,7 +1334,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
-        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        CurrentPtr currentObject = ProvenByRegionWalk(currentObj);
         size_t size = GetSize(currentObject);
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
@@ -1356,7 +1357,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         CHECK(currentPtr >= regionStart);
         size_t offset = currentPtr - regionStart;
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
-        CurrentPtr currentObject = UnsafeAssumeCurrent(currentObj);
+        CurrentPtr currentObject = ProvenByRegionWalk(currentObj);
         size_t size = GetSize(currentObject);
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
@@ -1465,7 +1466,7 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
 
     // Mark new allocated pinned object.
     BaseObject* object = reinterpret_cast<BaseObject*>(allocPtr);
-    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(UnsafeAssumeCurrent(object));
+    (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(ProvenByFreshAllocation(object));
     return allocPtr;
 }
 } // namespace MapleRuntime

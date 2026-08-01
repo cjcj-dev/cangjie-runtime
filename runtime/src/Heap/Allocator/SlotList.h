@@ -31,7 +31,7 @@ public:
     // Clear the rest memory of slot object if the slot object size is greater than ObjectSlot(16 Bytes).
     void ClearExtraContent(BaseObject* slot)
     {
-        size_t size = GetSize(UnsafeAssumeCurrent(slot)) - sizeof(ObjectSlot);
+        size_t size = GetSize(ProvenByPinnedSlot(slot)) - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
             CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
@@ -48,7 +48,7 @@ private:
     uintptr_t PopFront(size_t size)
     {
         if (head == nullptr ||
-            size != GetSize(UnsafeAssumeCurrent(reinterpret_cast<BaseObject*>(head)))) {
+            size != GetSize(ProvenByPinnedSlot(reinterpret_cast<BaseObject*>(head)))) {
             return 0;
         }
         ObjectSlot* allocSlot = head;
