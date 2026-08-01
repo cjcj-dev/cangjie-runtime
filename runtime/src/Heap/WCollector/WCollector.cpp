@@ -2062,7 +2062,7 @@ void WCollector::DoGarbageCollection()
     // R1 bulk rewrite + fact lifetime end + leave FORWARD share one STW
     // (gcsm05 F2/F5): mutators must not run ForwardBarrier after fact clear.
     {
-        ScopedStopTheWorld stw("bulk forward, sticky epoch, leave forward");
+        ScopedStopTheWorld stw("bulk forward and leave forward");
         // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
         // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
         BulkForwardHolderRefs();
