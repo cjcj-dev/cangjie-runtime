@@ -67,7 +67,13 @@ void NoteIdleExit(BaseObject* target, std::atomic<size_t>& total, std::atomic<si
 void NoteSpinRounds(size_t rounds)
 {
     size_t cur = g_idleSpinRoundsMax.load(std::memory_order_relaxed);
-    while (rounds > cur && !g_idleSpinRoundsMax.compare_exchange_weak(cur, rounds, std::memory_order_relaxed)) {
+    while (rounds > cur) {
+        if (g_idleSpinRoundsMax.compare_exchange_weak(cur, rounds, std::memory_order_relaxed)) {
+            if (rounds >= 2) {
+                VLOG(REPORT, "[IdleLeak] SPIN_ROUNDS_MAX=%zu", rounds);
+            }
+            break;
+        }
     }
 }
 } // namespace
