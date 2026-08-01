@@ -1611,22 +1611,22 @@ void WCollector::ValidateYoungMarking()
 // Independent checkmark (Go gccheckmark style).
 // Why independent of minor:
 // - Seeds use major-style root enumeration (mutator/static/concurrency/finalizer/
-//   export/resurrected/cycle/alloc-buffer) plus a full linear walk of non-young
-//   regions via VisitOldRegionsForCheckmark — not StickyLog remset, not
-//   RescanRememberedSet, not retained live bitmaps, not IsSurvivedObject.
+//   export/resurrected/cycle/alloc-buffer). A full linear walk of non-young
+//   regions via VisitOldRegionsForCheckmark finds candidates but does not make
+//   their holders reachable — not StickyLog remset, not RescanRememberedSet,
+//   not retained live bitmaps, not IsSurvivedObject.
 // - Young-object liveness is read only as the comparison oracle against minor's
 //   mark bitmap (IsMarkedObject); the second pass never consults minor's root
 //   visitor (VisitMinorRoots) or remset consumer.
 // - Therefore a root/remset hole that blinds both minor and ValidateYoungMarking
 //   can still surface here when an old→young edge exists in an unscanned old
 //   object body.
-void WCollector::CheckmarkYoungMarking()
+void WCollector::CheckmarkYoungMarking(const std::vector<BaseObject*>& allocationRoots)
 {
     if (!GCDebugConfig::IsCheckmarkEnabled()) {
         return;
     }
     uint64_t startNs = TimeUtil::NanoSeconds();
-    std::unordered_set<BaseObject*> reachable;
     std::vector<BaseObject*> pending;
     // remsetgap: first old→young holder (preferred) and root-only flag.
     struct IncomingEdge {
@@ -1684,6 +1684,15 @@ void WCollector::CheckmarkYoungMarking()
             }
         }
     }
+    for (BaseObject* object : allocationRoots) {
+        pushRoot(object, true);
+    }
+
+    // Preserve only actual roots before the all-old-object pass adds candidate
+    // young targets. Root closure is deferred until that pass finds an unmarked
+    // candidate, keeping zero-divergence rounds close to the original window.
+    std::vector<BaseObject*> rootSeeds = pending;
+    std::unordered_set<BaseObject*> rootReachable;
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     size_t oldRegionsScanned = 0;
@@ -1721,22 +1730,16 @@ void WCollector::CheckmarkYoungMarking()
                 });
         });
 
-    size_t youngReachable = 0;
-    size_t youngMissed = 0;
-    size_t youngExtra = 0;
-    size_t incomingResolved = 0;
-    size_t fromRootOnly = 0;
-    size_t inRemsetYes = 0;
-    size_t inRemsetNo = 0;
-    size_t retainedSkip = 0;
-    size_t retainedWouldScan = 0;
-    BaseObject* injectVictim = nullptr;
-    StickyLog& stickyLog = StickyLog::Instance();
-
+    // First collect every candidate the old checkmark input would classify as
+    // unmarked. Do not decide reachability until the independent root closure
+    // has been computed.
+    std::unordered_set<BaseObject*> candidateReachable;
+    std::vector<BaseObject*> unmarkedCandidates;
+    size_t candidateYoung = 0;
     while (!pending.empty()) {
         BaseObject* object = pending.back();
         pending.pop_back();
-        if (!Heap::IsHeapAddress(object) || !reachable.insert(object).second) {
+        if (!Heap::IsHeapAddress(object) || !candidateReachable.insert(object).second) {
             continue;
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
@@ -1744,135 +1747,201 @@ void WCollector::CheckmarkYoungMarking()
             continue;
         }
         if (region->IsYoungRegion()) {
-            ++youngReachable;
-            if (GCDebugConfig::IsCheckmarkInjectMissEnabled() && injectVictim == nullptr &&
-                region->IsMarkedObject(object)) {
-                injectVictim = object;
-            }
-            bool minorMarked = region->IsMarkedObject(object);
-            if (injectVictim == object) {
-                minorMarked = false;
-            }
-            if (!minorMarked) {
-                ++youngMissed;
-                unsigned typeId = 0;
-                const char* typeName = "<unknown>";
-                TypeInfo* ti = object->GetTypeInfo();
-                if (ti != nullptr) {
-                    typeId = static_cast<unsigned>(static_cast<unsigned char>(ti->GetType()));
-                    typeName = ti->GetName();
-                }
-                const char* holderType = "<none>";
-                BaseObject* holder = nullptr;
-                size_t slotOffset = 0;
-                RegionInfo* holderRegion = nullptr;
-                unsigned holderRegionType = 0;
-                unsigned holderYoungAge = 0;
-                int loggedLine = -1;
-                int retainedState = -1;
-                int retainedWould = -1;
-                int fromRoot = 0;
-                auto it = firstIncoming.find(object);
-                if (it != firstIncoming.end()) {
-                    IncomingEdge& edge = it->second;
-                    fromRoot = edge.seenFromRoot ? 1 : 0;
-                    if (edge.hasOldHolder && edge.holder != nullptr && edge.holderRegion != nullptr) {
-                        ++incomingResolved;
-                        holder = edge.holder;
-                        slotOffset = edge.slotOffset;
-                        holderRegion = edge.holderRegion;
-                        TypeInfo* hti = holder->GetTypeInfo();
-                        if (hti != nullptr) {
-                            holderType = hti->GetName();
-                        }
-                        holderRegionType = static_cast<unsigned>(holderRegion->GetRegionType());
-                        holderYoungAge = static_cast<unsigned>(holderRegion->GetYoungAge());
-                        MAddress fieldAddr = reinterpret_cast<MAddress>(holder) + slotOffset;
-                        MAddress holderAddr = reinterpret_cast<MAddress>(holder);
-                        auto lineOf = [](MAddress addr) {
-                            return addr & ~static_cast<MAddress>(StickyLog::LINE_SIZE - 1);
-                        };
-                        // Prefer the mark-phase rescan snapshot (pre-mutation). Fall
-                        // back to live sticky bits for any retain=1 lines still set.
-                        bool inRemset =
-                            minorRescannedLines.count(lineOf(fieldAddr)) != 0 ||
-                            minorRescannedLines.count(lineOf(holderAddr)) != 0 ||
-                            stickyLog.IsLoggedLine(fieldAddr) ||
-                            stickyLog.IsLoggedLine(holderAddr);
-                        loggedLine = inRemset ? 1 : 0;
-                        if (loggedLine == 1) {
-                            ++inRemsetYes;
-                        } else {
-                            ++inRemsetNo;
-                        }
-                        retainedState = static_cast<int>(holderRegion->GetRetainedLiveInfoState());
-                        if (holderRegion->GetRetainedLiveInfoState() ==
-                            RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
-                            retainedWould = 1;
-                            ++retainedWouldScan;
-                        } else if (!holderRegion->IsRetainedSnapshotValid()) {
-                            retainedWould = 1;
-                            ++retainedWouldScan;
-                        } else if (holderRegion->GetRetainedLiveInfoState() ==
-                                   RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
-                            retainedWould = 0;
-                            ++retainedSkip;
-                        } else {
-                            LiveInfo* retained = holderRegion->GetRetainedLiveInfo();
-                            MAddress covered = holderRegion->GetRetainedLiveInfoCoveredUpTo();
-                            if (holderAddr >= covered) {
-                                retainedWould = 1;
-                                ++retainedWouldScan;
-                            } else if (retained == nullptr) {
-                                retainedWould = 0;
-                                ++retainedSkip;
-                            } else {
-                                size_t off = holderAddr - holderRegion->GetRegionStart();
-                                retainedWould = retained->IsSurvivedObject(off) ? 1 : 0;
-                                if (retainedWould == 1) {
-                                    ++retainedWouldScan;
-                                } else {
-                                    ++retainedSkip;
-                                }
-                            }
-                        }
-                    } else if (edge.seenFromRoot) {
-                        ++fromRootOnly;
-                    }
-                }
-                VLOG(REPORT,
-                     "[GCCheckmark] DIVERGENCE dir=oracle-live/minor-unmarked obj=%p typeId=%u "
-                     "type=%s region=%p regionType=%u youngAge=%u liveBytes=%zu "
-                     "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
-                     "slotOffset=%zu fromRoot=%d IN_REMSET=%d retainedState=%d retainedWouldScan=%d",
-                     object, typeId, typeName, region, region->GetRegionType(),
-                     static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount(),
-                     holder, holderType, holderRegion, holderRegionType, holderYoungAge,
-                     slotOffset, fromRoot, loggedLine, retainedState, retainedWould);
+            ++candidateYoung;
+            if (!region->IsMarkedObject(object)) {
+                unmarkedCandidates.push_back(object);
             }
         }
-        object->ForEachRefField([this, &pending, &ensureEdge, object, region](RefField<>& field) {
+        object->ForEachRefField([this, &pending, &ensureEdge](RefField<>& field) {
             BaseObject* target = ResolveMinorReference(field);
             if (!Heap::IsHeapAddress(target)) {
                 return;
             }
-            // young→young / any graph edge: keep reachability, do not invent old holders.
+            // Keep graph reachability without inventing an old holder.
             (void)ensureEdge(target);
-            (void)object;
-            (void)region;
             pending.push_back(target);
         });
     }
 
+    bool needsRootClosure = GCDebugConfig::IsCheckmarkInjectMissEnabled() || !unmarkedCandidates.empty();
+    size_t youngReachable = 0;
+    if (needsRootClosure) {
+        std::vector<BaseObject*> rootPending = rootSeeds;
+        while (!rootPending.empty()) {
+            BaseObject* object = rootPending.back();
+            rootPending.pop_back();
+            if (!Heap::IsHeapAddress(object) || !rootReachable.insert(object).second) {
+                continue;
+            }
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+                continue;
+            }
+            if (region->IsYoungRegion()) {
+                ++youngReachable;
+            }
+            object->ForEachRefField([this, &rootPending](RefField<>& field) {
+                BaseObject* target = ResolveMinorReference(field);
+                if (Heap::IsHeapAddress(target)) {
+                    rootPending.push_back(target);
+                }
+            });
+        }
+    }
+
+    BaseObject* injectVictim = nullptr;
+    if (GCDebugConfig::IsCheckmarkInjectMissEnabled()) {
+        for (BaseObject* object : rootReachable) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion() && region->IsMarkedObject(object)) {
+                injectVictim = object;
+                unmarkedCandidates.push_back(object);
+                break;
+            }
+        }
+    }
+
+    size_t youngMissed = 0;
+    size_t youngExcluded = 0;
+    size_t youngExtra = 0;
+    size_t incomingResolved = 0;
+    size_t fromRootOnly = 0;
+    size_t inRemsetYes = 0;
+    size_t inRemsetNo = 0;
+    size_t retainedSkip = 0;
+    size_t retainedWouldScan = 0;
+    size_t holderRootReachableCount = 0;
+    size_t holderRootUnreachableCount = 0;
+    size_t targetRootReachableCount = 0;
+    size_t targetRootUnreachableCount = 0;
+    StickyLog& stickyLog = StickyLog::Instance();
+
+    for (BaseObject* object : unmarkedCandidates) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        int targetRootReachable = rootReachable.count(object) != 0 ? 1 : 0;
+        if (targetRootReachable == 1) {
+            ++youngMissed;
+            ++targetRootReachableCount;
+        } else {
+            ++youngExcluded;
+            ++targetRootUnreachableCount;
+        }
+        unsigned typeId = 0;
+        const char* typeName = "<unknown>";
+        TypeInfo* ti = object->GetTypeInfo();
+        if (ti != nullptr) {
+            typeId = static_cast<unsigned>(static_cast<unsigned char>(ti->GetType()));
+            typeName = ti->GetName();
+        }
+        const char* holderType = "<none>";
+        BaseObject* holder = nullptr;
+        size_t slotOffset = 0;
+        RegionInfo* holderRegion = nullptr;
+        unsigned holderRegionType = 0;
+        unsigned holderYoungAge = 0;
+        int loggedLine = -1;
+        int retainedState = -1;
+        int retainedWould = -1;
+        int fromRoot = 0;
+        int holderRootReachable = -1;
+        auto it = firstIncoming.find(object);
+        if (it != firstIncoming.end()) {
+            IncomingEdge& edge = it->second;
+            fromRoot = edge.seenFromRoot ? 1 : 0;
+            if (edge.hasOldHolder && edge.holder != nullptr && edge.holderRegion != nullptr) {
+                ++incomingResolved;
+                holder = edge.holder;
+                slotOffset = edge.slotOffset;
+                holderRegion = edge.holderRegion;
+                holderRootReachable = rootReachable.count(holder) != 0 ? 1 : 0;
+                if (holderRootReachable == 1) {
+                    ++holderRootReachableCount;
+                } else {
+                    ++holderRootUnreachableCount;
+                }
+                TypeInfo* hti = holder->GetTypeInfo();
+                if (hti != nullptr) {
+                    holderType = hti->GetName();
+                }
+                holderRegionType = static_cast<unsigned>(holderRegion->GetRegionType());
+                holderYoungAge = static_cast<unsigned>(holderRegion->GetYoungAge());
+                MAddress fieldAddr = reinterpret_cast<MAddress>(holder) + slotOffset;
+                MAddress holderAddr = reinterpret_cast<MAddress>(holder);
+                auto lineOf = [](MAddress addr) {
+                    return addr & ~static_cast<MAddress>(StickyLog::LINE_SIZE - 1);
+                };
+                // Prefer the mark-phase rescan snapshot (pre-mutation). Fall
+                // back to live sticky bits for any retain=1 lines still set.
+                bool inRemset = minorRescannedLines.count(lineOf(fieldAddr)) != 0 ||
+                    minorRescannedLines.count(lineOf(holderAddr)) != 0 || stickyLog.IsLoggedLine(fieldAddr) ||
+                    stickyLog.IsLoggedLine(holderAddr);
+                loggedLine = inRemset ? 1 : 0;
+                if (loggedLine == 1) {
+                    ++inRemsetYes;
+                } else {
+                    ++inRemsetNo;
+                }
+                retainedState = static_cast<int>(holderRegion->GetRetainedLiveInfoState());
+                if (holderRegion->GetRetainedLiveInfoState() ==
+                    RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+                    retainedWould = 1;
+                    ++retainedWouldScan;
+                } else if (!holderRegion->IsRetainedSnapshotValid()) {
+                    retainedWould = 1;
+                    ++retainedWouldScan;
+                } else if (holderRegion->GetRetainedLiveInfoState() ==
+                           RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                    retainedWould = 0;
+                    ++retainedSkip;
+                } else {
+                    LiveInfo* retained = holderRegion->GetRetainedLiveInfo();
+                    MAddress covered = holderRegion->GetRetainedLiveInfoCoveredUpTo();
+                    if (holderAddr >= covered) {
+                        retainedWould = 1;
+                        ++retainedWouldScan;
+                    } else if (retained == nullptr) {
+                        retainedWould = 0;
+                        ++retainedSkip;
+                    } else {
+                        size_t off = holderAddr - holderRegion->GetRegionStart();
+                        retainedWould = retained->IsSurvivedObject(off) ? 1 : 0;
+                        if (retainedWould == 1) {
+                            ++retainedWouldScan;
+                        } else {
+                            ++retainedSkip;
+                        }
+                    }
+                }
+            } else if (edge.seenFromRoot) {
+                ++fromRootOnly;
+            }
+        }
+        const char* classification = targetRootReachable == 1 ? "DIVERGENCE" : "UNREACHABLE_CANDIDATE";
+        VLOG(REPORT,
+             "[GCCheckmark] %s dir=root-live/minor-unmarked obj=%p typeId=%u "
+             "type=%s region=%p regionType=%u youngAge=%u liveBytes=%zu "
+             "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
+             "slotOffset=%zu fromRoot=%d targetRootReachable=%d holderRootReachable=%d IN_REMSET=%d "
+             "retainedState=%d retainedWouldScan=%d",
+             classification, object, typeId, typeName, region, region->GetRegionType(),
+             static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount(), holder, holderType,
+             holderRegion, holderRegionType, holderYoungAge, slotOffset, fromRoot, targetRootReachable,
+             holderRootReachable, loggedLine, retainedState, retainedWould);
+    }
+
     uint64_t wallUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
     VLOG(REPORT,
-         "[GCCheckmark] summary reachable=%zu young=%zu missed=%zu extra=%zu "
+         "[GCCheckmark] summary reachable=%zu young=%zu missed=%zu excluded=%zu extra=%zu "
+         "candidateReachable=%zu candidateYoung=%zu "
          "oldRegions=%zu oldObjects=%zu wallUs=%zu inject=%u "
          "INCOMING_RESOLVED=%zu FROM_ROOT_ONLY=%zu IN_REMSET_yes=%zu IN_REMSET_no=%zu "
-         "RETAINED_WOULD_SCAN=%zu RETAINED_SKIP=%zu",
-         reachable.size(), youngReachable, youngMissed, youngExtra, oldRegionsScanned,
-         oldObjectsScanned, wallUs, static_cast<unsigned>(injectVictim != nullptr),
-         incomingResolved, fromRootOnly, inRemsetYes, inRemsetNo, retainedWouldScan, retainedSkip);
+         "RETAINED_WOULD_SCAN=%zu RETAINED_SKIP=%zu HOLDER_ROOT_REACHABLE=%zu "
+         "HOLDER_ROOT_UNREACHABLE=%zu TARGET_ROOT_REACHABLE=%zu TARGET_ROOT_UNREACHABLE=%zu",
+         rootReachable.size(), youngReachable, youngMissed, youngExcluded, youngExtra,
+         candidateReachable.size(), candidateYoung, oldRegionsScanned, oldObjectsScanned, wallUs,
+         static_cast<unsigned>(injectVictim != nullptr), incomingResolved, fromRootOnly, inRemsetYes,
+         inRemsetNo, retainedWouldScan, retainedSkip, holderRootReachableCount,
+         holderRootUnreachableCount, targetRootReachableCount, targetRootUnreachableCount);
     EmitSiteCounters::Dump(youngMissed != 0 ? "checkmark-miss" : "checkmark-ok");
     if (youngMissed != 0) {
         CHECK_DETAIL(false,
@@ -1906,7 +1975,16 @@ void WCollector::DoYoungGarbageCollection()
     const bool evacuationEnabled = StickyLog::Instance().GetEvacuationThreshold() != 0 &&
         StickyLog::Instance().GetEvacuationMaxRegions() != 0;
     MinorRegionSet pinnedRegions;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    std::vector<BaseObject*> checkmarkAllocationRoots;
+    theAllocator.VisitAllocBuffers(
+        [&checkmarkAllocationRoots](AllocBuffer& buffer) { buffer.MergeRoots(checkmarkAllocationRoots); });
+    for (BaseObject* object : checkmarkAllocationRoots) {
+        enumRoots.push_back(object);
+    }
+#else
     theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+#endif
     while (!enumRoots.empty()) {
         BaseObject* object = enumRoots.back();
         enumRoots.pop_back();
@@ -1924,7 +2002,7 @@ void WCollector::DoYoungGarbageCollection()
     }
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     // After minor mark, before reclaim: independent checkmark path.
-    CheckmarkYoungMarking();
+    CheckmarkYoungMarking(checkmarkAllocationRoots);
 #endif
 
     std::vector<RegionInfo*> evacuationToRegions;
