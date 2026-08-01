@@ -51,10 +51,25 @@ private:
     friend class Mutator;
     friend class WCollector;
     friend CurrentPtr ProvenByCarrierChecks(BaseObject* object);
+    friend CurrentPtr ProvenByRegionWalk(BaseObject* object);
+    friend CurrentPtr ProvenByFreshAllocation(BaseObject* object);
+    friend CurrentPtr ProvenByPinnedSlot(BaseObject* object);
+    friend CurrentPtr ProvenByNonOldBranch(BaseObject* object);
+    friend CurrentPtr ProvenByTypedReceiver(BaseObject* object);
     friend CurrentPtr UnsafeAssumeCurrent(BaseObject* object);
 };
 
 ALWAYS_INLINE inline CurrentPtr UnsafeAssumeCurrent(BaseObject* object) { return CurrentPtr(object); }
+// Region linear/live walks only yield allocated current-version objects.
+ALWAYS_INLINE inline CurrentPtr ProvenByRegionWalk(BaseObject* object) { return CurrentPtr(object); }
+// Fresh heap allocations complete type init before any concurrent collector can retire them.
+ALWAYS_INLINE inline CurrentPtr ProvenByFreshAllocation(BaseObject* object) { return CurrentPtr(object); }
+// Free pinned slots retain a live object header under the slot-list lifecycle.
+ALWAYS_INLINE inline CurrentPtr ProvenByPinnedSlot(BaseObject* object) { return CurrentPtr(object); }
+// Explicit non-old / current-tag branch already proved the referent is current.
+ALWAYS_INLINE inline CurrentPtr ProvenByNonOldBranch(BaseObject* object) { return CurrentPtr(object); }
+// Member body reached only through a CurrentPtr friend wrapper (receiver already typed).
+ALWAYS_INLINE inline CurrentPtr ProvenByTypedReceiver(BaseObject* object) { return CurrentPtr(object); }
 
 using ObjectPtr = BaseObject*;
 

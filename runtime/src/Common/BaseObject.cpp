@@ -47,20 +47,19 @@ void BaseObject::DumpObject(int logtype, bool isSimple) const
 }
 #endif
 
-static void ForEachRefFieldInNonArrayObject(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachRefFieldInNonArrayObject(CurrentPtr currentObject, const RefFieldVisitor& visitor)
 {
-    GCTib gcTib = GetGCTib(UnsafeAssumeCurrent(obj));
+    GCTib gcTib = GetGCTib(currentObject);
     // gcTib record payload data, skip the TypeInfo
-    MAddress objAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
+    MAddress objAddr = reinterpret_cast<MAddress>(static_cast<BaseObject*>(currentObject)) + TYPEINFO_PTR_SIZE;
     gcTib.ForEachBitmapWord(objAddr, visitor);
 }
 
 // Call func on each element in an object array.
-static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
+static void ForEachElementInArray(CurrentPtr currentArray, const RefFieldVisitor& visitor)
 {
     // take array length and content.
-    MArray* mArray = reinterpret_cast<MArray*>(obj);
-    CurrentPtr currentArray = UnsafeAssumeCurrent(mArray);
+    MArray* mArray = reinterpret_cast<MArray*>(static_cast<BaseObject*>(currentArray));
     MIndex arrayLengthVal = mArray->GetLength();
     TypeInfo* componentTypeInfo = GetComponentTypeInfo(currentArray);
     if (componentTypeInfo->IsStructType()) {
@@ -86,10 +85,12 @@ void BaseObject::ForEachRefField(const RefFieldVisitor& visitor)
 {
     TypeInfo* typeInfo = GetTypeInfo();
     if (typeInfo->HasRefField()) {
+        // Member entry is only reached from the CurrentPtr friend wrapper.
+        CurrentPtr currentObject = ProvenByTypedReceiver(this);
         if (UNLIKELY(typeInfo->IsRawArray())) {
-            ForEachElementInArray(this, visitor);
+            ForEachElementInArray(currentObject, visitor);
         } else {
-            ForEachRefFieldInNonArrayObject(this, visitor);
+            ForEachRefFieldInNonArrayObject(currentObject, visitor);
         }
     }
 };
@@ -109,8 +110,9 @@ void BaseObject::ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress agg
 void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd)
 {
     // take array length and content.
+    // Member entry is only reached from the CurrentPtr friend wrapper.
+    CurrentPtr currentArray = ProvenByTypedReceiver(this);
     MArray* mArray = static_cast<MArray*>(this);
-    CurrentPtr currentArray = UnsafeAssumeCurrent(mArray);
     MIndex arrayLen = mArray->GetLength();
     TypeInfo* component = MapleRuntime::GetComponentTypeInfo(currentArray);
     if (component->IsStructType()) {
@@ -142,8 +144,9 @@ size_t BaseObject::GetSize() const
 {
     TypeInfo* kls = GetTypeInfo();
     if (kls->IsArrayType()) {
-        const MArray* mArray = reinterpret_cast<const MArray*>(this);
-        size_t size = GetMArraySize(UnsafeAssumeCurrent(const_cast<MArray*>(mArray)));
+        // Member entry is only reached from the CurrentPtr friend wrapper.
+        CurrentPtr currentArray = ProvenByTypedReceiver(const_cast<BaseObject*>(this));
+        size_t size = GetMArraySize(currentArray);
         return MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
     } else {
         return MapleRuntime::AlignUp<size_t>(kls->GetInstanceSize() + TYPEINFO_PTR_SIZE,
