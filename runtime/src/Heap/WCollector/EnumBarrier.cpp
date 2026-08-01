@@ -12,11 +12,43 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include "Common/StateWord.h"
+#include <atomic>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
 namespace MapleRuntime {
+// idleleak measure: AtomicReadReference IsCurrentPointer counters (owned in IdleBarrier.cpp).
+extern std::atomic<size_t> g_atomicCurtagTotal;
+extern std::atomic<size_t> g_atomicCurtagForwarded;
+extern std::atomic<size_t> g_atomicCurtagLocked;
+extern std::atomic<size_t> g_atomicCurtagForwarding;
+
+namespace {
+void NoteAtomicCurtag(BaseObject* target, const char* barrier)
+{
+    size_t n = g_atomicCurtagTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    size_t fwd = g_atomicCurtagForwarded.load(std::memory_order_relaxed);
+    size_t locked = g_atomicCurtagLocked.load(std::memory_order_relaxed);
+    size_t forwarding = g_atomicCurtagForwarding.load(std::memory_order_relaxed);
+    if (target != nullptr) {
+        ObjectState::ObjectStateCode code = target->GetObjectState().GetStateCode();
+        if (code == ObjectState::FORWARDED) {
+            fwd = g_atomicCurtagForwarded.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::LOCKED) {
+            locked = g_atomicCurtagLocked.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::FORWARDING) {
+            forwarding = g_atomicCurtagForwarding.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+    }
+    if ((n & (n - 1)) == 0) {
+        VLOG(REPORT, "[IdleLeak] ATOMIC_CURTAG %s n=%zu fwd=%zu locked=%zu forwarding=%zu target=%p", barrier, n, fwd,
+             locked, forwarding, target);
+    }
+}
+} // namespace
+
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -214,6 +246,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
         target = oldField.GetTargetObject();
+        NoteAtomicCurtag(target, "Enum");
         DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
         return target;
     }

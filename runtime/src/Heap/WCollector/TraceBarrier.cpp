@@ -12,11 +12,19 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include "Common/StateWord.h"
+#include <atomic>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
 namespace MapleRuntime {
+// idleleak measure: share AtomicReadReference counters owned in IdleBarrier.cpp.
+extern std::atomic<size_t> g_atomicCurtagTotal;
+extern std::atomic<size_t> g_atomicCurtagForwarded;
+extern std::atomic<size_t> g_atomicCurtagLocked;
+extern std::atomic<size_t> g_atomicCurtagForwarding;
+
 namespace {
 void RememberNewReference(Mutator* mutator, BaseObject* ref)
 {
@@ -26,6 +34,28 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
     // Keep the tracing closure for references inserted after their owner may have been scanned.
     // ShouldEnqueue filters trace-region and already marked objects and deduplicates the rest.
     mutator->RememberObjectInSatbBuffer(ref);
+}
+
+void NoteAtomicCurtagTrace(BaseObject* target)
+{
+    size_t n = g_atomicCurtagTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    size_t fwd = g_atomicCurtagForwarded.load(std::memory_order_relaxed);
+    size_t locked = g_atomicCurtagLocked.load(std::memory_order_relaxed);
+    size_t forwarding = g_atomicCurtagForwarding.load(std::memory_order_relaxed);
+    if (target != nullptr) {
+        ObjectState::ObjectStateCode code = target->GetObjectState().GetStateCode();
+        if (code == ObjectState::FORWARDED) {
+            fwd = g_atomicCurtagForwarded.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::LOCKED) {
+            locked = g_atomicCurtagLocked.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::FORWARDING) {
+            forwarding = g_atomicCurtagForwarding.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+    }
+    if ((n & (n - 1)) == 0) {
+        VLOG(REPORT, "[IdleLeak] ATOMIC_CURTAG Trace n=%zu fwd=%zu locked=%zu forwarding=%zu target=%p", n, fwd, locked,
+             forwarding, target);
+    }
 }
 } // namespace
 
@@ -230,6 +260,7 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
         target = oldField.GetTargetObject();
+        NoteAtomicCurtagTrace(target);
         DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
         return target;
     }

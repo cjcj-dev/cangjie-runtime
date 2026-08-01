@@ -11,28 +11,93 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
+#include "Common/StateWord.h"
+#include <atomic>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include "securec.h"
 
 namespace MapleRuntime {
+// idleleak measure: pure counters on Idle* ReadReference exits (no behavior change).
+// Shared process-wide so IdleLogBarrier (inherits ReadReference) is covered.
+std::atomic<size_t> g_idlePlainTotal{ 0 };
+std::atomic<size_t> g_idlePlainForwarded{ 0 };
+std::atomic<size_t> g_idlePlainLocked{ 0 };
+std::atomic<size_t> g_idlePlainForwarding{ 0 };
+std::atomic<size_t> g_idleUpdateTotal{ 0 };
+std::atomic<size_t> g_idleUpdateForwarded{ 0 };
+std::atomic<size_t> g_idleUpdateLocked{ 0 };
+std::atomic<size_t> g_idleUpdateForwarding{ 0 };
+std::atomic<size_t> g_idleUntagTotal{ 0 };
+std::atomic<size_t> g_idleUntagForwarded{ 0 };
+std::atomic<size_t> g_idleUntagLocked{ 0 };
+std::atomic<size_t> g_idleUntagForwarding{ 0 };
+std::atomic<size_t> g_idleSpinRoundsMax{ 0 };
+// Enum/Trace AtomicReadReference IsCurrentPointer early-return (defined here for one TU owner).
+std::atomic<size_t> g_atomicCurtagTotal{ 0 };
+std::atomic<size_t> g_atomicCurtagForwarded{ 0 };
+std::atomic<size_t> g_atomicCurtagLocked{ 0 };
+std::atomic<size_t> g_atomicCurtagForwarding{ 0 };
+
+namespace {
+void NoteIdleExit(BaseObject* target, std::atomic<size_t>& total, std::atomic<size_t>& forwarded,
+                  std::atomic<size_t>& locked, std::atomic<size_t>& forwarding, const char* exitName)
+{
+    size_t n = total.fetch_add(1, std::memory_order_relaxed) + 1;
+    size_t fwd = forwarded.load(std::memory_order_relaxed);
+    size_t lck = locked.load(std::memory_order_relaxed);
+    size_t fwing = forwarding.load(std::memory_order_relaxed);
+    if (target != nullptr) {
+        ObjectState::ObjectStateCode code = target->GetObjectState().GetStateCode();
+        if (code == ObjectState::FORWARDED) {
+            fwd = forwarded.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::LOCKED) {
+            lck = locked.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else if (code == ObjectState::FORWARDING) {
+            fwing = forwarding.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+    }
+    if ((n & (n - 1)) == 0) {
+        VLOG(REPORT, "[IdleLeak] %s n=%zu fwd=%zu locked=%zu forwarding=%zu target=%p", exitName, n, fwd, lck, fwing,
+             target);
+    }
+}
+
+void NoteSpinRounds(size_t rounds)
+{
+    size_t cur = g_idleSpinRoundsMax.load(std::memory_order_relaxed);
+    while (rounds > cur && !g_idleSpinRoundsMax.compare_exchange_weak(cur, rounds, std::memory_order_relaxed)) {
+    }
+}
+} // namespace
+
 BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
+    size_t rounds = 0;
     do {
+        ++rounds;
+        NoteSpinRounds(rounds);
         RefField<> oldField(field);
         if (LIKELY(!oldField.IsTagged())) {
-            return oldField.GetTargetObject();
+            BaseObject* target = oldField.GetTargetObject();
+            NoteIdleExit(target, g_idlePlainTotal, g_idlePlainForwarded, g_idlePlainLocked, g_idlePlainForwarding,
+                         "PLAIN");
+            return target;
         }
         BaseObject* toVersion = nullptr;
         if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
             DLOG(BARRIER, "update obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
+            NoteIdleExit(toVersion, g_idleUpdateTotal, g_idleUpdateForwarded, g_idleUpdateLocked,
+                         g_idleUpdateForwarding, "UPDATE");
             return toVersion;
         }
 
         BaseObject* target = nullptr;
         if (theCollector.TryUntagRefField(obj, field, target)) {
             DLOG(BARRIER, "untag obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+            NoteIdleExit(target, g_idleUntagTotal, g_idleUntagForwarded, g_idleUntagLocked, g_idleUntagForwarding,
+                         "UNTAG");
             return target;
         }
     } while (true);
