@@ -26,7 +26,7 @@ enum class EmitBarrierKind : int {
 
 // Per-barrier:
 //   STORE_OLD_TO_YOUNG  — Write* saw holder old, ref young
-//   STICKY_LOGGED       — that write also produced a sticky line attempt (IdleLog only)
+//   STICKY_LOGGED       — that write also produced a sticky line attempt
 //   STORE_ANY           — any Write* with heap holder (exercised proof)
 //   STORE_HOLDER_YOUNG_REF_YOUNG — write-time holder still young, ref young (H2 candidates)
 class EmitSiteCounters {
