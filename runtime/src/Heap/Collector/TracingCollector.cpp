@@ -206,7 +206,7 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
-            CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+            CurrentPtr currentObject = ProvenByWorkStack(obj);
             bool wasMarked = collector.MarkObject(currentObject);
             if (!wasMarked) {
                 nNewlyMarked++;
@@ -312,7 +312,7 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
-            bool wasMarked = collector.MarkObject(UnsafeAssumeCurrent(obj));
+            bool wasMarked = collector.MarkObject(ProvenByWorkStack(obj));
             if (!wasMarked) {
                 collector.DFSTraceExportObject(obj);
             }
@@ -543,7 +543,7 @@ void TracingCollector::FindUselessExternObjects()
             if (IsMarkedObject(*listIt)) {
                 listIt = ls.erase(listIt);
             } else {
-                MarkObject(UnsafeAssumeCurrent(*listIt));
+                MarkObject(ProvenByWorkStack(*listIt));
                 listIt++;
             }
         }
@@ -692,7 +692,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
             continue;
         }
 
-        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        CurrentPtr currentObject = ProvenByWorkStack(obj);
         ++resurrectdObjects;
         ResurrectObject(currentObject, offset, regionInfo);
 
@@ -743,7 +743,7 @@ void TracingCollector::DumpHeap(const CString& tag)
     // dump roots
     DumpRoots(FRAGMENT);
     // dump object contents
-    auto dumpVisitor = [](BaseObject* obj) { DumpObject(UnsafeAssumeCurrent(obj), FRAGMENT); };
+    auto dumpVisitor = [](BaseObject* obj) { DumpObject(ProvenByRegionWalk(obj), FRAGMENT); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
     CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
 
@@ -751,7 +751,7 @@ void TracingCollector::DumpHeap(const CString& tag)
     DLOG(FRAGMENT, "Print Type information");
     std::set<TypeInfo*> classinfoSet;
     auto assembleClassInfoVisitor = [&classinfoSet](BaseObject* obj) {
-        TypeInfo* classInfo = GetTypeInfo(UnsafeAssumeCurrent(obj));
+        TypeInfo* classInfo = GetTypeInfo(ProvenByRegionWalk(obj));
         // No need to check the result of insertion, because there are multiple-insertions.
         (void)classinfoSet.insert(classInfo);
     };
@@ -860,13 +860,13 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
     while (!workStack.empty()) {
         BaseObject* obj = workStack.back();
         workStack.pop_back();
-        CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+        CurrentPtr currentObject = ProvenByWorkStack(obj);
         ForEachRefField(currentObject, [&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);
             if (IsCurrentPointer(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
-                CurrentPtr currentTarget = UnsafeAssumeCurrent(targetObj);
+                CurrentPtr currentTarget = ProvenByNonOldBranch(targetObj);
                 if (IsMarkedObject(targetObj)) {
                     return;
                 }
@@ -881,7 +881,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
 
             CurrentPtr currentLatest = IsOldPointer(oldField)
                 ? FindLatestVersion(MaybeStalePtr(oldField.GetTargetObject()))
-                : UnsafeAssumeCurrent(field.GetTargetObject());
+                : ProvenByNonOldBranch(field.GetTargetObject());
             BaseObject* latest = currentLatest;
 
             // target object could be null or non-heap for some static variable.

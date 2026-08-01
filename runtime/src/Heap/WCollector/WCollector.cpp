@@ -98,7 +98,7 @@ bool WCollector::MarkObject(CurrentPtr currentObject) const
 bool WCollector::ResurrectObject(CurrentPtr currentObject, size_t offset, RegionInfo* region)
 {
     BaseObject* obj = currentObject;
-    bool resurrected = region->ResurrectObject(obj, offset);
+    bool resurrected = region->ResurrectObject(currentObject, offset);
         if (!resurrected) {
             region->AddLiveByteCount(GetSize(currentObject));
             DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
@@ -230,7 +230,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         BaseObject* targetObj = oldField.GetTargetObject();
         currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
+        currentLatest = ProvenByNonOldBranch(field.GetTargetObject());
     }
     BaseObject* latest = currentLatest;
 
@@ -266,7 +266,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     }
     BaseObject* root = oldField.GetTargetObject();
     if (Heap::IsHeapAddress(root)) {
-        CurrentPtr currentRoot = UnsafeAssumeCurrent(root);
+        CurrentPtr currentRoot = ProvenByNonOldBranch(root);
         (void)currentRoot;
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         RefField<> newField = GetAndTryTagRefField(root);
@@ -303,7 +303,7 @@ void WCollector::TraceRefField(CurrentPtr currentObject, RefField<>& field, Work
         BaseObject* targetObj = oldField.GetTargetObject();
         currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
+        currentLatest = ProvenByNonOldBranch(field.GetTargetObject());
     }
     BaseObject* latest = currentLatest;
 
@@ -358,7 +358,7 @@ CurrentPtr WCollector::GetAndTryTagObj(RefSlotKind kind, CurrentPtr currentObjec
         BaseObject* targetObj = oldField.GetTargetObject();
         currentLatest = FindLatestVersion(MaybeStalePtr(targetObj));
     } else {
-        currentLatest = UnsafeAssumeCurrent(field.GetTargetObject());
+        currentLatest = ProvenByNonOldBranch(field.GetTargetObject());
     }
     BaseObject* latest = currentLatest;
     // target object could be null or non-heap for some static variable.
@@ -651,7 +651,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
             if (!IsSurvivedObject(obj)) {
                 return;
             }
-            CurrentPtr currentObject = UnsafeAssumeCurrent(obj);
+            CurrentPtr currentObject = ProvenByRegionWalk(obj);
             if (!HasRefField(currentObject)) {
                 return;
             }
@@ -1162,7 +1162,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
-        CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+        CurrentPtr currentObject = ProvenByWorkStack(object);
         if (MarkObject(currentObject)) {
             continue;
         }
@@ -1187,7 +1187,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
         bool retainLine = false;
         auto scanObject = [this, workStack, forwarding, evacuatedRegions, lineStart, lineEnd,
                            &retainLine](BaseObject* object) {
-            CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+            CurrentPtr currentObject = ProvenByRegionWalk(object);
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::ToAllocSize(GetSize(currentObject));
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
@@ -1277,7 +1277,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
                 size_t offset = 0;
                 while (position < allocPtr) {
                     BaseObject* object = reinterpret_cast<BaseObject*>(position);
-                    size_t allocSize = RegionSpace::GetAllocSize(UnsafeAssumeCurrent(object));
+                    size_t allocSize = RegionSpace::GetAllocSize(ProvenByRegionWalk(object));
                     position += allocSize;
                     if (reinterpret_cast<uintptr_t>(object) >= coveredUpTo ||
                         retainedLiveInfo->IsSurvivedObject(offset)) {
@@ -1340,7 +1340,7 @@ void WCollector::FixMinorRootSlots(const MinorForwardTable& forwarding, const Mi
 void WCollector::FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding,
                                      const MinorRegionSet& evacuatedRegions)
 {
-    CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+    CurrentPtr currentObject = ProvenByRegionWalk(object);
     ForEachStrongRefSlot(currentObject,
         [this, &forwarding, &evacuatedRegions](RefSlotKind, CurrentPtr, RefField<>& field) {
             (void)FixMinorEvacuatedSlot(field, forwarding, evacuatedRegions);
@@ -1435,7 +1435,7 @@ void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::
                      fromRegion, liveInfo, liveBytes, bitmapLiveBytes, recomputedLiveBytes);
         (void)fromRegion->VisitLiveObjectsUntilFalse(
             [this, fromRegion, toRegion, &forwarding, &copiedObjects, &copiedBytes](BaseObject* fromObject) {
-                CurrentPtr currentFromObject = UnsafeAssumeCurrent(fromObject);
+                CurrentPtr currentFromObject = ProvenByRegionWalk(fromObject);
                 size_t size = RegionSpace::GetAllocSize(currentFromObject);
                 MAddress toAddress = toRegion->Alloc(size);
                 CHECK_DETAIL(toAddress != 0,
@@ -1611,7 +1611,7 @@ void WCollector::DoYoungGarbageCollection()
                                                     &promotedObjects, &promotedLoggedLines](BaseObject* object) {
             ++promotedObjects;
             bool logged = false;
-            ForEachStrongRefSlot(UnsafeAssumeCurrent(object),
+            ForEachStrongRefSlot(ProvenByRegionWalk(object),
                 [&satbBuffer, &stickyLog, &promotionNode, &promotedLoggedLines, &logged, object]
                 (RefSlotKind, CurrentPtr currentTarget, RefField<>&) {
                     BaseObject* target = currentTarget;
@@ -1724,7 +1724,7 @@ void WCollector::DoGarbageCollection()
             // Soft path for all slots: never GetAndTryTagObj hard-CHECK during
             // post-Flip normalize (5d8fa1f2 WEAK_MSG was strong RawArray holders
             // hitting a message that always said "weak object").
-            NormalizeTraceRegionObject(UnsafeAssumeCurrent(object));
+            NormalizeTraceRegionObject(ProvenByRegionWalk(object));
         });
         manager.HandleTraceRegions();
     }
