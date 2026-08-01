@@ -6,17 +6,78 @@
 
 
 #include "EnumBarrier.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include <atomic>
+#include <cstdlib>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 
 namespace MapleRuntime {
+namespace {
+// Posctrl / diagnosis for EnumBarrier old-tag null to-version (EnumBarrier.cpp:31-40).
+// MRT_ENUMFIX_POSCTRL=1: count and still return from (pre-fix arm). Default: fail-closed.
+std::atomic<size_t> g_enumNullToTotal{ 0 };
+std::atomic<size_t> g_enumNullToFwd{ 0 };
+std::atomic<size_t> g_enumNullToGhost0{ 0 };
+std::atomic<size_t> g_enumNullToLegal{ 0 };
+std::atomic<size_t> g_enumOldHit{ 0 };
+
+bool EnumfixPosctrlMode()
+{
+    static const int mode = []() {
+        const char* env = std::getenv("MRT_ENUMFIX_POSCTRL");
+        return (env != nullptr && env[0] == '1' && env[1] == '\0') ? 1 : 0;
+    }();
+    return mode != 0;
+}
+
+BaseObject* ResolveEnumOldNullTo(BaseObject* fromVersion)
+{
+    size_t n = g_enumNullToTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    const bool isFwd = fromVersion != nullptr && fromVersion->IsForwarded();
+    const bool ghost0 = fromVersion == nullptr || !RegionInfo::InGhostFromRegion(fromVersion);
+    if (isFwd) {
+        (void)g_enumNullToFwd.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (ghost0) {
+        (void)g_enumNullToGhost0.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!isFwd && fromVersion != nullptr && fromVersion->IsValidObject()) {
+        (void)g_enumNullToLegal.fetch_add(1, std::memory_order_relaxed);
+    }
+    if ((n & (n - 1)) == 0) {
+        VLOG(REPORT,
+             "[EnumBarrier] nullto n=%zu fwd=%zu ghost0=%zu legal=%zu from=%p", n,
+             g_enumNullToFwd.load(std::memory_order_relaxed),
+             g_enumNullToGhost0.load(std::memory_order_relaxed),
+             g_enumNullToLegal.load(std::memory_order_relaxed), fromVersion);
+    }
+    // Posctrl arm: keep pre-fix handoff so counters prove the else branch is live.
+    if (EnumfixPosctrlMode()) {
+        return fromVersion;
+    }
+    // Production: never hand out a FORWARDED from when route is unavailable.
+    // Legal null = unmoved live survivor (high-live / raw-pin): valid header, not FORWARDED.
+    // See reports/REPORT-nullenum.md LEGAL_NULL_SET; FindToVersion gate RegionInfo.h:718-722.
+    CHECK_DETAIL(!isFwd,
+                 "EnumBarrier ReadReference: null to-version for FORWARDED from-object %p "
+                 "(ghost gate / cleared route; do not hand off from-version)",
+                 fromVersion);
+    CHECK_DETAIL(fromVersion == nullptr || fromVersion->IsValidObject(),
+                 "EnumBarrier ReadReference: null to-version for invalid from-object %p "
+                 "(stale old-tag after ghost dispel; do not hand off from-version)",
+                 fromVersion);
+    return fromVersion;
+}
+} // namespace
+
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -29,15 +90,13 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         return tmpField.GetTargetObject();
     }
     if (theCollector.IsOldPointer(tmpField)) {
+        (void)g_enumOldHit.fetch_add(1, std::memory_order_relaxed);
         BaseObject* fromVersion = tmpField.GetTargetObject();
         BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
-        BaseObject* target = nullptr;
         if (toVersion != nullptr) {
-            target = toVersion;
-        } else {
-            target = fromVersion;
+            return toVersion;
         }
-        return target;
+        return ResolveEnumOldNullTo(fromVersion);
     }
     return tmpField.GetTargetObject();
 }

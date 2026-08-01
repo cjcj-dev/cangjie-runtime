@@ -12,6 +12,8 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include <atomic>
+#include <cstdlib>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -31,6 +33,8 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
 
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
+// Old-tag null to-version: same contract as EnumBarrier (fail-closed on FORWARDED /
+// invalid from; legal unmoved survivor only). Posctrl via MRT_ENUMFIX_POSCTRL=1.
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
@@ -42,13 +46,36 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
     } else if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* fromVersion = tmpField.GetTargetObject();
         BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
-        BaseObject* target = nullptr;
         if (toVersion != nullptr) {
-            target = toVersion;
-        } else {
-            target = fromVersion;
+            return toVersion;
         }
-        return target;
+        // Mirror EnumBarrier::ResolveEnumOldNullTo (EnumBarrier.cpp) — keep Trace
+        // and Enum on the same fail-closed contract for old-tag residual edges.
+        static std::atomic<size_t> g_traceNullToTotal{ 0 };
+        static std::atomic<size_t> g_traceNullToFwd{ 0 };
+        size_t n = g_traceNullToTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+        const bool isFwd = fromVersion != nullptr && fromVersion->IsForwarded();
+        if (isFwd) {
+            (void)g_traceNullToFwd.fetch_add(1, std::memory_order_relaxed);
+        }
+        if ((n & (n - 1)) == 0) {
+            VLOG(REPORT, "[TraceBarrier] nullto n=%zu fwd=%zu from=%p", n,
+                 g_traceNullToFwd.load(std::memory_order_relaxed), fromVersion);
+        }
+        const char* env = std::getenv("MRT_ENUMFIX_POSCTRL");
+        const bool posctrl = (env != nullptr && env[0] == '1' && env[1] == '\0');
+        if (posctrl) {
+            return fromVersion;
+        }
+        CHECK_DETAIL(!isFwd,
+                     "TraceBarrier ReadReference: null to-version for FORWARDED from-object %p "
+                     "(ghost gate / cleared route; do not hand off from-version)",
+                     fromVersion);
+        CHECK_DETAIL(fromVersion == nullptr || fromVersion->IsValidObject(),
+                     "TraceBarrier ReadReference: null to-version for invalid from-object %p "
+                     "(stale old-tag after ghost dispel; do not hand off from-version)",
+                     fromVersion);
+        return fromVersion;
     }
     return tmpField.GetTargetObject();
 }
