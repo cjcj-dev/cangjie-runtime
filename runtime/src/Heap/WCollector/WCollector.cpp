@@ -1239,7 +1239,11 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
 {
     StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions](MAddress lineStart,
                                                                                            MAddress lineEnd) {
-        if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
+        if (workStack != nullptr) {
+            // remsetgap / checkmark: snapshot every line the mark-phase remset
+            // consumer saw. StickyLog mutates logged bytes during Rescan (retain
+            // →1, drop →0), so a post-rescan IsLoggedLine probe is not the
+            // pre-rescan membership answer.
             minorRescannedLines.insert(lineStart);
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(lineStart);
@@ -1783,11 +1787,18 @@ void WCollector::CheckmarkYoungMarking()
                         holderRegionType = static_cast<unsigned>(holderRegion->GetRegionType());
                         holderYoungAge = static_cast<unsigned>(holderRegion->GetYoungAge());
                         MAddress fieldAddr = reinterpret_cast<MAddress>(holder) + slotOffset;
-                        loggedLine = stickyLog.IsLoggedLine(fieldAddr) ? 1 : 0;
-                        if (loggedLine == 0 &&
-                            stickyLog.IsLoggedLine(reinterpret_cast<MAddress>(holder))) {
-                            loggedLine = 1;
-                        }
+                        MAddress holderAddr = reinterpret_cast<MAddress>(holder);
+                        auto lineOf = [](MAddress addr) {
+                            return addr & ~static_cast<MAddress>(StickyLog::LINE_SIZE - 1);
+                        };
+                        // Prefer the mark-phase rescan snapshot (pre-mutation). Fall
+                        // back to live sticky bits for any retain=1 lines still set.
+                        bool inRemset =
+                            minorRescannedLines.count(lineOf(fieldAddr)) != 0 ||
+                            minorRescannedLines.count(lineOf(holderAddr)) != 0 ||
+                            stickyLog.IsLoggedLine(fieldAddr) ||
+                            stickyLog.IsLoggedLine(holderAddr);
+                        loggedLine = inRemset ? 1 : 0;
                         if (loggedLine == 1) {
                             ++inRemsetYes;
                         } else {
@@ -1808,7 +1819,6 @@ void WCollector::CheckmarkYoungMarking()
                         } else {
                             LiveInfo* retained = holderRegion->GetRetainedLiveInfo();
                             MAddress covered = holderRegion->GetRetainedLiveInfoCoveredUpTo();
-                            MAddress holderAddr = reinterpret_cast<MAddress>(holder);
                             if (holderAddr >= covered) {
                                 retainedWould = 1;
                                 ++retainedWouldScan;
