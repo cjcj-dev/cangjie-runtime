@@ -14,6 +14,19 @@
 #include "securec.h"
 
 namespace MapleRuntime {
+namespace {
+// SplitMix64-style mix for pointer keys (AS-safe, no heap).
+inline size_t MixPtr(uintptr_t x) noexcept
+{
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ull;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebull;
+    x ^= x >> 31;
+    return static_cast<size_t>(x);
+}
+} // namespace
+
 TimeWindowEvacRing& TimeWindowEvacRing::Instance() noexcept
 {
     static TimeWindowEvacRing instance;
@@ -25,18 +38,40 @@ void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) n
     if (from == nullptr || to == nullptr || from == to || size == 0) {
         return;
     }
-    uint32_t preState = 0;
-    // Best-effort: from is typically LOCKED during exclusive forward; minor
-    // evacuation leaves it NORMAL. Pure observation of header at copy time.
-    preState = static_cast<uint32_t>(from->GetObjectState().GetStateCode());
+    uint32_t preState = static_cast<uint32_t>(from->GetObjectState().GetStateCode());
+    const uintptr_t fromU = reinterpret_cast<uintptr_t>(from);
+    const uintptr_t toU = reinterpret_cast<uintptr_t>(to);
 
+    // (1) exact-from hash (durable; first writer wins per slot, probe limited)
+    {
+        size_t i = MixPtr(fromU) & (HASH_CAP - 1);
+        bool inserted = false;
+        for (size_t probe = 0; probe < 128; ++probe) {
+            uintptr_t expected = 0;
+            if (fromHash_[i].compare_exchange_strong(expected, fromU, std::memory_order_relaxed,
+                                                     std::memory_order_relaxed)) {
+                hashInserts_.fetch_add(1, std::memory_order_relaxed);
+                inserted = true;
+                break;
+            }
+            if (expected == fromU) {
+                inserted = true; // already present
+                break;
+            }
+            i = (i + 1) & (HASH_CAP - 1);
+        }
+        if (!inserted) {
+            hashFullDrops_.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // (2) detail ring (newest-first scan for interior / preState)
     const uint64_t n = seq_.fetch_add(1, std::memory_order_relaxed);
-    Entry& slot = slots_[n & (CAP - 1)];
-    slot.from = reinterpret_cast<uintptr_t>(from);
-    slot.to = reinterpret_cast<uintptr_t>(to);
+    Entry& slot = slots_[n & (RING_CAP - 1)];
+    slot.from = fromU;
+    slot.to = toU;
     slot.size = static_cast<uint32_t>(size > 0xffffffffu ? 0xffffffffu : size);
     slot.preState = preState;
-    // release so a concurrent Lookup sees a coherent entry once total_ advances
     std::atomic_thread_fence(std::memory_order_release);
     total_.fetch_add(1, std::memory_order_relaxed);
 }
@@ -46,22 +81,39 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
     if (addr == 0 || out == nullptr) {
         return false;
     }
+    // Prefer detail ring (interior + preState), newest-first.
     const uint64_t total = total_.load(std::memory_order_acquire);
-    if (total == 0) {
-        return false;
-    }
-    const size_t n = total < CAP ? static_cast<size_t>(total) : CAP;
-    // Scan newest-first so a recent move wins over an older recycled address.
-    const uint64_t seq = seq_.load(std::memory_order_relaxed);
-    for (size_t i = 0; i < n; ++i) {
-        const uint64_t idx = (seq - 1 - i) & (CAP - 1);
-        const Entry& e = slots_[idx];
-        if (e.from == 0 || e.size == 0) {
-            continue;
+    if (total > 0) {
+        const size_t n = total < RING_CAP ? static_cast<size_t>(total) : RING_CAP;
+        const uint64_t seq = seq_.load(std::memory_order_relaxed);
+        for (size_t i = 0; i < n; ++i) {
+            const uint64_t idx = (seq - 1 - i) & (RING_CAP - 1);
+            const Entry& e = slots_[idx];
+            if (e.from == 0 || e.size == 0) {
+                continue;
+            }
+            if (addr >= e.from && addr - e.from < e.size) {
+                *out = e;
+                return true;
+            }
         }
-        if (addr >= e.from && addr - e.from < e.size) {
-            *out = e;
-            return true;
+    }
+    // Exact-from hash (covers copies older than ring).
+    {
+        size_t i = MixPtr(addr) & (HASH_CAP - 1);
+        for (size_t probe = 0; probe < 128; ++probe) {
+            uintptr_t v = fromHash_[i].load(std::memory_order_relaxed);
+            if (v == 0) {
+                break;
+            }
+            if (v == addr) {
+                out->from = addr;
+                out->to = 0;
+                out->size = 0;
+                out->preState = 0xffffffffu; // unknown (hash-only hit)
+                return true;
+            }
+            i = (i + 1) & (HASH_CAP - 1);
         }
     }
     return false;
@@ -69,7 +121,6 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
 
 void PrintTimeWindowEvacLookup(const void* siAddr) noexcept
 {
-    // AS-safe: stack format + write(2). No heap / mutex / VLOG.
     const uintptr_t raw = reinterpret_cast<uintptr_t>(siAddr);
     const uintptr_t low48 = raw & ((1ull << 48) - 1);
     const unsigned high16 = static_cast<unsigned>((raw >> 48) & 0xffffu);
@@ -86,16 +137,15 @@ void PrintTimeWindowEvacLookup(const void* siAddr) noexcept
         hit48 = hit;
     }
 
-    // Cause split heuristic (task §五): high16∈{1,3} with low48 as candidate.
-    // (a) tagged RefField → low48 often heap; (b) StateWord-as-TypeInfo* → low48 in TypeInfo area.
-    // We only report high16 + which lookup hit; classification is offline.
-    char buf[512];
+    char buf[640];
     int n = sprintf_s(buf, sizeof(buf),
-                      "%d E [TimeWindow] si=%p hi16=%u low48=%p total=%llu "
+                      "%d E [TimeWindow] si=%p hi16=%u low48=%p total=%llu hashIns=%llu hashDrop=%llu "
                       "found_raw=%d from=%p to=%p size=%u preState=%u "
                       "found_low48=%d from48=%p to48=%p size48=%u preState48=%u\n",
                       static_cast<int>(GetTid()), siAddr, high16, reinterpret_cast<void*>(low48),
-                      static_cast<unsigned long long>(ring.TotalRecorded()), foundRaw,
+                      static_cast<unsigned long long>(ring.TotalRecorded()),
+                      static_cast<unsigned long long>(ring.HashInserts()),
+                      static_cast<unsigned long long>(ring.HashFullDrops()), foundRaw,
                       reinterpret_cast<void*>(hit.from), reinterpret_cast<void*>(hit.to), hit.size, hit.preState,
                       found48, reinterpret_cast<void*>(hit48.from), reinterpret_cast<void*>(hit48.to), hit48.size,
                       hit48.preState);
