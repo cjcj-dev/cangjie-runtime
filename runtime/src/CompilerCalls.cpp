@@ -606,7 +606,7 @@ extern "C" ArrayRef MCC_FillInStackTraceImpl(const TypeInfo* arrayInfo, const Ar
         ExceptionManager::CheckAndThrowPendingException("ObjectManager::NewKnownWidthArray return nullptr");
         return nullptr;
     }
-    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
+    CurrentPtr currentArray = ProvenByFreshAllocation(array);
     for (MIndex i = 0; i < size; ++i) {
         SetPrimitiveElement(currentArray, i, static_cast<int64_t>(liteFrameInfos[i]));
     }
@@ -634,7 +634,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
     std.className = ObjectManager::NewKnownWidthArray(
         stackTrace.className.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.className != nullptr) {
-        CurrentPtr currentClassName = UnsafeAssumeCurrent(std.className);
+        CurrentPtr currentClassName = ProvenByFreshAllocation(std.className);
         for (MIndex i = 0; i < stackTrace.className.Length(); ++i) {
             SetPrimitiveElement(currentClassName, i, static_cast<int8_t>(stackTrace.className[i]));
         }
@@ -647,7 +647,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
     std.fileName = ObjectManager::NewKnownWidthArray(
         stackTrace.fileName.Length(), charArray, ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.fileName != nullptr) {
-        CurrentPtr currentFileName = UnsafeAssumeCurrent(std.fileName);
+        CurrentPtr currentFileName = ProvenByFreshAllocation(std.fileName);
         for (MIndex i = 0; i < stackTrace.fileName.Length(); ++i) {
             SetPrimitiveElement(currentFileName, i, static_cast<int8_t>(stackTrace.fileName[i]));
         }
@@ -661,7 +661,7 @@ extern "C" StackTraceData MCC_DecodeStackTraceImpl(const uint64_t ip, const uint
         ObjectManager::NewKnownWidthArray(stackTrace.methodName.Length(), charArray,
                                           ObjectManager::ArrayElemBits::ELEM_8B, AllocType::RAW_POINTER_OBJECT);
     if (std.methodName != nullptr) {
-        CurrentPtr currentMethodName = UnsafeAssumeCurrent(std.methodName);
+        CurrentPtr currentMethodName = ProvenByFreshAllocation(std.methodName);
         for (MIndex i = 0; i < stackTrace.methodName.Length(); ++i) {
             SetPrimitiveElement(currentMethodName, i, static_cast<int8_t>(stackTrace.methodName[i]));
         }
@@ -688,7 +688,7 @@ static ArrayRef CreateCharArrayFromCString(const TypeInfo* charArray, CString na
     if (array == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateCharArrayFromCString: nullptr array");
     }
-    CurrentPtr currentArray = UnsafeAssumeCurrent(array);
+    CurrentPtr currentArray = ProvenByFreshAllocation(array);
     for (MIndex i = 0; i < name.Length(); ++i) {
         SetPrimitiveElement(currentArray, i, static_cast<int8_t>(name[i]));
     }
@@ -714,7 +714,7 @@ static ArrayRef CreateStackTrace(const TypeInfo* arrayStackTrace, const TypeInfo
     if (trace == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("CreateStackTrace: nullptr array");
     }
-    CurrentPtr currentTrace = UnsafeAssumeCurrent(trace);
+    CurrentPtr currentTrace = ProvenByFreshAllocation(trace);
     int stackIndex = 0;
     for (auto frame : srcSracks) {
         // skip native frame
@@ -775,7 +775,7 @@ static ArrayRef GetAllThreadSnapshot(const TypeInfo* arraySnapshot, const TypeIn
     if (allRecords == nullptr) {
         ExceptionManager::CheckAndThrowPendingException("GetAllThreadSnapshot: nullptr array");
     }
-    CurrentPtr currentRecords = UnsafeAssumeCurrent(allRecords);
+    CurrentPtr currentRecords = ProvenByFreshAllocation(allRecords);
     int recordIndex = 0;
     for (const auto &record : records) {
         ThreadSnapshot snapshot;
@@ -1007,7 +1007,7 @@ extern "C" ObjectPtr MCC_GetSubPackages(PackageInfo* packageInfo, TypeInfo* arra
     TypeInfo* rawArrayTi = arrayTi->GetFieldType(0); // 0: first field type RawArray<CPointer<Unit>>.ti
     ArrayRef rawArrayObj = ObjectManager::NewKnownWidthArray(subPkgCnt, rawArrayTi,
         ObjectManager::ArrayElemBits::ELEM_64B, AllocType::RAW_POINTER_OBJECT);
-    CurrentPtr currentRawArray = UnsafeAssumeCurrent(rawArrayObj);
+    CurrentPtr currentRawArray = ProvenByFreshAllocation(rawArrayObj);
     for (size_t idx = 0; idx < subPkgCnt; ++idx) {
         SetPrimitiveElement(currentRawArray, idx, reinterpret_cast<int64_t>(subPackages[idx]));
     }
@@ -2003,7 +2003,7 @@ extern "C" uintptr_t CJ_MCC_GetJSLambdaAddr(const ObjectPtr obj)
     while (MCC_IsWrapperClassForAutoEnv(GetTypeInfo(currentObject))) {
         currentObj = Heap::GetBarrier().ReadReference(currentObj,
             currentObj->GetRefField(TYPEINFO_PTR_SIZE + realAutoEnvObjOffset));
-        currentObject = UnsafeAssumeCurrent(currentObj);
+        currentObject = ProvenByBarrierRead(currentObj);
     }
 
     // Access func1 directly from currentObj
