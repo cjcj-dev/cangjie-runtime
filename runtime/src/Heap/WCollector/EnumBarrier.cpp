@@ -8,6 +8,7 @@
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
+#include "Heap/StickyLog.h"
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "Heap/EmitSiteCounters.h"
 #endif
@@ -20,6 +21,8 @@
 #endif
 
 namespace MapleRuntime {
+ALWAYS_INLINE void EnumBarrier::LogObject(BaseObject* obj) const { CJ_MCC_StickyLogLine(obj); }
+
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -110,6 +113,7 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
 
 void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    LogObject(obj);
     RefField<> tmpField(field);
     BaseObject* remeberedObject = nullptr;
     if (theCollector.IsOldPointer(tmpField)) {
@@ -135,8 +139,7 @@ void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     field.SetFieldValue(newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
-    // Enum write: SATB only — no StickyLog (H1 surface).
-    EmitSiteNoteWrite(EmitBarrierKind::Enum, obj, ref, false);
+    EmitSiteNoteWrite(EmitBarrierKind::Enum, obj, ref, true);
 #endif
 }
 
@@ -148,6 +151,7 @@ void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 
 void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    LogObject(obj);
     if (obj != nullptr) {
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
         Mutator* mutator = Mutator::GetMutator();
@@ -233,6 +237,7 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
 BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
+    LogObject(obj);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
     RefField<> oldField(oldValue);
@@ -249,6 +254,7 @@ BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
 void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                        MemoryOrder order) const
 {
+    LogObject(obj);
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = oldField.GetFieldValue();
     (void)oldValue;
@@ -270,6 +276,7 @@ void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
 bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
+    LogObject(obj);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
 
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
@@ -295,6 +302,7 @@ bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
 void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    LogObject(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
