@@ -17,6 +17,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
+#include "Heap/TimeWindowEvacRing.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
@@ -157,6 +158,8 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
+    // timewindow measure: AS-safe lookup of si_addr in CopyObject evacuated ring.
+    PrintTimeWindowEvacLookup(siAddr);
     // PrintSignalStackTrace degraded: only pc/fa hex already emitted above (no unwind/heap).
 }
 

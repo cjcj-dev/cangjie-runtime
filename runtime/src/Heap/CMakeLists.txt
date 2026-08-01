@@ -11,6 +11,7 @@ set(SRC_LIST
     "FixEdgeSet.cpp"
     "ForwardFactTable.cpp"
     "RelocationDiagnosticTable.cpp"
+    "TimeWindowEvacRing.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
