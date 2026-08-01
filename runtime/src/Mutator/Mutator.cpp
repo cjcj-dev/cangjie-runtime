@@ -233,19 +233,9 @@ extern "C" BaseObject* CANGJIE_DEFERRED_LOG_RING_SYMBOL(BaseObject* object)
     return object;
 }
 
-// stickyon3 cjc imports unversioned symbol; keep versioned ABI + unversioned alias.
-// GNU/ELF alias is unsupported on Mach-O (clang: "aliases are not supported on darwin").
-// Method B: MacAlias-style assembler .set (same as MacAlias.h) — ABI-equivalent (identical
-// address, no extra call) and keeps a real exported symbol for the old cjc import.
-// Method A (forward body) would also work but adds a call and risks LTO/inline edge cases.
-#if defined(__APPLE__)
-extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object);
-__asm__(".global _CJ_MCC_FlushDeferredLogRing\n\t.set _CJ_MCC_FlushDeferredLogRing, _"
-        CANGJIE_DEFERRED_LOG_RING_SYMBOL_STRING);
-#else
-extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object)
-    __attribute__((alias(CANGJIE_DEFERRED_LOG_RING_SYMBOL_STRING)));
-#endif
+// Unversioned CJ_MCC_FlushDeferredLogRing alias removed (macwin / user 0801-19:0x):
+// cjcj-llvm pin emits only the versioned symbol via CangjieDeferredLogRingABI::FlushFunctionName
+// (CJ_MCC_FlushDeferredLogRing_v1_8_264_32). GNU alias also blocked darwin builds.
 
 void Mutator::SetManagedContext(bool isManagedContext)
 {

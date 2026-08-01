@@ -652,7 +652,6 @@ static_assert(Mutator::DeferredLogRingCapacity() == CangjieDeferredLogRingABI::C
 #endif
 
 extern "C" MRT_EXPORT BaseObject* CANGJIE_DEFERRED_LOG_RING_SYMBOL(BaseObject* object);
-extern "C" MRT_EXPORT BaseObject* CJ_MCC_FlushDeferredLogRing(BaseObject* object);
 
 // This function is mainly used to initialize the context of mutator.
 // Ensured that updated fa is the caller layer of the managed function to be called.
