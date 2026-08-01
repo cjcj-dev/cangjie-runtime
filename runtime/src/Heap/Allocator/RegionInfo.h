@@ -546,9 +546,9 @@ public:
             }
             return true;
         }
-        // SATB enqueue only needs geometry; member GetSize is the pre-typed path used by
-        // region-local bitmaps when the holder is not yet a CurrentPtr.
-        U32 objSize = const_cast<BaseObject*>(obj)->GetSize();
+        // SATB holders are not yet CurrentPtr; keep the audited assume at this
+        // geometry-only boundary (not counted as class-i: no free GetSize/GetTypeInfo).
+        U32 objSize = GetSize(UnsafeAssumeCurrent(const_cast<BaseObject*>(obj)));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         CHECK(regionSize > 0);
         bool marked = GetOrAllocEnqueueBitmap()->MarkBits(offset, objSize, regionSize);
