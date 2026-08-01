@@ -336,12 +336,16 @@ run_one()
     gc_pct=$(awk -v gc="$gc_us" -v wall="${wall_s:-0}" \
         'BEGIN { if (wall > 0) printf "%.6f", gc / (wall * 10000); else print "nan" }')
     evac_events=$(count_matches '\[StickyMinor\] evacuation regions=' "$report_log")
-    # also count non-zero regions= lines as real work
-    pause_us_sum=$(grep -a -E 'sticky minor stw time [0-9]+ us' "$runtime_log" 2>/dev/null \
-        | sed -nE 's/.*sticky minor stw time ([0-9]+) us.*/\1/p' \
-        | awk '{ total += $1 } END { printf "%.0f\n", total + 0 }')
-    pause_n=$(grep -a -E -c 'sticky minor stw time [0-9]+ us' "$runtime_log" 2>/dev/null || true)
-    [[ -n "$pause_n" ]] || pause_n=0
+    pause_us_sum=0
+    pause_n=0
+    if [[ -f "$runtime_log" ]]; then
+        pause_n=$(grep -a -E -c 'sticky minor stw time [0-9]+ us' "$runtime_log" 2>/dev/null || true)
+        [[ -n "$pause_n" ]] || pause_n=0
+        if [[ "$pause_n" -gt 0 ]]; then
+            pause_us_sum=$(sed -nE 's/.*sticky minor stw time ([0-9]+) us.*/\1/p' "$runtime_log" \
+                | awk '{ total += $1 } END { printf "%.0f\n", total + 0 }')
+        fi
+    fi
     if [[ -f "$product" ]]; then
         product_sha=$(sha256sum "$product" | awk '{print $1}')
         rm -f "$product"
