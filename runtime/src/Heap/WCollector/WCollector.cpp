@@ -8,6 +8,9 @@
 #include "WCollector.h"
 
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <csignal>
 #include <unistd.h>
 
@@ -24,6 +27,34 @@
 
 namespace MapleRuntime {
 namespace {
+// mclassfix: count tagged RefField observations on ForEachBitmapWord visitor path
+// (TraceRefField). Enabled when MRT_MCLASSFIX_COUNT=1; dumped via atexit.
+std::atomic<uint64_t> g_mclassfixTotalLoads{ 0 };
+std::atomic<uint64_t> g_mclassfixTaggedLoads{ 0 };
+bool g_mclassfixCountEnabled = []() {
+    const char* v = std::getenv("MRT_MCLASSFIX_COUNT");
+    return v != nullptr && std::strcmp(v, "1") == 0;
+}();
+void DumpMclassfixCounts()
+{
+    if (!g_mclassfixCountEnabled) {
+        return;
+    }
+    uint64_t total = g_mclassfixTotalLoads.load(std::memory_order_relaxed);
+    uint64_t tagged = g_mclassfixTaggedLoads.load(std::memory_order_relaxed);
+    // stderr so smoke logs capture it even without RTLOG.
+    std::fprintf(stderr, "MCLASSFIX TAGGED_LOADS_OBSERVED_%llu TOTAL_LOADS_%llu\n",
+                 static_cast<unsigned long long>(tagged), static_cast<unsigned long long>(total));
+}
+struct MclassfixCountInit {
+    MclassfixCountInit()
+    {
+        if (g_mclassfixCountEnabled) {
+            std::atexit(DumpMclassfixCounts);
+        }
+    }
+} g_mclassfixCountInit;
+
 struct UntagRefFieldBreadcrumb {
     const void* holder = nullptr;
     const void* field = nullptr;
@@ -274,6 +305,12 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
+    if (g_mclassfixCountEnabled) {
+        g_mclassfixTotalLoads.fetch_add(1, std::memory_order_relaxed);
+        if (oldField.IsTagged()) {
+            g_mclassfixTaggedLoads.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
