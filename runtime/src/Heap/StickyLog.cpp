@@ -266,13 +266,6 @@ bool ProcessHasStickyConsumer()
     return true;
 }
 #elif defined(_WIN32)
-bool FileHasStickyConsumerUnd(const char* path)
-{
-    // PE path: no cheap .cjmetadata+UND all-scan here. Fail-safe major-only.
-    (void)path;
-    return false;
-}
-
 bool ProcessHasStickyConsumer()
 {
     // Windows: require *every* loaded module that looks like a Cangjie image
@@ -344,12 +337,6 @@ bool ProcessHasStickyConsumer()
     return sawManaged;
 }
 #elif defined(__APPLE__)
-bool FileHasStickyConsumerUnd(const char* path)
-{
-    (void)path;
-    return false;
-}
-
 bool ProcessHasStickyConsumer()
 {
     // all-predicate: every loaded image with __cjmetaheader must have sticky UND.
