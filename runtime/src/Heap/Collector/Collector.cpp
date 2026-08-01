@@ -22,6 +22,9 @@ const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regio
 // Legal null (high-live / raw-pin survivor still at from, ghost=0) keeps returning obj.
 // Illegal null (D: old tag + ghost already dispelled + from cleared) fails loudly here.
 // See reports/REPORT-nullenum.md LEGAL_NULL_SET; reports/REPORT-tagaba.md F5.
+// fixvalid F1: IsValidObject ≡ TypeInfo!=nullptr only (StateWord.h:116) — it does not
+// reject FORWARDED/LOCKED/FORWARDING. Empty-route fallback must also require NORMAL
+// (LEGAL_NULL_SET: in-place survivor). Do not change IsValidObject itself.
 BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
 {
     if (obj == nullptr) {
@@ -32,9 +35,10 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
     if (to != nullptr) {
         return to;
     }
-    CHECK_DETAIL(obj->IsValidObject(),
-                 "FindLatestVersion: no to-version for invalid from-object %p "
-                 "(stale old-tag after ghost dispel; do not fall back to from)",
+    CHECK_DETAIL(obj->IsValidObject() &&
+                     obj->GetObjectState().GetStateCode() == ObjectState::NORMAL,
+                 "FindLatestVersion: no to-version for non-NORMAL/invalid from-object %p "
+                 "(stale old-tag after ghost dispel or mid-forward; do not fall back to from)",
                  obj);
     return obj;
 }
