@@ -46,6 +46,8 @@ extern "C" MRT_EXPORT size_t CJ_MCC_GetCJThreadNumber() __attribute__((alias("MC
 extern "C" MRT_EXPORT size_t CJ_MCC_GetBlockingCJThreadNumber() __attribute__((alias("MCC_GetBlockingCJThreadNumber")));
 extern "C" MRT_EXPORT size_t CJ_MCC_GetNativeThreadNumber() __attribute__((alias("MCC_GetNativeThreadNumber")));
 extern "C" MRT_EXPORT size_t CJ_MCC_GetGCCount() __attribute__((alias("MCC_GetGCCount")));
+extern "C" MRT_EXPORT uint64_t CJ_MCC_GetI2ViolationCount() __attribute__((alias("MCC_GetI2ViolationCount")));
+extern "C" MRT_EXPORT void CJ_MCC_ResetI2ViolationCount() __attribute__((alias("MCC_ResetI2ViolationCount")));
 extern "C" MRT_EXPORT bool CJ_MCC_IsGCRunning() __attribute__((alias("MCC_IsGCRunning")));
 extern "C" MRT_EXPORT uint64_t CJ_MCC_GetGCTimeUs() __attribute__((alias("MCC_GetGCTimeUs")));
 extern "C" MRT_EXPORT size_t CJ_MCC_GetGCFreedSize() __attribute__((alias("MCC_GetGCFreedSize")));

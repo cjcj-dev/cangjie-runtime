@@ -436,6 +436,10 @@ extern "C" size_t MCC_GetNativeThreadNumber() { return ScheduleRunningOSThreadCo
 
 extern "C" size_t MCC_GetGCCount() { return g_gcCount; }
 
+extern "C" uint64_t MCC_GetI2ViolationCount() { return Barrier::I2ViolationCount(); }
+
+extern "C" void MCC_ResetI2ViolationCount() { Barrier::ResetI2ViolationCount(); }
+
 extern "C" uint64_t MCC_GetGCTimeUs() { return g_gcTotalTimeUs; }
 
 extern "C" size_t MCC_GetGCFreedSize() { return g_gcCollectedTotalBytes; }

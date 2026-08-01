@@ -66,6 +66,8 @@ extern "C" size_t MCC_GetBlockingCJThreadNumber();
 extern "C" size_t MCC_GetNativeThreadNumber();
 
 extern "C" size_t MCC_GetGCCount();
+extern "C" uint64_t MCC_GetI2ViolationCount();
+extern "C" void MCC_ResetI2ViolationCount();
 extern "C" uint64_t MCC_GetGCTimeUs();
 extern "C" size_t MCC_GetGCFreedSize();
 extern "C" bool MCC_IsGCRunning();
