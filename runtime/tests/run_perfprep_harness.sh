@@ -183,6 +183,7 @@ run_one()
         exec nice -n 15 taskset -c "$cores" /usr/bin/time \
             -f 'wall_s=%e user_s=%U sys_s=%S maxrss_kb=%M exit=%x' -o "$time_file" \
             timeout "$round_timeout" env \
+            -u MRT_GC_STRESS_MINOR -u MRT_GC_STRESS \
             -u MRT_STICKY_MINOR_FORCE_SLOW_PATH -u MRT_STICKY_FORCE_SLOW \
             CANGJIE_HOME="$sdk" LD_LIBRARY_PATH="$ld_path" cjHeapSize=24GB \
             MRT_STICKY_MINOR="$sticky" MRT_REPORT="$report_log" \
@@ -247,6 +248,8 @@ run_one()
     [[ "$rc" == 0 ]] || validity="INVALID_RC_$rc"
     [[ "$actual_sha" == "$compiler_sha" ]] || validity='INVALID_EXE_SHA'
     grep -q -x -F "MRT_STICKY_MINOR=$sticky" "$run_dir/environ.txt" 2>/dev/null || validity='INVALID_ENV'
+    grep -q -x -F 'MRT_GC_STRESS_MINOR=' "$run_dir/environ.txt" 2>/dev/null && validity='INVALID_STRESS'
+    grep -q -x -F 'MRT_GC_STRESS=' "$run_dir/environ.txt" 2>/dev/null && validity='INVALID_STRESS'
     grep -q -x -F "MRT_STICKY_MINOR_FORCE_SLOW_PATH=" "$run_dir/environ.txt" 2>/dev/null && validity='INVALID_FORCE_SLOW'
     grep -q -x -F "MRT_STICKY_FORCE_SLOW=" "$run_dir/environ.txt" 2>/dev/null && validity='INVALID_FORCE_SLOW'
     grep -q -F "$runtime_so" "$run_dir/maps.txt" 2>/dev/null || validity='INVALID_RUNTIME_MAP'
