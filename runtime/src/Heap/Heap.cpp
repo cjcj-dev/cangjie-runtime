@@ -194,7 +194,7 @@ void HeapImpl::Init(const HeapParam& param)
         InstallBarrier(GCPhase::GC_PHASE_IDLE);
     }
     if (!StickyLog::Instance().IsForceSlowPathEnabled() && !StickyLog::Instance().IsMinorEnabled()) {
-        // Only the explicit escape hatch; auto-disabled(no consumer) already warned in StickyLog.
+        // Only the explicit escape hatch MRT_STICKY_MINOR=0.
         const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
         if (minorEnv != nullptr && strcmp(minorEnv, "0") == 0) {
             LOG(RTLOG_WARNING,

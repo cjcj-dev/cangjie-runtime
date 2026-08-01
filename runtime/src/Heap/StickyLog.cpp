@@ -7,11 +7,9 @@
 #include "StickyLog.h"
 
 #include <cerrno>
-#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
-#include <vector>
 
 #include "Allocator/MemMap.h"
 #include "Allocator/RegionInfo.h"
@@ -83,48 +81,6 @@ size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
     return static_cast<size_t>(parsed);
 }
 
-// Sticky minor remset is only complete when the main managed executable embeds the
-// compiler sticky-logged-map consumer (`__cj_sticky_logged_base`). Runtime defines
-// that symbol; scanning /proc/self/exe (not the runtime DSO) detects consumer code.
-// Missing consumer + fast minor ⇒ unreclaimed live young objects (L355 bare rc139).
-// StickyLog.cpp:ConfigureMinorFromEnvironment / Heap.cpp:190-193
-bool MainExecutableHasStickyConsumer()
-{
-    FILE* file = std::fopen("/proc/self/exe", "rb");
-    if (file == nullptr) {
-        return false;
-    }
-    static constexpr char needle[] = "__cj_sticky_logged_base";
-    static constexpr size_t needleLen = sizeof(needle) - 1;
-    static constexpr size_t chunkSize = 1 << 20;
-    std::vector<char> buf(chunkSize + needleLen);
-    size_t carry = 0;
-    bool found = false;
-    while (!found) {
-        size_t n = std::fread(buf.data() + carry, 1, chunkSize, file);
-        if (n == 0) {
-            break;
-        }
-        size_t total = carry + n;
-        for (size_t i = 0; i + needleLen <= total; ++i) {
-            if (std::memcmp(buf.data() + i, needle, needleLen) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (found || n < chunkSize) {
-            break;
-        }
-        if (needleLen > 1) {
-            std::memmove(buf.data(), buf.data() + total - (needleLen - 1), needleLen - 1);
-            carry = needleLen - 1;
-        } else {
-            carry = 0;
-        }
-    }
-    std::fclose(file);
-    return found;
-}
 } // namespace
 
 StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
@@ -151,21 +107,12 @@ void StickyLog::ConfigureMinorFromEnvironment()
     evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 0),
                                    static_cast<size_t>(100));
     evacuationMaxRegions = ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_MAX_REGIONS", 8);
-    // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
-    // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
-    // a harness that still aborts under this load; major-only matches sticky0 green path.
-    // Does not claim full sticky product closure (see REPORT-stickyclosure.md).
+    // Product default ON. Exact MRT_STICKY_MINOR=0 is the escape hatch. Runtime does not
+    // auto-probe for sticky consumers (byte-scan false pos/neg; see REPORT-nodetect).
+    // Contract: all managed code is assumed cjcj-compiled with sticky write barriers.
     const char* mode = "on(default)";
     if (envExplicitOff) {
         mode = "off(env)";
-    } else if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
-        minorEnabled = false;
-        mode = "auto-disabled(no consumer)";
-        LOG(RTLOG_WARNING,
-            "sticky minor on by default but main executable has no sticky barrier consumer "
-            "(__cj_sticky_logged_base); disabling sticky minor to avoid incorrect young "
-            "reclamation (use a sticky-lowered main binary, or MRT_STICKY_MINOR=0 / "
-            "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
     }
     LOG(RTLOG_INFO, "sticky minor: %s", mode);
 }
