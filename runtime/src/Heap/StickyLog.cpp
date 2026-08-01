@@ -99,19 +99,25 @@ size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
     return static_cast<size_t>(parsed);
 }
 
-// Sticky minor is only sound when *some* already-mapped object *consumes*
-// `__cj_sticky_logged_base` (compiler barrier lowering emits UND references).
-// Runtime itself *defines* the symbol, so a raw byte scan of any loaded image
-// that includes the runtime DSO is a permanent false positive, and a scan of
-// only /proc/self/exe is a false negative when the consumer lives in a .so
-// (the normal --dy-std shape). Ask the process-wide question via the dynamic
-// symbol table: look for an undefined reference, never a definition.
-// Missing consumer + fast minor ⇒ unreclaimed live young objects (L355 bare rc139).
+// Sticky minor is only sound when *every* already-mapped managed object
+// *consumes* `__cj_sticky_logged_base` (compiler barrier lowering emits UND).
+// Runtime itself *defines* the symbol (no .cjmetadata) and is not a managed
+// participant. A raw byte scan confuses DEF for consumer; an *any*-UND scan
+// opens minor when only sticky std is present while a non-sticky user module
+// still does old→young writes (L355 bare rc139). Safety condition is *all*
+// managed modules (identified by .cjmetadata, same as StackManager) carry UND.
+// Fail-closed: unreadable image, empty managed set, or any managed module
+// without UND ⇒ report no (major-only).
 static constexpr char kStickyConsumerSym[] = "__cj_sticky_logged_base";
+static constexpr char kCjMetadataSection[] = ".cjmetadata";
 
 #if defined(__linux__) || defined(__OHOS__)
-bool FileHasStickyConsumerUnd(const char* path)
+// Open+mmap ELF once; fill hasCjMetadata / hasStickyUnd. Returns false if the
+// file cannot be proven well-formed (caller must fail-closed).
+bool InspectElfStickyFacts(const char* path, bool& hasCjMetadata, bool& hasStickyUnd)
 {
+    hasCjMetadata = false;
+    hasStickyUnd = false;
     if (path == nullptr || path[0] == '\0') {
         return false;
     }
@@ -130,7 +136,6 @@ bool FileHasStickyConsumerUnd(const char* path)
     if (mapped == MAP_FAILED) {
         return false;
     }
-    bool found = false;
     auto* base = static_cast<const uint8_t*>(mapped);
     if (fileSize < sizeof(ElfW(Ehdr))) {
         ::munmap(mapped, fileSize);
@@ -141,14 +146,29 @@ bool FileHasStickyConsumerUnd(const char* path)
         ::munmap(mapped, fileSize);
         return false;
     }
-    if (ehdr->e_shoff == 0 || ehdr->e_shentsize != sizeof(ElfW(Shdr)) ||
+    if (ehdr->e_shoff == 0 || ehdr->e_shentsize != sizeof(ElfW(Shdr)) || ehdr->e_shnum == 0 ||
+        ehdr->e_shstrndx >= ehdr->e_shnum ||
         static_cast<size_t>(ehdr->e_shoff) + static_cast<size_t>(ehdr->e_shnum) * sizeof(ElfW(Shdr)) > fileSize) {
         ::munmap(mapped, fileSize);
         return false;
     }
     auto* shdrs = reinterpret_cast<const ElfW(Shdr)*>(base + ehdr->e_shoff);
-    for (ElfW(Half) i = 0; i < ehdr->e_shnum && !found; ++i) {
+    const ElfW(Shdr)& shstr = shdrs[ehdr->e_shstrndx];
+    if (shstr.sh_type != SHT_STRTAB ||
+        static_cast<size_t>(shstr.sh_offset) + static_cast<size_t>(shstr.sh_size) > fileSize) {
+        ::munmap(mapped, fileSize);
+        return false;
+    }
+    auto* shstrtab = reinterpret_cast<const char*>(base + shstr.sh_offset);
+    size_t shstrSize = static_cast<size_t>(shstr.sh_size);
+    for (ElfW(Half) i = 0; i < ehdr->e_shnum; ++i) {
         const ElfW(Shdr)& sec = shdrs[i];
+        if (sec.sh_name < shstrSize) {
+            const char* secName = shstrtab + sec.sh_name;
+            if (std::strcmp(secName, kCjMetadataSection) == 0) {
+                hasCjMetadata = true;
+            }
+        }
         if (sec.sh_type != SHT_DYNSYM && sec.sh_type != SHT_SYMTAB) {
             continue;
         }
@@ -175,23 +195,36 @@ bool FileHasStickyConsumerUnd(const char* path)
             }
             const char* name = strtab + syms[s].st_name;
             if (std::strcmp(name, kStickyConsumerSym) == 0) {
-                found = true;
+                hasStickyUnd = true;
                 break;
             }
         }
     }
     ::munmap(mapped, fileSize);
-    return found;
+    return true;
+}
+
+bool FileHasStickyConsumerUnd(const char* path)
+{
+    bool hasMeta = false;
+    bool hasUnd = false;
+    if (!InspectElfStickyFacts(path, hasMeta, hasUnd)) {
+        return false;
+    }
+    return hasUnd;
 }
 
 struct ConsumerScan {
-    bool found;
+    // all-predicate accumulators (Linux/OHOS).
+    bool ok;              // still true so far; false ⇒ fail-closed
+    bool sawManaged;      // at least one .cjmetadata object
+    bool sawUnbarriered;  // managed object without sticky UND
 };
 
 int InspectLoadedForConsumer(struct dl_phdr_info* info, size_t, void* data)
 {
     auto* scan = static_cast<ConsumerScan*>(data);
-    if (info == nullptr) {
+    if (info == nullptr || !scan->ok) {
         return 0;
     }
     char pathBuf[PATH_MAX];
@@ -200,36 +233,62 @@ int InspectLoadedForConsumer(struct dl_phdr_info* info, size_t, void* data)
         // Main executable: dlpi_name is empty; resolve via /proc/self/exe.
         ssize_t n = ::readlink("/proc/self/exe", pathBuf, sizeof(pathBuf) - 1);
         if (n <= 0) {
-            return 0;
+            // Cannot identify main image: fail-closed (cannot prove all).
+            scan->ok = false;
+            return 1;
         }
         pathBuf[n] = '\0';
         path = pathBuf;
     }
-    if (FileHasStickyConsumerUnd(path)) {
-        scan->found = true;
-        return 1; // stop iteration
+    // Skip anonymous/vdso-style entries with no resolvable path (already handled main).
+    if (path[0] == '\0') {
+        return 0;
+    }
+    bool hasMeta = false;
+    bool hasUnd = false;
+    if (!InspectElfStickyFacts(path, hasMeta, hasUnd)) {
+        // open/mmap/parse failed. linux-vdso and similar have no openable path —
+        // treat as non-managed and skip. A true managed image that cannot be
+        // read would be invisible; empty managed set still fails closed below.
+        return 0;
+    }
+    if (!hasMeta) {
+        return 0; // not a managed Cangjie image (runtime, libc, …)
+    }
+    scan->sawManaged = true;
+    if (!hasUnd) {
+        scan->sawUnbarriered = true;
+        scan->ok = false;
+        return 1; // early out: mixed / unbarriered managed module
     }
     return 0;
 }
 
-// Process-wide: true iff any currently mapped ELF has an UND ref to the sticky consumer.
+// Process-wide all-predicate: every mapped image with .cjmetadata has sticky UND.
+// Empty managed set or any unbarriered managed module ⇒ false (major-only).
 bool ProcessHasStickyConsumer()
 {
-    ConsumerScan scan = {false};
+    ConsumerScan scan = {true, false, false};
     (void)dl_iterate_phdr(InspectLoadedForConsumer, &scan);
-    return scan.found;
+    if (!scan.ok || !scan.sawManaged || scan.sawUnbarriered) {
+        return false;
+    }
+    return true;
 }
 #elif defined(_WIN32)
 bool FileHasStickyConsumerUnd(const char* path)
 {
-    // PE has no direct ELF UND analogue we can cheaply scan here. Keep the historical
-    // fail-safe: if we cannot prove a consumer, report none (major-only).
+    // PE path: no cheap .cjmetadata+UND all-scan here. Fail-safe major-only.
     (void)path;
     return false;
 }
 
 bool ProcessHasStickyConsumer()
 {
+    // Windows: require *every* loaded module that looks like a Cangjie image
+    // (section name ".header", same marker IsCangjieExecutable uses) to import
+    // the sticky consumer. Any Cangjie image without the import, or no Cangjie
+    // image at all ⇒ false (major-only).
     HANDLE process = GetCurrentProcess();
     DWORD needed = 0;
     if (EnumProcessModules(process, nullptr, 0, &needed) == 0 || needed == 0) {
@@ -240,14 +299,8 @@ bool ProcessHasStickyConsumer()
                            &needed) == 0) {
         return false;
     }
+    bool sawManaged = false;
     for (HMODULE module : modules) {
-        char path[MAX_PATH];
-        DWORD written = GetModuleFileNameA(module, path, static_cast<DWORD>(sizeof(path)));
-        if (written == 0 || written >= sizeof(path) - 1) {
-            continue;
-        }
-        // On Windows the consumer shows up as an import of the sticky symbol from
-        // the runtime DLL. Walk the import table for the name.
         auto* base = reinterpret_cast<const uint8_t*>(module);
         auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
         if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
@@ -257,27 +310,48 @@ bool ProcessHasStickyConsumer()
         if (nt->Signature != IMAGE_NT_SIGNATURE) {
             continue;
         }
-        const IMAGE_DATA_DIRECTORY& impDir =
-            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
-        if (impDir.VirtualAddress == 0) {
+        const auto* sectionTable = reinterpret_cast<const uint8_t*>(&nt->OptionalHeader) +
+            nt->FileHeader.SizeOfOptionalHeader;
+        auto section = reinterpret_cast<const IMAGE_SECTION_HEADER*>(sectionTable);
+        bool isCangjie = false;
+        for (uint16_t i = 0; i < nt->FileHeader.NumberOfSections; ++i, ++section) {
+            if (strncmp(reinterpret_cast<const char*>(section->Name), ".header", sizeof(".header") - 1) == 0) {
+                isCangjie = true;
+                break;
+            }
+        }
+        if (!isCangjie) {
             continue;
         }
-        auto* imp = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + impDir.VirtualAddress);
-        for (; imp->Name != 0; ++imp) {
-            auto* thunk = reinterpret_cast<const IMAGE_THUNK_DATA*>(
-                base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
-            for (; thunk->u1.AddressOfData != 0; ++thunk) {
-                if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Ordinal)) {
-                    continue;
+        sawManaged = true;
+        bool hasImport = false;
+        const IMAGE_DATA_DIRECTORY& impDir =
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (impDir.VirtualAddress != 0) {
+            auto* imp = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + impDir.VirtualAddress);
+            for (; imp->Name != 0; ++imp) {
+                auto* thunk = reinterpret_cast<const IMAGE_THUNK_DATA*>(
+                    base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
+                for (; thunk->u1.AddressOfData != 0; ++thunk) {
+                    if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Ordinal)) {
+                        continue;
+                    }
+                    auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + thunk->u1.AddressOfData);
+                    if (std::strcmp(reinterpret_cast<const char*>(ibn->Name), kStickyConsumerSym) == 0) {
+                        hasImport = true;
+                        break;
+                    }
                 }
-                auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + thunk->u1.AddressOfData);
-                if (std::strcmp(reinterpret_cast<const char*>(ibn->Name), kStickyConsumerSym) == 0) {
-                    return true;
+                if (hasImport) {
+                    break;
                 }
             }
         }
+        if (!hasImport) {
+            return false; // managed without sticky import
+        }
     }
-    return false;
+    return sawManaged;
 }
 #elif defined(__APPLE__)
 bool FileHasStickyConsumerUnd(const char* path)
@@ -288,8 +362,9 @@ bool FileHasStickyConsumerUnd(const char* path)
 
 bool ProcessHasStickyConsumer()
 {
-    // Walk loaded images' symbol tables for an undefined sticky consumer.
+    // all-predicate: every loaded image with __cjmetaheader must have sticky UND.
     uint32_t count = _dyld_image_count();
+    bool sawManaged = false;
     for (uint32_t i = 0; i < count; ++i) {
         const struct mach_header* mh = _dyld_get_image_header(i);
         if (mh == nullptr) {
@@ -303,7 +378,7 @@ bool ProcessHasStickyConsumer()
         size_t strSize = 0;
         const void* symtab = nullptr;
         uint32_t nsyms = 0;
-        size_t symEnt = is64 ? sizeof(struct nlist_64) : sizeof(struct nlist);
+        bool isCangjie = false;
         for (uint32_t c = 0; c < ncmds; ++c) {
             auto* cmd = reinterpret_cast<const struct load_command*>(cursor);
             if (cmd->cmd == LC_SYMTAB) {
@@ -312,40 +387,62 @@ bool ProcessHasStickyConsumer()
                 strSize = st->strsize;
                 symtab = base + st->symoff;
                 nsyms = st->nsyms;
+            } else if (cmd->cmd == LC_SEGMENT_64) {
+                auto* segment = reinterpret_cast<const struct segment_command_64*>(cursor);
+                auto* section = reinterpret_cast<const struct section_64*>(segment + 1);
+                for (uint32_t j = 0; j < segment->nsects; ++j) {
+                    if (strncmp(section[j].sectname, "__cjmetaheader", sizeof("__cjmetaheader") - 1) == 0) {
+                        isCangjie = true;
+                    }
+                }
+            } else if (cmd->cmd == LC_SEGMENT) {
+                auto* segment = reinterpret_cast<const struct segment_command*>(cursor);
+                auto* section = reinterpret_cast<const struct section*>(segment + 1);
+                for (uint32_t j = 0; j < segment->nsects; ++j) {
+                    if (strncmp(section[j].sectname, "__cjmetaheader", sizeof("__cjmetaheader") - 1) == 0) {
+                        isCangjie = true;
+                    }
+                }
             }
             cursor += cmd->cmdsize;
         }
-        if (strtab == nullptr || symtab == nullptr) {
+        if (!isCangjie) {
             continue;
         }
-        for (uint32_t s = 0; s < nsyms; ++s) {
-            uint32_t strx;
-            uint8_t nType;
-            if (is64) {
-                auto* nl = reinterpret_cast<const struct nlist_64*>(symtab) + s;
-                strx = nl->n_un.n_strx;
-                nType = nl->n_type;
-            } else {
-                auto* nl = reinterpret_cast<const struct nlist*>(symtab) + s;
-                strx = nl->n_un.n_strx;
-                nType = nl->n_type;
-            }
-            if (strx == 0 || strx >= strSize) {
-                continue;
-            }
-            // Undefined external: N_EXT set, N_TYPE bits clear (N_UNDF).
-            if ((nType & N_TYPE) != N_UNDF || (nType & N_EXT) == 0) {
-                continue;
-            }
-            const char* name = strtab + strx;
-            // Mach-O C symbols are typically underscore-prefixed.
-            if (std::strcmp(name, kStickyConsumerSym) == 0 ||
-                (name[0] == '_' && std::strcmp(name + 1, kStickyConsumerSym) == 0)) {
-                return true;
+        sawManaged = true;
+        bool hasUnd = false;
+        if (strtab != nullptr && symtab != nullptr) {
+            for (uint32_t s = 0; s < nsyms; ++s) {
+                uint32_t strx;
+                uint8_t nType;
+                if (is64) {
+                    auto* nl = reinterpret_cast<const struct nlist_64*>(symtab) + s;
+                    strx = nl->n_un.n_strx;
+                    nType = nl->n_type;
+                } else {
+                    auto* nl = reinterpret_cast<const struct nlist*>(symtab) + s;
+                    strx = nl->n_un.n_strx;
+                    nType = nl->n_type;
+                }
+                if (strx == 0 || strx >= strSize) {
+                    continue;
+                }
+                if ((nType & N_TYPE) != N_UNDF || (nType & N_EXT) == 0) {
+                    continue;
+                }
+                const char* name = strtab + strx;
+                if (std::strcmp(name, kStickyConsumerSym) == 0 ||
+                    (name[0] == '_' && std::strcmp(name + 1, kStickyConsumerSym) == 0)) {
+                    hasUnd = true;
+                    break;
+                }
             }
         }
+        if (!hasUnd) {
+            return false;
+        }
     }
-    return false;
+    return sawManaged;
 }
 #else
 bool ProcessHasStickyConsumer()
@@ -380,10 +477,10 @@ void StickyLog::ConfigureMinorFromEnvironment()
     evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 0),
                                    static_cast<size_t>(100));
     evacuationMaxRegions = ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_MAX_REGIONS", 8);
-    // Fail-safe (L355 / stdiofd): fast sticky minor with empty remset reclaims live
-    // young objects. Prefer disable minor over force-slow. Ask the *process* whether
-    // any mapped object consumes the sticky map — not just /proc/self/exe, and not
-    // via a raw byte scan that confuses the runtime's own definition for a consumer.
+    // Fail-safe (L355): fast sticky minor with incomplete remset reclaims live young.
+    // Prefer disable minor over force-slow. Require *every* managed (.cjmetadata)
+    // mapped image to UND-consume the sticky map — not any, not /proc/self/exe alone,
+    // and not a raw byte scan that confuses the runtime's own DEF for a consumer.
     const char* mode = "on(default)";
     const bool minorOn = minorEnabled.load(std::memory_order_relaxed);
     if (envExplicitOff) {
@@ -392,9 +489,10 @@ void StickyLog::ConfigureMinorFromEnvironment()
         minorEnabled.store(false, std::memory_order_relaxed);
         mode = "auto-disabled(no consumer)";
         LOG(RTLOG_WARNING,
-            "sticky minor on by default but no loaded object has a sticky barrier consumer "
-            "(__cj_sticky_logged_base UND); disabling sticky minor to avoid incorrect young "
-            "reclamation (use a sticky-lowered main or std, or MRT_STICKY_MINOR=0 / "
+            "sticky minor on by default but not every loaded managed object has a sticky "
+            "barrier consumer (__cj_sticky_logged_base UND on each .cjmetadata image); "
+            "disabling sticky minor to avoid incorrect young reclamation (use a fully "
+            "sticky-lowered main+std, or MRT_STICKY_MINOR=0 / "
             "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
     }
     LOG(RTLOG_INFO, "sticky minor: %s", mode);
@@ -413,8 +511,8 @@ void StickyLog::RevalidateConsumerAfterLibraryLoad(const char* libName)
     }
     minorEnabled.store(false, std::memory_order_relaxed);
     LOG(RTLOG_WARNING,
-        "after loading managed library %s no loaded object has a sticky barrier consumer "
-        "(__cj_sticky_logged_base UND); disabling sticky minor from here on "
+        "after loading managed library %s not every loaded managed object has a sticky "
+        "barrier consumer (__cj_sticky_logged_base UND); disabling sticky minor from here on "
         "(sticky minor: auto-disabled(no consumer, late load))",
         libName == nullptr ? "<unnamed>" : libName);
 }
