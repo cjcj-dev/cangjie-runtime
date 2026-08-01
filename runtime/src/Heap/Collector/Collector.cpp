@@ -9,6 +9,7 @@
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
@@ -16,6 +17,35 @@ namespace MapleRuntime {
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
+
+// nonnormal lane: read-only dump at empty-route reject (does not change the predicate).
+void DumpNonNormalForensic(BaseObject* obj, GCPhase phase)
+{
+    const unsigned st = static_cast<unsigned>(obj->GetObjectState().GetStateCode());
+    const int valid = obj->IsValidObject() ? 1 : 0;
+    unsigned ghost = 0;
+    unsigned rtype = 255;
+    unsigned young = 0;
+    unsigned route = 255;
+    unsigned from = 0;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+    if (RegionInfo::InGhostFromRegion(obj)) {
+        ghost = 1;
+    }
+    RegionInfo* ghostRegion = RegionInfo::GetGhostFromRegionAt(addr);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
+    if (region != nullptr) {
+        rtype = static_cast<unsigned>(region->GetRegionType());
+        young = region->IsYoungRegion() ? 1 : 0;
+        route = static_cast<unsigned>(region->GetRouteState());
+        from = region->IsFromRegion() ? 1 : 0;
+    }
+    // st: 0=NORMAL 1=LOCKED 2=FORWARDING 3=FORWARDED
+    LOG(RTLOG_ERROR,
+        "NONNORMAL_FORENSIC obj=%p st=%u valid=%d phase=%u ghost=%u ghostReg=%p rtype=%u young=%u "
+        "from=%u route=%u",
+        obj, st, valid, static_cast<unsigned>(phase), ghost, ghostRegion, rtype, young, from, route);
+}
 }
 
 // F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.
@@ -34,6 +64,10 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
     BaseObject* to = FindToVersion(obj);
     if (to != nullptr) {
         return to;
+    }
+    if (!(obj->IsValidObject() &&
+          obj->GetObjectState().GetStateCode() == ObjectState::NORMAL)) {
+        DumpNonNormalForensic(obj, GetGCPhase());
     }
     CHECK_DETAIL(obj->IsValidObject() &&
                      obj->GetObjectState().GetStateCode() == ObjectState::NORMAL,
