@@ -354,7 +354,7 @@ void* WrapperTask(void* arg, unsigned int len)
     Mutator* mutator = reinterpret_cast<ThreadLocalData*>(threadData)->mutator;
     MRT_PreRunManagedCode(mutator, 0, reinterpret_cast<ThreadLocalData*>(threadData));
     BaseObject* future = Heap::GetBarrier().ReadStaticRef(*(reinterpret_cast<RefField<>*>(&lwtData->obj)));
-    TypeInfo* typeInfo = GetTypeInfo(UnsafeAssumeCurrent(future));
+    TypeInfo* typeInfo = GetTypeInfo(ProvenByBarrierRead(future));
 #if defined(__aarch64__)
     ExecuteCangjieStub(future, typeInfo, 0, execute, reinterpret_cast<void*>(threadData), &g_ut);
 #elif defined(__arm__)
@@ -486,7 +486,7 @@ static void* WrapperExclusiveClosure(void* arg, unsigned int len)
 #elif defined(__x86_64__)
     ExecuteExclusiveCangjieStub(&g_ut, nullptr, closureObj, executeClosure, reinterpret_cast<void*>(threadData));
 #elif defined(__arm__)
-    TypeInfo* ti = GetTypeInfo(UnsafeAssumeCurrent(closureObj));
+    TypeInfo* ti = GetTypeInfo(ProvenByBarrierRead(closureObj));
     ExecuteExclusiveCangjieStub(&g_ut, ti, closureObj, executeClosure, reinterpret_cast<void*>(threadData));
 #endif
     MutatorManager::Instance().TransitMutatorToExit();

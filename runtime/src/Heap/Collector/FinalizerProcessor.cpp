@@ -227,7 +227,7 @@ void FinalizerProcessor::ProcessFinalizableList()
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
         RefField<> tmpField(reinterpret_cast<MAddress>(*itor));
         BaseObject* finalizeObjAddr = Heap::GetBarrier().ReadStaticRef(tmpField);
-        CurrentPtr currentFinalizeObject = UnsafeAssumeCurrent(finalizeObjAddr);
+        CurrentPtr currentFinalizeObject = ProvenByBarrierRead(finalizeObjAddr);
 
         TypeInfo* classInfo = GetTypeInfo(currentFinalizeObject);
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
