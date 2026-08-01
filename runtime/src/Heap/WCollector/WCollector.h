@@ -240,8 +240,10 @@ private:
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
     void TraceHeap();
-    // F3: before DispelGhostFromRegion, rewrite IsOldPointer slots to plain/to so
-    // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
+    // F3: before DispelGhostFromRegion, rewrite IsOldPointer slots to **plain** to/from
+    // so one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
+    // Always plain RefField<>(latest) — never GetAndTryTagRefField (would re-stamp
+    // current-tag; FlipTagID then recreates old with no second F3 pass).
     // Requires caller-held STW (joint with PrepareForwardTable / Dispel).
     void InvalidateOldTaggedRefsBeforeDispel();
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);

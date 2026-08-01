@@ -38,6 +38,17 @@ struct UntagRefFieldBreadcrumb {
 
 thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
 
+// F3 positive-control counters (WCollector.cpp FixOldTaggedRefField / Invalidate…).
+// Reset each InvalidateOldTaggedRefsBeforeDispel; VLOG once at end.
+std::atomic<size_t> g_f3SeenOld{ 0 };
+std::atomic<size_t> g_f3CasOk{ 0 };
+std::atomic<size_t> g_f3CasPlain{ 0 };
+std::atomic<size_t> g_f3CasTagged{ 0 }; // must stay 0 after F-2 fix (always write plain)
+std::atomic<size_t> g_f3NullToFallback{ 0 };
+std::atomic<size_t> g_f3NullToRouted{ 0 };
+std::atomic<size_t> g_f3SkipSame{ 0 };
+std::atomic<size_t> g_f3RejectFwd{ 0 };
+
 constexpr bool IsInvalidCopyDestinationState(bool missing, bool free, bool garbage, bool from, bool invalidRole)
 {
     return missing || free || garbage || from || invalidRole;
@@ -488,23 +499,51 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (!IsOldPointer(oldField)) {
         return;
     }
+    (void)g_f3SeenOld.fetch_add(1, std::memory_order_relaxed);
     BaseObject* fromObj = oldField.GetTargetObject();
-    BaseObject* latest = FindToVersion(fromObj);
+    BaseObject* toVersion = FindToVersion(fromObj);
+    BaseObject* latest = toVersion;
     if (latest == nullptr) {
+        // F5 / nullenum LEGAL_NULL_SET: only unmoved live survivors may keep from.
+        // FORWARDED / invalid: fail-closed (no silent handoff). IsValidObject does not
+        // reject FORWARDED (StateWord.h:116 TypeInfo!=null only) — check explicitly.
+        if (fromObj == nullptr || !Heap::IsHeapAddress(fromObj) || !fromObj->IsValidObject() ||
+            fromObj->IsForwarded()) {
+            (void)g_f3RejectFwd.fetch_add(1, std::memory_order_relaxed);
+            CHECK_DETAIL(false,
+                         "InvalidateOldTaggedRefs: old-tag %p from holder %p has null to-version "
+                         "and from is invalid/FORWARDED (refuse silent fallback before dispel)",
+                         fromObj, holder);
+            return;
+        }
+        (void)g_f3NullToFallback.fetch_add(1, std::memory_order_relaxed);
         latest = fromObj;
+    } else {
+        (void)g_f3NullToRouted.fetch_add(1, std::memory_order_relaxed);
+        if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject() || latest->IsForwarded()) {
+            (void)g_f3RejectFwd.fetch_add(1, std::memory_order_relaxed);
+            CHECK_DETAIL(false,
+                         "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
+                         "(to-version bad before dispel)",
+                         fromObj, holder, latest);
+            return;
+        }
     }
-    if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject()) {
-        CHECK_DETAIL(false,
-                     "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
-                     "(no live to-version before dispel)",
-                     fromObj, holder, latest);
-        return;
-    }
-    RefField<> newField = GetAndTryTagRefField(latest);
+    // F3 contract (WCollector.h:243-244): rewrite IsOldPointer to plain/to.
+    // ⛔ Do not call GetAndTryTagRefField: IsFromObject(latest) would stamp current-tag;
+    // FlipTagID later turns that into old-tag with no second F3 pass (gcsm03 F-1/F-2).
+    RefField<> newField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        (void)g_f3SkipSame.fetch_add(1, std::memory_order_relaxed);
         return;
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        (void)g_f3CasOk.fetch_add(1, std::memory_order_relaxed);
+        if (newField.IsTagged()) {
+            (void)g_f3CasTagged.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            (void)g_f3CasPlain.fetch_add(1, std::memory_order_relaxed);
+        }
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
              oldField.GetFieldValue(), newField.GetFieldValue(), latest);
     }
@@ -610,6 +649,15 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     MRT_ASSERT(MutatorManager::Instance().WorldStopped(),
                "InvalidateOldTaggedRefsBeforeDispel requires an outer STW");
 
+    g_f3SeenOld.store(0, std::memory_order_relaxed);
+    g_f3CasOk.store(0, std::memory_order_relaxed);
+    g_f3CasPlain.store(0, std::memory_order_relaxed);
+    g_f3CasTagged.store(0, std::memory_order_relaxed);
+    g_f3NullToFallback.store(0, std::memory_order_relaxed);
+    g_f3NullToRouted.store(0, std::memory_order_relaxed);
+    g_f3SkipSame.store(0, std::memory_order_relaxed);
+    g_f3RejectFwd.store(0, std::memory_order_relaxed);
+
     RootVisitor fixRoot = [this](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         FixOldTaggedRefField(nullptr, field);
@@ -639,6 +687,21 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
             ForEachRefSlot(obj, [this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
         },
         false);
+
+    const size_t seen = g_f3SeenOld.load(std::memory_order_relaxed);
+    const size_t casOk = g_f3CasOk.load(std::memory_order_relaxed);
+    const size_t casPlain = g_f3CasPlain.load(std::memory_order_relaxed);
+    const size_t casTagged = g_f3CasTagged.load(std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[F3] seen_old=%zu cas_ok=%zu cas_plain=%zu cas_tagged=%zu routed=%zu null_fallback=%zu "
+         "skip_same=%zu reject_fwd=%zu",
+         seen, casOk, casPlain, casTagged, g_f3NullToRouted.load(std::memory_order_relaxed),
+         g_f3NullToFallback.load(std::memory_order_relaxed), g_f3SkipSame.load(std::memory_order_relaxed),
+         g_f3RejectFwd.load(std::memory_order_relaxed));
+    // Post-fix invariant: F3 must never re-stamp current-tag (Flip would recreate old).
+    CHECK_DETAIL(casTagged == 0,
+                 "InvalidateOldTaggedRefs: F3 wrote %zu current-tagged fields (expected 0 plain-only)",
+                 casTagged);
 }
 
 // After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
