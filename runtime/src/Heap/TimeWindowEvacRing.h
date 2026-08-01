@@ -18,7 +18,7 @@ namespace MapleRuntime {
 // Storage mmap'd on first Record (SO stays lean). Observation only.
 class TimeWindowEvacRing {
 public:
-    static constexpr size_t HASH_CAP = 1u << 23; // 8M slots (~64MB)
+    static constexpr size_t HASH_CAP = 1u << 24; // 16M slots (~128MB mmap)
     static constexpr size_t RING_CAP = 1u << 16; // 64K detail for preState
 
     struct Entry {

@@ -81,7 +81,7 @@ void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) n
 
     size_t i = MixPtr(fromU) & (HASH_CAP - 1);
     bool inserted = false;
-    for (size_t probe = 0; probe < 64; ++probe) {
+    for (size_t probe = 0; probe < 256; ++probe) {
         uintptr_t expected = 0;
         if (fromHash_[i].compare_exchange_strong(expected, fromU, std::memory_order_relaxed,
                                                  std::memory_order_relaxed)) {
@@ -133,7 +133,7 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
     }
     // exact-from durable hash
     size_t i = MixPtr(addr) & (HASH_CAP - 1);
-    for (size_t probe = 0; probe < 64; ++probe) {
+    for (size_t probe = 0; probe < 256; ++probe) {
         uintptr_t v = fromHash_[i].load(std::memory_order_relaxed);
         if (v == 0) {
             break;
