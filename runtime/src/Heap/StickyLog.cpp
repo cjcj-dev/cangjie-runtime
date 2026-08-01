@@ -242,6 +242,26 @@ bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
     return true;
 }
 
+void StickyLog::RelocateLoggedLines(MAddress from, MAddress to, size_t size) const
+{
+    MAddress heapEnd = heapStart + heapSize;
+    if (UNLIKELY(size == 0 || from == to || from < heapStart || from >= heapEnd || size > heapEnd - from ||
+                 to < heapStart || to >= heapEnd)) {
+        return;
+    }
+
+    MAddress sourceEnd = from + size;
+    MAddress sourceLine = from & ~(static_cast<MAddress>(LINE_SIZE) - 1);
+    for (; sourceLine < sourceEnd; sourceLine += LINE_SIZE) {
+        if (!IsLoggedLine(sourceLine)) {
+            continue;
+        }
+        MAddress destinationLine = 0;
+        (void)TryLogLine(to, destinationLine);
+        return;
+    }
+}
+
 void StickyLog::ClearUnavailableRegion(MAddress regionStart, size_t regionSize)
 {
     MRT_ASSERT(regionStart >= heapStart && regionStart + regionSize <= heapStart + heapSize,

@@ -50,6 +50,7 @@ public:
     size_t GetEvacuationMaxRegions() const { return evacuationMaxRegions; }
     bool IsLoggedLine(MAddress address) const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;
+    void RelocateLoggedLines(MAddress from, MAddress to, size_t size) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
 

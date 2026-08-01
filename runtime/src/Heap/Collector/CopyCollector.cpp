@@ -12,6 +12,7 @@
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
+#include "Heap/StickyLog.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -37,6 +38,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    StickyLog::Instance().RelocateLoggedLines(from, to, size);
     // Every object mover funnels through CopyObject. Move the holder-relative
     // fix-edge carrier only after the payload is committed; the destination
     // range simultaneously invalidates carriers belonging to overwritten data.
