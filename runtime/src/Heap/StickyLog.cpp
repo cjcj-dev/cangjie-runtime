@@ -19,6 +19,9 @@
 #include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -269,6 +272,9 @@ extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)
     StickyLog& stickyLog = StickyLog::Instance();
     MAddress address = reinterpret_cast<MAddress>(object);
     if (LIKELY(stickyLog.IsLoggedLine(address))) {
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteCounters::NoteStickyLogLine(object, false);
+#endif
         return;
     }
     Mutator* mutator = Mutator::GetMutator();
@@ -278,6 +284,9 @@ extern "C" MRT_EXPORT void CJ_MCC_StickyLogLine(BaseObject* object)
     MAddress lineStart = 0;
     if (stickyLog.TryLogLine(address, lineStart)) {
         mutator->RememberLineInStickyLogBuffer(lineStart);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteCounters::NoteStickyLogLine(object, true);
+#endif
     }
 }
 } // namespace MapleRuntime

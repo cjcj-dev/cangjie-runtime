@@ -9,6 +9,9 @@
 
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -110,6 +113,9 @@ void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field
     } else {
         DLOG(FBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
     }
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::Forward, obj, newRef, false);
+#endif
 }
 
 BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,

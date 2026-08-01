@@ -10,6 +10,9 @@
 #include <atomic>
 #include <csignal>
 
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Heap/StickyLog.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 

@@ -7,6 +7,9 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -135,6 +138,9 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::Trace, obj, ref, false);
+#endif
 }
 
 void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const

@@ -9,6 +9,9 @@ set(SRC_LIST
     "GcThreadPool.cpp"
     "StickyLog.cpp"
 )
+if (CANGJIE_GC_DEBUG_EQUIPMENT)
+    list(APPEND SRC_LIST "GCDebugConfig.cpp" "EmitSiteCounters.cpp")
+endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 add_subdirectory(Allocator)
