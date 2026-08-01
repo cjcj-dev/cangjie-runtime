@@ -34,6 +34,10 @@ enum GCPhase : uint8_t {
     GC_PHASE_POST_TRACE = 12,
     GC_PHASE_PREFORWARD = 13,
     GC_PHASE_FORWARD = 14,
+    // Correctness harness (MRT_STICKY_MINOR_FORCE_SLOW_PATH): phase > INIT so the
+    // compiler GetGCPhase check takes the runtime barrier path, while InstallBarrier
+    // maps this phase to Idle*/IdleLog — not a live marking phase.
+    GC_PHASE_FORCE_BARRIER = 15,
 };
 
 enum CollectorType {

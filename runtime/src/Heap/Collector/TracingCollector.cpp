@@ -837,8 +837,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     }
     PagePool::Instance().Trim();
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        TransitionToGCPhase(GCPhase::GC_PHASE_FORCE_BARRIER, true);
     }
     collectorResources.NotifyGCFinished(gcIndex);
 

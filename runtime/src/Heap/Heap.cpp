@@ -185,8 +185,12 @@ void HeapImpl::Init(const HeapParam& param)
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
-        SetGCPhase(GCPhase::GC_PHASE_ENUM);
-        InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        // Phase > INIT forces compiler write/read fast paths into runtime barriers
+        // (CJBarrierLowering: GetGCPhase() <= 8). Map the same phase to Idle* so
+        // phase⇒barrier stays consistent; do not lie with ENUM+Idle (MarkNewObject
+        // / barrierClosedMarking would treat ENUM as a live marking window).
+        SetGCPhase(GCPhase::GC_PHASE_FORCE_BARRIER);
+        InstallBarrier(GCPhase::GC_PHASE_FORCE_BARRIER);
         LOG(RTLOG_WARNING,
             "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
             "barriers; compiler sticky metadata is not required and performance is not production representative");
@@ -226,7 +230,7 @@ void HeapImpl::InstallBarrier(const GCPhase phase)
         currentBarrier = &preforwardBarrier;
     } else if (phase == GCPhase::GC_PHASE_FORWARD) {
         currentBarrier = &forwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_IDLE) {
+    } else if (phase == GCPhase::GC_PHASE_IDLE || phase == GCPhase::GC_PHASE_FORCE_BARRIER) {
         currentBarrier = idlePhaseBarrier;
     } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
         currentBarrier = &postTraceBarrier;

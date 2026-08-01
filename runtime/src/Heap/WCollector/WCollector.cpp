@@ -1616,8 +1616,7 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[StickyMinor] promotion scan regions=%zu objects=%zu loggedLines=%zu time=%zu us",
          promotedRegions, promotedObjects, promotedLoggedLines, promotionScanNs / NS_PER_US);
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        TransitionToGCPhase(GCPhase::GC_PHASE_FORCE_BARRIER, true);
     } else {
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     }
@@ -1673,8 +1672,7 @@ void WCollector::DoGarbageCollection()
         StickyLog::Instance().BeginEpoch();
     }
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        TransitionToGCPhase(GCPhase::GC_PHASE_FORCE_BARRIER, true);
     } else {
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     }
