@@ -32,7 +32,8 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 {
     uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
-    TypeInfo* typeInfo = GetTypeInfo(UnsafeAssumeCurrent(const_cast<BaseObject*>(&fromObj)));
+    // Copy begins only on the current source object before it becomes a from-version.
+    TypeInfo* typeInfo = GetTypeInfo(ProvenByRegionWalk(const_cast<BaseObject*>(&fromObj)));
     CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK, "memmove_s fail");
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);

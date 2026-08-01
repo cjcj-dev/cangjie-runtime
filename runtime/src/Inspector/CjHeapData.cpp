@@ -79,7 +79,7 @@ void CjHeapData::ProcessHeap()
     (void)LookupStringId("RefFields");
     (void)LookupStringId("ValueField");
     //  dump object contents
-    auto dumpVisitor = [this](BaseObject* obj) { ProcessHeapObject(UnsafeAssumeCurrent(obj)); };
+    auto dumpVisitor = [this](BaseObject* obj) { ProcessHeapObject(ProvenByRegionWalk(obj)); };
     bool ret = Heap::GetHeap().ForEachObj(dumpVisitor, false);
     CHECK_E(UNLIKELY(!ret), "theAllocator.ForEachObj() in DumpHeap() return false.");
 }
