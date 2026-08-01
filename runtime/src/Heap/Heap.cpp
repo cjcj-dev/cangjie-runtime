@@ -233,6 +233,9 @@ void HeapImpl::InstallBarrier(const GCPhase phase)
         currentBarrier = idlePhaseBarrier;
     } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
         currentBarrier = &postTraceBarrier;
+    } else {
+        // UNDEF/FINISH/INIT have no global transition site today; refuse silent reuse.
+        LOG(RTLOG_FATAL, "InstallBarrier: unmapped GC phase %u", static_cast<uint32_t>(phase));
     }
     DLOG(GCPHASE, "install barrier for gc phase %u", phase);
 }
