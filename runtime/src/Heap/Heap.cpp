@@ -190,7 +190,10 @@ void HeapImpl::Init(const HeapParam& param)
         LOG(RTLOG_WARNING,
             "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1 is a correctness harness: all managed writes use runtime "
             "barriers; compiler sticky metadata is not required and performance is not production representative");
-    } else if (!StickyLog::Instance().IsMinorEnabled()) {
+    } else {
+        InstallBarrier(GCPhase::GC_PHASE_IDLE);
+    }
+    if (!StickyLog::Instance().IsForceSlowPathEnabled() && !StickyLog::Instance().IsMinorEnabled()) {
         // Only the explicit escape hatch; auto-disabled(no consumer) already warned in StickyLog.
         const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
         if (minorEnv != nullptr && strcmp(minorEnv, "0") == 0) {
@@ -226,7 +229,7 @@ void HeapImpl::InstallBarrier(const GCPhase phase)
         currentBarrier = &preforwardBarrier;
     } else if (phase == GCPhase::GC_PHASE_FORWARD) {
         currentBarrier = &forwardBarrier;
-    } else if (phase == GCPhase::GC_PHASE_IDLE) {
+    } else if (phase == GCPhase::GC_PHASE_IDLE || phase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
         currentBarrier = idlePhaseBarrier;
     } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
         currentBarrier = &postTraceBarrier;
