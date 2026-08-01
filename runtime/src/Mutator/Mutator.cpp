@@ -460,20 +460,24 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
     // These pointers will be collected in the <rootList>.
     std::stack<BaseObject**, std::deque<BaseObject**, StdContainerAllocator<BaseObject**, STACK_PTR>>> rootList;
     StackPtrVisitor traceAndFixPtrVisitor = [&rootList, this](ObjectRef& oldStackAddr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
+        BaseObject* p = RefField<>(reinterpret_cast<MAddress>(oldStackAddr.object)).GetTargetObject();
+        if (IsStackAddr(reinterpret_cast<uintptr_t>(p))) {
             rootList.push(reinterpret_cast<BaseObject**>(&oldStackAddr));
         }
     };
     // The stack pointer does not require ref trace.
     StackPtrVisitor fixPtrVisitor = [&resSet, this](ObjectRef& oldStackAddr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
+        BaseObject* p = RefField<>(reinterpret_cast<MAddress>(oldStackAddr.object)).GetTargetObject();
+        if (IsStackAddr(reinterpret_cast<uintptr_t>(p))) {
             resSet.insert(reinterpret_cast<BaseObject**>(&oldStackAddr));
         }
     };
     // The Derived pointer does not require ref trace.
     DerivedPtrVisitor derivedPtrVisitor =
         [&resSet, this](BasePtrType basePtr __attribute__((unused)), DerivedPtrType& derivedPtr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(reinterpret_cast<ObjectRef&>(derivedPtr).object))) {
+        BaseObject* p =
+            RefField<>(reinterpret_cast<MAddress>(reinterpret_cast<ObjectRef&>(derivedPtr).object)).GetTargetObject();
+        if (IsStackAddr(reinterpret_cast<uintptr_t>(p))) {
             resSet.insert(reinterpret_cast<BaseObject**>(&derivedPtr));
         }
     };
@@ -494,8 +498,10 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         BaseObject** objSlot = rootList.top();
         rootList.pop();
         resSet.insert(objSlot);
-        BaseObject* obj = *objSlot;
-        if (!obj->IsValidObject()) {
+        // Slots may be ObjectRef* or RefField* (tagged). Always untag via RefField.
+        RefField<> slotField(reinterpret_cast<MAddress>(*objSlot));
+        BaseObject* obj = slotField.GetTargetObject();
+        if (obj == nullptr || !obj->IsValidObject()) {
             continue;
         }
         TypeInfo* tip = obj->GetTypeInfo();
@@ -667,7 +673,8 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
     };
 
     RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor](ObjectRef& root) {
-        BaseObject* obj = root.object;
+        // Stack slots may hold tagged RefField encoding; untag before use as BaseObject*.
+        BaseObject* obj = RefField<>(reinterpret_cast<MAddress>(root.object)).GetTargetObject();
         if (Heap::IsHeapAddress(obj)) {
             AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
             buffer->PushRoot(obj);
@@ -712,7 +719,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     };
 
     RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this, &refVisitor](ObjectRef& root) {
-        BaseObject* oldObj = root.object;
+        // Untag: stack may store tagged RefField words in ObjectRef slots.
+        BaseObject* oldObj = RefField<>(reinterpret_cast<MAddress>(root.object)).GetTargetObject();
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }

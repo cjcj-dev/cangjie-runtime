@@ -431,7 +431,8 @@ public:
     {
         RefField<> tmpField(nullptr);
         Heap::GetBarrier().WriteStaticRef(tmpField, obj);
-        localFinalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+        // WriteStaticRef may leave a tagged RefField; store the untagged target only.
+        localFinalizers.push_back(tmpField.GetTargetObject());
     }
 
     void MutatorLock() { mutatorLock.lock(); }

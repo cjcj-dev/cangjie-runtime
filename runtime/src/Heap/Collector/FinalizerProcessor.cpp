@@ -201,7 +201,8 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
         BaseObject* obj = tmpField.GetTargetObject();
         --countLimit;
         if (finalizable(obj)) {
-            finalizables.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+            // list may hold tagged encoding; always reify via GetTargetObject.
+            finalizables.push_back(tmpField.GetTargetObject());
             it = finalizers.erase(it);
         } else {
             ++it;
@@ -315,7 +316,8 @@ void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
     RefField<> tmpField(nullptr);
     Heap::GetBarrier().WriteStaticRef(tmpField, obj);
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+    // WriteStaticRef may tag; store untagged target so later ObjectRef walks stay canonical.
+    finalizers.push_back(tmpField.GetTargetObject());
 }
 
 void FinalizerProcessor::RegisterFinalizers(ManagedList<BaseObject*>& objs)
