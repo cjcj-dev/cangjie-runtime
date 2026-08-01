@@ -40,6 +40,9 @@ public:
                          MIndex srcSize) const override;
     void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
     void ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const override;
+
+private:
+    void LogObject(BaseObject* obj) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_MARK_BARRIER_H
