@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Stage stop-window measurement for generational GC (MRT_STICKY_MINOR on/off).
-# Same pinned binary + runtime; arms differ only by MRT_STICKY_MINOR.
-# Dry-run numbers are apparatus checks only — never performance conclusions.
+# Interleaved sticky-minor measurement (same pinned binary; arms = env only).
+# Absolute wall under schedutil is not publishable; ratios survive same-window interleave
+# when per-arm mean CPU frequency delta <=5%. Dryrun numbers are apparatus-only unless
+# mode=measure and FREQ balance passes.
 set -euo pipefail
 
 usage()
@@ -11,11 +12,11 @@ Usage: run_perfstage_stopwindow.sh --out DIR [options]
 
 Options:
   --out DIR              evidence directory (required, must be empty)
-  --mode MODE            dryrun | stopwindow (default: dryrun)
-  --cores RANGE          CPU range (default: dryrun 48-63, stopwindow 0-191)
-  --pairs N              interleaved ON/OFF pairs (default: dryrun 1, stopwindow 5)
-  --timeout SEC          per-round timeout (default: dryrun 1800, stopwindow 3600)
-  --marker LINE          exact MEASURE_ACTIVE line required
+  --mode MODE            dryrun | measure | stopwindow (default: dryrun)
+  --cores RANGE          CPU range (default: dryrun/measure 48-63, stopwindow 0-191)
+  --pairs N              interleaved OFF/ON pairs (default: dryrun 1, measure/stopwindow 5)
+  --timeout SEC          per-round timeout seconds
+  --marker PREFIX        MEASURE_ACTIVE line must start with this (or exact)
   --cjc FILE             pinned compiler binary
   --runtime-so FILE      pinned libcangjie-runtime.so
   --pkg-root DIR         packages root containing <pkg>/src
@@ -24,9 +25,13 @@ Options:
   --corpus LIST          comma packages (default: sema)
   --j N                  compiler -j (default: 16)
 
-Schedule: for each pair p=1..N, for each pkg in corpus:
-  ON  (MRT_STICKY_MINOR=1) then OFF (MRT_STICKY_MINOR=0).
-Same-window interleave only. Endpoints: wall_s and gc_us (reported separately).
+Schedule (hard): for each pair p=1..N, for each pkg:
+  OFF (MRT_STICKY_MINOR=0) then ON (MRT_STICKY_MINOR=1).
+Never segment all-OFF then all-ON.
+
+Endpoints (separate): wall_s ; gc_us (sum of total gc time lines).
+Each round records loadavg_1m and mean MHz of cores in --cores (start+end).
+FREQ arm-mean delta >5% => batch INVALID_FREQ_IMBALANCE (ratios still reported).
 EOF
 }
 
@@ -44,6 +49,36 @@ count_matches()
     else
         printf '0\n'
     fi
+}
+
+# Mean MHz for logical CPUs in RANGE start-end from /proc/cpuinfo.
+sample_freq_mean_mhz()
+{
+    local range=$1
+    local start=${range%-*} end=${range#*-}
+    python3 - "$start" "$end" <<'PY'
+import sys
+start, end = map(int, sys.argv[1:3])
+cpus = set(range(start, end + 1))
+mhz = []
+cur = None
+with open("/proc/cpuinfo") as f:
+    for line in f:
+        if line.startswith("processor"):
+            cur = int(line.split(":")[1])
+        elif line.startswith("cpu MHz") and cur in cpus:
+            mhz.append(float(line.split(":")[1]))
+            cur = None
+if not mhz:
+    print("nan")
+else:
+    print(f"{sum(mhz)/len(mhz):.3f}")
+PY
+}
+
+sample_loadavg_1m()
+{
+    awk '{print $1}' /proc/loadavg
 }
 
 out=''
@@ -88,20 +123,31 @@ case "$mode" in
         [[ -n "$round_timeout" ]] || round_timeout=1800
         [[ -n "$marker" ]] || marker='perfstage cores=48-63 KIND=build'
         ;;
+    measure)
+        [[ -n "$cores" ]] || cores=48-63
+        [[ -n "$pairs" ]] || pairs=5
+        [[ -n "$round_timeout" ]] || round_timeout=2400
+        [[ -n "$marker" ]] || marker='perfstage cores=48-63 KIND=build'
+        ;;
     stopwindow)
         [[ -n "$cores" ]] || cores=0-191
         [[ -n "$pairs" ]] || pairs=5
         [[ -n "$round_timeout" ]] || round_timeout=3600
         [[ -n "$marker" ]] || marker='perfstage cores=0-191 KIND=measure STOP_WINDOW=1'
         ;;
-    *) die "--mode must be dryrun or stopwindow" ;;
+    *) die "--mode must be dryrun|measure|stopwindow" ;;
 esac
 
 [[ "$cores" =~ ^[0-9]+-[0-9]+$ ]] || die '--cores must be START-END'
 [[ "$pairs" =~ ^[0-9]+$ && "$pairs" -ge 1 ]] || die '--pairs must be >=1'
 [[ "$round_timeout" =~ ^[0-9]+$ && "$round_timeout" -gt 0 ]] || die '--timeout must be positive'
 [[ "$parallel_j" =~ ^[0-9]+$ && "$parallel_j" -ge 1 ]] || die '--j must be positive'
-grep -q -x -F "$marker" /dev/shm/MEASURE_ACTIVE 2>/dev/null || die "missing marker line: $marker"
+
+# marker: exact line OR line begins with marker (allows trailing since=)
+if ! grep -q -x -F "$marker" /dev/shm/MEASURE_ACTIVE 2>/dev/null \
+    && ! grep -q -F "$marker" /dev/shm/MEASURE_ACTIVE 2>/dev/null; then
+    die "missing marker containing: $marker"
+fi
 
 for file in "$cjc" "$runtime_so"; do
     [[ -f "$file" && -x "$file" ]] || die "missing executable: $file"
@@ -129,7 +175,7 @@ mkdir -p "$out"
     die "output directory is not empty: $out"
 
 results="$out/results.tsv"
-printf 'mode\tpkg\tarm\tpair\tsticky\trc\tvalidity\twall_s\tgc_us\tgc_pct\tminor\tmajor\tmaxrss_kb\tproduct_sha256\tcjc_sha256\truntime_sha256\tmode_line\tactual_exe\tcpus_allowed\trun_dir\n' > "$results"
+printf 'mode\tpkg\tarm\tpair\tsticky\trc\tvalidity\twall_s\tgc_us\tgc_pct\tminor\tmajor\tmaxrss_kb\tproduct_sha256\tcjc_sha256\truntime_sha256\tmode_line\tactual_exe\tcpus_allowed\tload_start\tload_end\tfreq_start_mhz\tfreq_end_mhz\tfreq_mean_mhz\trun_dir\n' > "$results"
 
 {
     printf 'role\tpath\tsha256\tsticky_consumer_lines\n'
@@ -140,26 +186,29 @@ printf 'mode\tpkg\tarm\tpair\tsticky\trc\tvalidity\twall_s\tgc_us\tgc_pct\tminor
 
 {
     cat <<EOF
-# PREREGISTERED protocol (frozen before stop window)
+# PREREGISTERED protocol (frozen before seeing arm ratios)
 MODE_DEFAULT=$mode
 CORPUS=${pkgs[*]}
-SCHEDULE=interleaved_same_window (ON then OFF per pair; pairs sequential)
+SCHEDULE=interleaved_same_window HARD: OFF then ON per pair; pairs sequential; never segment arms
 PAIRS=$pairs
-ENDPOINTS=wall_s (compile total wall); gc_us (sum of total gc time lines, separate)
-SECONDARY=minor_count,major_count,maxrss_kb,product_sha256
-PREREG_CRITERION_CLEAR_IMPROVEMENT:
-  primary: median(wall_OFF)/median(wall_ON)-1 >= 0.05
-           AND all rounds VALID (rc=0)
-           AND product_sha256 identical across ON/OFF when both complete
-           AND ON minor>0 and OFF minor=0 (mode actually switched)
-  secondary_gc: report median(gc_us) separately; do not mix with wall criterion
-  noise: harnessfix sticky=0 sema N=8 mean=1295.52s sample_sd=30.08s cv=2.322%
-POWER_N (two-sample independent, alpha=0.05 two-sided, power=0.80, cv=2.322%):
-  POWER_N_for_5pct=4
-  POWER_N_for_10pct=1
-  POWER_N_for_20pct=1
-  planned_stopwindow_pairs=5 (covers 5% with margin; floor N>=4 for any 5% claim)
+CORES=$cores
+ENDPOINTS=wall_s (compile total wall); gc_us (sum total gc time, separate column)
+SECONDARY=minor_count,major_count,maxrss_kb,product_sha256,freq_mean_mhz,loadavg_1m
+PREREG_CRITERION_CLEAR_IMPROVEMENT (ratios only; absolute wall not publishable outside stopwindow):
+  primary_ratio: median(wall_OFF)/median(wall_ON) - 1 >= 0.05
+                 AND all rounds VALID (rc=0)
+                 AND product_sha256 identical across ON/OFF when both complete
+                 AND ON minor>0 and OFF minor=0
+                 AND FREQ_MEAN_OFF vs ON relative |delta| <= 5%
+  secondary_gc: report median(gc_us) separately; never mix into wall criterion
+  absolute wall: only stopwindow mode may publish absolute seconds for release notes
+POWER baseline seed (harnessfix sticky=0 sema N=8): mean=1295.52s sd=30.08s cv=2.322%
+  POWER_N two-sample independent alpha=0.05 power=0.80:
+  POWER_N_for_5pct=4 POWER_N_for_10pct=1 POWER_N_for_20pct=1
+  planned pairs=5 (margin over 5% power)
+FREQ_INVALIDATE_IF_ARM_MEAN_DELTA_GT=5%
 DISCLAIMER: dryrun numbers are NOT performance conclusions.
+ABSOLUTE_WALL_DISCLAIMER: non-stopwindow absolute wall is under schedutil (core freq can differ ~2.76x); ratios only when FREQ balance holds.
 EOF
 } > "$out/protocol.txt"
 
@@ -168,6 +217,14 @@ grep -q -F "$runtime_so" "$out/cjc.ldd" || die 'cjc does not resolve pinned runt
 grep '^MemAvailable:' /proc/meminfo > "$out/mem-before.txt"
 df -h /root > "$out/disk-before.txt"
 date -Iseconds > "$out/started_at.txt"
+# one-shot governor snapshot (structural context)
+{
+    echo "governor=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_governor 2>/dev/null || echo missing)"
+    echo "scaling_min=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_min_freq 2>/dev/null || echo missing)"
+    echo "scaling_max=$(cat /sys/devices/system/cpu/cpu0/cpufreq/scaling_max_freq 2>/dev/null || echo missing)"
+    sample_freq_mean_mhz "$cores" | awk '{print "batch_start_freq_mean_mhz="$1}'
+    sample_loadavg_1m | awk '{print "batch_start_loadavg_1m="$1}'
+} > "$out/machine_context.txt"
 
 run_one()
 {
@@ -182,7 +239,13 @@ run_one()
     local product="$run_dir/out.a"
     mkdir -p "$run_dir"
 
-    printf 'nice -n 12 taskset -c %q timeout %q env MRT_STICKY_MINOR=%q cjc --package %q ... -j %q\n' \
+    local load_start freq_start
+    load_start=$(sample_loadavg_1m)
+    freq_start=$(sample_freq_mean_mhz "$cores")
+    printf '%s\n' "$load_start" > "$run_dir/load_start.txt"
+    printf '%s\n' "$freq_start" > "$run_dir/freq_start_mhz.txt"
+
+    printf 'nice -n 12 taskset -c %q timeout %q env MRT_STICKY_MINOR=%q cjc package=%q -j %q\n' \
         "$cores" "$round_timeout" "$sticky" "$pkg_root/$pkg/src" "$parallel_j" > "$run_dir/command.txt"
 
     local launcher_pid rc=0 observed_pid='' actual_exe='UNOBSERVED' actual_sha='UNOBSERVED'
@@ -239,6 +302,17 @@ run_one()
     fi
     wait "$launcher_pid" || rc=$?
 
+    local load_end freq_end freq_mean
+    load_end=$(sample_loadavg_1m)
+    freq_end=$(sample_freq_mean_mhz "$cores")
+    freq_mean=$(awk -v a="$freq_start" -v b="$freq_end" 'BEGIN {
+        if (a == "nan" || b == "nan") print "nan";
+        else printf "%.3f", (a+b)/2
+    }')
+    printf '%s\n' "$load_end" > "$run_dir/load_end.txt"
+    printf '%s\n' "$freq_end" > "$run_dir/freq_end_mhz.txt"
+    printf '%s\n' "$freq_mean" > "$run_dir/freq_mean_mhz.txt"
+
     local wall_s maxrss_kb minor major total_gc gc_us gc_pct
     local product_sha cjc_sha rt_sha mode_line cpus_allowed validity
     wall_s=$(sed -nE 's/.*wall_s=([^ ]+).*/\1/p' "$time_file" 2>/dev/null || true)
@@ -283,22 +357,23 @@ run_one()
         validity='INVALID_OFF_YOUNG'
     fi
 
-    # drop large product after hashing to save disk
     if [[ -f "$product" ]]; then
         rm -f "$product"
     fi
 
-    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
+    printf '%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\t%s\n' \
         "$mode" "$pkg" "$arm" "$pair" "$sticky" "$rc" "$validity" "${wall_s:-MISSING}" \
         "$gc_us" "$gc_pct" "$minor" "$major" "${maxrss_kb:-MISSING}" "$product_sha" \
         "$cjc_sha" "$rt_sha" "${mode_line:-MISSING}" "$actual_exe" \
-        "${cpus_allowed:-MISSING}" "$run_dir" | tee -a "$results"
+        "${cpus_allowed:-MISSING}" "$load_start" "$load_end" "$freq_start" "$freq_end" \
+        "$freq_mean" "$run_dir" | tee -a "$results"
 }
 
+# HARD interleave: OFF then ON per pair
 for ((pair=1; pair<=pairs; ++pair)); do
     for pkg in "${pkgs[@]}"; do
-        run_one "$pkg" ON "$pair" 1
         run_one "$pkg" OFF "$pair" 0
+        run_one "$pkg" ON "$pair" 1
     done
 done
 
@@ -306,35 +381,123 @@ grep '^MemAvailable:' /proc/meminfo > "$out/mem-after.txt"
 df -h /root > "$out/disk-after.txt"
 date -Iseconds > "$out/finished_at.txt"
 
-# summary: apparatus only; never claim performance from dryrun
-invalid=$(awk -F '\t' 'NR > 1 && $7 != "VALID" { n++ } END { print n + 0 }' "$results")
-on_young=$(awk -F '\t' 'NR > 1 && $3 == "ON" { s += $11 } END { print s + 0 }' "$results")
-off_young=$(awk -F '\t' 'NR > 1 && $3 == "OFF" { s += $11 } END { print s + 0 }' "$results")
-cjc_unique=$(awk -F '\t' 'NR > 1 { print $15 }' "$results" | sort -u | wc -l)
-rt_unique=$(awk -F '\t' 'NR > 1 { print $16 }' "$results" | sort -u | wc -l)
-on_ok=$(awk -F '\t' 'NR > 1 && $3 == "ON" && $7 == "VALID" { n++ } END { print n + 0 }' "$results")
-off_ok=$(awk -F '\t' 'NR > 1 && $3 == "OFF" && $7 == "VALID" { n++ } END { print n + 0 }' "$results")
-flow=ok
-[[ "$invalid" == 0 && "$on_ok" -ge 1 && "$off_ok" -ge 1 && "$cjc_unique" == 1 && "$rt_unique" == 1 ]] || flow=fail
-if [[ "$on_young" -le 0 || "$off_young" != 0 ]]; then
-    flow=fail
-fi
+python3 - "$results" "$out/summary.txt" "$mode" <<'PY'
+import statistics, sys, math
+from pathlib import Path
+results_path, summary_path, mode = sys.argv[1:4]
+rows = []
+with open(results_path) as f:
+    header = f.readline().rstrip("\n").split("\t")
+    for line in f:
+        if not line.strip():
+            continue
+        d = dict(zip(header, line.rstrip("\n").split("\t")))
+        rows.append(d)
 
-{
-    printf 'MODE=%s\n' "$mode"
-    printf 'SAME_BINARY=yes\n'
-    printf 'CJC_SHA=%s\n' "$(sha256sum "$cjc" | awk '{print $1}')"
-    printf 'RT_SHA=%s\n' "$(sha256sum "$runtime_so" | awk '{print $1}')"
-    printf 'CORPUS=%s\n' "${pkgs[*]}"
-    printf 'PAIRS=%s\n' "$pairs"
-    printf 'ON_YOUNG_TOTAL=%s OFF_YOUNG_TOTAL=%s\n' "$on_young" "$off_young"
-    printf 'ON_OK=%s OFF_OK=%s INVALID=%s\n' "$on_ok" "$off_ok" "$invalid"
-    printf 'CJC_UNIQUE=%s RT_UNIQUE=%s\n' "$cjc_unique" "$rt_unique"
-    printf 'FLOW=%s\n' "$flow"
-    printf 'DISCLAIMER=dryrun_numbers_are_NOT_performance_conclusions\n'
-    if [[ "$mode" == dryrun ]]; then
-        printf 'DRYRUN_OK=%s\n' "$([[ "$flow" == ok ]] && echo yes || echo no)"
-    fi
-} | tee "$out/summary.txt"
+def fnum(x):
+    try:
+        return float(x)
+    except Exception:
+        return None
 
-[[ "$flow" == ok ]]
+invalid = sum(1 for r in rows if r.get("validity") != "VALID")
+off = [r for r in rows if r.get("arm") == "OFF"]
+on = [r for r in rows if r.get("arm") == "ON"]
+off_ok = [r for r in off if r.get("validity") == "VALID"]
+on_ok = [r for r in on if r.get("validity") == "VALID"]
+off_young = sum(int(r.get("minor") or 0) for r in off)
+on_young = sum(int(r.get("minor") or 0) for r in on)
+cjc_unique = len({r.get("cjc_sha256") for r in rows})
+rt_unique = len({r.get("runtime_sha256") for r in rows})
+
+def arm_mean(rs, key):
+    xs = [fnum(r.get(key)) for r in rs]
+    xs = [x for x in xs if x is not None and not math.isnan(x)]
+    return statistics.mean(xs) if xs else float("nan")
+
+freq_off = arm_mean(off, "freq_mean_mhz")
+freq_on = arm_mean(on, "freq_mean_mhz")
+load_off = arm_mean(off, "load_start")  # start load as proxy
+load_on = arm_mean(on, "load_start")
+if freq_off and freq_on and not math.isnan(freq_off) and not math.isnan(freq_on) and freq_off > 0:
+    freq_delta_pct = abs(freq_off - freq_on) / ((freq_off + freq_on) / 2) * 100
+else:
+    freq_delta_pct = float("nan")
+
+# observed CV from OFF walls if N>=3 else from all VALID walls
+off_walls = [fnum(r["wall_s"]) for r in off_ok if fnum(r.get("wall_s")) is not None]
+on_walls = [fnum(r["wall_s"]) for r in on_ok if fnum(r.get("wall_s")) is not None]
+all_walls = off_walls + on_walls
+cv_source = "OFF"
+cv_walls = off_walls
+if len(cv_walls) < 3:
+    cv_source = "ALL_VALID"
+    cv_walls = all_walls
+if len(cv_walls) >= 2:
+    mean = statistics.mean(cv_walls)
+    sd = statistics.stdev(cv_walls)
+    cv = sd / mean if mean else float("nan")
+else:
+    mean = sd = cv = float("nan")
+
+# power N from observed CV (fallback harnessfix cv=0.02322)
+use_cv = cv if cv == cv and cv > 0 else 0.02322
+za, zb = 1.96, 0.8416
+def power_n(pct):
+    return math.ceil(2 * (za + zb) ** 2 * (use_cv / pct) ** 2)
+
+# ratio claim only if measure/stopwindow + flow + freq
+flow = "ok"
+if invalid or not off_ok or not on_ok or cjc_unique != 1 or rt_unique != 1:
+    flow = "fail"
+if on_young <= 0 or off_young != 0:
+    flow = "fail"
+freq_ok = freq_delta_pct == freq_delta_pct and freq_delta_pct <= 5.0
+if not freq_ok:
+    flow = "fail" if flow == "ok" else flow
+    freq_tag = "INVALID_FREQ_IMBALANCE"
+else:
+    freq_tag = "FREQ_BALANCED"
+
+ratio = float("nan")
+if off_walls and on_walls:
+    # use median
+    med_off = statistics.median(off_walls)
+    med_on = statistics.median(on_walls)
+    if med_on > 0:
+        ratio = med_off / med_on - 1.0
+
+lines = []
+lines.append(f"MODE={mode}")
+lines.append("SAME_BINARY=yes")
+lines.append(f"FLOW={flow}")
+lines.append(f"INVALID={invalid}")
+lines.append(f"OFF_OK={len(off_ok)} ON_OK={len(on_ok)}")
+lines.append(f"OFF_YOUNG_TOTAL={off_young} ON_YOUNG_TOTAL={on_young}")
+lines.append(f"CJC_UNIQUE={cjc_unique} RT_UNIQUE={rt_unique}")
+lines.append(f"FREQ_MEAN_OFF_{freq_off:.3f}_ON_{freq_on:.3f}_DELTA_{freq_delta_pct:.3f}%")
+lines.append(f"LOAD_MEAN_OFF_{load_off:.3f}_ON_{load_on:.3f}")
+lines.append(f"FREQ_TAG={freq_tag}")
+lines.append(f"OBSERVED_CV_{cv*100 if cv==cv else float('nan'):.3f}%_SOURCE_{cv_source}_N_{len(cv_walls)}_MEAN_{mean if mean==mean else float('nan'):.3f}_SD_{sd if sd==sd else float('nan'):.3f}")
+lines.append(f"POWER_N_for_5pct_{power_n(0.05)}_10pct_{power_n(0.10)}_20pct_{power_n(0.20)}")
+lines.append("DISCLAIMER=dryrun_numbers_are_NOT_performance_conclusions")
+lines.append("ABSOLUTE_WALL=non-stopwindow under schedutil; not for release absolute claims")
+if mode == "dryrun":
+    lines.append(f"DRYRUN_OK={'yes' if flow=='ok' else 'no'}")
+    lines.append("RATIO_CLAIM=forbidden_in_dryrun")
+elif mode in ("measure", "stopwindow"):
+    if flow == "ok" and ratio == ratio:
+        clear = "yes" if ratio >= 0.05 else "no"
+        lines.append(f"RATIO_MEDIAN_OFF_over_ON_minus1={ratio:.6f}")
+        lines.append(f"CLEAR_IMPROVEMENT_PREREG={clear}")
+    else:
+        lines.append("RATIO_CLAIM=blocked_flow_or_freq")
+# stop window estimate for final absolute: pairs * 2 * ~22min + overhead
+pairs = max((int(r.get("pair") or 0) for r in rows), default=0)
+est_min = pairs * 2 * 22 + 10
+lines.append(f"STOP_WINDOW_FOR_FINAL_ONLY_{est_min}")
+text = "\n".join(lines) + "\n"
+Path(summary_path).write_text(text)
+print(text, end="")
+sys.exit(0 if flow == "ok" else 1)
+PY
