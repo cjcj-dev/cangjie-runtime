@@ -6,6 +6,8 @@
 
 #include "TimeWindowEvacRing.h"
 
+#include <sched.h>
+#include <sys/mman.h>
 #include <unistd.h>
 
 #include "Base/SysCall.h"
@@ -15,7 +17,6 @@
 
 namespace MapleRuntime {
 namespace {
-// SplitMix64-style mix for pointer keys (AS-safe, no heap).
 inline size_t MixPtr(uintptr_t x) noexcept
 {
     x ^= x >> 30;
@@ -33,20 +34,57 @@ TimeWindowEvacRing& TimeWindowEvacRing::Instance() noexcept
     return instance;
 }
 
+void TimeWindowEvacRing::EnsureStorage() noexcept
+{
+    if (ready_.load(std::memory_order_acquire) != 0) {
+        return;
+    }
+    // Single-flight: only one thread maps; others spin until ready.
+    static std::atomic<int> mapping{ 0 };
+    int expected = 0;
+    if (mapping.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
+        const size_t ringBytes = RING_CAP * sizeof(Entry);
+        const size_t hashBytes = HASH_CAP * sizeof(std::atomic<uintptr_t>);
+        void* ring = mmap(nullptr, ringBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        void* hash = mmap(nullptr, hashBytes, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+        if (ring == MAP_FAILED || hash == MAP_FAILED) {
+            if (ring != MAP_FAILED) {
+                munmap(ring, ringBytes);
+            }
+            if (hash != MAP_FAILED) {
+                munmap(hash, hashBytes);
+            }
+            mapping.store(0, std::memory_order_release);
+            return;
+        }
+        slots_ = static_cast<Entry*>(ring);
+        fromHash_ = static_cast<std::atomic<uintptr_t>*>(hash);
+        // mmap zero-fills; atomics are zero = empty.
+        ready_.store(1, std::memory_order_release);
+    } else {
+        while (ready_.load(std::memory_order_acquire) == 0) {
+            sched_yield();
+        }
+    }
+}
+
 void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) noexcept
 {
     if (from == nullptr || to == nullptr || from == to || size == 0) {
+        return;
+    }
+    EnsureStorage();
+    if (ready_.load(std::memory_order_acquire) == 0) {
         return;
     }
     uint32_t preState = static_cast<uint32_t>(from->GetObjectState().GetStateCode());
     const uintptr_t fromU = reinterpret_cast<uintptr_t>(from);
     const uintptr_t toU = reinterpret_cast<uintptr_t>(to);
 
-    // (1) exact-from hash (durable; first writer wins per slot, probe limited)
     {
         size_t i = MixPtr(fromU) & (HASH_CAP - 1);
         bool inserted = false;
-        for (size_t probe = 0; probe < 128; ++probe) {
+        for (size_t probe = 0; probe < 64; ++probe) {
             uintptr_t expected = 0;
             if (fromHash_[i].compare_exchange_strong(expected, fromU, std::memory_order_relaxed,
                                                      std::memory_order_relaxed)) {
@@ -55,7 +93,7 @@ void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) n
                 break;
             }
             if (expected == fromU) {
-                inserted = true; // already present
+                inserted = true;
                 break;
             }
             i = (i + 1) & (HASH_CAP - 1);
@@ -65,7 +103,6 @@ void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) n
         }
     }
 
-    // (2) detail ring (newest-first scan for interior / preState)
     const uint64_t n = seq_.fetch_add(1, std::memory_order_relaxed);
     Entry& slot = slots_[n & (RING_CAP - 1)];
     slot.from = fromU;
@@ -78,10 +115,9 @@ void TimeWindowEvacRing::Record(BaseObject* from, BaseObject* to, size_t size) n
 
 bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
 {
-    if (addr == 0 || out == nullptr) {
+    if (addr == 0 || out == nullptr || ready_.load(std::memory_order_acquire) == 0) {
         return false;
     }
-    // Prefer detail ring (interior + preState), newest-first.
     const uint64_t total = total_.load(std::memory_order_acquire);
     if (total > 0) {
         const size_t n = total < RING_CAP ? static_cast<size_t>(total) : RING_CAP;
@@ -98,10 +134,9 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
             }
         }
     }
-    // Exact-from hash (covers copies older than ring).
     {
         size_t i = MixPtr(addr) & (HASH_CAP - 1);
-        for (size_t probe = 0; probe < 128; ++probe) {
+        for (size_t probe = 0; probe < 64; ++probe) {
             uintptr_t v = fromHash_[i].load(std::memory_order_relaxed);
             if (v == 0) {
                 break;
@@ -110,7 +145,7 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
                 out->from = addr;
                 out->to = 0;
                 out->size = 0;
-                out->preState = 0xffffffffu; // unknown (hash-only hit)
+                out->preState = 0xffffffffu;
                 return true;
             }
             i = (i + 1) & (HASH_CAP - 1);
