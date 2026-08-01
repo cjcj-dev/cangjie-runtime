@@ -8,6 +8,9 @@
 #include "PostTraceBarrier.h"
 
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -102,6 +105,9 @@ void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, B
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::PostTrace, obj, ref, false);
+#endif
 }
 
 void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const

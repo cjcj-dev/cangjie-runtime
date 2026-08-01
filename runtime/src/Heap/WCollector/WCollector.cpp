@@ -18,6 +18,7 @@
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
 #include "Heap/GCDebugConfig.h"
 #endif
 #include "Heap/RelocationDiagnosticTable.h"
@@ -1872,6 +1873,7 @@ void WCollector::CheckmarkYoungMarking()
          reachable.size(), youngReachable, youngMissed, youngExtra, oldRegionsScanned,
          oldObjectsScanned, wallUs, static_cast<unsigned>(injectVictim != nullptr),
          incomingResolved, fromRootOnly, inRemsetYes, inRemsetNo, retainedWouldScan, retainedSkip);
+    EmitSiteCounters::Dump(youngMissed != 0 ? "checkmark-miss" : "checkmark-ok");
     if (youngMissed != 0) {
         CHECK_DETAIL(false,
                      "[GCCheckmark] %zu young object(s) reachable by independent path but unmarked by minor",

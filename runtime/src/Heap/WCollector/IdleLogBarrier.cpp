@@ -7,6 +7,9 @@
 #include "IdleLogBarrier.h"
 
 #include "Heap/StickyLog.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 
 namespace MapleRuntime {
 ALWAYS_INLINE void IdleLogBarrier::LogObject(BaseObject* obj) const { CJ_MCC_StickyLogLine(obj); }
@@ -14,6 +17,9 @@ ALWAYS_INLINE void IdleLogBarrier::LogObject(BaseObject* obj) const { CJ_MCC_Sti
 void IdleLogBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     LogObject(obj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, obj, ref, true);
+#endif
     IdleBarrier::WriteReference(obj, field, ref);
 }
 
@@ -25,6 +31,11 @@ void IdleLogBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) con
 void IdleLogBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     LogObject(obj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // struct write: count each dst ref that points young from old holder after copy
+    // (post-copy scan would need ForEach; approximate via holder+null ref for exercised)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, obj, nullptr, true);
+#endif
     IdleBarrier::WriteStruct(obj, dst, dstLen, src, srcLen);
 }
 
@@ -32,6 +43,9 @@ void IdleLogBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field
                                           MemoryOrder order) const
 {
     LogObject(obj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, obj, ref, true);
+#endif
     IdleBarrier::AtomicWriteReference(obj, field, ref, order);
 }
 
@@ -39,6 +53,9 @@ BaseObject* IdleLogBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>&
                                                 MemoryOrder order) const
 {
     LogObject(obj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, obj, ref, true);
+#endif
     return IdleBarrier::AtomicSwapReference(obj, field, ref, order);
 }
 
@@ -46,6 +63,9 @@ bool IdleLogBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fi
                                              BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
     LogObject(obj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, obj, newRef, true);
+#endif
     return IdleBarrier::CompareAndSwapReference(obj, field, oldRef, newRef, succOrder, failOrder);
 }
 
@@ -53,6 +73,9 @@ void IdleLogBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MInd
                                      MAddress srcField, MIndex srcSize) const
 {
     LogObject(dstObj);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::IdleLog, dstObj, nullptr, true);
+#endif
     IdleBarrier::CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
 }
 

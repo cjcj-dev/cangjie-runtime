@@ -10,6 +10,9 @@
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -125,6 +128,9 @@ void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fi
         DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
     }
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::Preforward, obj, newRef, false);
+#endif
 }
 
 BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,

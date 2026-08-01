@@ -8,6 +8,9 @@
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -131,6 +134,10 @@ void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // Enum write: SATB only — no StickyLog (H1 surface).
+    EmitSiteNoteWrite(EmitBarrierKind::Enum, obj, ref, false);
+#endif
 }
 
 void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const

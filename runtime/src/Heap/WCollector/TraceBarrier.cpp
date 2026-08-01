@@ -8,6 +8,9 @@
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -138,6 +141,9 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
     field.SetFieldValue(newField.GetFieldValue());
     // R1 I4/I5: Trace-phase store may leave plain→from when !IsFromObject (P7).
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteNoteWrite(EmitBarrierKind::Trace, obj, ref, false);
+#endif
 }
 
 void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const

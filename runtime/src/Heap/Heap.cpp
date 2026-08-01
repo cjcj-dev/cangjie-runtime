@@ -7,6 +7,7 @@
 #include "Heap.h"
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "GCDebugConfig.h"
+#include "EmitSiteCounters.h"
 #endif
 #include "StickyLog.h"
 
@@ -258,16 +259,37 @@ void HeapImpl::InstallBarrier(const GCPhase phase)
 {
     if (phase == GCPhase::GC_PHASE_ENUM) {
         currentBarrier = &enumBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteSetActiveKind(EmitBarrierKind::Enum);
+#endif
     } else if (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
         currentBarrier = &traceBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteSetActiveKind(EmitBarrierKind::Trace);
+#endif
     } else if (phase == GCPhase::GC_PHASE_PREFORWARD) {
         currentBarrier = &preforwardBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteSetActiveKind(EmitBarrierKind::Preforward);
+#endif
     } else if (phase == GCPhase::GC_PHASE_FORWARD) {
         currentBarrier = &forwardBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteSetActiveKind(EmitBarrierKind::Forward);
+#endif
     } else if (phase == GCPhase::GC_PHASE_IDLE || phase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE) {
         currentBarrier = idlePhaseBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        // idlePhaseBarrier is IdleLog when sticky minor/log barrier on, else Idle.
+        EmitSiteSetActiveKind(idlePhaseBarrier == static_cast<Barrier*>(&idleLogBarrier)
+                                  ? EmitBarrierKind::IdleLog
+                                  : EmitBarrierKind::Idle);
+#endif
     } else if (phase == GCPhase::GC_PHASE_POST_TRACE) {
         currentBarrier = &postTraceBarrier;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        EmitSiteSetActiveKind(EmitBarrierKind::PostTrace);
+#endif
     } else {
         // UNDEF/FINISH/INIT have no global transition site today; refuse silent reuse.
         LOG(RTLOG_FATAL, "InstallBarrier: unmapped GC phase %u", static_cast<uint32_t>(phase));

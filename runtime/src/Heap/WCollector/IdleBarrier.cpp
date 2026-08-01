@@ -8,6 +8,9 @@
 #include "IdleBarrier.h"
 
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -146,6 +149,14 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
 void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // Active kind distinguishes Idle / Preforward / Forward (shared Write path).
+    // IdleLog overrides Write* and counts itself with sticky=true — skip double-count.
+    if (EmitSiteActiveKind().load(std::memory_order_relaxed) !=
+        static_cast<int>(EmitBarrierKind::IdleLog)) {
+        EmitSiteNoteWriteActive(obj, ref, false);
+    }
+#endif
     field.SetTargetObject(ref);
     // R1 fix-set production (I5): edge key = field slot absolute address (H3).
     // Established on store; cleared after BulkForward (H4). plainsrc P1.
