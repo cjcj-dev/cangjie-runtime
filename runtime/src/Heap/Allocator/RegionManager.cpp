@@ -17,6 +17,9 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/FixEdgeSet.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/GCDebugConfig.h"
+#endif
 #include "Heap/StickyLog.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -285,6 +288,11 @@ inline void RegionManager::UntagHugePage(RegionInfo* region, size_t num) const
 
 size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
 {
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    if (GCDebugConfig::IsClobberEnabled()) {
+        return 0;
+    }
+#endif
     size_t dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
     if (dirtyBytes <= targetCachedSize) {
         VLOG(REPORT, "release heap garbage memory 0 bytes, cache %zu(%zu) bytes", dirtyBytes, targetCachedSize);
@@ -423,6 +431,9 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
                "sticky region clear must cover exactly the captured units");
     InvalidateFixEdgeRange(regionStart, regionSize);
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
+#endif
     region->InitFreeUnits();
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
@@ -445,9 +456,20 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
                "sticky region clear must cover exactly the captured units");
     InvalidateFixEdgeRange(regionStart, regionSize);
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    bool filled = GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
+#endif
     region->InitFreeUnits();
-    RegionInfo::ReleaseUnits(unitIndex, num);
-    freeRegionManager.AddReleaseUnits(unitIndex, num);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    if (filled) {
+        freeRegionManager.AddGarbageUnits(unitIndex, num);
+    } else {
+#endif
+        RegionInfo::ReleaseUnits(unitIndex, num);
+        freeRegionManager.AddReleaseUnits(unitIndex, num);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    }
+#endif
     return res;
 }
 
@@ -558,6 +580,9 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
             if (releaseResources) {
                 region->VisitAllObjects([](BaseObject* object) { ReleaseNativeResource(object); });
             }
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+            GCDebugConfig::FillReclaimedMemory(regionStart, regionSize);
+#endif
             ++stats.reclaimedRegions;
             if (region->IsLargeRegion() && region->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 stats.reclaimedBytes += ReleaseRegion(region);
@@ -1302,7 +1327,14 @@ void RegionManager::CompactRegion(RegionInfo* region)
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         InvalidateFixEdgeRange(cur, reclaimSize);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        if (!GCDebugConfig::FillReclaimedMemory(cur, reclaimSize)) {
+            CHECK_DETAIL(
+                memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        }
+#else
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+#endif
     }
 
     // Compaction rewrote the region's geometry: every byte below the new
@@ -1369,7 +1401,14 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         InvalidateFixEdgeRange(cur, reclaimSize);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        if (!GCDebugConfig::FillReclaimedMemory(cur, reclaimSize)) {
+            CHECK_DETAIL(
+                memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        }
+#else
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+#endif
     }
 
     // Compaction rewrote the region's geometry: every byte below the new

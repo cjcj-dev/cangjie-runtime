@@ -30,6 +30,9 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/GCDebugConfig.h"
+#endif
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -754,6 +757,11 @@ public:
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              RegionInfo::GetUnitAddress(idx + cnt));
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+        if (GCDebugConfig::FillReclaimedMemory(unitAddress, size)) {
+            return;
+        }
+#endif
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 

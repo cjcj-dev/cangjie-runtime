@@ -67,6 +67,12 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_HEU_SYNC, "heuristic_sync", true, true, 0, 0 },
     { GC_REASON_NATIVE_SYNC, "native_alloc_sync", true, true, 0, 0 },
     { GC_REASON_FORCE, "force", true, false, 0, 0 },
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    { GC_REASON_YOUNG, "young", false, false, LONG_MIN_HEU_GC_INTERVAL_NS, g_initHeuTriggerTimestamp },
+    { GC_REASON_STRESS_MINOR, "stress_minor", false, false, 0, 0 },
+    { GC_REASON_STRESS_MAJOR, "stress_major", false, false, 0, 0 }
+#else
     { GC_REASON_YOUNG, "young", false, false, LONG_MIN_HEU_GC_INTERVAL_NS, g_initHeuTriggerTimestamp }
+#endif
 };
 } // namespace MapleRuntime

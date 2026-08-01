@@ -185,7 +185,8 @@ private:
     mutable std::mutex releasedUnitTreeMutex;
     CartesianTree releasedUnitTree;
 
-    // dirty units are neither cleared nor released, thus must be zeroed explicitly for allocation.
+    // Dirty units are neither cleared nor released. Product allocation clears the units here; clobber-mode
+    // allocation keeps the fill until each object is allocated, then clears that object's range.
     mutable std::mutex dirtyUnitTreeMutex;
     CartesianTree dirtyUnitTree;
 };

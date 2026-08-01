@@ -12,6 +12,9 @@ set(SRC_LIST
     "ForwardFactTable.cpp"
     "RelocationDiagnosticTable.cpp"
 )
+if (CANGJIE_GC_DEBUG_EQUIPMENT)
+    list(APPEND SRC_LIST "GCDebugConfig.cpp")
+endif()
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
 add_subdirectory(Allocator)
