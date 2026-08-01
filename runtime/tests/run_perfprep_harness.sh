@@ -200,15 +200,16 @@ run_one()
     fi
     wait "$launcher_pid" || rc=$?
 
-    local wall_s maxrss_kb minor major minor_us major_ns gc_us gc_pct
+    local wall_s maxrss_kb minor major minor_us major_us gc_us gc_pct
     local binary_sha runtime_sha stdout_sha mode cpus_allowed validity
     wall_s=$(sed -nE 's/.*wall_s=([^ ]+).*/\1/p' "$time_file" 2>/dev/null || true)
     maxrss_kb=$(sed -nE 's/.*maxrss_kb=([^ ]+).*/\1/p' "$time_file" 2>/dev/null || true)
     minor=$(count_matches '\[StickyMinor\] run=' "$report_log")
-    major=$(count_matches 'GC for ' "$runtime_log")
+    major=$(count_matches 'total gc time: [0-9,]+ us, collection rate' "$report_log")
     minor_us=$(sum_matches 's/.*\[StickyMinor\] run=.*pause=([0-9]+) us.*/\1/p' "$report_log")
-    major_ns=$(sum_matches 's/.*GC for .*total GC time: ([0-9]+)->.*/\1/p' "$runtime_log")
-    gc_us=$((minor_us + major_ns / 1000))
+    major_us=$(sed -nE 's/.*total gc time: ([0-9,]+) us, collection rate.*/\1/p' "$report_log" \
+        | tr -d ',' | awk '{ total += $1 } END { printf "%.0f\n", total + 0 }')
+    gc_us=$((minor_us + major_us))
     gc_pct=$(awk -v gc="$gc_us" -v wall="${wall_s:-0}" \
         'BEGIN { if (wall > 0) printf "%.6f", gc / (wall * 10000); else print "nan" }')
     binary_sha=$(sha256sum "$fixture" | awk '{print $1}')
