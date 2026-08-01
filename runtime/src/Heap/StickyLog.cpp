@@ -7,11 +7,27 @@
 #include "StickyLog.h"
 
 #include <cerrno>
+#include <climits>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <vector>
+#if defined(__linux__) || defined(__OHOS__)
+#include <elf.h>
+#include <fcntl.h>
+#include <link.h>
+#include <sys/mman.h>
+#include <sys/stat.h>
+#include <unistd.h>
+#elif defined(_WIN32)
+#include <windows.h>
+#include <psapi.h>
+#elif defined(__APPLE__)
+#include <mach-o/dyld.h>
+#include <mach-o/loader.h>
+#include <mach-o/nlist.h>
+#endif
 
 #include "Allocator/MemMap.h"
 #include "Allocator/RegionInfo.h"
@@ -83,48 +99,261 @@ size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
     return static_cast<size_t>(parsed);
 }
 
-// Sticky minor remset is only complete when the main managed executable embeds the
-// compiler sticky-logged-map consumer (`__cj_sticky_logged_base`). Runtime defines
-// that symbol; scanning /proc/self/exe (not the runtime DSO) detects consumer code.
+// Sticky minor is only sound when *some* already-mapped object *consumes*
+// `__cj_sticky_logged_base` (compiler barrier lowering emits UND references).
+// Runtime itself *defines* the symbol, so a raw byte scan of any loaded image
+// that includes the runtime DSO is a permanent false positive, and a scan of
+// only /proc/self/exe is a false negative when the consumer lives in a .so
+// (the normal --dy-std shape). Ask the process-wide question via the dynamic
+// symbol table: look for an undefined reference, never a definition.
 // Missing consumer + fast minor ⇒ unreclaimed live young objects (L355 bare rc139).
-// StickyLog.cpp:ConfigureMinorFromEnvironment / Heap.cpp:190-193
-bool MainExecutableHasStickyConsumer()
+static constexpr char kStickyConsumerSym[] = "__cj_sticky_logged_base";
+
+#if defined(__linux__) || defined(__OHOS__)
+bool FileHasStickyConsumerUnd(const char* path)
 {
-    FILE* file = std::fopen("/proc/self/exe", "rb");
-    if (file == nullptr) {
+    if (path == nullptr || path[0] == '\0') {
         return false;
     }
-    static constexpr char needle[] = "__cj_sticky_logged_base";
-    static constexpr size_t needleLen = sizeof(needle) - 1;
-    static constexpr size_t chunkSize = 1 << 20;
-    std::vector<char> buf(chunkSize + needleLen);
-    size_t carry = 0;
+    int fd = ::open(path, O_RDONLY | O_CLOEXEC);
+    if (fd < 0) {
+        return false;
+    }
+    struct stat st {};
+    if (::fstat(fd, &st) != 0 || st.st_size <= 0) {
+        ::close(fd);
+        return false;
+    }
+    size_t fileSize = static_cast<size_t>(st.st_size);
+    void* mapped = ::mmap(nullptr, fileSize, PROT_READ, MAP_PRIVATE, fd, 0);
+    ::close(fd);
+    if (mapped == MAP_FAILED) {
+        return false;
+    }
     bool found = false;
-    while (!found) {
-        size_t n = std::fread(buf.data() + carry, 1, chunkSize, file);
-        if (n == 0) {
-            break;
+    auto* base = static_cast<const uint8_t*>(mapped);
+    if (fileSize < sizeof(ElfW(Ehdr))) {
+        ::munmap(mapped, fileSize);
+        return false;
+    }
+    auto* ehdr = reinterpret_cast<const ElfW(Ehdr)*>(base);
+    if (std::memcmp(ehdr->e_ident, ELFMAG, SELFMAG) != 0) {
+        ::munmap(mapped, fileSize);
+        return false;
+    }
+    if (ehdr->e_shoff == 0 || ehdr->e_shentsize != sizeof(ElfW(Shdr)) ||
+        static_cast<size_t>(ehdr->e_shoff) + static_cast<size_t>(ehdr->e_shnum) * sizeof(ElfW(Shdr)) > fileSize) {
+        ::munmap(mapped, fileSize);
+        return false;
+    }
+    auto* shdrs = reinterpret_cast<const ElfW(Shdr)*>(base + ehdr->e_shoff);
+    for (ElfW(Half) i = 0; i < ehdr->e_shnum && !found; ++i) {
+        const ElfW(Shdr)& sec = shdrs[i];
+        if (sec.sh_type != SHT_DYNSYM && sec.sh_type != SHT_SYMTAB) {
+            continue;
         }
-        size_t total = carry + n;
-        for (size_t i = 0; i + needleLen <= total; ++i) {
-            if (std::memcmp(buf.data() + i, needle, needleLen) == 0) {
+        if (sec.sh_entsize != sizeof(ElfW(Sym)) || sec.sh_link >= ehdr->e_shnum) {
+            continue;
+        }
+        const ElfW(Shdr)& strSec = shdrs[sec.sh_link];
+        if (strSec.sh_type != SHT_STRTAB ||
+            static_cast<size_t>(strSec.sh_offset) + static_cast<size_t>(strSec.sh_size) > fileSize ||
+            static_cast<size_t>(sec.sh_offset) + static_cast<size_t>(sec.sh_size) > fileSize) {
+            continue;
+        }
+        auto* strtab = reinterpret_cast<const char*>(base + strSec.sh_offset);
+        size_t strSize = static_cast<size_t>(strSec.sh_size);
+        size_t nSym = static_cast<size_t>(sec.sh_size) / sizeof(ElfW(Sym));
+        auto* syms = reinterpret_cast<const ElfW(Sym)*>(base + sec.sh_offset);
+        for (size_t s = 0; s < nSym; ++s) {
+            if (syms[s].st_name == 0 || syms[s].st_name >= strSize) {
+                continue;
+            }
+            // Only UND: a defined symbol is the runtime provider, not a consumer.
+            if (syms[s].st_shndx != SHN_UNDEF) {
+                continue;
+            }
+            const char* name = strtab + syms[s].st_name;
+            if (std::strcmp(name, kStickyConsumerSym) == 0) {
                 found = true;
                 break;
             }
         }
-        if (found || n < chunkSize) {
-            break;
-        }
-        if (needleLen > 1) {
-            std::memmove(buf.data(), buf.data() + total - (needleLen - 1), needleLen - 1);
-            carry = needleLen - 1;
-        } else {
-            carry = 0;
-        }
     }
-    std::fclose(file);
+    ::munmap(mapped, fileSize);
     return found;
 }
+
+struct ConsumerScan {
+    bool found;
+};
+
+int InspectLoadedForConsumer(struct dl_phdr_info* info, size_t, void* data)
+{
+    auto* scan = static_cast<ConsumerScan*>(data);
+    if (info == nullptr) {
+        return 0;
+    }
+    char pathBuf[PATH_MAX];
+    const char* path = info->dlpi_name;
+    if (path == nullptr || path[0] == '\0') {
+        // Main executable: dlpi_name is empty; resolve via /proc/self/exe.
+        ssize_t n = ::readlink("/proc/self/exe", pathBuf, sizeof(pathBuf) - 1);
+        if (n <= 0) {
+            return 0;
+        }
+        pathBuf[n] = '\0';
+        path = pathBuf;
+    }
+    if (FileHasStickyConsumerUnd(path)) {
+        scan->found = true;
+        return 1; // stop iteration
+    }
+    return 0;
+}
+
+// Process-wide: true iff any currently mapped ELF has an UND ref to the sticky consumer.
+bool ProcessHasStickyConsumer()
+{
+    ConsumerScan scan = {false};
+    (void)dl_iterate_phdr(InspectLoadedForConsumer, &scan);
+    return scan.found;
+}
+#elif defined(_WIN32)
+bool FileHasStickyConsumerUnd(const char* path)
+{
+    // PE has no direct ELF UND analogue we can cheaply scan here. Keep the historical
+    // fail-safe: if we cannot prove a consumer, report none (major-only).
+    (void)path;
+    return false;
+}
+
+bool ProcessHasStickyConsumer()
+{
+    HANDLE process = GetCurrentProcess();
+    DWORD needed = 0;
+    if (EnumProcessModules(process, nullptr, 0, &needed) == 0 || needed == 0) {
+        return false;
+    }
+    std::vector<HMODULE> modules(needed / sizeof(HMODULE));
+    if (EnumProcessModules(process, modules.data(), static_cast<DWORD>(modules.size() * sizeof(HMODULE)),
+                           &needed) == 0) {
+        return false;
+    }
+    for (HMODULE module : modules) {
+        char path[MAX_PATH];
+        DWORD written = GetModuleFileNameA(module, path, static_cast<DWORD>(sizeof(path)));
+        if (written == 0 || written >= sizeof(path) - 1) {
+            continue;
+        }
+        // On Windows the consumer shows up as an import of the sticky symbol from
+        // the runtime DLL. Walk the import table for the name.
+        auto* base = reinterpret_cast<const uint8_t*>(module);
+        auto* dos = reinterpret_cast<const IMAGE_DOS_HEADER*>(base);
+        if (dos->e_magic != IMAGE_DOS_SIGNATURE) {
+            continue;
+        }
+        auto* nt = reinterpret_cast<const IMAGE_NT_HEADERS*>(base + dos->e_lfanew);
+        if (nt->Signature != IMAGE_NT_SIGNATURE) {
+            continue;
+        }
+        const IMAGE_DATA_DIRECTORY& impDir =
+            nt->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_IMPORT];
+        if (impDir.VirtualAddress == 0) {
+            continue;
+        }
+        auto* imp = reinterpret_cast<const IMAGE_IMPORT_DESCRIPTOR*>(base + impDir.VirtualAddress);
+        for (; imp->Name != 0; ++imp) {
+            auto* thunk = reinterpret_cast<const IMAGE_THUNK_DATA*>(
+                base + (imp->OriginalFirstThunk ? imp->OriginalFirstThunk : imp->FirstThunk));
+            for (; thunk->u1.AddressOfData != 0; ++thunk) {
+                if (IMAGE_SNAP_BY_ORDINAL(thunk->u1.Ordinal)) {
+                    continue;
+                }
+                auto* ibn = reinterpret_cast<const IMAGE_IMPORT_BY_NAME*>(base + thunk->u1.AddressOfData);
+                if (std::strcmp(reinterpret_cast<const char*>(ibn->Name), kStickyConsumerSym) == 0) {
+                    return true;
+                }
+            }
+        }
+    }
+    return false;
+}
+#elif defined(__APPLE__)
+bool FileHasStickyConsumerUnd(const char* path)
+{
+    (void)path;
+    return false;
+}
+
+bool ProcessHasStickyConsumer()
+{
+    // Walk loaded images' symbol tables for an undefined sticky consumer.
+    uint32_t count = _dyld_image_count();
+    for (uint32_t i = 0; i < count; ++i) {
+        const struct mach_header* mh = _dyld_get_image_header(i);
+        if (mh == nullptr) {
+            continue;
+        }
+        bool is64 = mh->magic == MH_MAGIC_64 || mh->magic == MH_CIGAM_64;
+        const uint8_t* base = reinterpret_cast<const uint8_t*>(mh);
+        const uint8_t* cursor = base + (is64 ? sizeof(struct mach_header_64) : sizeof(struct mach_header));
+        uint32_t ncmds = mh->ncmds;
+        const char* strtab = nullptr;
+        size_t strSize = 0;
+        const void* symtab = nullptr;
+        uint32_t nsyms = 0;
+        size_t symEnt = is64 ? sizeof(struct nlist_64) : sizeof(struct nlist);
+        for (uint32_t c = 0; c < ncmds; ++c) {
+            auto* cmd = reinterpret_cast<const struct load_command*>(cursor);
+            if (cmd->cmd == LC_SYMTAB) {
+                auto* st = reinterpret_cast<const struct symtab_command*>(cursor);
+                strtab = reinterpret_cast<const char*>(base + st->stroff);
+                strSize = st->strsize;
+                symtab = base + st->symoff;
+                nsyms = st->nsyms;
+            }
+            cursor += cmd->cmdsize;
+        }
+        if (strtab == nullptr || symtab == nullptr) {
+            continue;
+        }
+        for (uint32_t s = 0; s < nsyms; ++s) {
+            uint32_t strx;
+            uint8_t nType;
+            if (is64) {
+                auto* nl = reinterpret_cast<const struct nlist_64*>(symtab) + s;
+                strx = nl->n_un.n_strx;
+                nType = nl->n_type;
+            } else {
+                auto* nl = reinterpret_cast<const struct nlist*>(symtab) + s;
+                strx = nl->n_un.n_strx;
+                nType = nl->n_type;
+            }
+            if (strx == 0 || strx >= strSize) {
+                continue;
+            }
+            // Undefined external: N_EXT set, N_TYPE bits clear (N_UNDF).
+            if ((nType & N_TYPE) != N_UNDF || (nType & N_EXT) == 0) {
+                continue;
+            }
+            const char* name = strtab + strx;
+            // Mach-O C symbols are typically underscore-prefixed.
+            if (std::strcmp(name, kStickyConsumerSym) == 0 ||
+                (name[0] == '_' && std::strcmp(name + 1, kStickyConsumerSym) == 0)) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+#else
+bool ProcessHasStickyConsumer()
+{
+    // No module enumeration: fail-safe to "no consumer" so minor stays off.
+    return false;
+}
+#endif
 } // namespace
 
 StickyLog& StickyLog::Instance() noexcept { return *g_stickyLog; }
@@ -134,7 +363,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
     // Product default ON (0.0.2 form A). Exact MRT_STICKY_MINOR=0 is the escape hatch.
     const char* minorEnv = std::getenv("MRT_STICKY_MINOR");
     const bool envExplicitOff = minorEnv != nullptr && strcmp(minorEnv, "0") == 0;
-    minorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR", true);
+    minorEnabled.store(ReadStickyBoolean("MRT_STICKY_MINOR", true), std::memory_order_relaxed);
     minorValidatorEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_VALIDATE", false);
     forceSlowPathEnabled = ReadStickyBoolean("MRT_STICKY_MINOR_FORCE_SLOW_PATH", false);
     youngBytesThreshold = ReadStickyPositiveInteger("MRT_STICKY_MINOR_YOUNG_BYTES", DEFAULT_YOUNG_BYTES);
@@ -151,23 +380,42 @@ void StickyLog::ConfigureMinorFromEnvironment()
     evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 0),
                                    static_cast<size_t>(100));
     evacuationMaxRegions = ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_MAX_REGIONS", 8);
-    // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
-    // reclaims live young objects. Prefer disable minor over force-slow: force-slow is
-    // a harness that still aborts under this load; major-only matches sticky0 green path.
-    // Does not claim full sticky product closure (see REPORT-stickyclosure.md).
+    // Fail-safe (L355 / stdiofd): fast sticky minor with empty remset reclaims live
+    // young objects. Prefer disable minor over force-slow. Ask the *process* whether
+    // any mapped object consumes the sticky map — not just /proc/self/exe, and not
+    // via a raw byte scan that confuses the runtime's own definition for a consumer.
     const char* mode = "on(default)";
+    const bool minorOn = minorEnabled.load(std::memory_order_relaxed);
     if (envExplicitOff) {
         mode = "off(env)";
-    } else if (minorEnabled && !forceSlowPathEnabled && !MainExecutableHasStickyConsumer()) {
-        minorEnabled = false;
+    } else if (minorOn && !forceSlowPathEnabled && !ProcessHasStickyConsumer()) {
+        minorEnabled.store(false, std::memory_order_relaxed);
         mode = "auto-disabled(no consumer)";
         LOG(RTLOG_WARNING,
-            "sticky minor on by default but main executable has no sticky barrier consumer "
-            "(__cj_sticky_logged_base); disabling sticky minor to avoid incorrect young "
-            "reclamation (use a sticky-lowered main binary, or MRT_STICKY_MINOR=0 / "
+            "sticky minor on by default but no loaded object has a sticky barrier consumer "
+            "(__cj_sticky_logged_base UND); disabling sticky minor to avoid incorrect young "
+            "reclamation (use a sticky-lowered main or std, or MRT_STICKY_MINOR=0 / "
             "MRT_STICKY_MINOR_FORCE_SLOW_PATH=1)");
     }
     LOG(RTLOG_INFO, "sticky minor: %s", mode);
+}
+
+// Init-time answer only covers objects mapped then. LoadCJLibrary can add a
+// managed participant afterwards; re-ask, and only ever disable (cannot prove
+// every write since the load was logged).
+void StickyLog::RevalidateConsumerAfterLibraryLoad(const char* libName)
+{
+    if (!minorEnabled.load(std::memory_order_relaxed) || forceSlowPathEnabled) {
+        return;
+    }
+    if (ProcessHasStickyConsumer()) {
+        return;
+    }
+    // Still no consumer after the load: keep minor off. (If minor was already on
+    // because some earlier participant had a consumer, a new library without one
+    // does not revoke that — ProcessHasStickyConsumer stays true. This path only
+    // fires when the process still has zero consumers, which is a no-op disable.)
+    (void)libName;
 }
 
 void StickyLog::Init(MAddress start, size_t size)
@@ -206,7 +454,7 @@ void StickyLog::Fini() noexcept
     loggedByteCount = 0;
     dirtyRegionByteCount = 0;
     enabled = false;
-    minorEnabled = false;
+    minorEnabled.store(false, std::memory_order_relaxed);
     minorValidatorEnabled = false;
     forceSlowPathEnabled = false;
 }

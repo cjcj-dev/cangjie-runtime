@@ -23,6 +23,7 @@
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/StickyLog.h"
 #include "RuntimeConfig.h"
 #include "UnwindStack/MangleNameHelper.h"
 #include "Loader/CjFileLoader/CjFileLoader.h"

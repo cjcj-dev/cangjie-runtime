@@ -7,6 +7,7 @@
 #ifndef MRT_STICKY_LOG_H
 #define MRT_STICKY_LOG_H
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 
@@ -33,10 +34,14 @@ public:
     void Init(MAddress heapStart, size_t heapSize);
     void Fini() noexcept;
     void ConfigureMinorFromEnvironment();
+    // Init-time answer covers objects mapped at Heap::Init. A later LoadCJLibrary can
+    // add a managed participant; re-ask then. Only ever disables (fail-safe / L355).
+    __attribute__((visibility("hidden")))
+    void RevalidateConsumerAfterLibraryLoad(const char* libName);
 
     void Enable(bool value) { enabled = value; }
     bool IsEnabled() const { return enabled; }
-    bool IsMinorEnabled() const { return minorEnabled; }
+    bool IsMinorEnabled() const { return minorEnabled.load(std::memory_order_relaxed); }
     bool IsMinorValidatorEnabled() const { return minorValidatorEnabled; }
     bool IsForceSlowPathEnabled() const { return forceSlowPathEnabled; }
     size_t GetYoungBytesThreshold() const { return youngBytesThreshold; }
@@ -65,7 +70,8 @@ private:
     size_t loggedByteCount = 0;
     size_t dirtyRegionByteCount = 0;
     bool enabled = false;
-    bool minorEnabled = false;
+    // Atomic: RevalidateConsumerAfterLibraryLoad may clear it from a loader thread.
+    std::atomic<bool> minorEnabled{ false };
     bool minorValidatorEnabled = false;
     bool forceSlowPathEnabled = false;
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
