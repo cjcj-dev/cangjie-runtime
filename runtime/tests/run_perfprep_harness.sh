@@ -15,6 +15,8 @@ Options:
   --rounds N                repeated main arm-A rounds (default: 5, minimum: 5)
   --jobs N                  compiler jobs and apc (default: 8)
   --timeout SEC             timeout for one round (default: 600)
+  --package RELPATH         package source relative to each root
+                            (default: packages/option/src)
   --marker LINE             required exact MEASURE_ACTIVE line
   --main-bin FILE           sticky-consumer compiler
   --control-bin FILE        compiler without a sticky consumer
@@ -25,7 +27,7 @@ Options:
   --control-root DIR        no-consumer corpus source root
   --control-import DIR      no-consumer corpus import root
 
-The fixed corpus is packages/basic/src compiled as a static library. The
+The fixed corpus is packages/option/src compiled as a static library. The
 schedule is main A1, main B1, no-consumer A1, no-consumer B1, then main
 A2..AN. A means MRT_STICKY_MINOR=1; B means MRT_STICKY_MINOR=0.
 EOF
@@ -62,6 +64,7 @@ cores=48-63
 rounds=5
 jobs=8
 round_timeout=600
+package='packages/option/src'
 marker='perfprep cores=48-63 KIND=build'
 main_bin='/root/fleet/CJCJ/cjcj::cjc'
 control_bin='/root/onsoak-20260728-4d909/cjcj/target/release/bin/cjcj::cjc'
@@ -79,6 +82,7 @@ while (($#)); do
         --rounds) rounds=${2:-}; shift 2 ;;
         --jobs) jobs=${2:-}; shift 2 ;;
         --timeout) round_timeout=${2:-}; shift 2 ;;
+        --package) package=${2:-}; shift 2 ;;
         --marker) marker=${2:-}; shift 2 ;;
         --main-bin) main_bin=${2:-}; shift 2 ;;
         --control-bin) control_bin=${2:-}; shift 2 ;;
@@ -98,6 +102,7 @@ done
 [[ "$rounds" =~ ^[0-9]+$ && "$rounds" -ge 5 ]] || die '--rounds must be at least 5'
 [[ "$jobs" =~ ^[0-9]+$ && "$jobs" -gt 0 ]] || die '--jobs must be positive'
 [[ "$round_timeout" =~ ^[0-9]+$ && "$round_timeout" -gt 0 ]] || die '--timeout must be positive'
+[[ "$package" != /* && "$package" != *..* ]] || die '--package must be a safe relative path'
 grep -q -x -F "$marker" /dev/shm/MEASURE_ACTIVE 2>/dev/null || die "missing marker line: $marker"
 
 runtime_so="$runtime_dir/libcangjie-runtime.so"
@@ -107,8 +112,8 @@ done
 for file in "$main_bin" "$control_bin"; do
     [[ -x "$file" ]] || die "compiler is not executable: $file"
 done
-for dir in "$sdk" "$main_root/packages/basic/src" "$main_import" \
-    "$control_root/packages/basic/src" "$control_import"; do
+for dir in "$sdk" "$main_root/$package" "$main_import" \
+    "$control_root/$package" "$control_import"; do
     [[ -d "$dir" ]] || die "missing input directory: $dir"
 done
 
@@ -173,8 +178,8 @@ run_one()
     mkdir -p "$run_dir"
     {
         printf 'cd %q\n' "$root"
-        printf 'nice -n 15 taskset -c %q timeout %q env MRT_STICKY_MINOR=%q <frozen compiler> --package packages/basic/src --module-name cjcj --import-path %q --output-type=staticlib -o %q --jobs %q --apc=%q\n' \
-            "$cores" "$round_timeout" "$sticky" "$import" "$artifact" "$jobs" "$jobs"
+        printf 'nice -n 15 taskset -c %q timeout %q env MRT_STICKY_MINOR=%q <frozen compiler> --package %q --module-name cjcj --import-path %q --output-type=staticlib -o %q --jobs %q --apc=%q\n' \
+            "$cores" "$round_timeout" "$sticky" "$package" "$import" "$artifact" "$jobs" "$jobs"
     } > "$run_dir/command.txt"
 
     local launcher_pid rc=0 observed_pid='' actual_exe='UNOBSERVED' actual_sha='UNOBSERVED'
@@ -188,7 +193,7 @@ run_one()
             CANGJIE_HOME="$sdk" LD_LIBRARY_PATH="$ld_path" cjHeapSize=24GB \
             MRT_STICKY_MINOR="$sticky" MRT_REPORT="$report_log" \
             MRT_LOG_PATH="$runtime_log" MRT_LOG_LEVEL=i \
-            "$compiler" --package packages/basic/src --module-name cjcj \
+            "$compiler" --package "$package" --module-name cjcj \
             --import-path "$import" --output-type=staticlib -o "$artifact" \
             --jobs "$jobs" --apc="$jobs" > "$run_dir/stdout.log" 2> "$run_dir/stderr.log"
     ) &
@@ -269,7 +274,8 @@ run_one()
         "$gc_pct" "$minor" "$major" "${maxrss_kb:-MISSING}" "$compiler_sha" "$runtime_sha" \
         "$artifact_sha" "${mode:-MISSING}" "$actual_exe" "${cpus_allowed:-MISSING}" "$run_dir" | tee -a "$results"
 
-    rm -f "$artifact" "$run_dir/out.cjo" "$run_dir/basic@cjcj.cjo"
+    package_name=$(basename "$(dirname "$package")")
+    rm -f "$artifact" "$run_dir/out.cjo" "$run_dir/$package_name@cjcj.cjo"
 }
 
 run_one main A 1 1
