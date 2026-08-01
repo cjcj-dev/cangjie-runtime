@@ -446,30 +446,37 @@ za, zb = 1.96, 0.8416
 def power_n(pct):
     return math.ceil(2 * (za + zb) ** 2 * (use_cv / pct) ** 2)
 
-# ratio claim only if measure/stopwindow + flow + freq
-flow = "ok"
+# apparatus flow: valid rounds + young direction + single binary
+apparatus = "ok"
 if invalid or not off_ok or not on_ok or cjc_unique != 1 or rt_unique != 1:
-    flow = "fail"
+    apparatus = "fail"
 if on_young <= 0 or off_young != 0:
-    flow = "fail"
+    apparatus = "fail"
 freq_ok = freq_delta_pct == freq_delta_pct and freq_delta_pct <= 5.0
-if not freq_ok:
-    flow = "fail" if flow == "ok" else flow
-    freq_tag = "INVALID_FREQ_IMBALANCE"
+freq_tag = "FREQ_BALANCED" if freq_ok else "INVALID_FREQ_IMBALANCE"
+# dryrun: apparatus only (FREQ reported, not gating). measure/stopwindow: FREQ gates ratio.
+if mode == "dryrun":
+    flow = apparatus
 else:
-    freq_tag = "FREQ_BALANCED"
+    flow = "ok" if apparatus == "ok" and freq_ok else "fail"
 
 ratio = float("nan")
 if off_walls and on_walls:
-    # use median
     med_off = statistics.median(off_walls)
     med_on = statistics.median(on_walls)
     if med_on > 0:
         ratio = med_off / med_on - 1.0
 
+# seed power from harnessfix if N_walls < 3
+seed_cv = 0.02322
+power_cv = use_cv if len(cv_walls) >= 3 else seed_cv
+def power_n2(pct, c=power_cv):
+    return math.ceil(2 * (za + zb) ** 2 * (c / pct) ** 2)
+
 lines = []
 lines.append(f"MODE={mode}")
 lines.append("SAME_BINARY=yes")
+lines.append(f"APPARATUS={apparatus}")
 lines.append(f"FLOW={flow}")
 lines.append(f"INVALID={invalid}")
 lines.append(f"OFF_OK={len(off_ok)} ON_OK={len(on_ok)}")
@@ -478,23 +485,27 @@ lines.append(f"CJC_UNIQUE={cjc_unique} RT_UNIQUE={rt_unique}")
 lines.append(f"FREQ_MEAN_OFF_{freq_off:.3f}_ON_{freq_on:.3f}_DELTA_{freq_delta_pct:.3f}%")
 lines.append(f"LOAD_MEAN_OFF_{load_off:.3f}_ON_{load_on:.3f}")
 lines.append(f"FREQ_TAG={freq_tag}")
-lines.append(f"OBSERVED_CV_{cv*100 if cv==cv else float('nan'):.3f}%_SOURCE_{cv_source}_N_{len(cv_walls)}_MEAN_{mean if mean==mean else float('nan'):.3f}_SD_{sd if sd==sd else float('nan'):.3f}")
-lines.append(f"POWER_N_for_5pct_{power_n(0.05)}_10pct_{power_n(0.10)}_20pct_{power_n(0.20)}")
+cv_pct = cv * 100 if cv == cv else float("nan")
+mean_s = mean if mean == mean else float("nan")
+sd_s = sd if sd == sd else float("nan")
+lines.append(f"OBSERVED_CV_{cv_pct:.3f}%_SOURCE_{cv_source}_N_{len(cv_walls)}_MEAN_{mean_s:.3f}_SD_{sd_s:.3f}")
+lines.append(f"POWER_N_for_5pct_{power_n2(0.05)}_10pct_{power_n2(0.10)}_20pct_{power_n2(0.20)}_CV_USED_{power_cv:.5f}")
 lines.append("DISCLAIMER=dryrun_numbers_are_NOT_performance_conclusions")
 lines.append("ABSOLUTE_WALL=non-stopwindow under schedutil; not for release absolute claims")
 if mode == "dryrun":
-    lines.append(f"DRYRUN_OK={'yes' if flow=='ok' else 'no'}")
+    lines.append(f"DRYRUN_OK={'yes' if apparatus=='ok' else 'no'}")
     lines.append("RATIO_CLAIM=forbidden_in_dryrun")
+    if not freq_ok:
+        lines.append("NOTE=FREQ_IMBALANCE_observed_would_void_ratio_batch")
 elif mode in ("measure", "stopwindow"):
-    if flow == "ok" and ratio == ratio:
+    if apparatus == "ok" and freq_ok and ratio == ratio:
         clear = "yes" if ratio >= 0.05 else "no"
         lines.append(f"RATIO_MEDIAN_OFF_over_ON_minus1={ratio:.6f}")
         lines.append(f"CLEAR_IMPROVEMENT_PREREG={clear}")
     else:
-        lines.append("RATIO_CLAIM=blocked_flow_or_freq")
-# stop window estimate for final absolute: pairs * 2 * ~22min + overhead
-pairs = max((int(r.get("pair") or 0) for r in rows), default=0)
-est_min = pairs * 2 * 22 + 10
+        lines.append("RATIO_CLAIM=blocked_apparatus_or_freq")
+# final absolute stopwindow: planned 5 pairs * 2 arms * ~22min + overhead
+est_min = 5 * 2 * 22 + 10
 lines.append(f"STOP_WINDOW_FOR_FINAL_ONLY_{est_min}")
 text = "\n".join(lines) + "\n"
 Path(summary_path).write_text(text)
