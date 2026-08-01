@@ -197,6 +197,10 @@ private:
     void TraceYoungClosure(WorkStack& workStack);
     void RescanRememberedSet(WorkStack& workStack);
     void ValidateYoungMarking();
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    // Independent post-minor checkmark (MRT_GC_CHECKMARK). Observational only.
+    void CheckmarkYoungMarking(const std::vector<BaseObject*>& allocationRoots);
+#endif
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
