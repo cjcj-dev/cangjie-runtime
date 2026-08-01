@@ -400,9 +400,9 @@ void StickyLog::ConfigureMinorFromEnvironment()
     LOG(RTLOG_INFO, "sticky minor: %s", mode);
 }
 
-// Init-time answer only covers objects mapped then. LoadCJLibrary can add a
-// managed participant afterwards; re-ask, and only ever disable (cannot prove
-// every write since the load was logged).
+// Init-time answer only covers objects mapped then. LoadCJLibrary can change the
+// set of participants; re-ask. Only ever disables (L355): re-enabling would need
+// proof that every write since the load was logged, which nothing here has.
 void StickyLog::RevalidateConsumerAfterLibraryLoad(const char* libName)
 {
     if (!minorEnabled.load(std::memory_order_relaxed) || forceSlowPathEnabled) {
@@ -411,11 +411,12 @@ void StickyLog::RevalidateConsumerAfterLibraryLoad(const char* libName)
     if (ProcessHasStickyConsumer()) {
         return;
     }
-    // Still no consumer after the load: keep minor off. (If minor was already on
-    // because some earlier participant had a consumer, a new library without one
-    // does not revoke that — ProcessHasStickyConsumer stays true. This path only
-    // fires when the process still has zero consumers, which is a no-op disable.)
-    (void)libName;
+    minorEnabled.store(false, std::memory_order_relaxed);
+    LOG(RTLOG_WARNING,
+        "after loading managed library %s no loaded object has a sticky barrier consumer "
+        "(__cj_sticky_logged_base UND); disabling sticky minor from here on "
+        "(sticky minor: auto-disabled(no consumer, late load))",
+        libName == nullptr ? "<unnamed>" : libName);
 }
 
 void StickyLog::Init(MAddress start, size_t size)
