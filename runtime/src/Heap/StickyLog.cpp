@@ -204,16 +204,6 @@ bool InspectElfStickyFacts(const char* path, bool& hasCjMetadata, bool& hasStick
     return true;
 }
 
-bool FileHasStickyConsumerUnd(const char* path)
-{
-    bool hasMeta = false;
-    bool hasUnd = false;
-    if (!InspectElfStickyFacts(path, hasMeta, hasUnd)) {
-        return false;
-    }
-    return hasUnd;
-}
-
 struct ConsumerScan {
     // all-predicate accumulators (Linux/OHOS).
     bool ok;              // still true so far; false ⇒ fail-closed
