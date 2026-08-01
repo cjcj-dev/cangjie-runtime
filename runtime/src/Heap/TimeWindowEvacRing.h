@@ -14,12 +14,13 @@
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
-// timewindow measure: lock-free ring of CopyObject from-addresses.
-// Observation only. 1M slots (proven SEGV shape; larger durable sets
-// shifted timing into unrelated CHECK abort paths).
+// timewindow measure: ring of *minor evacuation* from-addresses only.
+// (All-CopyObject flooded 5.7M/process and wrapped a 1M ring; large durable
+// sets shifted timing into unrelated aborts. Sticky minor is the known surface.)
+// Observation only — never consulted to rewrite references.
 class TimeWindowEvacRing {
 public:
-    static constexpr size_t CAP = 1u << 20; // 1M
+    static constexpr size_t CAP = 1u << 18; // 256K minor-evac slots (>> typical minor copy count)
 
     struct Entry {
         uintptr_t from = 0;
@@ -30,6 +31,7 @@ public:
 
     static TimeWindowEvacRing& Instance() noexcept;
 
+    // Call only from EvacuateYoungRegions after CopyObject (minor path).
     void Record(BaseObject* from, BaseObject* to, size_t size) noexcept;
     bool Lookup(uintptr_t addr, Entry* out) const noexcept;
 

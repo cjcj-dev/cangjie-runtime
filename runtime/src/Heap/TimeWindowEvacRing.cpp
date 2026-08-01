@@ -45,13 +45,9 @@ bool TimeWindowEvacRing::Lookup(uintptr_t addr, Entry* out) const noexcept
     if (total == 0) {
         return false;
     }
-    // Cap scan to last 64K newest entries in signal path (AS-safe budget).
-    // Positive hit in recent window is decisive; full 1M scan is too heavy here.
-    constexpr size_t kSigScan = 1u << 16;
     const size_t n = total < CAP ? static_cast<size_t>(total) : CAP;
-    const size_t scan = n < kSigScan ? n : kSigScan;
     const uint64_t seq = seq_.load(std::memory_order_relaxed);
-    for (size_t i = 0; i < scan; ++i) {
+    for (size_t i = 0; i < n; ++i) {
         const uint64_t idx = (seq - 1 - i) & (CAP - 1);
         const Entry& e = slots_[idx];
         if (e.from == 0 || e.size == 0) {

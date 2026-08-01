@@ -19,6 +19,7 @@
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Heap/StickyLog.h"
+#include "Heap/TimeWindowEvacRing.h"
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "securec.h"
 
@@ -1416,6 +1417,8 @@ void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::
                              fromRegion, toRegion, fromObject, size);
                 BaseObject* toObject = reinterpret_cast<BaseObject*>(toAddress);
                 CopyObject(*fromObject, *toObject, size);
+                // timewindow measure: minor-evac only (all-CopyObject floods wrap).
+                TimeWindowEvacRing::Instance().Record(fromObject, toObject, size);
                 toObject->SetStateCode(ObjectState::NORMAL);
                 auto inserted = forwarding.emplace(fromObject, toObject);
                 CHECK_DETAIL(inserted.second,

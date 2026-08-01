@@ -12,7 +12,6 @@
 #include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
-#include "Heap/TimeWindowEvacRing.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -49,9 +48,6 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     // producers (ForwardObjectExclusive + CompactRegion×3) funnel here.
     // Aborted paths never reach this point (no half entry).
     ForwardFactTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
-    // timewindow measure: durable ring of evacuated from-addresses (survives
-    // ForwardFactTable::Clear). Observation only; no behavior change.
-    TimeWindowEvacRing::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
