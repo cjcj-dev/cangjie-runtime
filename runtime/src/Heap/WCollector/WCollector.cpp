@@ -2030,16 +2030,27 @@ void WCollector::DoGarbageCollection()
 #endif
     GetGCStats().lastCollectionWasYoung = false;
 
-    if (stickyLog.IsMinorEnabled()) {
-        ScopedStopTheWorld stw("sticky major allocation rollover");
-        FlushAllocationRegions();
-        // With every allocation buffer flushed, each region's allocPtr is the
-        // exact frontier between objects the imminent SATB snapshot will
-        // census and objects born during the cycle. PromoteAllRegions later
-        // limits the retained census's bitmap authority to this boundary; the
-        // tracer, its mark bitmap, and the weak/finalizer machinery are not
-        // involved at any point (no allocate-black).
-        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().StampCensusBoundaries();
+    if (stickyLog.IsEnabled()) {
+        ScopedStopTheWorld stw("sticky major epoch rollover");
+        if (stickyLog.IsMinorEnabled()) {
+            FlushAllocationRegions();
+            // With every allocation buffer flushed, each region's allocPtr is the
+            // exact frontier between objects the imminent SATB snapshot will
+            // census and objects born during the cycle. PromoteAllRegions later
+            // limits the retained census's bitmap authority to this boundary; the
+            // tracer, its mark bitmap, and the weak/finalizer machinery are not
+            // involved at any point (no allocate-black).
+            reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().StampCensusBoundaries();
+        }
+        size_t flushedStickyNodes = 0;
+        MutatorManager::Instance().VisitAllMutators([&flushedStickyNodes](Mutator& mutator) {
+            if (mutator.FlushStickyLogNodeForEpoch()) {
+                ++flushedStickyNodes;
+            }
+        });
+        VLOG(REPORT, "[StickyEpoch] flushed_sticky_tls_nodes=%zu", flushedStickyNodes);
+        SatbBuffer::Instance().DiscardStickyLogBuffer();
+        stickyLog.BeginEpoch();
     }
     TraceHeap();
     PostTrace();
@@ -2048,26 +2059,14 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
 
-    // R1 bulk rewrite + fact lifetime end + sticky epoch + leave FORWARD share one
-    // STW (gcsm05 F2/F5): mutators must not run ForwardBarrier after fact clear,
-    // and sticky TLS nodes must flush before BeginEpoch clears the bitmap.
+    // R1 bulk rewrite + fact lifetime end + leave FORWARD share one STW
+    // (gcsm05 F2/F5): mutators must not run ForwardBarrier after fact clear.
     {
         ScopedStopTheWorld stw("bulk forward, sticky epoch, leave forward");
         // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
         // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
         BulkForwardHolderRefs();
 
-        if (StickyLog::Instance().IsEnabled()) {
-            size_t flushedStickyNodes = 0;
-            MutatorManager::Instance().VisitAllMutators([&flushedStickyNodes](Mutator& mutator) {
-                if (mutator.FlushStickyLogNodeForEpoch()) {
-                    ++flushedStickyNodes;
-                }
-            });
-            VLOG(REPORT, "[StickyEpoch] flushed_sticky_tls_nodes=%zu", flushedStickyNodes);
-            SatbBuffer::Instance().DiscardStickyLogBuffer();
-            StickyLog::Instance().BeginEpoch();
-        }
         if (StickyLog::Instance().IsForceSlowPathEnabled()) {
             TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
             Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
