@@ -1417,8 +1417,6 @@ void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::
                              fromRegion, toRegion, fromObject, size);
                 BaseObject* toObject = reinterpret_cast<BaseObject*>(toAddress);
                 CopyObject(*fromObject, *toObject, size);
-                // timewindow measure: minor-evac only (all-CopyObject floods wrap).
-                TimeWindowEvacRing::Instance().Record(fromObject, toObject, size);
                 toObject->SetStateCode(ObjectState::NORMAL);
                 auto inserted = forwarding.emplace(fromObject, toObject);
                 CHECK_DETAIL(inserted.second,
@@ -1795,6 +1793,9 @@ __attribute__((visibility("hidden"))) BaseObject* WCollector::ForwardObjectExclu
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
+    // timewindow measure: only exclusive forward leaves from as FORWARDED.
+    // (All-CopyObject floods wrap; minor EvacuateYoung does not set FORWARDED.)
+    TimeWindowEvacRing::Instance().Record(obj, toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);

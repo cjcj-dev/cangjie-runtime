@@ -14,13 +14,12 @@
 #include "Common/TypeDef.h"
 
 namespace MapleRuntime {
-// timewindow measure: ring of *minor evacuation* from-addresses only.
-// (All-CopyObject flooded 5.7M/process and wrapped a 1M ring; large durable
-// sets shifted timing into unrelated aborts. Sticky minor is the known surface.)
-// Observation only — never consulted to rewrite references.
+// timewindow measure: ring of ForwardObjectExclusive from-addresses.
+// Only path that sets ObjectState::FORWARDED on from-version.
+// Observation only. CAP=1M covers major forward volume under stress.
 class TimeWindowEvacRing {
 public:
-    static constexpr size_t CAP = 1u << 18; // 256K minor-evac slots (>> typical minor copy count)
+    static constexpr size_t CAP = 1u << 20; // 1M
 
     struct Entry {
         uintptr_t from = 0;
