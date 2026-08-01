@@ -1340,8 +1340,9 @@ void WCollector::FixMinorRootSlots(const MinorForwardTable& forwarding, const Mi
 void WCollector::FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding,
                                      const MinorRegionSet& evacuatedRegions)
 {
-    ForEachStrongRefSlot(object,
-        [this, &forwarding, &evacuatedRegions](RefSlotKind, BaseObject*, RefField<>& field) {
+    CurrentPtr currentObject = UnsafeAssumeCurrent(object);
+    ForEachStrongRefSlot(currentObject,
+        [this, &forwarding, &evacuatedRegions](RefSlotKind, CurrentPtr, RefField<>& field) {
             (void)FixMinorEvacuatedSlot(field, forwarding, evacuatedRegions);
         });
 }
@@ -1434,7 +1435,8 @@ void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::
                      fromRegion, liveInfo, liveBytes, bitmapLiveBytes, recomputedLiveBytes);
         (void)fromRegion->VisitLiveObjectsUntilFalse(
             [this, fromRegion, toRegion, &forwarding, &copiedObjects, &copiedBytes](BaseObject* fromObject) {
-                size_t size = RegionSpace::GetAllocSize(*fromObject);
+                CurrentPtr currentFromObject = UnsafeAssumeCurrent(fromObject);
+                size_t size = RegionSpace::GetAllocSize(currentFromObject);
                 MAddress toAddress = toRegion->Alloc(size);
                 CHECK_DETAIL(toAddress != 0,
                              "minor evacuation to-region exhausted source=%p to=%p object=%p size=%zu",
