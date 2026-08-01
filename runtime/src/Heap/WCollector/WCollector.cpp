@@ -1623,21 +1623,37 @@ void WCollector::CheckmarkYoungMarking()
     uint64_t startNs = TimeUtil::NanoSeconds();
     std::unordered_set<BaseObject*> reachable;
     std::vector<BaseObject*> pending;
+    // remsetgap: first old→young holder (preferred) and root-only flag.
+    struct IncomingEdge {
+        BaseObject* holder = nullptr;
+        size_t slotOffset = 0;
+        RegionInfo* holderRegion = nullptr;
+        bool seenFromRoot = false;
+        bool hasOldHolder = false;
+    };
+    std::unordered_map<BaseObject*, IncomingEdge> firstIncoming;
 
-    auto pushRoot = [&pending](BaseObject* object) {
-        if (Heap::IsHeapAddress(object)) {
-            pending.push_back(object);
+    auto ensureEdge = [&firstIncoming](BaseObject* object) -> IncomingEdge& {
+        return firstIncoming[object];
+    };
+    auto pushRoot = [&pending, &ensureEdge](BaseObject* object, bool fromRoot) {
+        if (!Heap::IsHeapAddress(object)) {
+            return;
         }
+        IncomingEdge& edge = ensureEdge(object);
+        if (fromRoot) {
+            edge.seenFromRoot = true;
+        }
+        pending.push_back(object);
     };
     auto pushField = [this, &pushRoot](RefField<>& field) {
-        pushRoot(ResolveMinorReference(field));
+        pushRoot(ResolveMinorReference(field), true);
     };
     RootVisitor rawRootVisitor = [&pushField](ObjectRef& root) {
         pushField(reinterpret_cast<RefField<>&>(root));
     };
     RefFieldVisitor fieldVisitor = [&pushField](RefField<>& field) { pushField(field); };
 
-    // Major-style roots (same categories as EnumAllCommonRoots + export + finalizers).
     MutatorManager::Instance().VisitAllMutators(
         [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
@@ -1648,56 +1664,69 @@ void WCollector::CheckmarkYoungMarking()
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         for (BaseObject* object : resurrectedExportObjectes) {
-            pushRoot(object);
+            pushRoot(object, true);
         }
         for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
-            pushRoot(object);
+            pushRoot(object, true);
         }
     }
     {
         std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
         for (const auto& entry : cycleRefWorkStack) {
-            pushRoot(entry.first);
+            pushRoot(entry.first, true);
             for (BaseObject* object : entry.second) {
-                pushRoot(object);
+                pushRoot(object, true);
             }
         }
     }
-    // Alloc-buffer roots were already MergeRoots'd into the minor work stack and
-    // cleared before TraceYoungClosure; re-merge would be empty. Mutator STW roots
-    // above cover the live set that major EnumAllCommonRoots would see.
 
-    // Independent old→young edge discovery: full object walk of non-young regions.
-    // ⛔ no RescanRememberedSet, no StickyLog, no retained bitmap, no IsSurvivedObject.
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     size_t oldRegionsScanned = 0;
     size_t oldObjectsScanned = 0;
     manager.VisitOldRegionsForCheckmark(
-        [this, &pushRoot, &oldRegionsScanned, &oldObjectsScanned](RegionInfo* region) {
+        [this, &pushRoot, &ensureEdge, &oldRegionsScanned, &oldObjectsScanned](RegionInfo* region) {
             ++oldRegionsScanned;
-            region->VisitAllObjects([this, &pushRoot, &oldObjectsScanned](BaseObject* object) {
-                ++oldObjectsScanned;
-                if (!Heap::IsHeapAddress(object)) {
-                    return;
-                }
-                object->ForEachRefField([this, &pushRoot](RefField<>& field) {
-                    BaseObject* target = ResolveMinorReference(field);
-                    if (!Heap::IsHeapAddress(target)) {
+            region->VisitAllObjects(
+                [this, &pushRoot, &ensureEdge, &oldObjectsScanned, region](BaseObject* object) {
+                    ++oldObjectsScanned;
+                    if (!Heap::IsHeapAddress(object)) {
                         return;
                     }
-                    RegionInfo* targetRegion =
-                        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (targetRegion->IsYoungRegion()) {
-                        pushRoot(target);
-                    }
+                    object->ForEachRefField(
+                        [this, &pushRoot, &ensureEdge, object, region](RefField<>& field) {
+                            BaseObject* target = ResolveMinorReference(field);
+                            if (!Heap::IsHeapAddress(target)) {
+                                return;
+                            }
+                            RegionInfo* targetRegion =
+                                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                            if (!targetRegion->IsYoungRegion()) {
+                                return;
+                            }
+                            IncomingEdge& edge = ensureEdge(target);
+                            if (!edge.hasOldHolder) {
+                                edge.holder = object;
+                                edge.holderRegion = region;
+                                edge.slotOffset = reinterpret_cast<MAddress>(&field) -
+                                    reinterpret_cast<MAddress>(object);
+                                edge.hasOldHolder = true;
+                            }
+                            pushRoot(target, false);
+                        });
                 });
-            });
         });
 
     size_t youngReachable = 0;
     size_t youngMissed = 0;
-    size_t youngExtra = 0; // reserved; comparison is one-sided (oracle-live, minor-unmarked)
+    size_t youngExtra = 0;
+    size_t incomingResolved = 0;
+    size_t fromRootOnly = 0;
+    size_t inRemsetYes = 0;
+    size_t inRemsetNo = 0;
+    size_t retainedSkip = 0;
+    size_t retainedWouldScan = 0;
     BaseObject* injectVictim = nullptr;
+    StickyLog& stickyLog = StickyLog::Instance();
 
     while (!pending.empty()) {
         BaseObject* object = pending.back();
@@ -1713,7 +1742,6 @@ void WCollector::CheckmarkYoungMarking()
             ++youngReachable;
             if (GCDebugConfig::IsCheckmarkInjectMissEnabled() && injectVictim == nullptr &&
                 region->IsMarkedObject(object)) {
-                // Positive control: pretend minor missed this live young object once.
                 injectVictim = object;
             }
             bool minorMarked = region->IsMarkedObject(object);
@@ -1729,27 +1757,111 @@ void WCollector::CheckmarkYoungMarking()
                     typeId = static_cast<unsigned>(static_cast<unsigned char>(ti->GetType()));
                     typeName = ti->GetName();
                 }
+                const char* holderType = "<none>";
+                BaseObject* holder = nullptr;
+                size_t slotOffset = 0;
+                RegionInfo* holderRegion = nullptr;
+                unsigned holderRegionType = 0;
+                unsigned holderYoungAge = 0;
+                int loggedLine = -1;
+                int retainedState = -1;
+                int retainedWould = -1;
+                int fromRoot = 0;
+                auto it = firstIncoming.find(object);
+                if (it != firstIncoming.end()) {
+                    IncomingEdge& edge = it->second;
+                    fromRoot = edge.seenFromRoot ? 1 : 0;
+                    if (edge.hasOldHolder && edge.holder != nullptr && edge.holderRegion != nullptr) {
+                        ++incomingResolved;
+                        holder = edge.holder;
+                        slotOffset = edge.slotOffset;
+                        holderRegion = edge.holderRegion;
+                        TypeInfo* hti = holder->GetTypeInfo();
+                        if (hti != nullptr) {
+                            holderType = hti->GetName();
+                        }
+                        holderRegionType = static_cast<unsigned>(holderRegion->GetRegionType());
+                        holderYoungAge = static_cast<unsigned>(holderRegion->GetYoungAge());
+                        MAddress fieldAddr = reinterpret_cast<MAddress>(holder) + slotOffset;
+                        loggedLine = stickyLog.IsLoggedLine(fieldAddr) ? 1 : 0;
+                        if (loggedLine == 0 &&
+                            stickyLog.IsLoggedLine(reinterpret_cast<MAddress>(holder))) {
+                            loggedLine = 1;
+                        }
+                        if (loggedLine == 1) {
+                            ++inRemsetYes;
+                        } else {
+                            ++inRemsetNo;
+                        }
+                        retainedState = static_cast<int>(holderRegion->GetRetainedLiveInfoState());
+                        if (holderRegion->GetRetainedLiveInfoState() ==
+                            RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+                            retainedWould = 1;
+                            ++retainedWouldScan;
+                        } else if (!holderRegion->IsRetainedSnapshotValid()) {
+                            retainedWould = 1;
+                            ++retainedWouldScan;
+                        } else if (holderRegion->GetRetainedLiveInfoState() ==
+                                   RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                            retainedWould = 0;
+                            ++retainedSkip;
+                        } else {
+                            LiveInfo* retained = holderRegion->GetRetainedLiveInfo();
+                            MAddress covered = holderRegion->GetRetainedLiveInfoCoveredUpTo();
+                            MAddress holderAddr = reinterpret_cast<MAddress>(holder);
+                            if (holderAddr >= covered) {
+                                retainedWould = 1;
+                                ++retainedWouldScan;
+                            } else if (retained == nullptr) {
+                                retainedWould = 0;
+                                ++retainedSkip;
+                            } else {
+                                size_t off = holderAddr - holderRegion->GetRegionStart();
+                                retainedWould = retained->IsSurvivedObject(off) ? 1 : 0;
+                                if (retainedWould == 1) {
+                                    ++retainedWouldScan;
+                                } else {
+                                    ++retainedSkip;
+                                }
+                            }
+                        }
+                    } else if (edge.seenFromRoot) {
+                        ++fromRootOnly;
+                    }
+                }
                 VLOG(REPORT,
                      "[GCCheckmark] DIVERGENCE dir=oracle-live/minor-unmarked obj=%p typeId=%u "
-                     "type=%s region=%p regionType=%u youngAge=%u liveBytes=%zu",
+                     "type=%s region=%p regionType=%u youngAge=%u liveBytes=%zu "
+                     "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
+                     "slotOffset=%zu fromRoot=%d IN_REMSET=%d retainedState=%d retainedWouldScan=%d",
                      object, typeId, typeName, region, region->GetRegionType(),
-                     static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount());
+                     static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount(),
+                     holder, holderType, holderRegion, holderRegionType, holderYoungAge,
+                     slotOffset, fromRoot, loggedLine, retainedState, retainedWould);
             }
         }
-        object->ForEachRefField([this, &pending](RefField<>& field) {
+        object->ForEachRefField([this, &pending, &ensureEdge, object, region](RefField<>& field) {
             BaseObject* target = ResolveMinorReference(field);
-            if (Heap::IsHeapAddress(target)) {
-                pending.push_back(target);
+            if (!Heap::IsHeapAddress(target)) {
+                return;
             }
+            // young→young / any graph edge: keep reachability, do not invent old holders.
+            (void)ensureEdge(target);
+            (void)object;
+            (void)region;
+            pending.push_back(target);
         });
     }
 
     uint64_t wallUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;
     VLOG(REPORT,
          "[GCCheckmark] summary reachable=%zu young=%zu missed=%zu extra=%zu "
-         "oldRegions=%zu oldObjects=%zu wallUs=%zu inject=%u",
+         "oldRegions=%zu oldObjects=%zu wallUs=%zu inject=%u "
+         "INCOMING_RESOLVED=%zu FROM_ROOT_ONLY=%zu IN_REMSET_yes=%zu IN_REMSET_no=%zu "
+         "RETAINED_WOULD_SCAN=%zu RETAINED_SKIP=%zu",
          reachable.size(), youngReachable, youngMissed, youngExtra, oldRegionsScanned,
-         oldObjectsScanned, wallUs, static_cast<unsigned>(injectVictim != nullptr));
+         oldObjectsScanned, wallUs, static_cast<unsigned>(injectVictim != nullptr),
+         incomingResolved, fromRootOnly, inRemsetYes, inRemsetNo, retainedWouldScan, retainedSkip);
     if (youngMissed != 0) {
         CHECK_DETAIL(false,
                      "[GCCheckmark] %zu young object(s) reachable by independent path but unmarked by minor",
