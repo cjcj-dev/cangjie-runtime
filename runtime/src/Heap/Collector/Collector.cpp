@@ -7,6 +7,8 @@
 
 #include "Collector/Collector.h"
 
+#include <cstdio>
+
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -41,10 +43,18 @@ void DumpNonNormalForensic(BaseObject* obj, GCPhase phase)
         from = region->IsFromRegion() ? 1 : 0;
     }
     // st: 0=NORMAL 1=LOCKED 2=FORWARDING 3=FORWARDED
-    LOG(RTLOG_ERROR,
+    // RTLOG_FAIL matches CHECK_DETAIL so MRT_LOG_LEVEL cannot hide the line.
+    LOG(RTLOG_FAIL,
         "NONNORMAL_FORENSIC obj=%p st=%u valid=%d phase=%u ghost=%u ghostReg=%p rtype=%u young=%u "
         "from=%u route=%u",
         obj, st, valid, static_cast<unsigned>(phase), ghost, ghostRegion, rtype, young, from, route);
+    // stderr belt: survives if logger path is re-entered during abort.
+    std::fprintf(stderr,
+                 "NONNORMAL_FORENSIC obj=%p st=%u valid=%d phase=%u ghost=%u ghostReg=%p rtype=%u "
+                 "young=%u from=%u route=%u\n",
+                 obj, st, valid, static_cast<unsigned>(phase), ghost, ghostRegion, rtype, young, from,
+                 route);
+    std::fflush(stderr);
 }
 }
 
