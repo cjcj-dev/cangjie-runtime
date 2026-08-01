@@ -1017,7 +1017,8 @@ public:
 
     void DispelGhostFromRegion()
     {
-        // Phase: POST_TRACE PrepareForwardTable, after InvalidateOldTaggedRefsBeforeDispel's local STW; no region lock.
+        // Phase: POST_TRACE PrepareForwardTable, inside the joint STW with
+        // InvalidateOldTaggedRefsBeforeDispel (fixstw: F3+Dispel co-STW); no region lock.
         // R2 validity-end: route teardown (not Forward complete).
         size_t nUnit = GetGhostRegionUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);

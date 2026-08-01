@@ -605,7 +605,10 @@ void WCollector::NormalizeTraceRegionObject(BaseObject* object)
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
     MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
-    ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
+    // STW is owned by the caller (PostTrace joint bracket with PrepareForwardTable).
+    // Nested STW would re-enter StopTheWorld under the same GC thread.
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(),
+               "InvalidateOldTaggedRefsBeforeDispel requires an outer STW");
 
     RootVisitor fixRoot = [this](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
@@ -825,7 +828,10 @@ void WCollector::FixHolderForwardRefField(BaseObject* holder, RefField<>& field,
 void WCollector::BulkForwardHolderRefs()
 {
     MRT_PHASE_TIMER("BulkForwardHolderRefs");
-    ScopedStopTheWorld stw("bulk forward holder refs");
+    // STW may be owned by the caller (DoGarbageCollection joint bracket with
+    // sticky epoch + IDLE transition). Nested STW is forbidden.
+    MRT_ASSERT(MutatorManager::Instance().WorldStopped(),
+               "BulkForwardHolderRefs requires an outer STW");
     const uint64_t startNs = TimeUtil::NanoSeconds();
     size_t rewritten = 0;
     size_t interiorRewritten = 0;
@@ -944,10 +950,14 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
-    // F3: dispel previous ghost from-regions next; kill one-gen-stale tags first so
-    // IsOldPointer cannot outlive FindToVersion's ghost gate (D phase).
-    InvalidateOldTaggedRefsBeforeDispel();
-    fwdTable.PrepareForwardTable();
+    // F3 + Dispel share one STW so mutators cannot observe identity/route/ghost
+    // mid-teardown (gcsm05 F4 / gcsm12 F3-F4). Order: rewrite old tags, then
+    // PrepareForwardTable → DispelGhostFromRegion.
+    {
+        ScopedStopTheWorld stw("invalidate old tags and dispel ghost routes");
+        InvalidateOldTaggedRefsBeforeDispel();
+        fwdTable.PrepareForwardTable();
+    }
 }
 
 void WCollector::Preforward()
@@ -1663,20 +1673,32 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
 
-    // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
-    // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
-    BulkForwardHolderRefs();
+    // R1 bulk rewrite + fact lifetime end + sticky epoch + leave FORWARD share one
+    // STW (gcsm05 F2/F5): mutators must not run ForwardBarrier after fact clear,
+    // and sticky TLS nodes must flush before BeginEpoch clears the bitmap.
+    {
+        ScopedStopTheWorld stw("bulk forward, sticky epoch, leave forward");
+        // R1: index-only bulk rewrite of plain→ghost-from edges registered by runtime
+        // write barriers / Trace. Compiler Idle plain stores (P5) not yet registered.
+        BulkForwardHolderRefs();
 
-    if (StickyLog::Instance().IsEnabled()) {
-        ScopedStopTheWorld stw("advance sticky log epoch");
-        SatbBuffer::Instance().DiscardStickyLogBuffer();
-        StickyLog::Instance().BeginEpoch();
-    }
-    if (StickyLog::Instance().IsForceSlowPathEnabled()) {
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
-    } else {
-        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        if (StickyLog::Instance().IsEnabled()) {
+            size_t flushedStickyNodes = 0;
+            MutatorManager::Instance().VisitAllMutators([&flushedStickyNodes](Mutator& mutator) {
+                if (mutator.FlushStickyLogNodeForEpoch()) {
+                    ++flushedStickyNodes;
+                }
+            });
+            VLOG(REPORT, "[StickyEpoch] flushed_sticky_tls_nodes=%zu", flushedStickyNodes);
+            SatbBuffer::Instance().DiscardStickyLogBuffer();
+            StickyLog::Instance().BeginEpoch();
+        }
+        if (StickyLog::Instance().IsForceSlowPathEnabled()) {
+            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+            Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
+        } else {
+            TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        }
     }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
@@ -1699,13 +1721,19 @@ void WCollector::DoGarbageCollection()
         manager.HandleTraceRegions();
     }
     CollectSmallSpace();
+    // UnbindPreviousLiveInfo clears region liveInfo under STW so IDLE mutators
+    // never race a half-cleared liveByteCount (gcsm05 F3). When sticky promote
+    // runs, share its STW; otherwise take a dedicated unbind STW.
     if (stickyLog.IsMinorEnabled()) {
-        ScopedStopTheWorld stw("sticky major promotion");
+        ScopedStopTheWorld stw("sticky major promotion and unbind live info");
         FlushAllocationRegions();
         reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().PromoteAllRegions();
         minorRunsSinceMajor = 0;
+        ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    } else {
+        ScopedStopTheWorld stw("unbind previous live info");
+        ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     }
-    ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)

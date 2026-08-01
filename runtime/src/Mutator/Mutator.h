@@ -395,6 +395,19 @@ public:
 
     ATTR_NO_INLINE void RememberLineInStickyLogBuffer(MAddress line) { RememberStickyLineImpl(line); }
 
+    // STW epoch advance (WCollector major): retire this mutator's sticky TLS node
+    // before BeginEpoch clears the bitmap. CLEAR_SATB/RECLAIM also flush via
+    // HandleGCPhase; major epoch STW does not transit those phases.
+    // Returns true if a non-null TLS node was flushed (posctrl counter arm).
+    bool FlushStickyLogNodeForEpoch()
+    {
+        if (stickyLogNode == nullptr) {
+            return false;
+        }
+        SatbBuffer::Instance().FlushStickyLogQueue(stickyLogNode);
+        return true;
+    }
+
     void DeferLogObject(BaseObject* object);
     void FlushDeferredLogObject();
 

@@ -242,6 +242,7 @@ private:
     void TraceHeap();
     // F3: before DispelGhostFromRegion, rewrite IsOldPointer slots to plain/to so
     // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
+    // Requires caller-held STW (joint with PrepareForwardTable / Dispel).
     void InvalidateOldTaggedRefsBeforeDispel();
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
     // R1: after ForwardFromSpace, rewrite plain→ghost-from edges via FixEdgeSet
@@ -250,6 +251,7 @@ private:
     void FixHolderForwardRefField(BaseObject* holder, RefField<>& field, size_t* skippedNoFact = nullptr,
                                   size_t* interiorRewritten = nullptr,
                                   BulkMissBuckets* missBuckets = nullptr);
+    // Requires caller-held STW (joint with sticky epoch + leave-FORWARD).
     void BulkForwardHolderRefs();
     // Post-forward: retag/repair slots in TRACE-born regions before merge+Unbind.
     // Weak referents soft-clear when dead; strong slots keep hard validity checks.
