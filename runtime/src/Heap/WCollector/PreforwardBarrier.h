@@ -24,17 +24,16 @@ public:
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
 
     BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;
-    void AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                              MemoryOrder order) const override;
 
-    BaseObject* AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                    MemoryOrder order) const override;
-
-    bool CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                 MemoryOrder succOrder, MemoryOrder failOrder) const override;
-
-    void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
-                         MIndex srcSize) const override;
+protected:
+    void AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
+                                  MemoryOrder order) const override;
+    BaseObject* AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
+                                        MemoryOrder order) const override;
+    bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
+                                     MemoryOrder succOrder, MemoryOrder failOrder) const override;
+    void CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                             MAddress srcField, MIndex srcSize) const override;
 };
 } // namespace MapleRuntime
 #endif // MRT_TRACE_FIX_BARRIER_H
