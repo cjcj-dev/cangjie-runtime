@@ -112,7 +112,7 @@ void TraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, con
     });
 }
 
-void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
     BaseObject* rememberedObject = nullptr;
@@ -150,7 +150,7 @@ void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     FixEdgeSet::Instance().MaybeAdd(nullptr, &field, ref);
 }
 
-void TraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(obj != nullptr);
     if (obj != nullptr) {
@@ -239,8 +239,8 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
     return target;
 }
 
-void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                        MemoryOrder order) const
+void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                            MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = oldField.GetFieldValue();
@@ -260,8 +260,8 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
-BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                              MemoryOrder order) const
+BaseObject* TraceBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                  MemoryOrder order) const
 {
     Mutator* mutator = Mutator::GetMutator();
     RememberNewReference(mutator, newRef);
@@ -276,8 +276,9 @@ BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& f
     return oldRef;
 }
 
-bool TraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                           BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                               BaseObject* newRef, MemoryOrder succOrder,
+                                               MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
@@ -300,8 +301,8 @@ bool TraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fiel
     return false;
 }
 
-void TraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                   MAddress srcField, MIndex srcSize) const
+void TraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                       MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!dstObj->HasRefField()) {
@@ -345,7 +346,7 @@ void TraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex
 #endif
 }
 
-void TraceBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+void TraceBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
@@ -379,7 +380,7 @@ void TraceBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const Objec
     }
 }
 
-void TraceBarrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
+void TraceBarrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
