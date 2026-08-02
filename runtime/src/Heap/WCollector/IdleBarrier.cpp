@@ -151,9 +151,11 @@ void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseOb
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
     // Active kind distinguishes Idle / Preforward / Forward (shared Write path).
-    // IdleLog overrides Write* and counts itself with sticky=true — skip double-count.
-    if (EmitSiteActiveKind().load(std::memory_order_relaxed) !=
-        static_cast<int>(EmitBarrierKind::IdleLog)) {
+    // Logging barriers override Write* and count themselves with sticky=true — skip double-count.
+    int activeKind = EmitSiteActiveKind().load(std::memory_order_relaxed);
+    if (activeKind != static_cast<int>(EmitBarrierKind::IdleLog) &&
+        activeKind != static_cast<int>(EmitBarrierKind::Preforward) &&
+        activeKind != static_cast<int>(EmitBarrierKind::Forward)) {
         EmitSiteNoteWriteActive(obj, ref, false);
     }
 #endif

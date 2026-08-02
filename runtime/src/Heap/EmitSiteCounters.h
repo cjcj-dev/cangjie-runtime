@@ -53,7 +53,7 @@ public:
     static std::atomic<uint64_t> stickyLineOnOld;
 };
 
-// Active barrier kind for inherited Write* (Idle/Preforward/Forward share IdleBarrier).
+// Active barrier kind for shared IdleBarrier Write* dispatch.
 // InstallBarrier updates this; IdleLog/Enum/Trace/PostTrace pass kind explicitly.
 inline std::atomic<int>& EmitSiteActiveKind()
 {
@@ -84,7 +84,7 @@ inline void EmitSiteNoteWrite(EmitBarrierKind kind, BaseObject* holder, BaseObje
 #endif
 }
 
-// For IdleBarrier Write* inherited by Preforward/Forward: use active kind.
+// For IdleBarrier Write* dispatch: use active kind.
 inline void EmitSiteNoteWriteActive(BaseObject* holder, BaseObject* ref, bool stickyLogged)
 {
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
