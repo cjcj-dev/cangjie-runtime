@@ -33,6 +33,11 @@ class EmitSiteCounters {
 public:
     static void NoteWrite(EmitBarrierKind kind, BaseObject* holder, BaseObject* ref, bool stickyLogged);
     static void NoteStickyLogLine(BaseObject* object, bool newlyLogged);
+    static bool IsAttributionConfigured();
+    static bool IsAttributionEnabled();
+    static void NoteAttribution(BaseObject* holder, void* slot, BaseObject* ref, bool fastPath, void* pc);
+    static void ReportAttribution(BaseObject* holder, MAddress slot, BaseObject* ref);
+    static void DumpAttribution();
     static void Dump(const char* tag);
     static void Reset();
 

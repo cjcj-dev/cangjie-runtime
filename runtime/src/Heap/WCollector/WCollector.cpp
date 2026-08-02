@@ -1844,6 +1844,7 @@ void WCollector::CheckmarkYoungMarking(const std::vector<BaseObject*>& allocatio
         int retainedWould = -1;
         int fromRoot = 0;
         int holderRootReachable = -1;
+        MAddress sourceFieldAddress = 0;
         auto it = firstIncoming.find(object);
         if (it != firstIncoming.end()) {
             IncomingEdge& edge = it->second;
@@ -1866,6 +1867,7 @@ void WCollector::CheckmarkYoungMarking(const std::vector<BaseObject*>& allocatio
                 holderRegionType = static_cast<unsigned>(holderRegion->GetRegionType());
                 holderYoungAge = static_cast<unsigned>(holderRegion->GetYoungAge());
                 MAddress fieldAddr = reinterpret_cast<MAddress>(holder) + slotOffset;
+                sourceFieldAddress = fieldAddr;
                 MAddress holderAddr = reinterpret_cast<MAddress>(holder);
                 auto lineOf = [](MAddress addr) {
                     return addr & ~static_cast<MAddress>(StickyLog::LINE_SIZE - 1);
@@ -1927,6 +1929,9 @@ void WCollector::CheckmarkYoungMarking(const std::vector<BaseObject*>& allocatio
              static_cast<unsigned>(region->GetYoungAge()), region->GetLiveByteCount(), holder, holderType,
              holderRegion, holderRegionType, holderYoungAge, slotOffset, fromRoot, targetRootReachable,
              holderRootReachable, loggedLine, retainedState, retainedWould);
+        if (targetRootReachable == 1 && sourceFieldAddress != 0 && loggedLine == 0 && retainedWould == 1) {
+            EmitSiteCounters::ReportAttribution(holder, sourceFieldAddress, object);
+        }
     }
 
     uint64_t wallUs = (TimeUtil::NanoSeconds() - startNs) / NS_PER_US;

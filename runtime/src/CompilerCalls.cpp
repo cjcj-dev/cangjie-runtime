@@ -31,6 +31,9 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/FixEdgeSet.h"
 #include "Heap/Heap.h"
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+#include "Heap/EmitSiteCounters.h"
+#endif
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -296,6 +299,10 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
 
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    EmitSiteCounters::NoteAttribution(obj, field, ref, false,
+                                      __builtin_extract_return_addr(__builtin_return_address(0)));
+#endif
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
         VLOG(REPORT, "found and writing a global struct ref field");
         Heap::GetBarrier().WriteStaticRef(*field, ref);
@@ -312,6 +319,14 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
 // Predicate is FixEdgeSet::MaybeAdd (I5) — do not alter here (r1cons owns E6).
 extern "C" void MCC_FixEdgeMaybe(void* holder, void* slot, void* newRef)
 {
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    if (EmitSiteCounters::IsAttributionConfigured()) {
+        EmitSiteCounters::NoteAttribution(reinterpret_cast<BaseObject*>(holder), slot,
+                                          reinterpret_cast<BaseObject*>(newRef), true,
+                                          __builtin_extract_return_addr(__builtin_return_address(0)));
+        return;
+    }
+#endif
     FixEdgeSet::Instance().MaybeAdd(reinterpret_cast<BaseObject*>(holder),
                                     reinterpret_cast<RefField<>*>(slot),
                                     reinterpret_cast<BaseObject*>(newRef));
