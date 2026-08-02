@@ -434,9 +434,32 @@ void Mutator::StackGuardRecover() const
 void Mutator::InitStackInfo(ThreadLocalData* threadData)
 {
     CJThread* cjthread = reinterpret_cast<CJThread*>(threadData->cjthread);
-    SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGetByCJThrd(cjthread)));
-    SetStackSize(CJThreadStackSizeGetByCJThrd(cjthread));
-    SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGetByCJThrd(cjthread)));
+    void* stackTopAddr = CJThreadStackAddrGetByCJThrd(cjthread);
+    size_t stackSize = CJThreadStackSizeGetByCJThrd(cjthread);
+    void* stackBaseAddr = CJThreadStackBaseAddrGetByCJThrd(cjthread);
+    if (stackTopAddr == nullptr || stackBaseAddr == nullptr) {
+#if defined(_WIN64)
+        _TEB* teb = NtCurrentTeb();
+        stackTopAddr = reinterpret_cast<void*>(reinterpret_cast<NT_TIB64*>(teb)->StackLimit);
+        stackBaseAddr = reinterpret_cast<void*>(reinterpret_cast<NT_TIB64*>(teb)->StackBase);
+        stackSize = reinterpret_cast<uintptr_t>(stackBaseAddr) - reinterpret_cast<uintptr_t>(stackTopAddr);
+#elif defined(__APPLE__)
+        pthread_t thread = pthread_self();
+        stackBaseAddr = pthread_get_stackaddr_np(thread);
+        stackSize = pthread_get_stacksize_np(thread);
+        stackTopAddr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(stackBaseAddr) - stackSize);
+#else
+        pthread_attr_t attr;
+        pthread_t thread = pthread_self();
+        CHECK_PTHREAD_CALL(pthread_getattr_np, (thread, &attr), "get thread attr failed");
+        CHECK_PTHREAD_CALL(pthread_attr_getstack, (&attr, &stackTopAddr, &stackSize), "get thread stack attr failed");
+        CHECK_PTHREAD_CALL(pthread_attr_destroy, (&attr), "destroy pthread attr");
+        stackBaseAddr = reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(stackTopAddr) + stackSize);
+#endif
+    }
+    SetStackTopAddr(reinterpret_cast<uintptr_t>(stackTopAddr));
+    SetStackSize(stackSize);
+    SetStackBaseAddr(reinterpret_cast<uintptr_t>(stackBaseAddr));
 }
 
 bool Mutator::IsStackAddr(uintptr_t addr)
