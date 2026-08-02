@@ -15,7 +15,7 @@
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
-#include "ObjectModel/TypeInfo.h"
+#include "ObjectModel/MClass.h"
 
 namespace MapleRuntime {
 
