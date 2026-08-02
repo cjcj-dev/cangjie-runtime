@@ -729,27 +729,34 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-    fwdTable.PrepareForwardTable();
-
-    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    FixMinorRootSlots();
-    PreforwardDiscoveredExternObjects();
-    PreforwardAllResurrectExportFromObjects();
-
     auto currentObject = [this](BaseObject* object) {
         if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
             return ForwardObject(object);
         }
         return object;
     };
-    for (BaseObject* object : reachableObjects) {
-        FixMinorObjectSlots(currentObject(object));
-    }
-    for (MAddress slot : rememberedSlots) {
-        if (Heap::IsHeapAddress(slot)) {
-            (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+
+    auto fixAllReferences = [this, &reachableObjects, &rememberedSlots, &currentObject]() {
+        FixMinorRootSlots();
+        PreforwardDiscoveredExternObjects();
+        PreforwardAllResurrectExportFromObjects();
+        for (BaseObject* object : reachableObjects) {
+            FixMinorObjectSlots(currentObject(object));
         }
-    }
+        for (MAddress slot : rememberedSlots) {
+            if (Heap::IsHeapAddress(slot)) {
+                (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+            }
+        }
+    };
+
+    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+    fixAllReferences();
+
+    TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+    fwdTable.PrepareForwardTable();
+    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+    fixAllReferences();
 
     ForwardFromSpace();
     manager.ReassembleFromSpace();
