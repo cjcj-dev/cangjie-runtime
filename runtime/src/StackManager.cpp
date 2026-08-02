@@ -170,9 +170,15 @@ void StackManager::VisitStackRoots(const UnwindContext& topFrame, const RootVisi
 void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
     const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
 {
+    VisitHeapReferencesOnStack(topFrame, rootVisitor, rootVisitor, derivedPtrVisitor, mutator);
+}
+
+void StackManager::VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
+    const RootVisitor& slotRootVisitor, const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator)
+{
     GCStackInfo gcStackInfo(&topFrame);
     gcStackInfo.FillInStackTrace();
-    gcStackInfo.VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor, mutator);
+    gcStackInfo.VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, mutator);
 }
 
 void StackManager::VisitStackPtrMap(const UnwindContext& topFrame, const StackPtrVisitor& traceAndFixPtrVisitor,
