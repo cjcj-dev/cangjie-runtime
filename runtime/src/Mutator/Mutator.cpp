@@ -661,7 +661,8 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
     return 0;
 }
 
-inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
+inline void CheckAndPush(
+    Mutator* mutator, BaseObject* obj, std::set<BaseObject*>& rootSet, std::stack<BaseObject*>& rootStack)
 {
     if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
         return;
@@ -669,7 +670,8 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     TypeInfo* tip = obj->GetTypeInfo();
     if (UNLIKELY(STACKSCAN_PROBE_ENABLED)) {
         size_t count = g_stackscanCheckAndPush.fetch_add(1, std::memory_order_relaxed) + 1;
-        LOG(RTLOG_ERROR, "STACKSCAN_PROBE event=check-and-push count=%zu object=%p typeinfo=%p", count, obj, tip);
+        LOG(RTLOG_ERROR, "STACKSCAN_PROBE event=check-and-push count=%zu mutator=%p object=%p typeinfo=%p", count,
+            mutator, obj, tip);
     }
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
     CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
@@ -701,7 +703,7 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            CheckAndPush(this, obj, rootSet, rootStack);
         }
     };
 
@@ -712,7 +714,7 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+            CheckAndPush(this, obj, rootSet, rootStack);
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
