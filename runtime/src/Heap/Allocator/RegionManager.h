@@ -541,16 +541,16 @@ public:
 
     void ClearAllLiveInfo()
     {
-        ClearLiveInfo(tlRegionList);
-        ClearLiveInfo(recentFullRegionList);
-        ClearLiveInfo(fullTraceRegions);
-        ClearLiveInfo(unmovableFromRegionList);
-        ClearLiveInfo(recentPinnedRegionList);
-        ClearLiveInfo(oldPinnedRegionList);
-        ClearLiveInfo(rawPointerPinnedRegionList);
-        ClearLiveInfo(oldLargeRegionList);
-        ClearLiveInfo(recentLargeRegionList);
-        ClearLiveInfo(largeTraceRegions);
+        ClearLiveInfo(tlRegionList, "RegionManager::ClearAllLiveInfo/thread-local");
+        ClearLiveInfo(recentFullRegionList, "RegionManager::ClearAllLiveInfo/recent-full");
+        ClearLiveInfo(fullTraceRegions, "RegionManager::ClearAllLiveInfo/full-trace");
+        ClearLiveInfo(unmovableFromRegionList, "RegionManager::ClearAllLiveInfo/unmovable-from");
+        ClearLiveInfo(recentPinnedRegionList, "RegionManager::ClearAllLiveInfo/recent-pinned");
+        ClearLiveInfo(oldPinnedRegionList, "RegionManager::ClearAllLiveInfo/old-pinned");
+        ClearLiveInfo(rawPointerPinnedRegionList, "RegionManager::ClearAllLiveInfo/raw-pointer-pinned");
+        ClearLiveInfo(oldLargeRegionList, "RegionManager::ClearAllLiveInfo/old-large");
+        ClearLiveInfo(recentLargeRegionList, "RegionManager::ClearAllLiveInfo/recent-large");
+        ClearLiveInfo(largeTraceRegions, "RegionManager::ClearAllLiveInfo/large-trace");
     }
 
 private:
@@ -588,11 +588,11 @@ private:
     inline void TagHugePage(RegionInfo* region, size_t num) const;
     inline void UntagHugePage(RegionInfo* region, size_t num) const;
 
-    void ClearLiveInfo(RegionList& list)
+    void ClearLiveInfo(RegionList& list, const char* stage)
     {
         RegionList tmp("temp region list");
         list.CopyListTo(tmp);
-        tmp.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
+        tmp.VisitAllRegions([stage](RegionInfo* region) { region->ClearLiveInfo(stage); });
     }
 
     FreeRegionManager freeRegionManager;

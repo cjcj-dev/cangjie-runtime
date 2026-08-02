@@ -75,6 +75,10 @@ private:
     the offset of unit index and unitInfo index is 1
 */
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
+class RegionInfo;
+void TraceGCProvLiveZero(RegionInfo* region, uint32_t oldValue, const char* writer, int line, const char* stage,
+                         uint8_t targetUnitRole);
+
 class RegionInfo {
 public:
     enum RouteState : uint8_t {
@@ -727,7 +731,7 @@ public:
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
 
     // the interface can only be used to clear live info after gc.
-    void CheckAndClearLiveInfo(LiveInfo* liveInfo)
+    void CheckAndClearLiveInfo(LiveInfo* liveInfo, const char* stage)
     {
         // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
         // We will clean it before the region is accessible.
@@ -736,16 +740,20 @@ public:
         }
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
+            uint32_t oldValue = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
             metadata.liveInfo = nullptr;
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+            TraceGCProvLiveZero(this, oldValue, __func__, __LINE__, stage, static_cast<uint8_t>(GetUnitRole()));
         }
     }
-    void ClearLiveInfo()
+    void ClearLiveInfo(const char* stage)
     {
+        uint32_t oldValue = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        TraceGCProvLiveZero(this, oldValue, __func__, __LINE__, stage, static_cast<uint8_t>(GetUnitRole()));
     }
 
     // only from-region should be locked.
@@ -993,9 +1001,11 @@ public:
         return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
     }
 
-    void ResetLiveByteCount()
+    void ResetLiveByteCount(const char* stage)
     {
+        uint32_t oldValue = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        TraceGCProvLiveZero(this, oldValue, __func__, __LINE__, stage, static_cast<uint8_t>(GetUnitRole()));
     }
 
     void AddLiveByteCount(uint32_t count)
@@ -1261,12 +1271,14 @@ private:
     // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        uint32_t oldValue = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         SetUnitRole(UnitRole::FREE_UNITS);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        TraceGCProvLiveZero(this, oldValue, __func__, __LINE__, "region-construction", static_cast<uint8_t>(uClass));
         metadata.liveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);

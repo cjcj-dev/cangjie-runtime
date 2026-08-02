@@ -7,7 +7,11 @@
 
 #include "Allocator/RegionManager.h"
 
+#include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -25,6 +29,31 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+void TraceGCProvLiveZero(RegionInfo* region, uint32_t oldValue, const char* writer, int line, const char* stage,
+                         uint8_t targetUnitRole)
+{
+    const char* enabled = std::getenv("MRT_GCPROV");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[GCPROV] LIVE_ZERO_WRITE region=%p old=%u new=0 writer=%s:%d stage=%s type=%u "
+                 "unit_role=%u target_unit_role=%u young=%u ghost=%u route=%u raw_refcount=%d\n",
+                 region, oldValue, writer, line, stage, static_cast<unsigned>(region->GetRegionType()),
+                 static_cast<unsigned>(region->GetUnitRole()), static_cast<unsigned>(targetUnitRole),
+                 static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->IsGhostFromRegion()),
+                 static_cast<unsigned>(region->GetRouteState()), region->GetRawPointerObjectCount());
+    static std::atomic<bool> positiveControlPrinted{ false };
+    if (std::strcmp(stage, "region-construction") == 0 && !positiveControlPrinted.exchange(true)) {
+        std::fprintf(stderr,
+                     "[GCPROV] PROBE_POSITIVE_CONTROL yes=1 region=%p writer=%s:%d old=%u observed=%u "
+                     "target_unit_role=%u\n",
+                     region, writer, line, oldValue, region->GetLiveByteCount(),
+                     static_cast<unsigned>(targetUnitRole));
+    }
+    std::fflush(stderr);
+}
+
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
@@ -475,14 +504,15 @@ void RegionManager::AssembleSmallGarbageCandidates()
     fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 
-    fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
+    fromRegionList.VisitAllRegions(
+        [](RegionInfo* region) { region->ClearLiveInfo("RegionManager::AssembleSmallGarbageCandidates"); });
 }
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
     oldLargeRegionList.MergeRegionList(recentLargeRegionList, RegionInfo::RegionType::LARGE_REGION);
     for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
-        region->ClearLiveInfo();
+        region->ClearLiveInfo("RegionManager::AssembleLargeGarbageCandidates");
     }
 }
 
@@ -496,7 +526,7 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
             oldPinnedRegionList.DeleteRegion(region);
             rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
         }
-        region->ClearLiveInfo();
+        region->ClearLiveInfo("RegionManager::AssemblePinnedGarbageCandidates");
         region = nextRegion;
     }
 }
@@ -519,7 +549,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        region->ClearLiveInfo();
+        region->ClearLiveInfo("RegionManager::PrepareYoungGarbageCandidates/unmovable-from");
         visitor(region);
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
@@ -537,7 +567,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        region->ClearLiveInfo();
+        region->ClearLiveInfo("RegionManager::PrepareYoungGarbageCandidates/recent-full");
         visitor(region);
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
@@ -1279,7 +1309,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     {
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         if (youngRegion) {
-            region->ResetLiveByteCount();
+            region->ResetLiveByteCount("RegionManager::ForwardRegion/young-forwarded");
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }

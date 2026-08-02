@@ -58,7 +58,8 @@ void ForwardDataManager::ForwardDataSpace::UnbindPreviousLiveInfo()
         LiveInfo* currentLiveInfo = reinterpret_cast<LiveInfo*>(current);
         RegionInfo* bindedRegion = currentLiveInfo->bindedRegion;
         CHECK(bindedRegion != nullptr);
-        bindedRegion->CheckAndClearLiveInfo(currentLiveInfo);
+        bindedRegion->CheckAndClearLiveInfo(
+            currentLiveInfo, "ForwardDataManager::ForwardDataSpace::UnbindPreviousLiveInfo");
     }
 }
 } // namespace MapleRuntime
