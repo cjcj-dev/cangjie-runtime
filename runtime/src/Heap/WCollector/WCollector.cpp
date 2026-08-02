@@ -684,6 +684,45 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     }
 }
 
+bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
+{
+    RefField<> oldField(field);
+    BaseObject* target = ResolveMinorReference(field);
+    BaseObject* current = target;
+    if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        current = const_cast<WCollector*>(this)->ForwardObject(target);
+    }
+    RefField<> newField(current);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return false;
+    }
+    CHECK_DETAIL(field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue()),
+                 "minor reference changed while the world was stopped field=%p from=%p to=%p",
+                 &field, target, current);
+    return true;
+}
+
+void WCollector::FixMinorRootSlots()
+{
+    RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        (void)FixMinorEvacuatedSlot(field);
+    };
+    RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+}
+
+void WCollector::FixMinorObjectSlots(BaseObject* object)
+{
+    if (!object->HasRefField()) {
+        return;
+    }
+    object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+}
+
 void WCollector::DoGarbageCollection()
 {
     TraceHeap();
