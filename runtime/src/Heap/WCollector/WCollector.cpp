@@ -781,6 +781,75 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
 }
 
+void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects)
+{
+    MinorObjectSet reachable;
+    MinorObjectSet expectedYoung;
+    WorkStack pending = NewWorkStack();
+    VisitMinorRoots([&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(object);
+        }
+    });
+    auto pushField = [this, &pending](RefField<>& field) {
+        BaseObject* target = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(target)) {
+            pending.push_back(target);
+        }
+    };
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!reachable.insert(object).second) {
+            continue;
+        }
+        CHECK_DETAIL(object->IsValidObject(), "minor marking validator reached invalid object %p", object);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region->IsYoungRegion()) {
+            expectedYoung.insert(object);
+        }
+        if (!object->HasRefField()) {
+            continue;
+        }
+        if (UNLIKELY(object->IsWeakRef())) {
+            RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = ResolveMinorReference(*referentField);
+            if (Heap::IsHeapAddress(referent)) {
+                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+            }
+            continue;
+        }
+        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+    }
+
+    size_t actualYoung = 0;
+    size_t unexpectedYoung = 0;
+    for (RegionInfo* region : minorCandidateRegions) {
+        region->VisitAllObjects([&](BaseObject* object) {
+            if (!region->IsMarkedObject(object)) {
+                return;
+            }
+            ++actualYoung;
+            if (expectedYoung.count(object) == 0 || reachableObjects.count(object) == 0) {
+                ++unexpectedYoung;
+            }
+        });
+    }
+    size_t missingYoung = 0;
+    for (BaseObject* object : expectedYoung) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (!region->IsMarkedObject(object) || reachableObjects.count(object) == 0) {
+            ++missingYoung;
+        }
+    }
+    VLOG(REPORT, "[GCV2Minor] mark-equivalence=%zu/%zu missing=%zu unexpected=%zu",
+         actualYoung - unexpectedYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
+    CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 && actualYoung == expectedYoung.size(),
+                 "minor marking differs from full marking: actual=%zu expected=%zu missing=%zu unexpected=%zu",
+                 actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
+}
+
 void WCollector::DoGarbageCollection()
 {
     TraceHeap();
