@@ -554,6 +554,136 @@ void WCollector::PostResolveCycleTask()
     CJ_MRT_RolveCycleRef();
 #endif
 }
+
+BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
+{
+    RefField<> value(field);
+    BaseObject* object = value.GetTargetObject();
+    if (IsOldPointer(value)) {
+        BaseObject* latest = FindLatestVersion(object);
+        return latest == nullptr ? object : latest;
+    }
+    return object;
+}
+
+void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
+{
+    MutatorManager::Instance().VisitAllMutators(
+        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+}
+
+void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
+{
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* object : resurrectedExportObjectes) {
+            visitor(object);
+        }
+        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
+            visitor(object);
+        }
+    }
+    std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    for (const auto& entry : cycleRefWorkStack) {
+        visitor(entry.first);
+        for (BaseObject* object : entry.second) {
+            visitor(object);
+        }
+    }
+}
+
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
+{
+    RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        visitor(ResolveMinorReference(field));
+    };
+    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
+    VisitMinorRootSlots(rawRootVisitor, fieldVisitor);
+    VisitMinorValueRoots(visitor);
+}
+
+void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object", object);
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+        workStack.push_back(object);
+    }
+}
+
+void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                   MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots)
+{
+    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
+        BaseObject* target = ResolveMinorReference(field);
+        if (fullYoungScan) {
+            if (Heap::IsHeapAddress(target)) {
+                workStack.push_back(target);
+            }
+        } else {
+            PushYoungObject(target, workStack);
+        }
+    };
+    while (!workStack.empty()) {
+        BaseObject* object = workStack.back();
+        workStack.pop_back();
+        if (!Heap::IsHeapAddress(object) || !reachableObjects.insert(object).second) {
+            continue;
+        }
+        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region->IsYoungRegion()) {
+            (void)MarkObject(object);
+        } else if (!fullYoungScan) {
+            continue;
+        }
+        if (!object->HasRefField()) {
+            continue;
+        }
+        if (UNLIKELY(object->IsWeakRef())) {
+            RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            weakSlots.insert(reinterpret_cast<MAddress>(referentField));
+            BaseObject* referent = ResolveMinorReference(*referentField);
+            if (!Heap::IsHeapAddress(referent)) {
+                continue;
+            }
+            RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
+            if (referentRegion->IsYoungRegion()) {
+                WeakRefBuffer::Instance().Insert(object);
+            }
+            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            continue;
+        }
+        object->ForEachRefField([&reachableSlots, &pushTarget](RefField<>& field) {
+            reachableSlots.insert(reinterpret_cast<MAddress>(&field));
+            pushTarget(field);
+        });
+    }
+}
+
+void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
+                                     const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
+                                     bool fullYoungScan)
+{
+    for (MAddress slot : rememberedSlots) {
+        if (!Heap::IsHeapAddress(slot) || weakSlots.count(slot) != 0 ||
+            (fullYoungScan && reachableSlots.count(slot) == 0)) {
+            continue;
+        }
+        RefField<>* field = reinterpret_cast<RefField<>*>(slot);
+        PushYoungObject(ResolveMinorReference(*field), workStack);
+    }
+}
+
 void WCollector::DoGarbageCollection()
 {
     TraceHeap();
