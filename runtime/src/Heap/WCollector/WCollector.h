@@ -225,7 +225,7 @@ private:
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
-    bool RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
+    void RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
                              const MinorRegionSet* evacuatedRegions = nullptr);
     void PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const;
     bool FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding,
