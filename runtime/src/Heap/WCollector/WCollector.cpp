@@ -949,32 +949,30 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         bool liveZero = rootMask != 0 && holderRegion != nullptr && holderRegion->GetLiveByteCount() == 0;
         if (liveZero) {
             ++liveZeroVisits;
-            if (nonCanonicalType || liveZeroVisits <= 4) {
-                std::fprintf(stderr,
-                             "[GCPROV] PRE_HAS_REF_FIELD point=after-dispel sequence=%zu object=%p holder=%p "
-                             "type_info=%p type_noncanonical=%u region=%p region_type=%u live=%u root_mask=0x%03x "
-                             "root_stack=%u root_register=%u root_derived=%u root_static=%u root_heap=%u "
-                             "root_weak=%u root_finalizer=%u root_export=%u root_concurrency=%u "
-                             "root_external_resurrection=%u root_exception=%u root_raw_object=%u "
-                             "incoming_category=%s incoming_slot=%p predecessor=%p\n",
-                             liveZeroVisits, object, holder, holder->GetTypeInfo(),
-                             static_cast<unsigned>(nonCanonicalType), holderRegion,
-                             static_cast<unsigned>(holderRegion->GetRegionType()), holderRegion->GetLiveByteCount(),
-                             static_cast<unsigned>(rootMask), static_cast<unsigned>((rootMask >> 0) & 1U),
-                             static_cast<unsigned>((rootMask >> 1) & 1U),
-                             static_cast<unsigned>((rootMask >> 2) & 1U),
-                             static_cast<unsigned>((rootMask >> 3) & 1U),
-                             static_cast<unsigned>((rootMask >> 4) & 1U),
-                             static_cast<unsigned>((rootMask >> 5) & 1U),
-                             static_cast<unsigned>((rootMask >> 6) & 1U),
-                             static_cast<unsigned>((rootMask >> 7) & 1U),
-                             static_cast<unsigned>((rootMask >> 8) & 1U),
-                             static_cast<unsigned>((rootMask >> 9) & 1U),
-                             static_cast<unsigned>((rootMask >> 10) & 1U),
-                             static_cast<unsigned>((rootMask >> 11) & 1U), categoryNames[incomingCategory],
-                             incomingSlot, predecessor);
-            }
-            if (nonCanonicalType && lifecycleLogged.insert(holderRegion).second) {
+            std::fprintf(stderr,
+                         "[GCPROV] PRE_HAS_REF_FIELD point=after-dispel sequence=%zu object=%p holder=%p "
+                         "type_info=%p type_noncanonical=%u region=%p region_type=%u live=%u root_mask=0x%03x "
+                         "root_stack=%u root_register=%u root_derived=%u root_static=%u root_heap=%u "
+                         "root_weak=%u root_finalizer=%u root_export=%u root_concurrency=%u "
+                         "root_external_resurrection=%u root_exception=%u root_raw_object=%u "
+                         "incoming_category=%s incoming_slot=%p predecessor=%p\n",
+                         liveZeroVisits, object, holder, holder->GetTypeInfo(), static_cast<unsigned>(nonCanonicalType),
+                         holderRegion, static_cast<unsigned>(holderRegion->GetRegionType()),
+                         holderRegion->GetLiveByteCount(), static_cast<unsigned>(rootMask),
+                         static_cast<unsigned>((rootMask >> 0) & 1U),
+                         static_cast<unsigned>((rootMask >> 1) & 1U),
+                         static_cast<unsigned>((rootMask >> 2) & 1U),
+                         static_cast<unsigned>((rootMask >> 3) & 1U),
+                         static_cast<unsigned>((rootMask >> 4) & 1U),
+                         static_cast<unsigned>((rootMask >> 5) & 1U),
+                         static_cast<unsigned>((rootMask >> 6) & 1U),
+                         static_cast<unsigned>((rootMask >> 7) & 1U),
+                         static_cast<unsigned>((rootMask >> 8) & 1U),
+                         static_cast<unsigned>((rootMask >> 9) & 1U),
+                         static_cast<unsigned>((rootMask >> 10) & 1U),
+                         static_cast<unsigned>((rootMask >> 11) & 1U), categoryNames[incomingCategory], incomingSlot,
+                         predecessor);
+            if (lifecycleLogged.insert(holderRegion).second) {
                 RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
                 manager.ReportGCProvRegionLifecycle(
                     holderRegion, holder, rootMask, incomingCategory, incomingSlot, predecessor);
