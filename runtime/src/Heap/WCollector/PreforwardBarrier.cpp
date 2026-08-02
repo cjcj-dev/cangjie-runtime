@@ -113,8 +113,8 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
     return target;
 }
 
-void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                             MemoryOrder order) const
+void PreforwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                 MemoryOrder order) const
 {
     RefField<> newField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
@@ -127,8 +127,8 @@ void PreforwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fi
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
-BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                                   MemoryOrder order) const
+BaseObject* PreforwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                       MemoryOrder order) const
 {
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
@@ -139,8 +139,9 @@ BaseObject* PreforwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<tru
     return oldRef;
 }
 
-bool PreforwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                                BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                                    BaseObject* newRef, MemoryOrder succOrder,
+                                                    MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
@@ -159,8 +160,8 @@ bool PreforwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>&
     return false;
 }
 
-void PreforwardBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                        MAddress srcField, MIndex srcSize) const
+void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
+                                            BaseObject* srcObj, MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
