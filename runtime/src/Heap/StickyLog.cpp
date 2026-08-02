@@ -223,6 +223,17 @@ bool StickyLog::IsLoggedLine(MAddress address) const
     return *reinterpret_cast<volatile uint8_t*>(__cj_sticky_logged_base + lineIndex) != 0;
 }
 
+bool StickyLog::HasLoggedLines() const
+{
+    uint8_t* dirtyBytes = reinterpret_cast<uint8_t*>(dirtyRegionMap->GetBaseAddr());
+    for (size_t i = 0; i < dirtyRegionByteCount; ++i) {
+        if (__atomic_load_n(dirtyBytes + i, __ATOMIC_ACQUIRE) != 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
 bool StickyLog::TryLogLine(MAddress address, MAddress& lineStart) const
 {
     if (UNLIKELY(address < heapStart || address >= heapStart + heapSize || __cj_sticky_logged_base == nullptr)) {

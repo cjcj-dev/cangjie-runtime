@@ -1956,12 +1956,20 @@ void WCollector::FlushAllocationRegions()
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
 }
 
-void WCollector::DoYoungGarbageCollection()
+bool WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     ScopedStopTheWorld stw("sticky minor", true, GCPhase::GC_PHASE_ENUM);
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();
+
+    StickyLog& stickyLog = StickyLog::Instance();
+    if (!stickyLog.HasLoggedLines()) {
+        ++emptyRemsetFallbacks;
+        VLOG(REPORT, "[StickyMinor] empty remset; major fallback count=%zu", emptyRemsetFallbacks);
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        return false;
+    }
 
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     minorCandidateRegions.clear();
@@ -2015,7 +2023,6 @@ void WCollector::DoYoungGarbageCollection()
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
     satbBuffer.DiscardStickyLogBuffer();
-    StickyLog& stickyLog = StickyLog::Instance();
     SatbBuffer::Node* promotionNode = nullptr;
     size_t promotedRegions = 0;
     size_t promotedObjects = 0;
@@ -2077,6 +2084,7 @@ void WCollector::DoYoungGarbageCollection()
         "[StickyMinor] run=%zu candidates=%zu candidateBytes=%zu reclaimedRegions=%zu reclaimedBytes=%zu pause=%zu us",
         minorTotalRuns, stats.candidateRegions, stats.candidateBytes, stats.reclaimedRegions, stats.reclaimedBytes,
         pauseUs);
+    return true;
 }
 
 void WCollector::DoGarbageCollection()
@@ -2094,8 +2102,9 @@ void WCollector::DoGarbageCollection()
         }
 #endif
         GetGCStats().lastCollectionWasYoung = true;
-        DoYoungGarbageCollection();
-        return;
+        if (DoYoungGarbageCollection()) {
+            return;
+        }
     }
     // Reaching here means a full collection runs, even when the request said YOUNG
     // (the majorInterval promotion above); the throttle clocks key off this record.

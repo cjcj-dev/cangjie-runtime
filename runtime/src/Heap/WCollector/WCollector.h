@@ -239,7 +239,7 @@ private:
     // Independent post-minor checkmark (MRT_GC_CHECKMARK). Observational only.
     void CheckmarkYoungMarking(const std::vector<BaseObject*>& allocationRoots);
 #endif
-    void DoYoungGarbageCollection();
+    bool DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
@@ -277,6 +277,7 @@ private:
     uint16_t currentTagID = 0;
     uint32_t minorRunsSinceMajor = 0;
     uint64_t minorTotalRuns = 0;
+    size_t emptyRemsetFallbacks = 0;
     mutable std::unordered_set<MAddress> minorRescannedLines;
     mutable std::unordered_set<MAddress> minorRescannedFields;
     mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;

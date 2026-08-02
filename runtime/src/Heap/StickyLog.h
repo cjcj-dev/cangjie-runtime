@@ -49,6 +49,7 @@ public:
     size_t GetEvacuationThreshold() const { return evacuationThreshold; }
     size_t GetEvacuationMaxRegions() const { return evacuationMaxRegions; }
     bool IsLoggedLine(MAddress address) const;
+    bool HasLoggedLines() const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
     void BeginEpoch();
