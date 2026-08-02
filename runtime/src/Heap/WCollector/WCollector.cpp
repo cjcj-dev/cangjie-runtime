@@ -901,7 +901,13 @@ void WCollector::DoYoungGarbageCollection()
         }
     });
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
-    RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan);
+    MinorSlotSet liveRememberedSlots;
+    for (MAddress slot : rememberedSlots) {
+        if (weakSlots.count(slot) == 0 && (!fullYoungScan || reachableSlots.count(slot) != 0)) {
+            liveRememberedSlots.insert(slot);
+        }
+    }
+    RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
 
     size_t liveObjects = 0;
@@ -923,7 +929,7 @@ void WCollector::DoYoungGarbageCollection()
     SatbBuffer::Instance().ClearBuffer();
 
     size_t allocatedBefore = space.AllocatedBytes();
-    EvacuateYoungRegions(reachableObjects, rememberedSlots);
+    EvacuateYoungRegions(reachableObjects, liveRememberedSlots);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
@@ -936,7 +942,7 @@ void WCollector::DoYoungGarbageCollection()
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveObjects, liveBytes, rememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
 }
 
 void WCollector::DoGarbageCollection()
