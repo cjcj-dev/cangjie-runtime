@@ -25,6 +25,9 @@ struct SkippedStackMapCounts {
 };
 
 SkippedStackMapCounts g_skippedStackMapCounts;
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+SkippedStackMapCounts g_rootMapMissCounts;
+#endif
 
 const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
@@ -51,31 +54,48 @@ void ResetSkippedStackMapCounts()
     g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    g_rootMapMissCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+#endif
 }
 
-ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
-                                          uintptr_t frameIP)
+ATTR_NO_INLINE void RecordSkippedStackMap(SkippedStackMapCounts& counts, const char* mapKind,
+                                          StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                                          uintptr_t frameIP, uintptr_t frameAddress, const Mutator& mutator)
 {
-    std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+    std::atomic<size_t>* skippedCount = &counts.zeroRootIndices;
     switch (reason) {
         case StackMapInvalidReason::ZERO_ENTRIES:
-            skippedCount = &g_skippedStackMapCounts.zeroEntries;
+            skippedCount = &counts.zeroEntries;
             break;
         case StackMapInvalidReason::PC_MISS:
-            skippedCount = &g_skippedStackMapCounts.pcMiss;
+            skippedCount = &counts.pcMiss;
             break;
         case StackMapInvalidReason::NONE:
         case StackMapInvalidReason::ZERO_ROOT_INDICES:
-            skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+            skippedCount = &counts.zeroRootIndices;
             break;
     }
     skippedCount->fetch_add(1, std::memory_order_relaxed);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    CString symbol = frame.GetFuncName();
+    LOG(RTLOG_ERROR,
+        "GC stack map miss: MAP_KIND=%s REASON=%s SYMBOL=%s START_IP=%p FRAME_IP=%p FRAME_ADDRESS=%p "
+        "MUTATOR=%p MUTATOR_TID=%u",
+        mapKind, StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+        reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), reinterpret_cast<void*>(frameAddress),
+        &mutator, mutator.GetTid());
+#endif
     if (UNLIKELY(STRICT_STACKMAP_ENABLED)) {
         CString symbol = frame.GetFuncName();
         LOG(RTLOG_FATAL,
-            "MRT_GC_STRICT_STACKMAP=1: invalid stack map reason=%s symbol=%s start_ip=%p frame_ip=%p",
-            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(), reinterpret_cast<void*>(startIP),
-            reinterpret_cast<void*>(frameIP));
+            "MRT_GC_STRICT_STACKMAP=1: invalid stack map kind=%s reason=%s symbol=%s start_ip=%p frame_ip=%p "
+            "frame_address=%p mutator=%p mutator_tid=%u",
+            mapKind, StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), reinterpret_cast<void*>(frameAddress),
+            &mutator, mutator.GetTid());
     }
 }
 
@@ -84,13 +104,23 @@ void ReportSkippedStackMapCounts()
     size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
     size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
     size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
-    if (zeroEntries == 0 && pcMiss == 0 && zeroRootIndices == 0) {
-        return;
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
     }
-    LOG(RTLOG_ERROR,
-        "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
-        "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
-        zeroEntries, pcMiss, zeroRootIndices);
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    zeroEntries = g_rootMapMissCounts.zeroEntries.load(std::memory_order_relaxed);
+    pcMiss = g_rootMapMissCounts.pcMiss.load(std::memory_order_relaxed);
+    zeroRootIndices = g_rootMapMissCounts.zeroRootIndices.load(std::memory_order_relaxed);
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC root map miss summary: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
+    }
+#endif
 }
 } // namespace
 
@@ -360,6 +390,12 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
                 reinterpret_cast<void*>(frameIP));
         }
     }
+#if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
+    else {
+        RecordSkippedStackMap(g_rootMapMissCounts, "ROOT_MAP", builder.GetInvalidReason(), frame, startIP, frameIP,
+                              frameAddress, mutator);
+    }
+#endif
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
@@ -412,7 +448,8 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
-        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
+        RecordSkippedStackMap(g_skippedStackMapCounts, "HEAP_REFERENCE_MAP", builder.GetInvalidReason(), frame,
+                              startIP, frameIP, frameAddress, mutator);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
