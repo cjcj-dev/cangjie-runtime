@@ -8,6 +8,7 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include <unordered_map>
+#include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
@@ -190,6 +191,26 @@ protected:
     void EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const override;
 
 private:
+    using MinorObjectSet = std::unordered_set<BaseObject*>;
+    using MinorRegionSet = std::unordered_set<RegionInfo*>;
+    using MinorSlotSet = std::unordered_set<MAddress>;
+
+    BaseObject* ResolveMinorReference(RefField<>& field) const;
+    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
+    void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
+    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
+    void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
+    void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                           MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
+    void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
+                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan);
+    bool FixMinorEvacuatedSlot(RefField<>& field) const;
+    void FixMinorRootSlots();
+    void FixMinorObjectSlots(BaseObject* object);
+    void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
+    void ValidateYoungMarking(const MinorObjectSet& reachableObjects);
+    void DoYoungGarbageCollection();
+    void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
     void TraceHeap();
@@ -205,6 +226,8 @@ private:
     ForwardTable fwdTable;
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint16_t currentTagID = 0;
+    uint64_t minorTotalRuns = 0;
+    MinorRegionSet minorCandidateRegions;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
