@@ -56,9 +56,10 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy),
-        idleBarrier(collectorProxy), enumBarrier(collectorProxy), traceBarrier(collectorProxy),
-        postTraceBarrier(collectorProxy), preforwardBarrier(collectorProxy), forwardBarrier(collectorProxy)
+          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy, rememberedSet),
+        idleBarrier(collectorProxy, rememberedSet), enumBarrier(collectorProxy, rememberedSet),
+        traceBarrier(collectorProxy, rememberedSet), postTraceBarrier(collectorProxy, rememberedSet),
+        preforwardBarrier(collectorProxy, rememberedSet), forwardBarrier(collectorProxy, rememberedSet)
     {
         currentBarrier = &stwBarrier;
         stwBarrierPtr = &stwBarrier;
@@ -102,6 +103,7 @@ public:
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
     void InstallBarrier(const GCPhase phase) override;
+    RememberedSet& GetRememberedSet() override { return rememberedSet; }
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
@@ -141,6 +143,7 @@ private:
     CollectorProxy collectorProxy;
 
     ExportRootTable exportRootsTable;
+    RememberedSet rememberedSet;
     Barrier stwBarrier;
     IdleBarrier idleBarrier;
     EnumBarrier enumBarrier;

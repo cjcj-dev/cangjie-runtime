@@ -7,8 +7,10 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <atomic>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -802,6 +804,30 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
     }
 
+    void SetYoungRegionFlag(uint8_t flag);
+
+    bool IsYoungRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+    }
+
+    static size_t GetYoungRegionCount();
+
+    static bool HasYoungRegions();
+
+    void SetYoungAge(uint8_t age)
+    {
+        CHECK(age <= MAX_YOUNG_AGE);
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
+    }
+
+    uint8_t GetYoungAge() const
+    {
+        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
+                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
+                                    RegionStateBitPos::YOUNG_AGE_FLAG);
+    }
+
     RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
@@ -992,15 +1018,22 @@ public:
     }
 
 private:
+    static std::atomic<size_t> youngRegionCount;
+    static std::mutex youngRegionFlagMutex;
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
+    static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
+    static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
+    static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
     enum RegionStateBitPos : uint8_t {
         REGION_TYPE_FLAG = 0,
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
         ENQUEUED_REGION_FLAG,
-        RESURRECTED_REGION_FLAG
+        RESURRECTED_REGION_FLAG,
+        YOUNG_REGION_FLAG,
+        YOUNG_AGE_FLAG
     };
 
     struct UnitMetadata {
@@ -1240,6 +1273,7 @@ private:
         SetMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
+        SetYoungRegionFlag(0);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);
     }

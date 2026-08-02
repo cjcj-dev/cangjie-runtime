@@ -27,6 +27,35 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+std::mutex RegionInfo::youngRegionFlagMutex;
+
+void RegionInfo::SetYoungRegionFlag(uint8_t flag)
+{
+    std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
+    bool wasYoung = IsYoungRegion();
+    bool makeYoung = flag != 0;
+    if (!wasYoung && makeYoung) {
+        youngRegionCount.fetch_add(1, std::memory_order_release);
+    }
+    metadata.regionStateBitField.SetAtomicValue(
+        RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
+    if (wasYoung && !makeYoung) {
+        size_t count = youngRegionCount.load(std::memory_order_relaxed);
+        CHECK(count > 0);
+        youngRegionCount.fetch_sub(1, std::memory_order_release);
+    }
+}
+
+size_t RegionInfo::GetYoungRegionCount()
+{
+    return youngRegionCount.load(std::memory_order_acquire);
+}
+
+bool RegionInfo::HasYoungRegions()
+{
+    return GetYoungRegionCount() != 0;
+}
 
 static size_t GetPageSize() noexcept
 {

@@ -99,7 +99,7 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
     return target;
 }
 
-void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+void ForwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                           MemoryOrder order) const
 {
     RefField<> newField(newRef);
@@ -112,7 +112,7 @@ void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field
     }
 }
 
-BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+BaseObject* ForwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                 MemoryOrder order) const
 {
     MAddress oldValue = field.Exchange(newRef, order);
@@ -123,7 +123,7 @@ BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>&
     return oldRef;
 }
 
-bool ForwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+bool ForwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                              BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
@@ -142,7 +142,7 @@ bool ForwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fi
     return false;
 }
 
-void ForwardBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+void ForwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                      MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)

@@ -6,6 +6,7 @@
 
 
 #include "Barrier.inline.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/Field.inline.h"
@@ -15,6 +16,44 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+std::atomic<uint64_t> generationalBarrierFastPathHits { 0 };
+std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
+#endif
+
+inline bool HasYoungRegionsForRecording()
+{
+    bool hasYoungRegions = RegionInfo::HasYoungRegions();
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+    if (hasYoungRegions) {
+        generationalBarrierRegionLookups.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        generationalBarrierFastPathHits.fetch_add(1, std::memory_order_relaxed);
+    }
+#endif
+    return hasYoungRegions;
+}
+} // namespace
+
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+void Barrier::ResetGenerationalBarrierProbe()
+{
+    generationalBarrierFastPathHits.store(0, std::memory_order_relaxed);
+    generationalBarrierRegionLookups.store(0, std::memory_order_relaxed);
+}
+
+uint64_t Barrier::GetGenerationalBarrierFastPathHits()
+{
+    return generationalBarrierFastPathHits.load(std::memory_order_relaxed);
+}
+
+uint64_t Barrier::GetGenerationalBarrierRegionLookups()
+{
+    return generationalBarrierRegionLookups.load(std::memory_order_relaxed);
+}
+#endif
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -29,11 +68,23 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    WriteReferenceImpl(obj, field, ref);
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+}
+
+void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+{
     DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
     field.SetTargetObject(ref);
 }
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+{
+    WriteStructImpl(obj, dst, dstLen, src, srcLen);
+    RecordCrossGenEdgesInStruct(obj, dst, dstLen);
+}
+
+void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
@@ -98,6 +149,12 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    AtomicWriteReferenceImpl(obj, field, ref, order);
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+}
+
+void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
+{
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
              &field, field.GetFieldValue(), ref);
@@ -110,6 +167,14 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
 
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                          MemoryOrder order) const
+{
+    BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    return oldRef;
+}
+
+BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                             MemoryOrder order) const
 {
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
@@ -137,6 +202,16 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
+    if (success) {
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    }
+    return success;
+}
+
+bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                          BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+{
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
@@ -150,6 +225,13 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                            MIndex srcSize) const
 {
+    CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize);
+}
+
+void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                               MAddress srcField, MIndex srcSize) const
+{
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
@@ -162,6 +244,13 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
 
 void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                               MAddress srcField, MIndex srcSize) const
+{
+    CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    RecordCrossGenEdgesInStruct(dstObj, dstField, dstSize);
+}
+
+void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                  MAddress srcField, MIndex srcSize) const
 {
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -208,6 +297,12 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
 
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
+    WriteGenericImpl(obj, fieldPtr, src, size);
+    RecordCrossGenEdgesInStruct(obj, reinterpret_cast<MAddress>(fieldPtr), size);
+}
+
+void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+{
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
                               reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
@@ -235,6 +330,14 @@ void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr 
 }
 void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
+    ReadGenericImpl(dstObj, obj, fieldPtr, size);
+    if (Heap::IsHeapAddress(dstObj)) {
+        RecordCrossGenEdgesInStruct(dstObj, reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE, size);
+    }
+}
+
+void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
+{
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
                               size, fieldPtr, size) == EOK,
@@ -248,6 +351,55 @@ void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr,
         MAddress dstAddr = reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE;
         MAddress srcAddr = reinterpret_cast<MAddress>(fieldPtr);
         WriteStruct(dstObj, dstAddr, size, srcAddr, size);
+    }
+}
+
+void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
+{
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
+    if (obj == nullptr || ref == nullptr || !Heap::IsHeapAddress(obj) || !Heap::IsHeapAddress(fieldAddress) ||
+        !Heap::IsHeapAddress(ref)) {
+        return;
+    }
+    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
+    if (!targetRegion->IsYoungRegion()) {
+        return;
+    }
+    RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
+    if (!sourceRegion->IsYoungRegion()) {
+        theRememberedSet.Record(fieldAddress);
+    }
+}
+
+void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
+{
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return;
+    }
+    obj->ForEachRefInStruct(
+        [this, obj](RefField<>& field) {
+            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+        },
+        start, start + size);
+}
+
+void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size) const
+{
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return;
+    }
+    MAddress end = start + size;
+    for (MAddress current = start; current + sizeof(RefField<>) <= end; current += sizeof(RefField<>)) {
+        RefField<>* field = reinterpret_cast<RefField<>*>(current);
+        RecordCrossGenEdge(obj, current, field->GetTargetObject());
     }
 }
 
