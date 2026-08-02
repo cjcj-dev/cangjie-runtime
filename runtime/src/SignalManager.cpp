@@ -9,9 +9,11 @@
 
 #include <algorithm>
 #include <atomic>
+#include <unistd.h>
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#include "Base/SysCall.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
@@ -21,10 +23,32 @@
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
 #include "Heap/Collector/TaskQueue.h"
+#include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
 #endif
 namespace MapleRuntime {
+
+namespace {
+// AS-safe stderr write for signal-handler diagnostic path only.
+void WriteSigDiag(const char* buf, size_t len)
+{
+    if (buf == nullptr || len == 0) {
+        return;
+    }
+    (void)write(STDERR_FILENO, buf, len);
+}
+
+// FLOG-compatible ERROR line without logMutex: "<tid> E <msg>\n"
+void LogErrorAsSafe(const char* msg)
+{
+    char buf[512];
+    int n = sprintf_s(buf, sizeof(buf), "%d E %s\n", static_cast<int>(GetTid()), msg);
+    if (n > 0) {
+        WriteSigDiag(buf, static_cast<size_t>(n));
+    }
+}
+} // namespace
 
 void SignalManager::Init()
 {
@@ -88,7 +112,7 @@ static void CheckStackOverflow(const siginfo_t& info)
     uintptr_t topAddr = stackAddr - MapleRuntime::MRT_PAGE_SIZE;
     uintptr_t sigAddr = reinterpret_cast<uintptr_t>(info.si_addr);
     if (stackAddr != 0 && sigAddr >= topAddr && sigAddr < stackAddr) {
-        FLOG(RTLOG_ERROR, "unhandled SIGSEGV from unmanaged stack overflow!");
+        LogErrorAsSafe("unhandled SIGSEGV from unmanaged stack overflow!");
     }
 }
 
@@ -108,77 +132,24 @@ static void CheckSuspendState()
 
 void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
 {
-    DLOG(SIGNAL, "Unexpected signal:\n%s", PrintSignalInfo(*info).Str());
-    MRT_FlushGCInfo();
+    // AS-safe path: key fields (tid/si_addr/pc/fa) via stack buffer + write(2).
+    // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
+    // signal-context critical path (REPORT-gchang11 §5 D).
 
     ucontext_t* ucontext = static_cast<ucontext_t*>(context);
     uintptr_t sigPc = GetPCFromUContext(*ucontext);
     uintptr_t sigFa = GetFAFromUContext(*ucontext);
-    constexpr uint8_t threadNameLen = 16;
-    constexpr uint32_t simpleSigStrSize = 256;
-    char threadName[threadNameLen];
-#if defined (__arm__) && defined (__ANDROID__)
-    prctl(PR_GET_NAME, threadName, 0, 0, 0);
-#else
-    pthread_t thread = pthread_self();
-    pthread_getname_np(thread, threadName, threadNameLen);
-#endif
-    UnwindContext uwContext;
-    const char* frameTypeStr;
-    Mutator* mutator = Mutator::GetMutator();
+    const void* siAddr = (info != nullptr) ? info->si_addr : nullptr;
 
-    if (mutator != nullptr) {
-        if (mutator->GetUnwindContext().GetUnwindContextStatus() == UnwindContextStatus::RISKY) {
-            uwContext = Mutator::GetMutator()->GetUnwindContext();
-            frameTypeStr = "native";
-        } else if (StackManager::IsRuntimeFrame(sigPc)) {
-            uwContext =
-                UnwindContext(MachineFrame(reinterpret_cast<FrameAddress*>(sigFa), reinterpret_cast<uint32_t*>(sigPc)));
-            frameTypeStr = "runtime";
-        } else {
-            if (sig == SIGABRT) {
-                frameTypeStr = "runtime";
-                char simpleSigStr[simpleSigStrSize];
-                CHECK_IN_SIG(sprintf_s(simpleSigStr, simpleSigStrSize,
-                            "Thread \"%s\" catched unhandled %s (%s) from %s frame. Please report to us.", threadName,
-                            SignalManager::GetSignalName(sig), strsignal(sig), frameTypeStr) != -1);
-                FLOG(RTLOG_ERROR, simpleSigStr);
-                return;
-            }
-            uwContext =
-                UnwindContext(MachineFrame(reinterpret_cast<FrameAddress*>(sigFa), reinterpret_cast<uint32_t*>(sigPc)));
-            frameTypeStr = "managed";
-        }
-    } else {
-        frameTypeStr = "native";
-        char simpleSigStr[simpleSigStrSize];
-        CHECK_IN_SIG(sprintf_s(simpleSigStr, simpleSigStrSize,
-                     "Thread \"%s\" catched unhandled %s (%s) from %s frame. signal pc: 0x%lx", threadName,
-                     SignalManager::GetSignalName(sig), strsignal(sig), frameTypeStr, sigPc) != -1);
-        if (sig == SIGSEGV) {
-            CHECK_IN_SIG(sprintf_s(simpleSigStr, simpleSigStrSize, "%s, addr: %p", simpleSigStr, info->si_addr) != -1);
-        }
-        FLOG(RTLOG_ERROR, simpleSigStr);
-#if defined(ENABLE_BACKWARD_PTRAUTH_CFI)
-        SigHandlerFrameinfo frameInfo(MachineFrame(reinterpret_cast<FrameAddress*>(sigFa),
-            reinterpret_cast<uint32_t*>(sigPc), nullptr), FrameType::NATIVE);
-#else
-        SigHandlerFrameinfo frameInfo(MachineFrame(reinterpret_cast<FrameAddress*>(sigFa),
-            reinterpret_cast<uint32_t*>(sigPc)), FrameType::NATIVE);
-#endif
-        frameInfo.PrintFrameInfo(0);
-        return;
+    char line[320];
+    int n = sprintf_s(line, sizeof(line),
+                      "%d E signal %s (%d) pc=0x%lx fa=0x%lx si_addr=%p\n",
+                      static_cast<int>(GetTid()), SignalManager::GetSignalName(static_cast<uint8_t>(sig)), sig,
+                      static_cast<unsigned long>(sigPc), static_cast<unsigned long>(sigFa), siAddr);
+    if (n > 0) {
+        WriteSigDiag(line, static_cast<size_t>(n));
     }
-
-    char simpleSigStr[simpleSigStrSize];
-    CHECK_IN_SIG(sprintf_s(simpleSigStr, simpleSigStrSize,
-                 "Thread \"%s\" catched unhandled %s (%s) from %s frame. signal pc: 0x%lx", threadName,
-                 SignalManager::GetSignalName(sig), strsignal(sig), frameTypeStr, sigPc) != -1);
-    if (sig == SIGSEGV) {
-        CHECK_IN_SIG(sprintf_s(simpleSigStr, simpleSigStrSize, "%s, addr: %p", simpleSigStr, info->si_addr) != -1);
-    }
-    FLOG(RTLOG_ERROR, simpleSigStr);
-    StackManager::PrintSignalStackTrace(&uwContext, sigPc, sigFa);
+    // PrintSignalStackTrace degraded: only pc/fa hex already emitted above (no unwind/heap).
 }
 
 bool SignalManager::HandleUnexpectedSignal(int sig, siginfo_t* info, void* context)
