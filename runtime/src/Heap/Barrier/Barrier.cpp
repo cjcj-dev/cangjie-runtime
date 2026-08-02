@@ -112,7 +112,7 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     AtomicWriteReferenceImpl(obj, field, ref, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(order));
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
@@ -131,7 +131,7 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
                                          MemoryOrder order) const
 {
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(order));
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     return oldRef;
 }
 
@@ -166,7 +166,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 {
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(succOrder));
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     }
     return success;
 }
