@@ -100,8 +100,8 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
     return target;
 }
 
-void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                          MemoryOrder order) const
+void ForwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                              MemoryOrder order) const
 {
     RefField<> newField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
@@ -114,8 +114,8 @@ void ForwardBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
-BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                                MemoryOrder order) const
+BaseObject* ForwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                    MemoryOrder order) const
 {
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
@@ -126,8 +126,9 @@ BaseObject* ForwardBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>&
     return oldRef;
 }
 
-bool ForwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                             BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+bool ForwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                                 BaseObject* newRef, MemoryOrder succOrder,
+                                                 MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
@@ -146,8 +147,8 @@ bool ForwardBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fi
     return false;
 }
 
-void ForwardBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                     MAddress srcField, MIndex srcSize) const
+void ForwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                         MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
