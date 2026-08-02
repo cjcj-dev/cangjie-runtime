@@ -27,13 +27,13 @@ void Barrier::WriteF32(BaseObject* obj, Field<float>& field, float val) const { 
 
 void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const { field.SetFieldValue(obj, val); }
 
-void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
     field.SetTargetObject(ref);
 }
 
-void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
@@ -96,7 +96,8 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 }
 
 // barrier for atomic operation.
-void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
+void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
+                                       MemoryOrder order) const
 {
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
@@ -108,8 +109,8 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     field.SetTargetObject(ref, order);
 }
 
-BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                         MemoryOrder order) const
+BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                             MemoryOrder order) const
 {
     MAddress oldValue = field.Exchange(newRef, order);
     RefField<> oldField(oldValue);
@@ -134,8 +135,9 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
     return target;
 }
 
-bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                      MemoryOrder succOrder, MemoryOrder failOrder) const
+bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                          BaseObject* newRef, MemoryOrder succOrder,
+                                          MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
@@ -147,8 +149,8 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     return res;
 }
 
-void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
-                           MIndex srcSize) const
+void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                               MAddress srcField, MIndex srcSize) const
 {
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -160,8 +162,8 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
 #endif
 }
 
-void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                              MAddress srcField, MIndex srcSize) const
+void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                  MAddress srcField, MIndex srcSize) const
 {
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -206,7 +208,7 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
     });
 }
 
-void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
@@ -233,7 +235,7 @@ void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr 
         WriteStruct(obj, dstAddr, size, srcAddr, size);
     }
 }
-void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
+void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
