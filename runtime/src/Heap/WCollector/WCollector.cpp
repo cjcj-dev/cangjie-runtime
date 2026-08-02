@@ -7,6 +7,7 @@
 
 #include "WCollector.h"
 
+#include <array>
 #include <cstdlib>
 #include <cstring>
 
@@ -795,6 +796,123 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         });
     }
     VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
+}
+
+void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects)
+{
+    const char* enabled = std::getenv("MRT_GCV2_STALE_REFERENCE_VALIDATOR");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+
+    constexpr size_t categoryCount = 12;
+    constexpr size_t sampleCount = 3;
+    const std::array<const char*, categoryCount> categoryNames = {
+        "stack", "register", "derived", "static", "heap", "weak", "finalizer", "export",
+        "concurrency", "external_resurrection", "exception", "raw_object"
+    };
+    std::array<size_t, categoryCount> counts{};
+    std::array<std::array<const void*, sampleCount>, categoryCount> slots{};
+    std::array<std::array<BaseObject*, sampleCount>, categoryCount> holders{};
+    std::array<std::array<BaseObject*, sampleCount>, categoryCount> targets{};
+
+    auto record = [this, &counts, &slots, &holders, &targets](
+                      size_t category, const void* slot, BaseObject* holder, BaseObject* target) {
+        if (!Heap::IsHeapAddress(target) || !IsGhostFromObject(target) || IsUnmovableFromObject(target)) {
+            return;
+        }
+        size_t sample = counts[category]++;
+        if (sample < sampleCount) {
+            slots[category][sample] = slot;
+            holders[category][sample] = holder;
+            targets[category][sample] = target;
+        }
+    };
+    auto recordRawRoot = [&record](size_t category) {
+        return RootVisitor([category, &record](ObjectRef& root) {
+            record(category, &root, nullptr, root.object);
+        });
+    };
+    auto recordField = [&record](size_t category, BaseObject* holder, RefField<>& field) {
+        RefField<> value(field);
+        record(category, &field, holder, value.GetTargetObject());
+    };
+
+    RootVisitor stackVisitor = recordRawRoot(0);
+    RootVisitor registerVisitor = recordRawRoot(1);
+    DerivedPtrVisitor derivedVisitor = [&record](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+        record(2, &derivedPtr, nullptr, reinterpret_cast<BaseObject*>(basePtr));
+    };
+    RootVisitor exceptionVisitor = recordRawRoot(10);
+    RootVisitor rawObjectVisitor = recordRawRoot(11);
+    MutatorManager::Instance().VisitAllMutators(
+        [&registerVisitor, &stackVisitor, &derivedVisitor, &exceptionVisitor, &rawObjectVisitor](Mutator& mutator) {
+            mutator.VisitHeapReferences(
+                registerVisitor, stackVisitor, derivedVisitor, exceptionVisitor, rawObjectVisitor);
+        });
+
+    Heap::GetHeap().VisitStaticRoots(
+        [&recordField](RefField<>& field) { recordField(3, nullptr, field); });
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(recordRawRoot(6));
+    Heap::GetHeap().VisitAllExportRoots(recordRawRoot(7));
+    RootVisitor concurrencyVisitor = recordRawRoot(8);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrencyVisitor);
+
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* const& object : resurrectedExportObjectes) {
+            record(9, &object, nullptr, object);
+        }
+        for (BaseObject* const& object : resurrectedExportObjectesForwardPhase) {
+            record(9, &object, nullptr, object);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+        for (const auto& entry : cycleRefWorkStack) {
+            record(9, &entry.first, nullptr, entry.first);
+            for (BaseObject* const& object : entry.second) {
+                record(9, &object, nullptr, object);
+            }
+        }
+    }
+
+    auto visitObject = [this, &recordField](BaseObject* object) {
+        BaseObject* holder = object;
+        if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder)) {
+            holder = FindLatestVersion(holder);
+        }
+        if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
+            return;
+        }
+        size_t category = holder->IsWeakRef() ? 5 : 4;
+        holder->ForEachRefField(
+            [category, holder, &recordField](RefField<>& field) { recordField(category, holder, field); });
+    };
+    if (reachableObjects != nullptr) {
+        for (BaseObject* object : *reachableObjects) {
+            visitObject(object);
+        }
+    } else {
+        RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+        manager.ForEachObjUnsafe(visitObject);
+    }
+
+    size_t total = 0;
+    for (size_t category = 0; category < categoryCount; ++category) {
+        total += counts[category];
+        VLOG(REPORT,
+             "[GCV2Minor] STALE_SLOT_CATEGORY_%s point=%s count=%zu "
+             "samples=[%p/%p/%p,%p/%p/%p,%p/%p/%p]",
+             categoryNames[category], point, counts[category], slots[category][0], holders[category][0],
+             targets[category][0], slots[category][1], holders[category][1], targets[category][1],
+             slots[category][2], holders[category][2], targets[category][2]);
+    }
+    VLOG(REPORT, "[GCV2Minor] VALIDATOR_GATED_BY_MRT_GCV2_STALE_REFERENCE_VALIDATOR point=%s total=%zu",
+         point, total);
+    if (std::strcmp(point, "round2-start") == 0) {
+        VLOG(REPORT, "[GCV2Minor] STALE_SLOT_AT_ROUND2_START_%zu", total);
+    }
 }
 
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
