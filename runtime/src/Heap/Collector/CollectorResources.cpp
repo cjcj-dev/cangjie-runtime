@@ -7,6 +7,8 @@
 
 #include "CollectorResources.h"
 
+#include <cstdlib>
+#include <cstring>
 #include <thread>
 
 #include "Base/SysCall.h"
@@ -173,7 +175,16 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
     GCRequest& request = g_gcRequests[reason];
     uint64_t curTime = TimeUtil::NanoSeconds();
     request.SetPrevRequestTime(curTime);
-    if (collectorProxy.ShouldIgnoreRequest(request)) {
+    bool ignored = collectorProxy.ShouldIgnoreRequest(request);
+    const char* triggerProbeEnv = std::getenv("MRT_STICKY_MINOR_TRIGGER_PROBE");
+    if (reason == GC_REASON_YOUNG && triggerProbeEnv != nullptr && std::strcmp(triggerProbeEnv, "1") == 0) {
+        LOG(RTLOG_INFO,
+            "[StickyMinorTrigger] stage=request_check nowNs=%zu condition=%s sinceYoungFinishNs=%zu "
+            "throttleNs=%zu",
+            curTime, ignored ? "throttled" : "trigger", curTime - GCStats::GetPrevYoungGCFinishTime(),
+            request.minIntervelNs);
+    }
+    if (ignored) {
         DLOG(ALLOC, "ignore gc request");
         PostIgnoredGcRequest(reason);
     } else if (async) {
