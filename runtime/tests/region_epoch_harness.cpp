@@ -30,6 +30,7 @@
 #include "Allocator/RegionSpace.h"
 #include "CangjieRuntime.h"
 #include "Heap/Heap.h"
+#include "Heap/StickyLog.h"
 
 namespace MapleRuntime {
 std::atomic<bool> routeTeardownAfterAcquire { false };
@@ -409,6 +410,41 @@ bool ProbeReclaimGhostTeardown(RegionManager& manager)
     return pass;
 }
 
+bool ProbeYoungRegionSurvival(RegionManager& manager)
+{
+    constexpr size_t expectedLiveBytes = 4096;
+    RegionInfo* survivor = manager.AllocateThreadLocalRegion();
+    RegionInfo* empty = manager.AllocateThreadLocalRegion();
+    if (survivor == nullptr || empty == nullptr) {
+        std::printf("EPOCH_PROBE young_region_survival result=FAIL reason=allocate-region\n");
+        return false;
+    }
+    MAddress allocation = survivor->Alloc(expectedLiveBytes);
+    if (allocation == 0) {
+        std::printf("EPOCH_PROBE young_region_survival result=FAIL reason=allocate-bytes\n");
+        return false;
+    }
+    survivor->GetOrAllocLiveInfo();
+    survivor->AddLiveByteCount(expectedLiveBytes);
+    survivor->SetYoungAge(StickyLog::Instance().GetPromoteAge());
+    manager.RemoveThreadLocalRegion(survivor);
+    manager.EnlistFullThreadLocalRegion(survivor);
+    manager.RemoveThreadLocalRegion(empty);
+    manager.EnlistFullThreadLocalRegion(empty);
+
+    const size_t expectedRegionBytes = survivor->GetRegionSize();
+    const double expectedSurvivalRate =
+        static_cast<double>(expectedLiveBytes) / static_cast<double>(expectedRegionBytes);
+    YoungCollectionStats stats;
+    manager.CollectYoungGarbage(stats, [](RegionInfo*) {});
+    const bool pass = !survivor->IsYoungRegion() && stats.reclaimedRegions == 1;
+    std::printf(
+        "EPOCH_PROBE young_region_survival result=%s expected_region_bytes=%zu "
+        "expected_live_bytes=%zu expected_survival_rate=%.9f expected_destinations=promotion,reclamation\n",
+        pass ? "PASS" : "FAIL", expectedRegionBytes, expectedLiveBytes, expectedSurvivalRate);
+    return pass;
+}
+
 } // namespace
 } // namespace MapleRuntime
 
@@ -428,14 +464,16 @@ int main()
     const bool staleEmpty = MapleRuntime::ProbeStaleEmpty(manager);
     const bool largePromotion = MapleRuntime::ProbeLargePromotion(manager);
     const bool reclaimGhost = MapleRuntime::ProbeReclaimGhostTeardown(manager);
+    const bool youngRegionSurvival = MapleRuntime::ProbeYoungRegionSurvival(manager);
     MapleRuntime::CangjieRuntime::FiniAndDelete();
     std::printf(
         "EPOCH_PROBE summary route=%s empty=%s max_epoch=%s clear_ghost=%s snapshot=%s "
-        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s reclaim_ghost=%s\n",
+        "reuse_route=%s boundary=%s stale_empty=%s large_promotion=%s reclaim_ghost=%s "
+        "young_region_survival=%s\n",
         route ? "PASS" : "FAIL", empty ? "PASS" : "FAIL", maxEpoch ? "PASS" : "FAIL",
         clearGhost ? "PASS" : "FAIL", snapshot ? "PASS" : "FAIL", reuseRoute ? "PASS" : "FAIL",
         boundary ? "PASS" : "FAIL", staleEmpty ? "PASS" : "FAIL", largePromotion ? "PASS" : "FAIL",
-        reclaimGhost ? "PASS" : "FAIL");
+        reclaimGhost ? "PASS" : "FAIL", youngRegionSurvival ? "PASS" : "FAIL");
     return route && empty && maxEpoch && clearGhost && snapshot && reuseRoute && boundary &&
-        staleEmpty && largePromotion && reclaimGhost ? 0 : 1;
+        staleEmpty && largePromotion && reclaimGhost && youngRegionSurvival ? 0 : 1;
 }

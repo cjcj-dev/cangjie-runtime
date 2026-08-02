@@ -8,6 +8,7 @@
 #include "Allocator/RegionManager.h"
 
 #include <cmath>
+#include <cstring>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -525,7 +526,24 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
     // Promotion age (default 1 = shipped behavior): regions with live bytes age
     // until youngAge reaches the threshold, then the whole region is promoted.
     const uint8_t promoteAge = StickyLog::Instance().GetPromoteAge();
-    auto collect = [this, &stats, &promoteVisitor, promoteAge](RegionList& list, bool releaseResources) {
+    const char* survivalProbeEnv = std::getenv("MRT_STICKY_MINOR_REGION_SURVIVAL_PROBE");
+    const bool survivalProbeEnabled = survivalProbeEnv != nullptr && std::strcmp(survivalProbeEnv, "1") == 0;
+    auto reportSurvival = [survivalProbeEnabled](RegionInfo* region, const char* destination) {
+        if (!survivalProbeEnabled) {
+            return;
+        }
+        size_t regionBytes = region->GetRegionSize();
+        size_t allocatedBytes = region->GetRegionAllocatedSize();
+        size_t liveBytes = region->GetLiveByteCount();
+        double survivalRate = regionBytes == 0 ? 0.0 :
+            static_cast<double>(liveBytes) / static_cast<double>(regionBytes);
+        LOG(RTLOG_INFO,
+            "[StickyMinorRegionSurvival] region=%p regionBytes=%zu allocatedBytes=%zu liveBytes=%zu "
+            "survivalRate=%.9f destination=%s",
+            region, regionBytes, allocatedBytes, liveBytes, survivalRate, destination);
+    };
+    auto collect = [this, &stats, &promoteVisitor, &reportSurvival, promoteAge](RegionList& list,
+                                                                              bool releaseResources) {
         RegionInfo* region = list.GetHeadRegion();
         while (region != nullptr) {
             RegionInfo* next = region->GetNextRegion();
@@ -537,7 +555,9 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 uint8_t age = region->GetYoungAge();
                 if (age < promoteAge) {
                     region->SetYoungAge(age + 1);
+                    reportSurvival(region, "young");
                 } else {
+                    reportSurvival(region, "promotion");
                     region->PreserveRetainedLiveInfo();
                     region->SetYoungRegionFlag(0);
                     region->SetYoungAge(0);
@@ -546,6 +566,7 @@ void RegionManager::CollectYoungGarbage(YoungCollectionStats& stats,
                 region = next;
                 continue;
             }
+            reportSurvival(region, "reclamation");
             size_t num = region->GetUnitCount();
             size_t unitIndex = region->GetUnitIdx();
             MAddress regionStart = region->GetRegionStart();
