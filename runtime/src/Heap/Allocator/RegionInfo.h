@@ -735,7 +735,7 @@ public:
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
             metadata.liveInfo = nullptr;
-            metadata.liveByteCount = 0;
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         }
     }
     void ClearLiveInfo()
@@ -743,7 +743,7 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
-        metadata.liveByteCount = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
     }
 
     // only from-region should be locked.
@@ -962,9 +962,15 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    uint32_t GetLiveByteCount() const { return metadata.liveByteCount; }
+    uint32_t GetLiveByteCount() const
+    {
+        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+    }
 
-    void ResetLiveByteCount() { metadata.liveByteCount = 0; }
+    void ResetLiveByteCount()
+    {
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+    }
 
     void AddLiveByteCount(uint32_t count)
     {
@@ -1227,7 +1233,7 @@ private:
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
-        metadata.liveByteCount = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);

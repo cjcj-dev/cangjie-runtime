@@ -16,6 +16,18 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+void RememberNewReference(Mutator* mutator, BaseObject* ref)
+{
+    if (mutator == nullptr || ref == nullptr) {
+        return;
+    }
+    // Keep the tracing closure for references inserted after their owner may have been scanned.
+    // ShouldEnqueue filters trace-region and already marked objects and deduplicates the rest.
+    mutator->RememberObjectInSatbBuffer(ref);
+}
+} // namespace
+
 // Because gc thread will also have impact on tagged pointer in enum and trace phase,
 // so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -118,6 +130,7 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
     if (rememberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(rememberedObject);
     }
+    RememberNewReference(mutator, ref);
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
@@ -126,6 +139,7 @@ void TraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseO
 
 void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
+    RememberNewReference(Mutator::GetMutator(), ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
@@ -144,6 +158,13 @@ void TraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAd
                 },
                 dst, dst + dstLen);
         }
+        obj->ForEachRefInStruct(
+            [=](RefField<>& refField) {
+                MAddress offset = reinterpret_cast<MAddress>(&refField) - dst;
+                RefField<> srcField(*reinterpret_cast<RefField<>*>(src + offset));
+                RememberNewReference(mutator, ReadReference(nullptr, srcField));
+            },
+            dst, dst + srcLen);
     }
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
@@ -170,6 +191,12 @@ void TraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAd
 
 void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    Mutator* mutator = Mutator::GetMutator();
+    gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
+        MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
+        RefField<> srcField(*reinterpret_cast<RefField<>*>(src + offset));
+        RememberNewReference(mutator, ReadReference(nullptr, srcField));
+    });
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
@@ -212,9 +239,10 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
     MAddress oldValue = oldField.GetFieldValue();
     (void)oldValue;
     BaseObject* oldRef = ReadReference(nullptr, oldField);
+    Mutator* mutator = Mutator::GetMutator();
+    RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
-    Mutator* mutator = Mutator::GetMutator();
     mutator->RememberObjectInSatbBuffer(oldRef);
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
@@ -227,11 +255,12 @@ void TraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, 
 BaseObject* TraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                               MemoryOrder order) const
 {
+    Mutator* mutator = Mutator::GetMutator();
+    RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
-    Mutator* mutator = Mutator::GetMutator();
     mutator->RememberObjectInSatbBuffer(oldRef);
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
          obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
@@ -244,11 +273,12 @@ bool TraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& fiel
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
+    Mutator* mutator = Mutator::GetMutator();
+    RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
 
     while (oldVersion == oldRef) {
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
-            Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);
             return true;
         }
@@ -274,10 +304,11 @@ void TraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex
     }
 #endif
     Mutator* mutator = Mutator::GetMutator();
-    RefFieldVisitor srcVisitor = [this](RefField<false>& field) {
+    RefFieldVisitor srcVisitor = [this, mutator](RefField<false>& field) {
         RefField<> oldField(field);
         RefField<> toBeUpdated(oldField);
         BaseObject* target = ReadReference(nullptr, toBeUpdated);
+        RememberNewReference(mutator, target);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
             field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
