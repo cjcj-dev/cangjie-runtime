@@ -61,6 +61,12 @@ public:
     void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const;
     void ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* fieldPtr, size_t size) const;
 
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+    static void ResetGenerationalBarrierProbe();
+    static uint64_t GetGenerationalBarrierFastPathHits();
+    static uint64_t GetGenerationalBarrierRegionLookups();
+#endif
+
 protected:
     virtual void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const;
     virtual void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;

@@ -16,6 +16,44 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+std::atomic<uint64_t> generationalBarrierFastPathHits { 0 };
+std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
+#endif
+
+inline bool HasYoungRegionsForRecording()
+{
+    bool hasYoungRegions = RegionInfo::HasYoungRegions();
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+    if (hasYoungRegions) {
+        generationalBarrierRegionLookups.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        generationalBarrierFastPathHits.fetch_add(1, std::memory_order_relaxed);
+    }
+#endif
+    return hasYoungRegions;
+}
+} // namespace
+
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+void Barrier::ResetGenerationalBarrierProbe()
+{
+    generationalBarrierFastPathHits.store(0, std::memory_order_relaxed);
+    generationalBarrierRegionLookups.store(0, std::memory_order_relaxed);
+}
+
+uint64_t Barrier::GetGenerationalBarrierFastPathHits()
+{
+    return generationalBarrierFastPathHits.load(std::memory_order_relaxed);
+}
+
+uint64_t Barrier::GetGenerationalBarrierRegionLookups()
+{
+    return generationalBarrierRegionLookups.load(std::memory_order_relaxed);
+}
+#endif
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -318,6 +356,9 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
     if (obj == nullptr || ref == nullptr || !Heap::IsHeapAddress(obj) || !Heap::IsHeapAddress(fieldAddress) ||
         !Heap::IsHeapAddress(ref)) {
         return;
@@ -334,6 +375,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
 
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
 {
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
@@ -346,6 +390,9 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
 
 void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size) const
 {
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
