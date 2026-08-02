@@ -818,6 +818,7 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     std::array<std::array<BaseObject*, sampleCount>, categoryCount> targets{};
     WorkStack pending = NewWorkStack();
     MinorObjectSet visited;
+    bool buildReachableClosure = reachableObjects == nullptr;
 
     auto record = [this, &counts, &slots, &holders, &targets](
                       size_t category, const void* slot, BaseObject* holder, BaseObject* target) {
@@ -832,12 +833,12 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         }
         return true;
     };
-    auto inspectTarget = [&record, &pending](
+    auto inspectTarget = [&record, &pending, buildReachableClosure](
                              size_t category, const void* slot, BaseObject* holder, BaseObject* target) {
         if (record(category, slot, holder, target)) {
             return;
         }
-        if (Heap::IsHeapAddress(target)) {
+        if (buildReachableClosure && Heap::IsHeapAddress(target)) {
             pending.push_back(target);
         }
     };
