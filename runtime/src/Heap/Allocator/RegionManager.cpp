@@ -8,6 +8,7 @@
 #include "Allocator/RegionManager.h"
 
 #include <cmath>
+#include <cstring>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -724,6 +725,15 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         StickyLog& stickyLog = StickyLog::Instance();
         size_t youngAllocated = GetYoungAllocatedSize();
         if (stickyLog.IsMinorEnabled() && youngAllocated >= stickyLog.GetYoungBytesThreshold()) {
+            const char* triggerProbeEnv = std::getenv("MRT_STICKY_MINOR_TRIGGER_PROBE");
+            if (triggerProbeEnv != nullptr && std::strcmp(triggerProbeEnv, "1") == 0) {
+                uint64_t now = TimeUtil::NanoSeconds();
+                LOG(RTLOG_INFO,
+                    "[StickyMinorTrigger] stage=threshold_check nowNs=%zu youngAllocated=%zu threshold=%zu "
+                    "sinceYoungFinishNs=%zu",
+                    now, youngAllocated, stickyLog.GetYoungBytesThreshold(),
+                    now - GCStats::GetPrevYoungGCFinishTime());
+            }
             DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated,
                  stickyLog.GetYoungBytesThreshold());
             collector.RequestGC(GC_REASON_YOUNG, true);
