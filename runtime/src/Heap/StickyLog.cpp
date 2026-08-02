@@ -151,7 +151,7 @@ void StickyLog::ConfigureMinorFromEnvironment()
     size_t configuredPromoteAge = ReadStickyPositiveInteger("MRT_STICKY_MINOR_PROMOTE_AGE", 1);
     promoteAge = static_cast<uint8_t>(std::min(configuredPromoteAge,
         static_cast<size_t>(RegionInfo::MAX_YOUNG_AGE)));
-    evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 0),
+    evacuationThreshold = std::min(ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_THRESHOLD", 10),
                                    static_cast<size_t>(100));
     evacuationMaxRegions = ReadStickyNonNegativeInteger("MRT_STICKY_EVAC_MAX_REGIONS", 8);
     // Fail-safe for non-sticky main ELF (L355 / stdiofd): fast sticky minor with empty remset
