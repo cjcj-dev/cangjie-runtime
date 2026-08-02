@@ -1525,6 +1525,15 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    const char* triggerProbeEnv = std::getenv("MRT_STICKY_MINOR_TRIGGER_PROBE");
+    const bool triggerProbeEnabled = triggerProbeEnv != nullptr && std::strcmp(triggerProbeEnv, "1") == 0;
+    if (triggerProbeEnabled) {
+        size_t youngAllocated =
+            reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().GetYoungAllocatedSize();
+        LOG(RTLOG_INFO,
+            "[StickyMinorTrigger] stage=minor_entry nowNs=%zu youngAllocated=%zu threshold=%zu",
+            start, youngAllocated, StickyLog::Instance().GetYoungBytesThreshold());
+    }
     ScopedStopTheWorld stw("sticky minor", true, GCPhase::GC_PHASE_ENUM);
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();
@@ -1533,6 +1542,12 @@ void WCollector::DoYoungGarbageCollection()
     minorCandidateRegions.clear();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    if (triggerProbeEnabled) {
+        LOG(RTLOG_INFO,
+            "[StickyMinorTrigger] stage=minor_start nowNs=%zu youngAllocated=%zu candidateBytes=%zu threshold=%zu",
+            TimeUtil::NanoSeconds(), manager.GetYoungAllocatedSize(), stats.candidateBytes,
+            StickyLog::Instance().GetYoungBytesThreshold());
+    }
     minorRescannedLines.clear();
     minorRescannedFields.clear();
     minorDiscoveredObjects.clear();
