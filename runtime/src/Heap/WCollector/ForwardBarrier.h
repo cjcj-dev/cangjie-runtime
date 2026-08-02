@@ -22,6 +22,9 @@ public:
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
 
+    void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const override;
+    void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const override;
+
     BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;
     void AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
                               MemoryOrder order) const override;
@@ -34,6 +37,9 @@ public:
 
     void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                          MIndex srcSize) const override;
+
+private:
+    void LogObject(BaseObject* obj) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_COPY_BARRIER_H
