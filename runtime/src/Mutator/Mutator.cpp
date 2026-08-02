@@ -7,6 +7,9 @@
 
 #include "Base/Types.h"
 #include "Common/TypeDef.h"
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
 #if defined(_WIN64)
 #define NOGDI
 #include <windows.h>
@@ -31,6 +34,17 @@
 #include "Interpreter/InterpreterSpecific.h"
 
 namespace MapleRuntime {
+namespace {
+const bool STACKSCAN_PROBE_ENABLED = []() {
+    const char* value = std::getenv("MRT_STACKSCAN_PROBE");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+std::atomic<size_t> g_stackscanRegistered{ 0 };
+std::atomic<size_t> g_stackscanUnregistered{ 0 };
+std::atomic<size_t> g_stackscanEnumerated{ 0 };
+std::atomic<size_t> g_stackscanCheckAndPush{ 0 };
+} // namespace
+
 extern "C" uintptr_t MRT_GetThreadLocalData()
 {
     uintptr_t tlDataAddr = reinterpret_cast<uintptr_t>(ThreadLocal::GetThreadLocalData());
@@ -168,6 +182,13 @@ void Mutator::InitProtectStackAddr()
 
 void Mutator::ResetMutator()
 {
+    if (UNLIKELY(STACKSCAN_PROBE_ENABLED)) {
+        size_t count = g_stackscanUnregistered.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR,
+            "STACKSCAN_PROBE event=unregister count=%zu mutator=%p tid=%u cjthread=%p top=%p size=%zu base=%p",
+            count, this, GetTid(), GetCjthreadPtr(), reinterpret_cast<void*>(GetStackTopAddr()), GetStackSize(),
+            reinterpret_cast<void*>(GetStackBaseAddr()));
+    }
     rawObject.object = nullptr;
     FlushDeferredLogObject();
     SatbBuffer::Instance().FlushQueue(satbNode);
@@ -437,6 +458,13 @@ void Mutator::InitStackInfo(ThreadLocalData* threadData)
     SetStackTopAddr(reinterpret_cast<uintptr_t>(CJThreadStackAddrGetByCJThrd(cjthread)));
     SetStackSize(CJThreadStackSizeGetByCJThrd(cjthread));
     SetStackBaseAddr(reinterpret_cast<uintptr_t>(CJThreadStackBaseAddrGetByCJThrd(cjthread)));
+    if (UNLIKELY(STACKSCAN_PROBE_ENABLED)) {
+        size_t count = g_stackscanRegistered.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR,
+            "STACKSCAN_PROBE event=register count=%zu mutator=%p tid=%u cjthread=%p top=%p size=%zu base=%p",
+            count, this, GetTid(), GetCjthreadPtr(), reinterpret_cast<void*>(GetStackTopAddr()), GetStackSize(),
+            reinterpret_cast<void*>(GetStackBaseAddr()));
+    }
 }
 
 bool Mutator::IsStackAddr(uintptr_t addr)
@@ -639,6 +667,10 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
         return;
     }
     TypeInfo* tip = obj->GetTypeInfo();
+    if (UNLIKELY(STACKSCAN_PROBE_ENABLED)) {
+        size_t count = g_stackscanCheckAndPush.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR, "STACKSCAN_PROBE event=check-and-push count=%zu object=%p typeinfo=%p", count, obj, tip);
+    }
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
     CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
                  "CheckAndPush: TypeInfo %p on stack object %p is not 8-byte aligned "
@@ -653,6 +685,13 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
 
 inline void Mutator::GcPhaseEnum(GCPhase newPhase)
 {
+    if (UNLIKELY(STACKSCAN_PROBE_ENABLED)) {
+        size_t count = g_stackscanEnumerated.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR,
+            "STACKSCAN_PROBE event=enumerate count=%zu mutator=%p tid=%u cjthread=%p top=%p size=%zu base=%p",
+            count, this, GetTid(), GetCjthreadPtr(), reinterpret_cast<void*>(GetStackTopAddr()), GetStackSize(),
+            reinterpret_cast<void*>(GetStackBaseAddr()));
+    }
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
     RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
