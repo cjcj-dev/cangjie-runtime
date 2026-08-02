@@ -797,7 +797,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
 }
 
-void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects)
+void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
     MinorObjectSet reachable;
     MinorObjectSet expectedYoung;
@@ -807,6 +807,9 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects)
             pending.push_back(object);
         }
     });
+    for (BaseObject* object : allocationRoots) {
+        pending.push_back(object);
+    }
     auto pushField = [this, &pending](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
         if (Heap::IsHeapAddress(target)) {
@@ -902,8 +905,25 @@ void WCollector::DoYoungGarbageCollection()
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
     WorkStack workStack = NewWorkStack();
     MinorObjectSet reachableObjects;
+    MinorObjectSet allocationRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
+    WorkStack enumRoots = NewWorkStack();
+    theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+    while (!enumRoots.empty()) {
+        BaseObject* object = enumRoots.back();
+        enumRoots.pop_back();
+        if (Heap::IsHeapAddress(object)) {
+            allocationRoots.insert(object);
+        }
+        if (fullYoungScan) {
+            if (Heap::IsHeapAddress(object)) {
+                workStack.push_back(object);
+            }
+        } else {
+            PushYoungObject(object, workStack);
+        }
+    }
     VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(object)) {
@@ -934,7 +954,7 @@ void WCollector::DoYoungGarbageCollection()
         });
     }
     if (fullYoungScan) {
-        ValidateYoungMarking(reachableObjects);
+        ValidateYoungMarking(reachableObjects, allocationRoots);
     }
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
