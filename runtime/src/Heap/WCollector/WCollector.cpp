@@ -768,7 +768,6 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     ValidateMinorReferences("before-return", &reachableObjects);
 
     ForwardFromSpace();
-    manager.ReassembleFromSpace();
 
     for (RegionInfo* region : minorCandidateRegions) {
         if (region->IsYoungRegion()) {
@@ -798,6 +797,10 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         });
     }
     VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
+
+    fwdTable.PrepareForwardTable();
+    ValidateMinorReferences("after-dispel", nullptr);
+    manager.ReassembleFromSpace();
 }
 
 void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects)
