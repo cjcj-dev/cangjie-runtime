@@ -94,7 +94,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
     });
 }
 
-void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
     CHECK(!theCollector.IsOldPointer(tmpField));
@@ -111,7 +111,7 @@ void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) c
     FixEdgeSet::Instance().MaybeAdd(nullptr, &field, ref);
 }
 
-void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(obj != nullptr);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
@@ -187,8 +187,8 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
     return target;
 }
 
-void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                            MemoryOrder order) const
+void PostTraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = oldField.GetFieldValue();
@@ -204,8 +204,8 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
-BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                                  MemoryOrder order) const
+BaseObject* PostTraceBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                      MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
@@ -216,8 +216,9 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
     return oldRef;
 }
 
-bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                               BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
+bool PostTraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                                   BaseObject* newRef, MemoryOrder succOrder,
+                                                   MemoryOrder failOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
@@ -234,8 +235,8 @@ bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& 
     return false;
 }
 
-void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                       MAddress srcField, MIndex srcSize) const
+void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize,
+                                           BaseObject* srcObj, MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!dstObj->HasRefField()) {
