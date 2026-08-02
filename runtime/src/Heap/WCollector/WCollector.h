@@ -278,6 +278,7 @@ private:
     uint32_t minorRunsSinceMajor = 0;
     uint64_t minorTotalRuns = 0;
     size_t emptyRemsetFallbacks = 0;
+    bool minorReclaimedWithoutPromotionLog = false;
     mutable std::unordered_set<MAddress> minorRescannedLines;
     mutable std::unordered_set<MAddress> minorRescannedFields;
     mutable std::unordered_set<BaseObject*> minorDiscoveredObjects;

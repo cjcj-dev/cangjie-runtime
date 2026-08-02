@@ -1964,9 +1964,13 @@ bool WCollector::DoYoungGarbageCollection()
     FlushAllocationRegions();
 
     StickyLog& stickyLog = StickyLog::Instance();
-    if (!stickyLog.HasLoggedLines()) {
+    if (!stickyLog.HasLoggedLines() || minorReclaimedWithoutPromotionLog) {
         ++emptyRemsetFallbacks;
-        VLOG(REPORT, "[StickyMinor] empty remset; major fallback count=%zu", emptyRemsetFallbacks);
+        VLOG(REPORT,
+             "[StickyMinor] incomplete remset; major fallback count=%zu empty=%u "
+             "priorReclaimWithoutPromotionLog=%u",
+             emptyRemsetFallbacks, static_cast<unsigned>(!stickyLog.HasLoggedLines()),
+             static_cast<unsigned>(minorReclaimedWithoutPromotionLog));
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
         return false;
     }
@@ -2069,6 +2073,13 @@ bool WCollector::DoYoungGarbageCollection()
     satbBuffer.FlushStickyLogQueue(promotionNode);
     VLOG(REPORT, "[StickyMinor] promotion scan regions=%zu objects=%zu loggedLines=%zu time=%zu us",
          promotedRegions, promotedObjects, promotedLoggedLines, promotionScanNs / NS_PER_US);
+    minorReclaimedWithoutPromotionLog = stats.reclaimedBytes != 0 && promotedLoggedLines == 0;
+    if (minorReclaimedWithoutPromotionLog) {
+        VLOG(REPORT,
+             "[StickyMinor] reclaimedBytes=%zu with zero promoted logged lines; "
+             "subsequent young collections use major",
+             stats.reclaimedBytes);
+    }
     if (StickyLog::Instance().IsForceSlowPathEnabled()) {
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_IDLE);
