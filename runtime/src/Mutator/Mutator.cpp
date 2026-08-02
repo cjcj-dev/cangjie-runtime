@@ -748,7 +748,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (oldObj != toObj) { refFieldAddr.SetTargetObject(toObj); }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            CheckAndPush(this, oldObj, rootSet, rootStack);
         }
     };
 
@@ -760,7 +760,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (oldObj != toObj) { root.object = toObj; }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
-            CheckAndPush(oldObj, rootSet, rootStack);
+            CheckAndPush(this, oldObj, rootSet, rootStack);
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
