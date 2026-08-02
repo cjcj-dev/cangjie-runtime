@@ -37,6 +37,9 @@ public:
 
     void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                          MIndex srcSize) const override;
+
+private:
+    void LogObject(BaseObject* obj) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_MARK_BARRIER_H

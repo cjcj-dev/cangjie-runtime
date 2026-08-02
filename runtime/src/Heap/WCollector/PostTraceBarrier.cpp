@@ -8,6 +8,7 @@
 #include "PostTraceBarrier.h"
 
 #include "Heap/FixEdgeSet.h"
+#include "Heap/StickyLog.h"
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
 #include "Heap/EmitSiteCounters.h"
 #endif
@@ -19,6 +20,8 @@
 #endif
 
 namespace MapleRuntime {
+ALWAYS_INLINE void PostTraceBarrier::LogObject(BaseObject* obj) const { CJ_MCC_StickyLogLine(obj); }
+
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
@@ -99,6 +102,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 
 void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    LogObject(obj);
     RefField<> tmpField(field);
     CHECK(!theCollector.IsOldPointer(tmpField));
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
@@ -106,7 +110,7 @@ void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, B
     field.SetFieldValue(newField.GetFieldValue());
     FixEdgeSet::Instance().MaybeAdd(obj, &field, ref);
 #if defined(CANGJIE_GC_DEBUG_EQUIPMENT)
-    EmitSiteNoteWrite(EmitBarrierKind::PostTrace, obj, ref, false);
+    EmitSiteNoteWrite(EmitBarrierKind::PostTrace, obj, ref, true);
 #endif
 }
 
@@ -119,6 +123,7 @@ void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) c
 
 void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    LogObject(obj);
     CHECK(obj != nullptr);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
@@ -196,6 +201,7 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
 void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                             MemoryOrder order) const
 {
+    LogObject(obj);
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = oldField.GetFieldValue();
     (void)oldValue;
@@ -213,6 +219,7 @@ void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& fie
 BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                   MemoryOrder order) const
 {
+    LogObject(obj);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
     RefField<> oldField(oldValue);
@@ -225,6 +232,7 @@ BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true
 bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                                BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    LogObject(obj);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
@@ -243,6 +251,7 @@ bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& 
 void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                        MAddress srcField, MIndex srcSize) const
 {
+    LogObject(dstObj);
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!dstObj->HasRefField()) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);
