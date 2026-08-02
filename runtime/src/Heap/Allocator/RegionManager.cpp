@@ -500,6 +500,40 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         region = nextRegion;
     }
 }
+
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
+{
+    YoungCollectionStats stats;
+    RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
+    while (oldRegion != nullptr) {
+        RegionInfo* next = oldRegion->GetNextRegion();
+        fromRegionList.DeleteRegion(oldRegion);
+        ExemptFromRegion(oldRegion);
+        oldRegion = next;
+    }
+
+    RegionInfo* region = recentFullRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        region->ClearLiveInfo();
+        visitor(region);
+        ++stats.candidateRegions;
+        stats.candidateBytes += region->GetRegionAllocatedSize();
+        if (region->GetRawPointerObjectCount() != 0) {
+            region = next;
+            continue;
+        }
+        recentFullRegionList.DeleteRegion(region);
+        fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        region = next;
+    }
+    return stats;
+}
+
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
 {
     regionList->DeleteRegionLocked(region);
