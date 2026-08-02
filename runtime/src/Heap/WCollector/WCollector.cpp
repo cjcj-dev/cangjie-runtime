@@ -7,6 +7,9 @@
 
 #include "WCollector.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -853,6 +856,87 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects)
 void WCollector::FlushAllocationRegions()
 {
     theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+}
+
+void WCollector::DoYoungGarbageCollection()
+{
+    uint64_t start = TimeUtil::NanoSeconds();
+    ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    FlushAllocationRegions();
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    minorCandidateRegions.clear();
+    YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
+        [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    if (stats.candidateRegions == 0) {
+        manager.ReassembleFromSpace();
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        ++minorTotalRuns;
+        VLOG(REPORT, "[GCV2Minor] run=%zu candidates=0 candidateBytes=0 live=0 reclaimedBytes=0",
+             minorTotalRuns);
+        return;
+    }
+
+    MinorSlotSet rememberedSlots;
+    {
+        RememberedSet::Records records = Heap::GetHeap().GetRememberedSet().AcquireRecordsForMinor();
+        rememberedSlots.insert(records.begin(), records.end());
+    }
+
+    const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
+    bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
+    WorkStack workStack = NewWorkStack();
+    MinorObjectSet reachableObjects;
+    MinorSlotSet reachableSlots;
+    MinorSlotSet weakSlots;
+    VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
+        if (fullYoungScan) {
+            if (Heap::IsHeapAddress(object)) {
+                workStack.push_back(object);
+            }
+        } else {
+            PushYoungObject(object, workStack);
+        }
+    });
+    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan);
+    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+
+    size_t liveObjects = 0;
+    size_t liveBytes = 0;
+    for (RegionInfo* region : minorCandidateRegions) {
+        liveBytes += region->GetLiveByteCount();
+        region->VisitAllObjects([&](BaseObject* object) {
+            if (region->IsMarkedObject(object)) {
+                ++liveObjects;
+            }
+        });
+    }
+    if (fullYoungScan) {
+        ValidateYoungMarking(reachableObjects);
+    }
+
+    TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+    WeakRefBuffer::Instance().ClearWeakRefBuffer();
+    SatbBuffer::Instance().ClearBuffer();
+
+    size_t allocatedBefore = space.AllocatedBytes();
+    EvacuateYoungRegions(reachableObjects, rememberedSlots);
+    size_t allocatedAfter = space.AllocatedBytes();
+    stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
+    GetGCStats().collectedBytes = stats.reclaimedBytes;
+
+    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    MergeResurrectExportObjects();
+    ++minorTotalRuns;
+    uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
+    VLOG(REPORT,
+         "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
+         "remembered=%zu reclaimedBytes=%zu pause=%zu us",
+         minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
+         liveObjects, liveBytes, rememberedSlots.size(), stats.reclaimedBytes, pauseUs);
 }
 
 void WCollector::DoGarbageCollection()
