@@ -363,6 +363,8 @@ public:
     // can be reclaimed.
     size_t ExemptFromRegions();
     void ReassembleFromSpace();
+    void ReportGCProvRegionLifecycle(RegionInfo* region, const void* holder, uint16_t rootMask,
+                                     size_t incomingCategory, const void* incomingSlot, const void* predecessor);
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;

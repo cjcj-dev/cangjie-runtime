@@ -492,6 +492,57 @@ void RegionManager::ReassembleFromSpace()
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 }
 
+void RegionManager::ReportGCProvRegionLifecycle(RegionInfo* region, const void* holder, uint16_t rootMask,
+                                                size_t incomingCategory, const void* incomingSlot,
+                                                const void* predecessor)
+{
+    auto contains = [region](RegionList& list) {
+        bool found = false;
+        list.VisitAllRegions([region, &found](RegionInfo* candidate) { found = found || candidate == region; });
+        return found;
+    };
+    bool inThreadLocal = contains(tlRegionList);
+    bool inRecentFull = contains(recentFullRegionList);
+    bool inFullTrace = contains(fullTraceRegions);
+    bool inFrom = contains(fromRegionList);
+    bool inUnmovableFrom = contains(unmovableFromRegionList);
+    bool inGarbage = contains(garbageRegionList);
+    bool inRecentPinned = contains(recentPinnedRegionList);
+    bool inOldPinned = contains(oldPinnedRegionList);
+    bool inRawPointerPinned = contains(rawPointerPinnedRegionList);
+    bool inOldLarge = contains(oldLargeRegionList);
+    bool inRecentLarge = contains(recentLargeRegionList);
+    bool inLargeTrace = contains(largeTraceRegions);
+    bool inGhostFrom = false;
+    ghostFromRegionList.VisitAllGhostRegions(
+        [region, &inGhostFrom](RegionInfo* candidate) { inGhostFrom = inGhostFrom || candidate == region; });
+    bool stillLinked = inThreadLocal || inRecentFull || inFullTrace || inFrom || inUnmovableFrom || inGarbage ||
+        inRecentPinned || inOldPinned || inRawPointerPinned || inOldLarge || inRecentLarge || inLargeTrace ||
+        inGhostFrom;
+    std::fprintf(stderr,
+                 "[GCPROV] REGION_LIFECYCLE region=%p holder=%p root_mask=0x%03x incoming_category=%zu "
+                 "incoming_slot=%p predecessor=%p type=%u unit_role=%u live=%u young=%u ghost=%u route=%u "
+                 "raw_refcount=%d valid=%u free_pool_by_unit_role=%u pending_reuse_by_garbage_list=%u "
+                 "still_linked=%u next=%p prev=%p alloc_ptr=%#zx region_end=%#zx "
+                 "lists=thread_local:%u,recent_full:%u,full_trace:%u,from:%u,unmovable_from:%u,garbage:%u,"
+                 "recent_pinned:%u,old_pinned:%u,raw_pointer_pinned:%u,old_large:%u,recent_large:%u,"
+                 "large_trace:%u,ghost_from:%u\n",
+                 region, holder, static_cast<unsigned>(rootMask), incomingCategory, incomingSlot, predecessor,
+                 static_cast<unsigned>(region->GetRegionType()), static_cast<unsigned>(region->GetUnitRole()),
+                 region->GetLiveByteCount(), static_cast<unsigned>(region->IsYoungRegion()),
+                 static_cast<unsigned>(region->IsGhostFromRegion()), static_cast<unsigned>(region->GetRouteState()),
+                 region->GetRawPointerObjectCount(), static_cast<unsigned>(region->IsValidRegion()),
+                 static_cast<unsigned>(region->IsFreeRegion()), static_cast<unsigned>(inGarbage),
+                 static_cast<unsigned>(stillLinked), region->GetNextRegion(), region->GetPrevRegion(),
+                 region->GetRegionAllocPtr(), region->GetRegionEnd(), static_cast<unsigned>(inThreadLocal),
+                 static_cast<unsigned>(inRecentFull), static_cast<unsigned>(inFullTrace), static_cast<unsigned>(inFrom),
+                 static_cast<unsigned>(inUnmovableFrom), static_cast<unsigned>(inGarbage),
+                 static_cast<unsigned>(inRecentPinned), static_cast<unsigned>(inOldPinned),
+                 static_cast<unsigned>(inRawPointerPinned), static_cast<unsigned>(inOldLarge),
+                 static_cast<unsigned>(inRecentLarge), static_cast<unsigned>(inLargeTrace),
+                 static_cast<unsigned>(inGhostFrom));
+}
+
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));

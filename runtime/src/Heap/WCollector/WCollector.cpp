@@ -8,9 +8,11 @@
 #include "WCollector.h"
 
 #include <array>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <vector>
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
@@ -823,8 +825,17 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     std::array<std::array<uint8_t, sampleCount>, categoryCount> regionTypes{};
     std::array<std::array<uint8_t, sampleCount>, categoryCount> objectStates{};
     std::array<std::array<uint16_t, sampleCount>, categoryCount> tags{};
-    WorkStack pending = NewWorkStack();
-    MinorObjectSet visited;
+    struct ProvenanceEntry {
+        BaseObject* object;
+        uint16_t rootMask;
+        size_t incomingCategory;
+        const void* incomingSlot;
+        BaseObject* predecessor;
+    };
+    std::vector<ProvenanceEntry> pending;
+    std::unordered_map<BaseObject*, uint16_t> visitedOrigins;
+    MinorRegionSet lifecycleLogged;
+    size_t liveZeroVisits = 0;
     bool buildReachableClosure = reachableObjects == nullptr;
 
     auto record = [this, &counts, &slots, &holders, &targets, &regionTypes, &objectStates, &tags](
@@ -850,8 +861,8 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         }
         return true;
     };
-    auto inspectTarget = [&record, &pending, buildReachableClosure](
-                             size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
+    auto inspectTarget = [&record, &pending, buildReachableClosure](size_t category, const void* slot,
+                             BaseObject* holder, BaseObject* target, uint16_t tag, uint16_t rootMask) {
         if (record(category, slot, holder, target, tag)) {
             return;
         }
@@ -860,27 +871,28 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         }
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (region != nullptr && !region->IsGarbageRegion() && !region->IsFreeRegion() && target->IsValidObject()) {
-            pending.push_back(target);
+            pending.push_back(ProvenanceEntry{ target, rootMask, category, slot, holder });
         }
     };
     auto recordRawRoot = [&inspectTarget](size_t category) {
         return RootVisitor([category, &inspectTarget](ObjectRef& root) {
             RefField<> value = reinterpret_cast<RefField<>&>(root);
             uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
-            inspectTarget(category, &root, nullptr, value.GetTargetObject(), tag);
+            inspectTarget(category, &root, nullptr, value.GetTargetObject(), tag,
+                          static_cast<uint16_t>(1U << category));
         });
     };
-    auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
+    auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field, uint16_t rootMask) {
         RefField<> value(field);
         uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
-        inspectTarget(category, &field, holder, value.GetTargetObject(), tag);
+        inspectTarget(category, &field, holder, value.GetTargetObject(), tag, rootMask);
     };
 
     RootVisitor stackVisitor = recordRawRoot(0);
     RootVisitor registerVisitor = recordRawRoot(1);
     DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
         inspectTarget(2, &derivedPtr, nullptr, reinterpret_cast<BaseObject*>(basePtr),
-                      std::numeric_limits<uint16_t>::max());
+                      std::numeric_limits<uint16_t>::max(), static_cast<uint16_t>(1U << 2));
     };
     RootVisitor exceptionVisitor = recordRawRoot(10);
     RootVisitor rawObjectVisitor = recordRawRoot(11);
@@ -891,7 +903,7 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         });
 
     Heap::GetHeap().VisitStaticRoots(
-        [&recordField](RefField<>& field) { recordField(3, nullptr, field); });
+        [&recordField](RefField<>& field) { recordField(3, nullptr, field, static_cast<uint16_t>(1U << 3)); });
     collectorResources.GetFinalizerProcessor().VisitRawPointers(recordRawRoot(6));
     Heap::GetHeap().VisitAllExportRoots(recordRawRoot(7));
     RootVisitor concurrencyVisitor = recordRawRoot(8);
@@ -900,45 +912,95 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         for (BaseObject* const& object : resurrectedExportObjectes) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
+            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max(),
+                          static_cast<uint16_t>(1U << 9));
         }
         for (BaseObject* const& object : resurrectedExportObjectesForwardPhase) {
-            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
+            inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max(),
+                          static_cast<uint16_t>(1U << 9));
         }
     }
     {
         std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
         for (const auto& entry : cycleRefWorkStack) {
-            inspectTarget(9, &entry.first, nullptr, entry.first, std::numeric_limits<uint16_t>::max());
+            inspectTarget(9, &entry.first, nullptr, entry.first, std::numeric_limits<uint16_t>::max(),
+                          static_cast<uint16_t>(1U << 9));
             for (BaseObject* const& object : entry.second) {
-                inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max());
+                inspectTarget(9, &object, nullptr, object, std::numeric_limits<uint16_t>::max(),
+                              static_cast<uint16_t>(1U << 9));
             }
         }
     }
 
-    auto visitObject = [this, &recordField](BaseObject* object) {
+    auto visitObject = [this, &recordField, &categoryNames, &lifecycleLogged, &liveZeroVisits](BaseObject* object,
+                           uint16_t rootMask, size_t incomingCategory, const void* incomingSlot,
+                           BaseObject* predecessor) {
         BaseObject* holder = object;
         if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder) &&
             holder->GetStateWord().GetStateCode() == ObjectState::FORWARDED) {
             holder = FindLatestVersion(holder);
         }
-        if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
+        if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject()) {
+            return;
+        }
+        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        uintptr_t typeAddress = reinterpret_cast<uintptr_t>(holder->GetTypeInfo());
+        bool nonCanonicalType = typeAddress >= (1ULL << StateWord::ADDRESS_BIT_COUNT);
+        bool liveZero = rootMask != 0 && holderRegion != nullptr && holderRegion->GetLiveByteCount() == 0;
+        if (liveZero) {
+            ++liveZeroVisits;
+            if (nonCanonicalType || liveZeroVisits <= 4) {
+                std::fprintf(stderr,
+                             "[GCPROV] PRE_HAS_REF_FIELD point=after-dispel sequence=%zu object=%p holder=%p "
+                             "type_info=%p type_noncanonical=%u region=%p region_type=%u live=%u root_mask=0x%03x "
+                             "root_stack=%u root_register=%u root_derived=%u root_static=%u root_heap=%u "
+                             "root_weak=%u root_finalizer=%u root_export=%u root_concurrency=%u "
+                             "root_external_resurrection=%u root_exception=%u root_raw_object=%u "
+                             "incoming_category=%s incoming_slot=%p predecessor=%p\n",
+                             liveZeroVisits, object, holder, holder->GetTypeInfo(),
+                             static_cast<unsigned>(nonCanonicalType), holderRegion,
+                             static_cast<unsigned>(holderRegion->GetRegionType()), holderRegion->GetLiveByteCount(),
+                             static_cast<unsigned>(rootMask), static_cast<unsigned>((rootMask >> 0) & 1U),
+                             static_cast<unsigned>((rootMask >> 1) & 1U),
+                             static_cast<unsigned>((rootMask >> 2) & 1U),
+                             static_cast<unsigned>((rootMask >> 3) & 1U),
+                             static_cast<unsigned>((rootMask >> 4) & 1U),
+                             static_cast<unsigned>((rootMask >> 5) & 1U),
+                             static_cast<unsigned>((rootMask >> 6) & 1U),
+                             static_cast<unsigned>((rootMask >> 7) & 1U),
+                             static_cast<unsigned>((rootMask >> 8) & 1U),
+                             static_cast<unsigned>((rootMask >> 9) & 1U),
+                             static_cast<unsigned>((rootMask >> 10) & 1U),
+                             static_cast<unsigned>((rootMask >> 11) & 1U), categoryNames[incomingCategory],
+                             incomingSlot, predecessor);
+            }
+            if (nonCanonicalType && lifecycleLogged.insert(holderRegion).second) {
+                RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+                manager.ReportGCProvRegionLifecycle(
+                    holderRegion, holder, rootMask, incomingCategory, incomingSlot, predecessor);
+            }
+        }
+        if (!holder->HasRefField()) {
             return;
         }
         size_t category = holder->IsWeakRef() ? 5 : 4;
-        holder->ForEachRefField(
-            [category, holder, &recordField](RefField<>& field) { recordField(category, holder, field); });
+        holder->ForEachRefField([category, holder, rootMask, &recordField](RefField<>& field) {
+            recordField(category, holder, field, rootMask);
+        });
     };
     if (reachableObjects != nullptr) {
         for (BaseObject* object : *reachableObjects) {
-            visitObject(object);
+            visitObject(object, 0, 4, nullptr, nullptr);
         }
     } else {
         while (!pending.empty()) {
-            BaseObject* object = pending.back();
+            ProvenanceEntry entry = pending.back();
             pending.pop_back();
-            if (visited.insert(object).second) {
-                visitObject(object);
+            uint16_t unseenOrigins = static_cast<uint16_t>(entry.rootMask & ~visitedOrigins[entry.object]);
+            if (unseenOrigins != 0) {
+                visitedOrigins[entry.object] |= unseenOrigins;
+                visitObject(entry.object, unseenOrigins, entry.incomingCategory, entry.incomingSlot,
+                            entry.predecessor);
             }
         }
     }
