@@ -315,6 +315,14 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator)
 {
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+}
+
+void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+                                                  const RootVisitor& slotRootVisitor,
+                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
+                                                  const FrameInfo& frame, Mutator& mutator)
+{
     uintptr_t startIP = reinterpret_cast<uintptr_t>(frame.GetStartProc());
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
@@ -346,14 +354,14 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(rootVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(rootVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {

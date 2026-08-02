@@ -182,6 +182,10 @@ public:
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                            RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
 
+    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
+                                           const FrameInfo& frame, Mutator& mutator);
+
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
     static void RecordC2NStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
