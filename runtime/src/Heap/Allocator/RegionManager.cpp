@@ -1233,12 +1233,21 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
         region->GetRegionType(), region->GetLiveByteCount());
 
+    bool youngRegion = region->IsYoungRegion();
     if (region->GetLiveByteCount() == 0) {
+        if (youngRegion) {
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
         CollectRegion(region);
         return;
     }
 
     if (!RouteRegion(region)) {
+        if (youngRegion) {
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
         return;
     }
 
@@ -1251,6 +1260,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     CHECK(forwarded);
     {
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+        if (youngRegion) {
+            region->ResetLiveByteCount();
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
         CollectRegion(region);
     }
 }
