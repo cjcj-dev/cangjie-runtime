@@ -512,7 +512,25 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         oldRegion = next;
     }
 
-    RegionInfo* region = recentFullRegionList.GetHeadRegion();
+    RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        region->ClearLiveInfo();
+        visitor(region);
+        ++stats.candidateRegions;
+        stats.candidateBytes += region->GetRegionAllocatedSize();
+        if (region->GetRawPointerObjectCount() == 0) {
+            unmovableFromRegionList.DeleteRegion(region);
+            fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        }
+        region = next;
+    }
+
+    region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
         if (!region->IsYoungRegion()) {
