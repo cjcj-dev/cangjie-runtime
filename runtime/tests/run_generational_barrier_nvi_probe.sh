@@ -21,7 +21,8 @@ cleanup()
 trap cleanup EXIT
 
 taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread \
-    -I"$repo/runtime/src" -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
+    -I"$repo/runtime/src" -I"$repo/runtime/include" -I"$repo/runtime/output/temp/include" \
+    -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
     "$repo/runtime/tests/generational_barrier_nvi_harness.cpp" \
     -L"$runtime_lib_dir" -Wl,-rpath,"$runtime_lib_dir" -lcangjie-runtime -lboundscheck \
     -o "$probe_tmp/gcv2-nvi-probe"
