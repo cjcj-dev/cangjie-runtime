@@ -342,6 +342,9 @@ public:
     }
 
     void VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                             const DerivedPtrVisitor& derivedPtrVisitor, const RootVisitor& exceptionRootVisitor,
+                             const RootVisitor& rawObjectVisitor);
 
     void DumpMutator() const
     {
@@ -487,6 +490,9 @@ protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func);
     void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor);
+    void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                    const DerivedPtrVisitor& derivedPtrVisitor,
+                                    const RootVisitor& rawObjectVisitor);
     // for exception ref
     void VisitExceptionRoots(const RootVisitor& func);
     void VisitRawObjects(const RootVisitor& func);

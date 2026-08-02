@@ -284,6 +284,13 @@ void Mutator::VisitRawObjects(const RootVisitor& func)
 
 void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor)
 {
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, rootVisitor);
+}
+
+void Mutator::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                         const DerivedPtrVisitor& derivedPtrVisitor,
+                                         const RootVisitor& rawObjectVisitor)
+{
     MutatorLock();
     // the stack doesn't include managed frame, skip it.
     if (!IsManagedContext()) {
@@ -294,8 +301,9 @@ void Mutator::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const D
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
-    StackManager::VisitHeapReferencesOnStack(uwContext, rootVisitor, derivedPtrVisitor, *this);
-    VisitRawObjects(rootVisitor);
+    StackManager::VisitHeapReferencesOnStack(
+        uwContext, regRootVisitor, slotRootVisitor, derivedPtrVisitor, *this);
+    VisitRawObjects(rawObjectVisitor);
     DecObserver();
     MutatorUnlock();
 }
@@ -304,6 +312,14 @@ void Mutator::VisitHeapReferences(const RootVisitor& rootVisitor, const DerivedP
 {
     VisitHeapReferencesOnStack(rootVisitor, derivedPtrVisitor);
     VisitExceptionRoots(rootVisitor);
+}
+
+void Mutator::VisitHeapReferences(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                  const DerivedPtrVisitor& derivedPtrVisitor,
+                                  const RootVisitor& exceptionRootVisitor, const RootVisitor& rawObjectVisitor)
+{
+    VisitHeapReferencesOnStack(regRootVisitor, slotRootVisitor, derivedPtrVisitor, rawObjectVisitor);
+    VisitExceptionRoots(exceptionRootVisitor);
 }
 
 Mutator* Mutator::GetMutator() noexcept
