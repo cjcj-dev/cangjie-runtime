@@ -23,23 +23,24 @@ public:
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
 
-    void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const override;
-    void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const override;
     void WriteStaticRef(RefField<false>& field, BaseObject* ref) const override;
     void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const override;
 
     BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;
-    void AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                              MemoryOrder order) const override;
-    BaseObject* AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                    MemoryOrder order) const override;
-    bool CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                 MemoryOrder succOrder, MemoryOrder failOrder) const override;
 
-    void CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
-                         MIndex srcSize) const override;
-    void WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
-    void ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const override;
+protected:
+    void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const override;
+    void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const override;
+    void AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
+                                  MemoryOrder order) const override;
+    BaseObject* AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
+                                        MemoryOrder order) const override;
+    bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
+                                     MemoryOrder succOrder, MemoryOrder failOrder) const override;
+    void CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                             MAddress srcField, MIndex srcSize) const override;
+    void WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
+    void ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const override;
 };
 } // namespace MapleRuntime
 #endif // MRT_MARK_BARRIER_H
