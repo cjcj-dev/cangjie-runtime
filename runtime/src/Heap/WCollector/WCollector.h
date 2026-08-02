@@ -226,7 +226,8 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
     void TraceYoungClosure(WorkStack& workStack);
     void RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
-                             const MinorRegionSet* evacuatedRegions = nullptr);
+                             const MinorRegionSet* evacuatedRegions = nullptr,
+                             bool* hasYoungReference = nullptr);
     void PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const;
     bool FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding,
                                const MinorRegionSet& evacuatedRegions) const;

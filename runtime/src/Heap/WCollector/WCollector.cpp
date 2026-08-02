@@ -1236,10 +1236,13 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
 }
 
 void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
-                                     const MinorRegionSet* evacuatedRegions)
+                                     const MinorRegionSet* evacuatedRegions, bool* hasYoungReference)
 {
-    StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions](MAddress lineStart,
-                                                                                           MAddress lineEnd) {
+    if (hasYoungReference != nullptr) {
+        *hasYoungReference = false;
+    }
+    StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions, hasYoungReference]
+                                            (MAddress lineStart, MAddress lineEnd) {
         if (workStack != nullptr) {
             // remsetgap / checkmark: snapshot every line the mark-phase remset
             // consumer saw. StickyLog mutates logged bytes during Rescan (retain
@@ -1253,14 +1256,14 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
         }
         bool retainLine = false;
         auto scanObject = [this, workStack, forwarding, evacuatedRegions, lineStart, lineEnd,
-                           &retainLine](BaseObject* object) {
+                           hasYoungReference, &retainLine](BaseObject* object) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
             ForEachStrongRefSlot(object,
-                [this, workStack, forwarding, evacuatedRegions,
+                [this, workStack, forwarding, evacuatedRegions, hasYoungReference,
                  &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
                     if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
                         minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
@@ -1274,6 +1277,9 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
                     if (Heap::IsHeapAddress(target) && RegionInfo::GetRegionInfoAt(
                             reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                         retainLine = true;
+                        if (hasYoungReference != nullptr) {
+                            *hasYoungReference = true;
+                        }
                     }
                     if (workStack != nullptr) {
                         PushYoungObject(target, *workStack);
@@ -2002,7 +2008,13 @@ bool WCollector::DoYoungGarbageCollection()
         }
     }
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
-    RescanRememberedSet(&workStack, nullptr);
+    bool hasRememberedYoungReference = false;
+    RescanRememberedSet(&workStack, nullptr, nullptr, &hasRememberedYoungReference);
+    if (!hasRememberedYoungReference) {
+        static std::atomic<size_t> emptyFilteredRemsetObservations{ 0 };
+        size_t count = emptyFilteredRemsetObservations.fetch_add(1, std::memory_order_relaxed) + 1;
+        VLOG(REPORT, "[StickyMinor] empty filtered remset observation count=%zu", count);
+    }
     TraceYoungClosure(workStack);
 
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
