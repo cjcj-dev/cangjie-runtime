@@ -723,6 +723,64 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
 }
 
+void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
+{
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    fwdTable.PrepareForwardTable();
+
+    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+    FixMinorRootSlots();
+    PreforwardDiscoveredExternObjects();
+    PreforwardAllResurrectExportFromObjects();
+
+    auto currentObject = [this](BaseObject* object) {
+        if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
+            return ForwardObject(object);
+        }
+        return object;
+    };
+    for (BaseObject* object : reachableObjects) {
+        FixMinorObjectSlots(currentObject(object));
+    }
+    for (MAddress slot : rememberedSlots) {
+        if (Heap::IsHeapAddress(slot)) {
+            (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+        }
+    }
+
+    ForwardFromSpace();
+    manager.ReassembleFromSpace();
+
+    for (RegionInfo* region : minorCandidateRegions) {
+        if (region->IsYoungRegion()) {
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+    }
+
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t rebuiltRecords = 0;
+    for (BaseObject* object : reachableObjects) {
+        BaseObject* holder = currentObject(object);
+        RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
+            continue;
+        }
+        holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (!Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                ++rebuiltRecords;
+            }
+        });
+    }
+    VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
+}
+
 void WCollector::DoGarbageCollection()
 {
     TraceHeap();
