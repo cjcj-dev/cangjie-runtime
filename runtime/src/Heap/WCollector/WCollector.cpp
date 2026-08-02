@@ -941,6 +941,10 @@ void WCollector::DoYoungGarbageCollection()
 
 void WCollector::DoGarbageCollection()
 {
+    if (gcReason == GC_REASON_YOUNG) {
+        DoYoungGarbageCollection();
+        return;
+    }
     TraceHeap();
     PostTrace();
 
