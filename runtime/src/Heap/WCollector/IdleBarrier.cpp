@@ -94,7 +94,7 @@ void IdleBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
     });
 }
 
-void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+void IdleBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                        MemoryOrder order) const
 {
     if (obj != nullptr) {
@@ -106,7 +106,7 @@ void IdleBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     field.SetTargetObject(newRef, order);
 }
 
-BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+BaseObject* IdleBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
     // newRef must be the latest versions.
@@ -118,7 +118,7 @@ BaseObject* IdleBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     return oldRef;
 }
 
-bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
@@ -138,13 +138,13 @@ bool IdleBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
     return false;
 }
 
-void IdleBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
     field.SetTargetObject(ref);
 }
 
-void IdleBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -161,7 +161,7 @@ void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     WriteStruct(nullptr, dst, dstLen, src, srcLen);
 }
 
-void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize, BaseObject* srcObj, MAddress src,
+void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstSize, BaseObject* srcObj, MAddress src,
                                MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -219,7 +219,7 @@ void IdleBarrier::CopyRefArray(BaseObject* dstObj, MAddress dst, MIndex dstSize,
 #endif
 }
 
-void IdleBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
