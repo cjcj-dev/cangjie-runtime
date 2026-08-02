@@ -956,11 +956,12 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion)
 {
     RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem);
     if (region != nullptr) {
         {
+            region->SetYoungRegionFlag(youngRegion ? 1 : 0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
@@ -1016,7 +1017,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     CHECK(region != toRegion1);
     bool result;
     if (toRegion1 == RegionInfo::NullRegion()) {
-        toRegion1 = AllocateThreadLocalRegion();
+        toRegion1 = AllocateThreadLocalRegion(false, false);
         if (toRegion1 == nullptr) {
             CompactRegion(region);
             toRegion1 = region;
@@ -1064,7 +1065,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         EnlistFullThreadLocalRegion(toRegion1);
     }
 
-    RegionInfo* toRegion2 = AllocateThreadLocalRegion();
+    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false);
     CHECK(region != toRegion2);
     if (toRegion2 != nullptr) {
         toRegion1->Alloc(usedBytes1);

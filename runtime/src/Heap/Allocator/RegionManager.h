@@ -116,7 +116,7 @@ public:
 
     RegionManager& operator=(const RegionManager&) = delete;
 
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false);
+    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true);
 
     void ForwardFromRegions(GCThreadPool* threadPool);
     void ForwardFromRegions();
