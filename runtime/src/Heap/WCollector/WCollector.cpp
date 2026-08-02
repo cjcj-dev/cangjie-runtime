@@ -764,6 +764,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     fwdTable.PrepareForwardTable();
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
     fixForwardedReferences();
+    ValidateMinorReferences("before-return", &reachableObjects);
 
     ForwardFromSpace();
     manager.ReassembleFromSpace();
@@ -998,6 +999,9 @@ void WCollector::DoYoungGarbageCollection()
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();
+    if (minorTotalRuns != 0) {
+        ValidateMinorReferences("round2-start", nullptr);
+    }
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
