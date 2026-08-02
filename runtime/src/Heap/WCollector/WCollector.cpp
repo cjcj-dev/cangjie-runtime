@@ -915,7 +915,8 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
 
     auto visitObject = [this, &recordField](BaseObject* object) {
         BaseObject* holder = object;
-        if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder)) {
+        if (IsGhostFromObject(holder) && !IsUnmovableFromObject(holder) &&
+            holder->GetStateWord().GetStateCode() == ObjectState::FORWARDED) {
             holder = FindLatestVersion(holder);
         }
         if (holder == nullptr || IsGhostFromObject(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
