@@ -850,6 +850,11 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects)
                  actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
 }
 
+void WCollector::FlushAllocationRegions()
+{
+    theAllocator.VisitAllocBuffers([](AllocBuffer& buffer) { buffer.FlushRegion(); });
+}
+
 void WCollector::DoGarbageCollection()
 {
     TraceHeap();
