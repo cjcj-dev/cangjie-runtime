@@ -804,34 +804,16 @@ public:
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
     }
 
-    void SetYoungRegionFlag(uint8_t flag)
-    {
-        std::lock_guard<std::mutex> lock(GetYoungRegionFlagMutex());
-        bool wasYoung = IsYoungRegion();
-        bool makeYoung = flag != 0;
-        if (!wasYoung && makeYoung) {
-            GetYoungRegionCountStorage().fetch_add(1, std::memory_order_release);
-        }
-        metadata.regionStateBitField.SetAtomicValue(
-            RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
-        if (wasYoung && !makeYoung) {
-            size_t count = GetYoungRegionCountStorage().load(std::memory_order_relaxed);
-            CHECK(count > 0);
-            GetYoungRegionCountStorage().fetch_sub(1, std::memory_order_release);
-        }
-    }
+    void SetYoungRegionFlag(uint8_t flag);
 
     bool IsYoungRegion() const
     {
         return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
     }
 
-    static size_t GetYoungRegionCount()
-    {
-        return GetYoungRegionCountStorage().load(std::memory_order_acquire);
-    }
+    static size_t GetYoungRegionCount();
 
-    static bool HasYoungRegions() { return GetYoungRegionCount() != 0; }
+    static bool HasYoungRegions();
 
     void SetYoungAge(uint8_t age)
     {
@@ -1036,18 +1018,8 @@ public:
     }
 
 private:
-    static std::atomic<size_t>& GetYoungRegionCountStorage()
-    {
-        static std::atomic<size_t> count { 0 };
-        return count;
-    }
-
-    static std::mutex& GetYoungRegionFlagMutex()
-    {
-        static std::mutex mutex;
-        return mutex;
-    }
-
+    static std::atomic<size_t> youngRegionCount;
+    static std::mutex youngRegionFlagMutex;
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
     static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
