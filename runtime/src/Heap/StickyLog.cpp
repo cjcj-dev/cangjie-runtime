@@ -90,40 +90,8 @@ size_t ReadStickyNonNegativeInteger(const char* name, size_t defaultValue)
 // StickyLog.cpp:ConfigureMinorFromEnvironment / Heap.cpp:190-193
 bool MainExecutableHasStickyConsumer()
 {
-    FILE* file = std::fopen("/proc/self/exe", "rb");
-    if (file == nullptr) {
-        return false;
-    }
-    static constexpr char needle[] = "__cj_sticky_logged_base";
-    static constexpr size_t needleLen = sizeof(needle) - 1;
-    static constexpr size_t chunkSize = 1 << 20;
-    std::vector<char> buf(chunkSize + needleLen);
-    size_t carry = 0;
-    bool found = false;
-    while (!found) {
-        size_t n = std::fread(buf.data() + carry, 1, chunkSize, file);
-        if (n == 0) {
-            break;
-        }
-        size_t total = carry + n;
-        for (size_t i = 0; i + needleLen <= total; ++i) {
-            if (std::memcmp(buf.data() + i, needle, needleLen) == 0) {
-                found = true;
-                break;
-            }
-        }
-        if (found || n < chunkSize) {
-            break;
-        }
-        if (needleLen > 1) {
-            std::memmove(buf.data(), buf.data() + total - (needleLen - 1), needleLen - 1);
-            carry = needleLen - 1;
-        } else {
-            carry = 0;
-        }
-    }
-    std::fclose(file);
-    return found;
+    // unmask arm B: force-detect-pass only (not product). Keeps minor ON so defect can surface.
+    return true;
 }
 } // namespace
 
