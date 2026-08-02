@@ -13,6 +13,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
