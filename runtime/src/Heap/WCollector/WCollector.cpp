@@ -564,7 +564,10 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     BaseObject* object = value.GetTargetObject();
     if (IsOldPointer(value)) {
         BaseObject* latest = FindLatestVersion(object);
-        return latest == nullptr ? object : latest;
+        if (latest != nullptr) {
+            field.SetTargetObject(latest);
+            return latest;
+        }
     }
     return object;
 }
