@@ -11,6 +11,7 @@
 #include <new>
 #include <string>
 #include <sys/mman.h>
+#include <vector>
 
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Barrier/Barrier.h"
@@ -117,8 +118,8 @@ bool ExerciseNineEntries(TestBarrier& barrier, RegionFixture& fixture, Remembere
 {
     bool passed = true;
     RefField<> sourceField(fixture.youngObject);
-    alignas(RefField<>) unsigned char genericSource[TYPEINFO_PTR_SIZE + sizeof(RefField<>)] {};
-    new (genericSource + TYPEINFO_PTR_SIZE) RefField<>(fixture.youngObject);
+    std::vector<unsigned char> genericSource(TYPEINFO_PTR_SIZE + sizeof(RefField<>));
+    new (genericSource.data() + TYPEINFO_PTR_SIZE) RefField<>(fixture.youngObject);
     auto check = [&](const char* name) {
         bool one = ExpectOneRecord(name, rememberedSet, reinterpret_cast<MAddress>(fixture.field));
         std::cout << "ENTRY_RECORDS name=" << name << " count=" << (one ? 1 : 0) << '\n';
@@ -159,13 +160,13 @@ bool ExerciseNineEntries(TestBarrier& barrier, RegionFixture& fixture, Remembere
     check("CompareAndSwapReference");
 
     fixture.field->SetTargetObject(nullptr);
-    barrier.WriteGeneric(fixture.oldObject, fixture.field, reinterpret_cast<BaseObject*>(genericSource),
+    barrier.WriteGeneric(fixture.oldObject, fixture.field, reinterpret_cast<BaseObject*>(genericSource.data()),
                          sizeof(RefField<>));
     check("WriteGeneric");
 
     fixture.field->SetTargetObject(nullptr);
-    barrier.ReadGeneric(fixture.oldObject, reinterpret_cast<BaseObject*>(genericSource),
-                        genericSource + TYPEINFO_PTR_SIZE, sizeof(RefField<>));
+    barrier.ReadGeneric(fixture.oldObject, reinterpret_cast<BaseObject*>(genericSource.data()),
+                        genericSource.data() + TYPEINFO_PTR_SIZE, sizeof(RefField<>));
     check("ReadGeneric");
     return passed;
 }
