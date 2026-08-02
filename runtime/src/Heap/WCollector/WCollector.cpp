@@ -7,8 +7,11 @@
 
 #include "WCollector.h"
 
+#include <algorithm>
 #include <atomic>
 #include <csignal>
+#include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 
 #include "Base/SysCall.h"
@@ -637,7 +640,8 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 
 // After ForwardFromSpace: rewrite plain→ghost-from survivor edges to plain to.
 // Predicate aligned with bulkfwd f04 (plain-only + route state + ghost live).
-// holder arg is diagnostic only — P-G walks slot addresses from FixEdgeSet.
+// holder arg is diagnostic only — P-G walks validated holder-relative fields
+// from FixEdgeSet without a heap-wide object traversal.
 // r1route2 R2.1: consume ForwardFactTable only (copy-time side table).
 // ⛔ GetRoute/RouteObject/FindToVersion (r1segv D5) and ⛔ IsValidObject(to).
 // ⛔ FindLatestVersion (silent fallback returns from when to==null).
@@ -855,9 +859,9 @@ void WCollector::BulkForwardHolderRefs()
     collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
     Heap::GetHeap().VisitAllExportRoots(fixRoot);
 
-    // Index-only walk: each entry is a field slot address registered at store time.
+    // Index-only walk: each entry is a field offset bound to its holder carrier.
     FixEdgeSet::Instance().VisitAndClear(
-        [&fixOne](RefField<>& field) { fixOne(nullptr, field); });
+        [&fixOne](BaseObject* holder, RefField<>& field) { fixOne(holder, field); });
 
     // R2.1: fact table lifetime ends with BulkForward (same major STW bracket).
     ForwardFactTable::Instance().Clear();
@@ -1081,6 +1085,12 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     };
     RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
 
+    VisitMinorRootSlots(rawRootVisitor, fieldVisitor);
+    VisitMinorValueRoots(visitor);
+}
+
+void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
+{
     MutatorManager::Instance().VisitAllMutators(
         [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
@@ -1088,7 +1098,10 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     collectorResources.GetFinalizerProcessor().VisitGCRoots(rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitFinalizers(rawRootVisitor);
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+}
 
+void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
+{
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         for (BaseObject* object : resurrectedExportObjectes) {
@@ -1136,10 +1149,12 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
     }
 }
 
-void WCollector::RescanRememberedSet(WorkStack& workStack)
+void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
+                                     const MinorRegionSet* evacuatedRegions)
 {
-    StickyLog::Instance().RescanLoggedLines([this, &workStack](MAddress lineStart, MAddress lineEnd) {
-        if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+    StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions](MAddress lineStart,
+                                                                                           MAddress lineEnd) {
+        if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
             minorRescannedLines.insert(lineStart);
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(lineStart);
@@ -1147,22 +1162,32 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
             return false;
         }
         bool retainLine = false;
-        auto scanObject = [this, &workStack, lineStart, lineEnd, &retainLine](BaseObject* object) {
+        auto scanObject = [this, workStack, forwarding, evacuatedRegions, lineStart, lineEnd,
+                           &retainLine](BaseObject* object) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
                 return;
             }
             ForEachStrongRefSlot(object,
-                [this, &workStack, &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
-                    if (StickyLog::Instance().IsMinorValidatorEnabled()) {
+                [this, workStack, forwarding, evacuatedRegions,
+                 &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+                    if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
                         minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
                     }
-                    if (Heap::IsHeapAddress(target) &&
-                        RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
+                    if (forwarding != nullptr) {
+                        CHECK_DETAIL(evacuatedRegions != nullptr,
+                                     "minor forwarding scan has no evacuated-region identity set");
+                        (void)FixMinorEvacuatedSlot(field, *forwarding, *evacuatedRegions);
+                        target = ResolveMinorReference(field);
+                    }
+                    if (Heap::IsHeapAddress(target) && RegionInfo::GetRegionInfoAt(
+                            reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                         retainLine = true;
                     }
-                    PushYoungObject(target, workStack);
+                    if (workStack != nullptr) {
+                        PushYoungObject(target, *workStack);
+                    }
                 });
         };
         LiveInfo* retainedLiveInfo = region->GetRetainedLiveInfo();
@@ -1239,6 +1264,194 @@ void WCollector::RescanRememberedSet(WorkStack& workStack)
         }
         return retainLine;
     });
+}
+
+void WCollector::PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return;
+    }
+    CHECK_DETAIL(object->IsValidObject(), "minor value root %p is not a valid object", object);
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (region->IsYoungRegion()) {
+        pinnedRegions.insert(region);
+    }
+}
+
+bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, const MinorForwardTable& forwarding,
+                                       const MinorRegionSet& evacuatedRegions) const
+{
+    BaseObject* target = ResolveMinorReference(field);
+    auto it = forwarding.find(target);
+    if (it == forwarding.end()) {
+        if (Heap::IsHeapAddress(target)) {
+            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            CHECK_DETAIL(targetRegion == nullptr || evacuatedRegions.count(targetRegion) == 0,
+                         "minor evacuation forwarding miss field=%p target=%p source_region=%p",
+                         &field, target, targetRegion);
+        }
+        return false;
+    }
+    RefField<> oldField(field);
+    RefField<> newField(it->second);
+    CHECK_DETAIL(field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue()),
+                 "minor evacuation slot changed while the world was stopped field=%p from=%p to=%p",
+                 &field, target, it->second);
+    return true;
+}
+
+void WCollector::FixMinorRootSlots(const MinorForwardTable& forwarding, const MinorRegionSet& evacuatedRegions)
+{
+    RootVisitor rawRootVisitor = [this, &forwarding, &evacuatedRegions](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        (void)FixMinorEvacuatedSlot(field, forwarding, evacuatedRegions);
+    };
+    RefFieldVisitor fieldVisitor = [this, &forwarding, &evacuatedRegions](RefField<>& field) {
+        (void)FixMinorEvacuatedSlot(field, forwarding, evacuatedRegions);
+    };
+    VisitMinorRootSlots(rawRootVisitor, fieldVisitor);
+}
+
+void WCollector::FixMinorObjectSlots(BaseObject* object, const MinorForwardTable& forwarding,
+                                     const MinorRegionSet& evacuatedRegions)
+{
+    ForEachStrongRefSlot(object,
+        [this, &forwarding, &evacuatedRegions](RefSlotKind, BaseObject*, RefField<>& field) {
+            (void)FixMinorEvacuatedSlot(field, forwarding, evacuatedRegions);
+        });
+}
+
+void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::vector<RegionInfo*>& toRegions)
+{
+    StickyLog& stickyLog = StickyLog::Instance();
+    const size_t threshold = stickyLog.GetEvacuationThreshold();
+    const size_t maxRegions = stickyLog.GetEvacuationMaxRegions();
+    if (threshold == 0 || maxRegions == 0) {
+        return;
+    }
+
+    std::vector<RegionInfo*> fromRegions;
+    for (RegionInfo* region : minorCandidateRegions) {
+        size_t liveBytes = region->GetLiveByteCount();
+        size_t regionBytes = region->GetRegionSize();
+        if (!region->IsYoungRegion() || !region->IsSmallRegion() || region->IsPinnedRegion() ||
+            region->GetYoungAge() < 1 || liveBytes == 0 || region->GetRawPointerObjectCount() != 0 ||
+            pinnedRegions.count(region) != 0 || liveBytes * 100 > regionBytes * threshold) {
+            continue;
+        }
+        fromRegions.push_back(region);
+    }
+    std::sort(fromRegions.begin(), fromRegions.end(), [](RegionInfo* left, RegionInfo* right) {
+        size_t leftScaled = left->GetLiveByteCount() * right->GetRegionSize();
+        size_t rightScaled = right->GetLiveByteCount() * left->GetRegionSize();
+        return leftScaled == rightScaled ? left->GetRegionStart() < right->GetRegionStart() :
+                                          leftScaled < rightScaled;
+    });
+    if (fromRegions.size() > maxRegions) {
+        fromRegions.resize(maxRegions);
+    }
+    if (fromRegions.empty()) {
+        return;
+    }
+
+    CHECK_DETAIL(ForwardFactTable::Instance().SizeApprox() == 0 &&
+                     RelocationDiagnosticTable::Instance().Size() == 0,
+                 "minor evacuation entered with pending copy facts");
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    toRegions.reserve(fromRegions.size());
+    for (RegionInfo* fromRegion : fromRegions) {
+        RegionInfo* toRegion = manager.AllocateThreadLocalRegion();
+        CHECK_DETAIL(toRegion != nullptr, "minor evacuation failed to allocate to-region for source=%p",
+                     fromRegion);
+        CHECK_DETAIL(toRegion != fromRegion && toRegion->IsYoungRegion() && toRegion->IsSmallRegion(),
+                     "minor evacuation received invalid to-region source=%p to=%p", fromRegion, toRegion);
+        toRegion->SetYoungAge(fromRegion->GetYoungAge());
+        toRegions.push_back(toRegion);
+    }
+
+    MinorForwardTable forwarding;
+    size_t copiedObjects = 0;
+    size_t copiedBytes = 0;
+    bool positiveControlInjected = false;
+    for (size_t i = 0; i < fromRegions.size(); ++i) {
+        RegionInfo* fromRegion = fromRegions[i];
+        RegionInfo* toRegion = toRegions[i];
+        const char* positiveControl = std::getenv("MRT_STICKY_EVAC_BITMAP_POSCTRL");
+        if (!positiveControlInjected && positiveControl != nullptr && std::strcmp(positiveControl, "1") == 0) {
+            BaseObject* victim = nullptr;
+            bool visitedAll = fromRegion->VisitLiveObjectsUntilFalse([&victim](BaseObject* object) {
+                victim = object;
+                return false;
+            });
+            CHECK_DETAIL(!visitedAll && victim != nullptr,
+                         "minor evacuation bitmap positive control found no survivor in source=%p", fromRegion);
+            size_t victimOffset = fromRegion->GetAddressOffset(reinterpret_cast<MAddress>(victim));
+            LiveInfo* liveInfo = fromRegion->GetLiveInfo();
+            bool dropped = liveInfo != nullptr && liveInfo->markBitmap != nullptr &&
+                liveInfo->markBitmap->ClearObjectStartForPositiveControl(victimOffset);
+            if (liveInfo != nullptr && liveInfo->resurrectBitmap != nullptr) {
+                dropped = liveInfo->resurrectBitmap->ClearObjectStartForPositiveControl(victimOffset) || dropped;
+            }
+            CHECK_DETAIL(dropped,
+                         "minor evacuation bitmap positive control failed to drop survivor=%p source=%p",
+                         victim, fromRegion);
+            positiveControlInjected = true;
+            VLOG(REPORT, "[StickyMinor] bitmap_positive_control source=%p victim=%p offset=%zu",
+                 fromRegion, victim, victimOffset);
+        }
+        size_t liveBytes = fromRegion->GetLiveByteCount();
+        LiveInfo* liveInfo = fromRegion->GetLiveInfo();
+        size_t bitmapLiveBytes = liveInfo == nullptr ? 0 : liveInfo->GetBitmapLiveBytes();
+        size_t recomputedLiveBytes = liveInfo == nullptr ? 0 : liveInfo->RecomputeBitmapLiveBytes();
+        CHECK_DETAIL(liveInfo != nullptr && bitmapLiveBytes == liveBytes && recomputedLiveBytes == bitmapLiveBytes,
+                     "minor evacuation bitmap completeness failure source=%p liveInfo=%p liveByteCount=%zu "
+                     "bitmapLiveBytes=%zu recomputedLiveBytes=%zu",
+                     fromRegion, liveInfo, liveBytes, bitmapLiveBytes, recomputedLiveBytes);
+        (void)fromRegion->VisitLiveObjectsUntilFalse(
+            [this, fromRegion, toRegion, &forwarding, &copiedObjects, &copiedBytes](BaseObject* fromObject) {
+                size_t size = RegionSpace::GetAllocSize(*fromObject);
+                MAddress toAddress = toRegion->Alloc(size);
+                CHECK_DETAIL(toAddress != 0,
+                             "minor evacuation to-region exhausted source=%p to=%p object=%p size=%zu",
+                             fromRegion, toRegion, fromObject, size);
+                BaseObject* toObject = reinterpret_cast<BaseObject*>(toAddress);
+                CopyObject(*fromObject, *toObject, size);
+                toObject->SetStateCode(ObjectState::NORMAL);
+                auto inserted = forwarding.emplace(fromObject, toObject);
+                CHECK_DETAIL(inserted.second,
+                             "minor evacuation forwarding conflict source=%p old-to=%p new-to=%p",
+                             fromObject, inserted.first->second, toObject);
+                ++copiedObjects;
+                copiedBytes += size;
+                return true;
+            });
+    }
+    std::atomic_thread_fence(std::memory_order_release);
+
+    MinorRegionSet fromRegionSet(fromRegions.begin(), fromRegions.end());
+    FixMinorRootSlots(forwarding, fromRegionSet);
+    RescanRememberedSet(nullptr, &forwarding, &fromRegionSet);
+    for (RegionInfo* region : minorCandidateRegions) {
+        if (fromRegionSet.count(region) != 0) {
+            continue;
+        }
+        (void)region->VisitLiveObjectsUntilFalse([this, &forwarding, &fromRegionSet](BaseObject* object) {
+            FixMinorObjectSlots(object, forwarding, fromRegionSet);
+            return true;
+        });
+    }
+    for (const auto& entry : forwarding) {
+        FixMinorObjectSlots(entry.second, forwarding, fromRegionSet);
+    }
+
+    ForwardFactTable::Instance().Clear();
+    RelocationDiagnosticTable::Instance().Clear();
+    for (RegionInfo* fromRegion : fromRegions) {
+        fromRegion->ResetLiveByteCount();
+    }
+    VLOG(REPORT,
+         "[StickyMinor] evacuation regions=%zu objects=%zu copiedBytes=%zu threshold=%zu%% maxRegions=%zu",
+         fromRegions.size(), copiedObjects, copiedBytes, threshold, maxRegions);
 }
 
 void WCollector::ValidateYoungMarking()
@@ -1325,18 +1538,32 @@ void WCollector::DoYoungGarbageCollection()
     minorDiscoveredObjects.clear();
     WorkStack workStack = NewWorkStack();
     WorkStack enumRoots = NewWorkStack();
+    const bool evacuationEnabled = StickyLog::Instance().GetEvacuationThreshold() != 0 &&
+        StickyLog::Instance().GetEvacuationMaxRegions() != 0;
+    MinorRegionSet pinnedRegions;
     theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
     while (!enumRoots.empty()) {
         BaseObject* object = enumRoots.back();
         enumRoots.pop_back();
         PushYoungObject(object, workStack);
+        if (evacuationEnabled) {
+            PinMinorValueRoot(object, pinnedRegions);
+        }
     }
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
-    RescanRememberedSet(workStack);
+    RescanRememberedSet(&workStack, nullptr);
     TraceYoungClosure(workStack);
 
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
         ValidateYoungMarking();
+    }
+
+    std::vector<RegionInfo*> evacuationToRegions;
+    if (evacuationEnabled) {
+        VisitMinorValueRoots([this, &pinnedRegions](BaseObject* object) {
+            PinMinorValueRoot(object, pinnedRegions);
+        });
+        EvacuateYoungRegions(pinnedRegions, evacuationToRegions);
     }
 
     SatbBuffer& satbBuffer = SatbBuffer::Instance();
@@ -1378,6 +1605,13 @@ void WCollector::DoYoungGarbageCollection()
         });
         promotionScanNs += TimeUtil::NanoSeconds() - scanStart;
     });
+    for (RegionInfo* toRegion : evacuationToRegions) {
+        CHECK_DETAIL(toRegion->IsYoungRegion(), "minor evacuation to-region promoted in the same collection: %p",
+                     toRegion);
+        toRegion->SetTraceRegionFlag(0);
+        manager.RemoveThreadLocalRegion(toRegion);
+        manager.EnlistFullThreadLocalRegion(toRegion);
+    }
     satbBuffer.FlushStickyLogQueue(promotionNode);
     VLOG(REPORT, "[StickyMinor] promotion scan regions=%zu objects=%zu loggedLines=%zu time=%zu us",
          promotedRegions, promotedObjects, promotedLoggedLines, promotionScanNs / NS_PER_US);

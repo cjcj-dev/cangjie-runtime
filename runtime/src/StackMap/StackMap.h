@@ -251,6 +251,16 @@ public:
         return MapType(true, stackBase, entry, std::move(closure));
     }
 
+    StackMapInvalidReason GetInvalidReason() const
+    {
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        return head.GetInvalidReason(startPC, framePC);
+    }
+
 protected:
     uintptr_t startPC;
     uintptr_t framePC;

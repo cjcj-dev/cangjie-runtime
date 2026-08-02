@@ -6,6 +6,9 @@
 
 #include "TracingCollector.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
@@ -14,6 +17,83 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+namespace {
+struct SkippedStackMapCounts {
+    std::atomic<size_t> zeroEntries{ 0 };
+    std::atomic<size_t> pcMiss{ 0 };
+    std::atomic<size_t> zeroRootIndices{ 0 };
+};
+
+SkippedStackMapCounts g_skippedStackMapCounts;
+
+const bool STRICT_STACKMAP_ENABLED = []() {
+    const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
+{
+    switch (reason) {
+        case StackMapInvalidReason::NONE:
+            return "none";
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            return "present-but-zero-entries";
+        case StackMapInvalidReason::PC_MISS:
+            return "pc-miss-exact";
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            return "zero-root-indices";
+    }
+    return "unknown";
+}
+
+void ResetSkippedStackMapCounts()
+{
+    g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+}
+
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                                          uintptr_t frameIP)
+{
+    std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            skippedCount = &g_skippedStackMapCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            skippedCount = &g_skippedStackMapCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+            break;
+    }
+    skippedCount->fetch_add(1, std::memory_order_relaxed);
+    if (UNLIKELY(STRICT_STACKMAP_ENABLED)) {
+        CString symbol = frame.GetFuncName();
+        LOG(RTLOG_FATAL,
+            "MRT_GC_STRICT_STACKMAP=1: invalid stack map reason=%s symbol=%s start_ip=%p frame_ip=%p",
+            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(), reinterpret_cast<void*>(startIP),
+            reinterpret_cast<void*>(frameIP));
+    }
+}
+
+void ReportSkippedStackMapCounts()
+{
+    size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
+    size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
+    size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
+    if (zeroEntries == 0 && pcMiss == 0 && zeroRootIndices == 0) {
+        return;
+    }
+    LOG(RTLOG_ERROR,
+        "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+        "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+        zeroEntries, pcMiss, zeroRootIndices);
+}
+} // namespace
+
 const size_t TracingCollector::MAX_MARKING_WORK_SIZE = 16; // fork task if bigger
 const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller
 
@@ -331,6 +411,8 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
         heapMap.VisitSlotRoots(rootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
+    } else {
+        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
@@ -717,6 +799,7 @@ void TracingCollector::DumpRoots(LogType logType)
 
 void TracingCollector::PreGarbageCollection(bool isConcurrent)
 {
+    ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
          g_gcRequests[gcReason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(), GetCurrentTagID());
@@ -743,6 +826,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
+    ReportSkippedStackMapCounts();
     // release pages in PagePool
     if (StickyLog::Instance().IsEnabled()) {
         ScopedStopTheWorld stw("reclaim sticky log nodes", true, GCPhase::GC_PHASE_RECLAIM_SATB_NODE);

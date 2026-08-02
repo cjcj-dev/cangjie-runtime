@@ -16,6 +16,7 @@
 #include "Collector/CopyCollector.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/FixEdgeSet.h"
 #include "Heap/StickyLog.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -420,6 +421,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(unitIndex) && regionSize != 0 &&
                    (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
                "sticky region clear must cover exactly the captured units");
+    InvalidateFixEdgeRange(regionStart, regionSize);
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
     region->InitFreeUnits();
     freeRegionManager.AddGarbageUnits(unitIndex, num);
@@ -441,11 +443,17 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     MRT_ASSERT(regionStart == RegionInfo::GetUnitAddress(unitIndex) && regionSize != 0 &&
                    (regionSize % RegionInfo::UNIT_SIZE) == 0 && regionSize == num * RegionInfo::UNIT_SIZE,
                "sticky region clear must cover exactly the captured units");
+    InvalidateFixEdgeRange(regionStart, regionSize);
     StickyLog::Instance().ClearUnavailableRegion(regionStart, regionSize);
     region->InitFreeUnits();
     RegionInfo::ReleaseUnits(unitIndex, num);
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
+}
+
+void RegionManager::InvalidateFixEdgeRange(MAddress start, size_t size)
+{
+    FixEdgeSet::Instance().InvalidateRange(start, size);
 }
 
 void RegionManager::ReassembleFromSpace()
@@ -864,6 +872,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
             garbageSize += objSize;
             std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
+            InvalidateFixEdgeRange(reinterpret_cast<MAddress>(object), objSize);
             ReleaseNativeResource(object);
             freePinnedSlotLists.PushFront(object);
         }
@@ -1292,6 +1301,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
+        InvalidateFixEdgeRange(cur, reclaimSize);
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
     }
 
@@ -1358,6 +1368,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
+        InvalidateFixEdgeRange(cur, reclaimSize);
         CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
     }
 

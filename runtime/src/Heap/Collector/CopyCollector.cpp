@@ -9,6 +9,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
+#include "Heap/FixEdgeSet.h"
 #include "Heap/ForwardFactTable.h"
 #include "Heap/RelocationDiagnosticTable.h"
 #include "Mutator/MutatorManager.h"
@@ -36,6 +37,10 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    // Every object mover funnels through CopyObject. Move the holder-relative
+    // fix-edge carrier only after the payload is committed; the destination
+    // range simultaneously invalidates carriers belonging to overwritten data.
+    FixEdgeSet::Instance().RelocateHolder(from, to, size);
     // r1missbucket: independent observation only. In particular, retain the
     // identity compact copies that ForwardFactTable intentionally rejects.
     RelocationDiagnosticTable::Instance().Record(const_cast<BaseObject*>(&fromObj), &toObj, size, typeInfo);

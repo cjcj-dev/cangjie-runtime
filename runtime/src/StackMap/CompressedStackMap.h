@@ -23,6 +23,13 @@
 #include "StackMap/StackMapX86.h"
 #endif
 namespace MapleRuntime {
+enum class StackMapInvalidReason : U8 {
+    NONE,
+    ZERO_ENTRIES,
+    PC_MISS,
+    ZERO_ROOT_INDICES,
+};
+
 class CompressedStackMapEntry {
 public:
     CompressedStackMapEntry(const IdxSet& idx, const RegTable& reg, const SlotTable& slot, const LineNumTable& lineNum,
@@ -144,6 +151,20 @@ public:
         DerivedPtrTable derivedTable(lineTable.GetNextTable(), stackMapTable.GetRegBitsLen(),
                                      stackMapTable.GetSlotBitsLen());
         return CompressedStackMapEntry(idxSet, regTable, slotTable, lineTable, derivedTable, true);
+    }
+
+    StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
+    {
+        StackMapTable stackMapTable(prologue.GetNextTable());
+        switch (stackMapTable.GetLookupResult(startPC, framePC)) {
+            case StackMapLookupResult::ZERO_ENTRIES:
+                return StackMapInvalidReason::ZERO_ENTRIES;
+            case StackMapLookupResult::PC_MISS:
+                return StackMapInvalidReason::PC_MISS;
+            case StackMapLookupResult::FOUND:
+                return StackMapInvalidReason::ZERO_ROOT_INDICES;
+        }
+        return StackMapInvalidReason::ZERO_ROOT_INDICES;
     }
 
 private:

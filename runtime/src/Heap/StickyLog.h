@@ -46,6 +46,8 @@ public:
     // (RegionManager::CollectYoungGarbage). Default 1 = shipped behavior
     // (age once, promote on the second surviving minor).
     uint8_t GetPromoteAge() const { return promoteAge; }
+    size_t GetEvacuationThreshold() const { return evacuationThreshold; }
+    size_t GetEvacuationMaxRegions() const { return evacuationMaxRegions; }
     bool IsLoggedLine(MAddress address) const;
     bool TryLogLine(MAddress address, MAddress& lineStart) const;
     void ClearUnavailableRegion(MAddress regionStart, size_t regionSize);
@@ -69,6 +71,8 @@ private:
     size_t youngBytesThreshold = DEFAULT_YOUNG_BYTES;
     uint32_t majorInterval = 8;
     uint8_t promoteAge = 1;
+    size_t evacuationThreshold = 0;
+    size_t evacuationMaxRegions = 8;
 };
 } // namespace MapleRuntime
 
