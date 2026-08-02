@@ -816,11 +816,13 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     std::array<std::array<const void*, sampleCount>, categoryCount> slots{};
     std::array<std::array<BaseObject*, sampleCount>, categoryCount> holders{};
     std::array<std::array<BaseObject*, sampleCount>, categoryCount> targets{};
+    WorkStack pending = NewWorkStack();
+    MinorObjectSet visited;
 
     auto record = [this, &counts, &slots, &holders, &targets](
                       size_t category, const void* slot, BaseObject* holder, BaseObject* target) {
         if (!Heap::IsHeapAddress(target) || !IsGhostFromObject(target) || IsUnmovableFromObject(target)) {
-            return;
+            return false;
         }
         size_t sample = counts[category]++;
         if (sample < sampleCount) {
@@ -828,21 +830,31 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
             holders[category][sample] = holder;
             targets[category][sample] = target;
         }
+        return true;
     };
-    auto recordRawRoot = [&record](size_t category) {
-        return RootVisitor([category, &record](ObjectRef& root) {
-            record(category, &root, nullptr, root.object);
+    auto inspectTarget = [&record, &pending](
+                             size_t category, const void* slot, BaseObject* holder, BaseObject* target) {
+        if (record(category, slot, holder, target)) {
+            return;
+        }
+        if (Heap::IsHeapAddress(target)) {
+            pending.push_back(target);
+        }
+    };
+    auto recordRawRoot = [&inspectTarget](size_t category) {
+        return RootVisitor([category, &inspectTarget](ObjectRef& root) {
+            inspectTarget(category, &root, nullptr, root.object);
         });
     };
-    auto recordField = [&record](size_t category, BaseObject* holder, RefField<>& field) {
+    auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
         RefField<> value(field);
-        record(category, &field, holder, value.GetTargetObject());
+        inspectTarget(category, &field, holder, value.GetTargetObject());
     };
 
     RootVisitor stackVisitor = recordRawRoot(0);
     RootVisitor registerVisitor = recordRawRoot(1);
-    DerivedPtrVisitor derivedVisitor = [&record](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        record(2, &derivedPtr, nullptr, reinterpret_cast<BaseObject*>(basePtr));
+    DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+        inspectTarget(2, &derivedPtr, nullptr, reinterpret_cast<BaseObject*>(basePtr));
     };
     RootVisitor exceptionVisitor = recordRawRoot(10);
     RootVisitor rawObjectVisitor = recordRawRoot(11);
@@ -862,18 +874,18 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
         for (BaseObject* const& object : resurrectedExportObjectes) {
-            record(9, &object, nullptr, object);
+            inspectTarget(9, &object, nullptr, object);
         }
         for (BaseObject* const& object : resurrectedExportObjectesForwardPhase) {
-            record(9, &object, nullptr, object);
+            inspectTarget(9, &object, nullptr, object);
         }
     }
     {
         std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
         for (const auto& entry : cycleRefWorkStack) {
-            record(9, &entry.first, nullptr, entry.first);
+            inspectTarget(9, &entry.first, nullptr, entry.first);
             for (BaseObject* const& object : entry.second) {
-                record(9, &object, nullptr, object);
+                inspectTarget(9, &object, nullptr, object);
             }
         }
     }
@@ -895,8 +907,13 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
             visitObject(object);
         }
     } else {
-        RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
-        manager.ForEachObjUnsafe(visitObject);
+        while (!pending.empty()) {
+            BaseObject* object = pending.back();
+            pending.pop_back();
+            if (visited.insert(object).second) {
+                visitObject(object);
+            }
+        }
     }
 
     size_t total = 0;
