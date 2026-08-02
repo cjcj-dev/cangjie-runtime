@@ -739,7 +739,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         return object;
     };
 
-    auto fixAllReferences = [this, &reachableObjects, &rememberedSlots, &currentObject]() {
+    auto fixForwardedReferences = [this, &reachableObjects, &rememberedSlots, &currentObject]() {
         FixMinorRootSlots();
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
@@ -754,12 +754,14 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     };
 
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    fixAllReferences();
+    FixMinorRootSlots();
+    PreforwardDiscoveredExternObjects();
+    PreforwardAllResurrectExportFromObjects();
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
     fwdTable.PrepareForwardTable();
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    fixAllReferences();
+    fixForwardedReferences();
 
     ForwardFromSpace();
     manager.ReassembleFromSpace();
