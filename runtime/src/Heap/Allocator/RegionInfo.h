@@ -7,8 +7,10 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <atomic>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -804,14 +806,32 @@ public:
 
     void SetYoungRegionFlag(uint8_t flag)
     {
+        std::lock_guard<std::mutex> lock(GetYoungRegionFlagMutex());
+        bool wasYoung = IsYoungRegion();
+        bool makeYoung = flag != 0;
+        if (!wasYoung && makeYoung) {
+            GetYoungRegionCountStorage().fetch_add(1, std::memory_order_release);
+        }
         metadata.regionStateBitField.SetAtomicValue(
-            RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, flag == 0 ? 0 : 1);
+            RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
+        if (wasYoung && !makeYoung) {
+            size_t count = GetYoungRegionCountStorage().load(std::memory_order_relaxed);
+            CHECK(count > 0);
+            GetYoungRegionCountStorage().fetch_sub(1, std::memory_order_release);
+        }
     }
 
     bool IsYoungRegion() const
     {
         return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
     }
+
+    static size_t GetYoungRegionCount()
+    {
+        return GetYoungRegionCountStorage().load(std::memory_order_acquire);
+    }
+
+    static bool HasYoungRegions() { return GetYoungRegionCount() != 0; }
 
     void SetYoungAge(uint8_t age)
     {
@@ -1016,6 +1036,18 @@ public:
     }
 
 private:
+    static std::atomic<size_t>& GetYoungRegionCountStorage()
+    {
+        static std::atomic<size_t> count { 0 };
+        return count;
+    }
+
+    static std::mutex& GetYoungRegionFlagMutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
     static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
@@ -1180,12 +1212,6 @@ private:
         void SetResurrectedRegionFlag(uint8_t flag)
         {
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
-        }
-
-        void SetYoungRegionFlag(uint8_t flag)
-        {
-            metadata.regionStateBitField.SetAtomicValue(
-                RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, flag == 0 ? 0 : 1);
         }
 
         // Publish the owner before the discriminator that guards it, so a reader which observes
