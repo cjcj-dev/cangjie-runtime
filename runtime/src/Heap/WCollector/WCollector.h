@@ -208,7 +208,7 @@ private:
     void FixMinorRootSlots();
     void FixMinorObjectSlots(BaseObject* object);
     void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
-    void ValidateYoungMarking(const MinorObjectSet& reachableObjects);
+    void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
