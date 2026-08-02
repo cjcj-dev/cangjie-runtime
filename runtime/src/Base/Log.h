@@ -376,7 +376,9 @@ using LogHandle = void (*)(const char* msg);
 #endif
 
 constexpr size_t DEFAULT_MAX_FILE_SIZE = 10 * 1024 * 1024;
-constexpr size_t LOG_BUFFER_SIZE = 1024;
+// Sticky/GC report lines exceed 1KiB under concurrent STW; short buffer caused
+// WriteLogImpl vsprintf_s failed and truncated multi-process reports (fountperf).
+constexpr size_t LOG_BUFFER_SIZE = 8192;
 
 class Logger {
 public:

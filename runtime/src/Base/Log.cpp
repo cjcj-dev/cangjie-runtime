@@ -158,6 +158,19 @@ void Logger::GetLogPath(const char* env, CString& logPath)
     }
     if (logPath.IsEmpty()) {
         LOG(RTLOG_ERROR, "Unsupported %s parameter. %s is empty.\n", env, env);
+        return;
+    }
+    // cjpm -jN spawns multiple processes that inherit the same MRT_LOG_PATH /
+    // MRT_REPORT file path; concurrent fopen("w") + fprintf interleaves and
+    // truncates lines ("Processor number: 1922026-..." / "rrent allocated").
+    // Isolate by pid so each process owns a unique file (LogFile.cpp open site).
+    char pidSuffix[64];
+    int endsWithSep = logPath.RFind(separator) == static_cast<int>(logPath.Length() - 1);
+    int n = endsWithSep
+        ? sprintf_s(pidSuffix, sizeof(pidSuffix), "mrt.%d.log", GetPid())
+        : sprintf_s(pidSuffix, sizeof(pidSuffix), ".%d", GetPid());
+    if (n > 0) {
+        logPath.Append(pidSuffix);
     }
 }
 
