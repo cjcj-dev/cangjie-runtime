@@ -570,11 +570,18 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // a chance to invoke heuristic gc.
     if (!Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
-        size_t threshold = collector.GetGCStats().GetThreshold();
-        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-        if (allocated >= threshold) {
-            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, threshold);
-            collector.RequestGC(GC_REASON_HEU, true);
+        constexpr size_t youngRegionTriggerBytes = 32 * MB;
+        size_t youngAllocated = GetYoungAllocatedSize();
+        if (youngAllocated >= youngRegionTriggerBytes) {
+            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
+            collector.RequestGC(GC_REASON_YOUNG, true);
+        } else {
+            size_t threshold = collector.GetGCStats().GetThreshold();
+            size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
+            if (allocated >= threshold) {
+                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, threshold);
+                collector.RequestGC(GC_REASON_HEU, true);
+            }
         }
     }
 
