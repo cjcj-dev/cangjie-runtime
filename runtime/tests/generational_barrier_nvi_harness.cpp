@@ -177,6 +177,16 @@ int main()
 {
     using namespace MapleRuntime;
     RegionFixture fixture;
+    size_t initialYoungCount = RegionInfo::GetYoungRegionCount();
+    fixture.oldRegion->SetYoungRegionFlag(1);
+    size_t countAfterNewWrite = RegionInfo::GetYoungRegionCount();
+    fixture.oldRegion->SetYoungRegionFlag(0);
+    size_t countAfterClear = RegionInfo::GetYoungRegionCount();
+    bool counterPassed = initialYoungCount == 0 && countAfterNewWrite == 1 && countAfterClear == 0;
+    std::cout << "COUNTER_STRUCTURAL_PROOF new_write=SetYoungRegionFlag counter_calls=0 after_set="
+              << countAfterNewWrite << " after_clear=" << countAfterClear << " result="
+              << (counterPassed ? "PASS" : "FAIL") << '\n';
+
     bool representationPassed = !fixture.oldRegion->IsYoungRegion() && fixture.oldRegion->GetYoungAge() == 0 &&
         !fixture.youngRegion->IsYoungRegion() && fixture.youngRegion->GetYoungAge() == 0;
     fixture.youngRegion->SetYoungRegionFlag(1);
@@ -193,9 +203,23 @@ int main()
     std::cout << "YOUNG_REPRESENTATION result=" << (representationPassed ? "PASS" : "FAIL") << '\n';
 
     TestCollector collector;
-    bool passed = representationPassed;
+    bool passed = representationPassed && counterPassed;
     RememberedSet testSet;
     TestBarrier testBarrier(collector, testSet);
+#if defined(MRT_GENERATIONAL_BARRIER_PROBE)
+    fixture.youngRegion->SetYoungRegionFlag(0);
+    Barrier::ResetGenerationalBarrierProbe();
+    fixture.field->SetTargetObject(nullptr);
+    testBarrier.WriteReference(fixture.oldObject, *fixture.field, fixture.youngObject);
+    uint64_t fastPathHits = Barrier::GetGenerationalBarrierFastPathHits();
+    uint64_t regionLookups = Barrier::GetGenerationalBarrierRegionLookups();
+    bool fastPathPassed = fastPathHits == 1 && regionLookups == 0;
+    std::cout << "FASTPATH_HIT_RATE hits=" << fastPathHits << " total=" << (fastPathHits + regionLookups)
+              << " result=" << (fastPathPassed ? "PASS" : "FAIL") << '\n';
+    passed = fastPathPassed && passed;
+    fixture.youngRegion->SetYoungRegionFlag(1);
+    fixture.youngRegion->SetYoungAge(63);
+#endif
     passed = ExerciseNineEntries(testBarrier, fixture, testSet) && passed;
 
     RememberedSet baseSet;

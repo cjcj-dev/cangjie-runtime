@@ -12,6 +12,10 @@ repo=$(git -C "$script_dir" rev-parse --show-toplevel)
 cpuset=${GCV2_CPUSET:-112-127}
 runtime_lib_dir=${GCV2_RUNTIME_LIB_DIR:-$repo/runtime/output/temp/lib/x86_64_Release}
 probe_tmp=$(mktemp -d /tmp/gcv2-nvi-probe.XXXXXX)
+probe_definitions=()
+if [[ "${GCV2_ENABLE_FASTPATH_PROBE:-0}" == "1" ]]; then
+    probe_definitions+=(-DMRT_GENERATIONAL_BARRIER_PROBE)
+fi
 
 cleanup()
 {
@@ -21,6 +25,7 @@ cleanup()
 trap cleanup EXIT
 
 taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
+    "${probe_definitions[@]}" \
     -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
     -I"$repo/runtime/output/temp/include" \
     -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
