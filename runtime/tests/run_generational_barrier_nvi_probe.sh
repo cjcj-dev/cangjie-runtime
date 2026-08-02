@@ -20,7 +20,7 @@ cleanup()
 }
 trap cleanup EXIT
 
-taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread \
+taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
     -I"$repo/runtime/src" -I"$repo/runtime/src/Heap" -I"$repo/runtime/include" \
     -I"$repo/runtime/output/temp/include" \
     -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
