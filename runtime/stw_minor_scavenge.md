@@ -1,4 +1,4 @@
-# Default-off STW minor scavenge
+# STW minor scavenge
 
 ## Scope and switch
 
@@ -8,14 +8,14 @@ young trace has completed and before `RegionManager::CollectYoungGarbage`
 reclaims the selected source regions.
 
 `MRT_STICKY_EVAC_THRESHOLD` is the maximum live percentage of a small young
-region that may be selected.  Its default is zero, which skips every
-evacuation operation.  Values above 100 are clamped to 100.
+region that may be selected.  Its default is 10 percent.  Setting it to zero
+skips every evacuation operation.  Values above 100 are clamped to 100.
 `MRT_STICKY_EVAC_MAX_REGIONS` bounds the number of source regions selected per
 minor collection and defaults to 8.  Setting either value to zero selects no
 source regions.
 
-This facility must remain disabled until the remembered-set completeness work
-has established that every old-to-young edge is represented.  It allocates no
+This facility is enabled after the remembered-set completeness work established
+that every old-to-young edge is represented.  It allocates no
 `ForwardDataManager` storage and does not use the concurrent major collector's
 route, ghost, or epoch protocol.
 
@@ -91,6 +91,6 @@ Failure is explicit while the world is stopped:
 - failure to replace a slot with the table's destination fails a `CHECK`.
 
 There is no partial fallback that would reclaim a source region after an
-incomplete copy or incomplete slot correction.  With the threshold at its
-default zero, none of these operations is reached and the pre-existing sticky
+incomplete copy or incomplete slot correction.  With the threshold explicitly
+set to zero, none of these operations is reached and the pre-existing sticky
 minor path is unchanged.
