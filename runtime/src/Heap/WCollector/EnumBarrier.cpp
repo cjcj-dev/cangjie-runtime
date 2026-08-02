@@ -105,7 +105,7 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
     });
 }
 
-void EnumBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
     BaseObject* remeberedObject = nullptr;
@@ -139,7 +139,7 @@ void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     WriteReference(nullptr, field, ref);
 }
 
-void EnumBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     if (obj != nullptr) {
         MRT_ASSERT(dst > reinterpret_cast<MAddress>(obj), "WriteStruct struct addr is less than obj!");
@@ -223,8 +223,8 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     return target;
 }
 
-BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                             MemoryOrder order) const
+BaseObject* EnumBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                                 MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
@@ -239,8 +239,8 @@ BaseObject* EnumBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& fi
     return oldRef;
 }
 
-void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
-                                       MemoryOrder order) const
+void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+                                           MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
     MAddress oldValue = oldField.GetFieldValue();
@@ -260,8 +260,9 @@ void EnumBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, B
     FixEdgeSet::Instance().MaybeAdd(obj, reinterpret_cast<RefField<>*>(&field), newRef);
 }
 
-bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
-                                          BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
+bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+                                              BaseObject* newRef, MemoryOrder sOrder,
+                                              MemoryOrder fOrder) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
 
@@ -285,8 +286,8 @@ bool EnumBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field
     return false;
 }
 
-void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                                  MAddress srcField, MIndex srcSize) const
+void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+                                      MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
@@ -337,7 +338,7 @@ void EnumBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex 
 #endif
 }
 
-void EnumBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
+void EnumBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
@@ -371,7 +372,7 @@ void EnumBarrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const Object
     }
 }
 
-void EnumBarrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
+void EnumBarrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE), size,
