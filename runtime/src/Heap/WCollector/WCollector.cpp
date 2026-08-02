@@ -1235,11 +1235,12 @@ void WCollector::TraceYoungClosure(WorkStack& workStack)
     }
 }
 
-void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
+bool WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTable* forwarding,
                                      const MinorRegionSet* evacuatedRegions)
 {
-    StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions](MAddress lineStart,
-                                                                                           MAddress lineEnd) {
+    bool hasYoungReference = false;
+    StickyLog::Instance().RescanLoggedLines([this, workStack, forwarding, evacuatedRegions, &hasYoungReference]
+                                            (MAddress lineStart, MAddress lineEnd) {
         if (workStack != nullptr) {
             // remsetgap / checkmark: snapshot every line the mark-phase remset
             // consumer saw. StickyLog mutates logged bytes during Rescan (retain
@@ -1253,7 +1254,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
         }
         bool retainLine = false;
         auto scanObject = [this, workStack, forwarding, evacuatedRegions, lineStart, lineEnd,
-                           &retainLine](BaseObject* object) {
+                           &retainLine, &hasYoungReference](BaseObject* object) {
             MAddress objectStart = reinterpret_cast<MAddress>(object);
             MAddress objectEnd = objectStart + RegionSpace::GetAllocSize(*object);
             if (objectStart >= lineEnd || objectEnd <= lineStart) {
@@ -1261,7 +1262,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
             }
             ForEachStrongRefSlot(object,
                 [this, workStack, forwarding, evacuatedRegions,
-                 &retainLine](RefSlotKind, BaseObject* target, RefField<>& field) {
+                 &retainLine, &hasYoungReference](RefSlotKind, BaseObject* target, RefField<>& field) {
                     if (workStack != nullptr && StickyLog::Instance().IsMinorValidatorEnabled()) {
                         minorRescannedFields.insert(reinterpret_cast<MAddress>(&field));
                     }
@@ -1274,6 +1275,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
                     if (Heap::IsHeapAddress(target) && RegionInfo::GetRegionInfoAt(
                             reinterpret_cast<MAddress>(target))->IsYoungRegion()) {
                         retainLine = true;
+                        hasYoungReference = true;
                     }
                     if (workStack != nullptr) {
                         PushYoungObject(target, *workStack);
@@ -1354,6 +1356,7 @@ void WCollector::RescanRememberedSet(WorkStack* workStack, const MinorForwardTab
         }
         return retainLine;
     });
+    return hasYoungReference;
 }
 
 void WCollector::PinMinorValueRoot(BaseObject* object, MinorRegionSet& pinnedRegions) const
@@ -1520,7 +1523,7 @@ void WCollector::EvacuateYoungRegions(const MinorRegionSet& pinnedRegions, std::
 
     MinorRegionSet fromRegionSet(fromRegions.begin(), fromRegions.end());
     FixMinorRootSlots(forwarding, fromRegionSet);
-    RescanRememberedSet(nullptr, &forwarding, &fromRegionSet);
+    (void)RescanRememberedSet(nullptr, &forwarding, &fromRegionSet);
     for (RegionInfo* region : minorCandidateRegions) {
         if (fromRegionSet.count(region) != 0) {
             continue;
@@ -2002,7 +2005,12 @@ bool WCollector::DoYoungGarbageCollection()
         }
     }
     VisitMinorRoots([this, &workStack](BaseObject* object) { PushYoungObject(object, workStack); });
-    RescanRememberedSet(&workStack, nullptr);
+    if (!RescanRememberedSet(&workStack, nullptr)) {
+        ++emptyRemsetFallbacks;
+        VLOG(REPORT, "[StickyMinor] empty filtered remset; major fallback count=%zu", emptyRemsetFallbacks);
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        return false;
+    }
     TraceYoungClosure(workStack);
 
     if (StickyLog::Instance().IsMinorValidatorEnabled()) {
