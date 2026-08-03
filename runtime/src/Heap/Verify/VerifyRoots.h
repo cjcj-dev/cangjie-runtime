@@ -76,6 +76,8 @@ public:
     static RegDebugVisitor MakeRegDebugVisitor(const RootVerifyContext& baseCtx);
 
     static size_t BadRootCount();
+    // INFO-channel count (typeinfo-misaligned demoted off BAD_ROOT; gcvheap2).
+    static size_t InfoRootCount();
     static void ResetStats();
 };
 
