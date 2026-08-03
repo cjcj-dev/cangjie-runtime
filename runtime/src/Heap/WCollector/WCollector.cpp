@@ -9,9 +9,11 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <vector>
 #include <unistd.h>
 #include <sys/mman.h>
 
@@ -260,6 +262,7 @@ constexpr size_t kEnqCatCount = 12;
 constexpr size_t kEnqRingCap = 8192;
 constexpr size_t kEnqSampleCap = 48;
 constexpr size_t kEnqHitCap = 64;
+constexpr size_t kStaticLocCap = 64;
 struct EnqRec {
     BaseObject* target;
     BaseObject* slotHolder;
@@ -283,6 +286,243 @@ std::atomic<uint64_t> g_enqHitGoodThenBad{0};
 std::atomic<uint64_t> g_enqHitBadAlready{0};
 std::atomic<uint64_t> g_enqHitMiss{0};
 std::atomic<bool> g_enqSummaryDumped{false};
+// gcstatic: locate static-root slot addresses in maps / ELF section.
+std::atomic<uint64_t> g_staticLocEmitted{0};
+std::atomic<uint64_t> g_staticGoodSample{0};
+std::atomic<uint64_t> g_staticBadSample{0};
+std::atomic<uint64_t> g_staticSectionCount[8]; // 0=unknown 1=.data 2=.bss 3=.rodata 4=.cjmetadata 5=anon 6=heap_like 7=other
+
+struct MapsRange {
+    uintptr_t start;
+    uintptr_t end;
+    uintptr_t offset;
+    char perms[8];
+    char path[256];
+};
+
+bool LookupMaps(uintptr_t addr, MapsRange& out)
+{
+    FILE* f = fopen("/proc/self/maps", "r");
+    if (f == nullptr) {
+        return false;
+    }
+    char line[512];
+    bool found = false;
+    while (fgets(line, sizeof(line), f) != nullptr) {
+        uintptr_t start = 0;
+        uintptr_t end = 0;
+        uintptr_t offset = 0;
+        char perms[8] = {};
+        char path[256] = {};
+        // 55aa...-55aa... r-xp 00000000 08:01 123 /path
+        int n = std::sscanf(line, "%lx-%lx %7s %lx %*s %*s %255[^\n]", &start, &end, perms, &offset, path);
+        if (n < 4) {
+            continue;
+        }
+        if (addr >= start && addr < end) {
+            out.start = start;
+            out.end = end;
+            out.offset = offset + (addr - start);
+            std::snprintf(out.perms, sizeof(out.perms), "%s", perms);
+            if (n >= 5) {
+                // trim leading spaces in path
+                const char* p = path;
+                while (*p == ' ' || *p == '\t') {
+                    ++p;
+                }
+                std::snprintf(out.path, sizeof(out.path), "%s", p);
+            } else {
+                out.path[0] = '\0';
+            }
+            found = true;
+            break;
+        }
+    }
+    fclose(f);
+    return found;
+}
+
+// Best-effort ELF section name for file-backed mapping offset.
+const char* ElfSectionAt(const char* path, uintptr_t fileOff)
+{
+    if (path == nullptr || path[0] == '\0' || path[0] == '[') {
+        return "anon_or_special";
+    }
+    FILE* f = fopen(path, "rb");
+    if (f == nullptr) {
+        return "unreadable";
+    }
+    unsigned char eident[16];
+    if (fread(eident, 1, 16, f) != 16 || eident[0] != 0x7f || eident[1] != 'E' || eident[2] != 'L' ||
+        eident[3] != 'F') {
+        fclose(f);
+        return "not_elf";
+    }
+    bool is64 = eident[4] == 2;
+    uint16_t shnum = 0;
+    uint16_t shstrndx = 0;
+    uint64_t shoff = 0;
+    uint16_t shentsize = 0;
+    if (is64) {
+        if (fseek(f, 40, SEEK_SET) != 0) {
+            fclose(f);
+            return "elf_hdr_fail";
+        }
+        if (fread(&shoff, 8, 1, f) != 1) {
+            fclose(f);
+            return "elf_hdr_fail";
+        }
+        if (fseek(f, 58, SEEK_SET) != 0) {
+            fclose(f);
+            return "elf_hdr_fail";
+        }
+        if (fread(&shentsize, 2, 1, f) != 1 || fread(&shnum, 2, 1, f) != 1 || fread(&shstrndx, 2, 1, f) != 1) {
+            fclose(f);
+            return "elf_hdr_fail";
+        }
+    } else {
+        fclose(f);
+        return "elf32_skip";
+    }
+    if (shnum == 0 || shentsize < 64 || shstrndx >= shnum) {
+        fclose(f);
+        return "elf_no_shdr";
+    }
+    // section header: name(4) type(4) flags(8) addr(8) offset(8) size(8) ...
+    auto readShdr = [&](uint16_t idx, uint32_t& nameOff, uint64_t& off, uint64_t& size) -> bool {
+        if (fseek(f, static_cast<long>(shoff + static_cast<uint64_t>(idx) * shentsize), SEEK_SET) != 0) {
+            return false;
+        }
+        unsigned char buf[64];
+        if (fread(buf, 1, 64, f) != 64) {
+            return false;
+        }
+        std::memcpy(&nameOff, buf + 0, 4);
+        std::memcpy(&off, buf + 24, 8);
+        std::memcpy(&size, buf + 32, 8);
+        return true;
+    };
+    uint32_t strName = 0;
+    uint64_t strOff = 0;
+    uint64_t strSize = 0;
+    if (!readShdr(shstrndx, strName, strOff, strSize) || strSize == 0 || strSize > (1u << 20)) {
+        fclose(f);
+        return "elf_strtab_fail";
+    }
+    std::vector<char> strtab(static_cast<size_t>(strSize));
+    if (fseek(f, static_cast<long>(strOff), SEEK_SET) != 0 ||
+        fread(strtab.data(), 1, static_cast<size_t>(strSize), f) != strSize) {
+        fclose(f);
+        return "elf_strtab_read_fail";
+    }
+    static thread_local char secNameBuf[64];
+    secNameBuf[0] = '?';
+    secNameBuf[1] = '\0';
+    for (uint16_t i = 0; i < shnum; ++i) {
+        uint32_t nameOff = 0;
+        uint64_t off = 0;
+        uint64_t size = 0;
+        if (!readShdr(i, nameOff, off, size)) {
+            continue;
+        }
+        if (size == 0) {
+            continue;
+        }
+        if (fileOff >= off && fileOff < off + size) {
+            if (nameOff < strSize) {
+                std::snprintf(secNameBuf, sizeof(secNameBuf), "%s", strtab.data() + nameOff);
+            }
+            fclose(f);
+            return secNameBuf;
+        }
+    }
+    fclose(f);
+    return "no_section_match";
+}
+
+uint8_t SectionBucket(const char* sec)
+{
+    if (sec == nullptr) {
+        return 0;
+    }
+    if (std::strcmp(sec, ".data") == 0 || std::strncmp(sec, ".data.", 6) == 0) {
+        return 1;
+    }
+    if (std::strcmp(sec, ".bss") == 0 || std::strncmp(sec, ".bss.", 5) == 0) {
+        return 2;
+    }
+    if (std::strcmp(sec, ".rodata") == 0 || std::strncmp(sec, ".rodata", 7) == 0) {
+        return 3;
+    }
+    if (std::strstr(sec, "cjmeta") != nullptr || std::strstr(sec, "CJ") != nullptr ||
+        std::strstr(sec, "gcroot") != nullptr) {
+        return 4;
+    }
+    if (std::strcmp(sec, "anon_or_special") == 0) {
+        return 5;
+    }
+    return 7;
+}
+
+const char* EnqTiNameFwd(uint8_t c); // defined below with other Enq helpers
+
+void EmitStaticSlotLoc(const void* slot, uint8_t tiClass, uint32_t seq, const char* kind)
+{
+    if (slot == nullptr) {
+        return;
+    }
+    uint64_t n = g_staticLocEmitted.fetch_add(1, std::memory_order_relaxed);
+    if (n >= kStaticLocCap) {
+        return;
+    }
+    uintptr_t addr = reinterpret_cast<uintptr_t>(slot);
+    MapsRange mr{};
+    bool ok = LookupMaps(addr, mr);
+    const char* sec = "maps_miss";
+    const char* mapTag = "unknown";
+    if (ok) {
+        if (mr.path[0] == '\0') {
+            mapTag = "anon";
+            sec = "anon";
+        } else if (mr.path[0] == '[') {
+            mapTag = mr.path;
+            sec = mr.path;
+        } else {
+            mapTag = mr.path;
+            sec = ElfSectionAt(mr.path, mr.offset);
+        }
+    }
+    uint8_t bucket = SectionBucket(sec);
+    g_staticSectionCount[bucket].fetch_add(1, std::memory_order_relaxed);
+    // Precise root table path: VisitStaticRoots only walks registered GC_ROOT_TABLE entries.
+    // in_root_table=yes by construction for category=static.
+    std::fprintf(stderr,
+                 "[GCSTATIC] SLOT_LOC seq=%u kind=%s ticlass=%s slot=%p maps=%s perms=%s "
+                 "map_start=0x%llx map_end=0x%llx file_off=0x%llx section=%s "
+                 "in_root_table=yes_by_VisitStaticRoots\n",
+                 seq, kind, EnqTiNameFwd(tiClass), slot, ok ? mapTag : "(none)", ok ? mr.perms : "?",
+                 static_cast<unsigned long long>(ok ? mr.start : 0),
+                 static_cast<unsigned long long>(ok ? mr.end : 0),
+                 static_cast<unsigned long long>(ok ? mr.offset : 0), sec);
+}
+
+void DumpStaticLocSummary(const char* reason)
+{
+    static const char* names[8] = {
+        "unknown", ".data", ".bss", ".rodata", ".cjmetadata", "anon", "heap_like", "other"
+    };
+    std::fprintf(stderr, "[GCSTATIC] SLOT_LOC_SUMMARY reason=%s emitted=%llu", reason,
+                 static_cast<unsigned long long>(g_staticLocEmitted.load(std::memory_order_relaxed)));
+    for (size_t i = 0; i < 8; ++i) {
+        uint64_t c = g_staticSectionCount[i].load(std::memory_order_relaxed);
+        if (c != 0) {
+            std::fprintf(stderr, " %s=%llu", names[i], static_cast<unsigned long long>(c));
+        }
+    }
+    std::fprintf(stderr, " good_samples=%llu bad_samples=%llu\n",
+                 static_cast<unsigned long long>(g_staticGoodSample.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_staticBadSample.load(std::memory_order_relaxed)));
+}
 
 uint8_t PointIdOf(const char* point)
 {
@@ -335,6 +575,7 @@ const char* EnqTiName(uint8_t c)
         default: return "?";
     }
 }
+const char* EnqTiNameFwd(uint8_t c) { return EnqTiName(c); }
 
 void DumpEnqSummary(const char* reason)
 {
@@ -361,6 +602,7 @@ void DumpEnqSummary(const char* reason)
                  static_cast<unsigned long long>(g_enqHitBadAlready.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_enqHitMiss.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_enqHitEmitted.load(std::memory_order_relaxed)));
+    DumpStaticLocSummary(reason);
 }
 
 void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot, size_t category,
@@ -419,6 +661,18 @@ void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot,
                      seq, point, EnqCatName(category), target,
                      static_cast<unsigned long long>(typeAddr), EnqTiName(tc), slot, slotHolder,
                      static_cast<unsigned long long>(hTypeAddr), EnqTiName(htc), off);
+    }
+    // gcstatic: locate static-root slots (bad + limited good) in maps/section.
+    if (category == 3 && slot != nullptr) {
+        bool takeLoc = false;
+        if (tc != ENQ_TI_GOOD) {
+            takeLoc = g_staticBadSample.fetch_add(1, std::memory_order_relaxed) < 48;
+        } else {
+            takeLoc = g_staticGoodSample.fetch_add(1, std::memory_order_relaxed) < 16;
+        }
+        if (takeLoc) {
+            EmitStaticSlotLoc(slot, tc, seq, tc != ENQ_TI_GOOD ? "bad" : "good");
+        }
     }
 }
 
