@@ -139,12 +139,17 @@ static void WriteLogImpl(bool addPrefix, LogType type, const char* format, va_li
     int index = 0;
     size_t requiredCapacity = 0;
     if (addPrefix) {
-        index = snprintf(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
-        if (index < 0) {
-            index = snprintf(buf, sizeof(buf), "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
+        int ret = snprintf(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
+        if (ret < 0) {
+            ret = snprintf(buf, sizeof(buf), "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
                 sizeof(buf), LOG_TYPE_NAMES[type]);
-        } else if (static_cast<size_t>(index) >= sizeof(buf)) {
-            requiredCapacity = static_cast<size_t>(index) + 1;
+        }
+        if (ret < 0) {
+            buf[0] = '\0';
+        } else if (static_cast<size_t>(ret) >= sizeof(buf)) {
+            requiredCapacity = static_cast<size_t>(ret) + 1;
+        } else {
+            index = ret;
         }
     }
 
@@ -154,10 +159,14 @@ static void WriteLogImpl(bool addPrefix, LogType type, const char* format, va_li
         if (ret < 0) {
             ret = snprintf(buf + index, remainingCapacity, "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
                 sizeof(buf), LOG_TYPE_NAMES[type]);
+        }
+        if (ret < 0) {
+            buf[index] = '\0';
         } else if (static_cast<size_t>(ret) >= remainingCapacity) {
             requiredCapacity = static_cast<size_t>(index) + static_cast<size_t>(ret) + 1;
+        } else {
+            index += ret;
         }
-        index += ret;
     }
 
     if (requiredCapacity != 0) {
