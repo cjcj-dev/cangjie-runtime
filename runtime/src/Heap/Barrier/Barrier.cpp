@@ -9,6 +9,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
+#include "Heap/WCollector/GcInitWinProbe.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -98,11 +99,14 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
+    GcInitWin::NoteStaticRefWrite(&field, ref, "Barrier::WriteStaticRef");
     field.SetTargetObject(ref);
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    GcInitWin::NoteStaticStructWrite(reinterpret_cast<const void*>(dst), dstLen,
+                                     reinterpret_cast<const void*>(src), "Barrier::WriteStaticStruct");
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -298,6 +302,7 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
     WriteGenericImpl(obj, fieldPtr, src, size);
+    GcInitWin::NoteStaticStructWrite(fieldPtr, size, fieldPtr, "Barrier::WriteGeneric");
     RecordCrossGenEdgesInStruct(obj, reinterpret_cast<MAddress>(fieldPtr), size);
 }
 
