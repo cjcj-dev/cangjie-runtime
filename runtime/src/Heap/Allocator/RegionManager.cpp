@@ -1372,39 +1372,34 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     bool youngRegion = region->IsYoungRegion();
     if (region->IsKnownEmpty()) {
-        {
-            static const bool probe = []() {
-                const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
-                return v != nullptr && std::strcmp(v, "1") == 0;
-            }();
-            if (probe) {
-                size_t start = region->GetRegionStart();
-                size_t alloc = region->GetRegionAllocPtr();
-                size_t residual = alloc > start ? (alloc - start) : 0;
-                size_t validObjs = 0;
-                if (residual > 0 && !region->IsLargeRegion()) {
-                    uintptr_t pos = start;
-                    while (pos < alloc) {
-                        BaseObject* o = reinterpret_cast<BaseObject*>(pos);
-                        if (!o->IsValidObject()) {
-                            break;
-                        }
-                        size_t sz = o->GetSize();
-                        if (sz == 0) {
-                            break;
-                        }
-                        ++validObjs;
-                        pos += sz;
-                    }
-                }
-                VLOG(REPORT,
-                     "[GCRECLAIM][fwd-empty] region=%p start=%#zx alloc=%#zx residual=%zu validObjs=%zu "
-                     "young=%u live=%u auth=%u type=%u",
-                     region, start, alloc, residual, validObjs,
-                     static_cast<unsigned>(youngRegion), region->GetLiveByteCount(),
-                     static_cast<unsigned>(region->IsLiveCountAuthoritative()),
-                     region->GetRegionType());
+        // ClearLiveInfo arms LIVE_AUTHORITY with live=0 before mark. MarkObject is the only
+        // path that allocates the mark bitmap. If the region still has allocated payload but
+        // never got a mark bitmap, mark never examined it — bare IsKnownEmpty is not proof of
+        // emptiness (B2: survivors reclaimed via CollectRegion → TakeRegion ClearUnits).
+        bool neverExamined = region->GetMarkBitmap() == nullptr &&
+            region->GetRegionAllocPtr() > region->GetRegionStart();
+        if (neverExamined) {
+            VLOG(REPORT,
+                 "[GCRECLAIM][fwd-empty-keep] region=%p start=%#zx alloc=%#zx young=%u "
+                 "live=%u neverExamined=1 — skip CollectRegion",
+                 region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
+            if (youngRegion) {
+                (void)RecordPromotedCrossGenEdges(region);
+                region->SetYoungRegionFlag(0);
+                region->SetYoungAge(0);
             }
+            region->SetRouteState(RegionInfo::RouteState::NORMAL);
+            RegionInfo::RegionType oldType = region->GetRegionType();
+            if (oldType == RegionInfo::RegionType::FROM_REGION ||
+                oldType == RegionInfo::RegionType::LONE_FROM_REGION) {
+                if (fromRegionList.TryDeleteRegion(region, oldType,
+                        RegionInfo::RegionType::UNMOVABLE_FROM_REGION)) {
+                    unmovableFromRegionList.PrependRegion(region,
+                        RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+                }
+            }
+            return;
         }
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.
