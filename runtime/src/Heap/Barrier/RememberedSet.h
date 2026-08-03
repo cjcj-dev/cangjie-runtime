@@ -66,6 +66,12 @@ public:
         return records.count(fieldAddress) != 0;
     }
 
+    size_t Size() const
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        return records.size();
+    }
+
 private:
     friend class Barrier;
     friend class WCollector;
@@ -75,6 +81,28 @@ private:
     {
         std::lock_guard<std::mutex> guard(lock);
         records.insert(fieldAddress);
+    }
+
+    // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
+    // falls inside a region that is about to be reclaimed/reused. Without this, the
+    // next minor RescanRememberedSet reads freed payload as if it were still a holder.
+    size_t EraseRange(MAddress start, MAddress end)
+    {
+        if (start >= end) {
+            return 0;
+        }
+        std::lock_guard<std::mutex> guard(lock);
+        size_t erased = 0;
+        for (auto it = records.begin(); it != records.end();) {
+            MAddress slot = *it;
+            if (slot >= start && slot < end) {
+                it = records.erase(it);
+                ++erased;
+            } else {
+                ++it;
+            }
+        }
+        return erased;
     }
 
     mutable std::mutex lock;

@@ -7,6 +7,7 @@
 
 #include "Allocator/RegionManager.h"
 
+#include <atomic>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -526,6 +527,27 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
+void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return;
+    }
+    MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
+    MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
+    // STEER1 decisive observation: remset still holds slots in this region at Collect?
+    // EraseRange returns the count of such stale entries — non-zero ⇒ H1 live.
+    size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd);
+    if (scrubbed != 0) {
+        static std::atomic<size_t> g_staleAtCollect{ 0 };
+        size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
+        VLOG(REPORT,
+             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu region=%p [%#zx,%#zx) type=%u young=%u "
+             "sample=%zu (H1: remset retained slots into region about to be reclaimed)",
+             scrubbed, region, static_cast<size_t>(rStart), static_cast<size_t>(rEnd),
+             region->GetRegionType(), static_cast<unsigned>(region->IsYoungRegion()), n);
+    }
+}
+
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {
     size_t num = region->GetUnitCount();
@@ -535,6 +557,10 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     }
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+
+    // Also scrub here: garbageRegionList may hold a region for a while after CollectRegion;
+    // when payload is finally freed/reused, any late remset entry must already be gone.
+    ScrubRememberedSetForRegion(region);
 
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());

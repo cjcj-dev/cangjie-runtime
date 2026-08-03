@@ -367,6 +367,10 @@ public:
             }
         }
 
+        // HotSpot HeapRegionRemSet::clear() analogue — drop remset slots whose field
+        // address falls in this region before it becomes garbage/free. See .cpp.
+        ScrubRememberedSetForRegion(region);
+
         region->LockWriteRegion();
 #if defined(__OHOS__)
         // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
@@ -408,6 +412,9 @@ public:
 
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
+    // Drop remset entries whose field address lies in [regionStart, regionEnd).
+    // HotSpot: HeapRegionRemSet::clear() when a region is freed.
+    static void ScrubRememberedSetForRegion(RegionInfo* region);
 
     void ReclaimGarbageRegions()
     {
