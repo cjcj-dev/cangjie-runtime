@@ -554,54 +554,63 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
 }
 
 // Anchor: HotSpot g1HeapVerifier.cpp:424-438 verify_region_sets + VerifyRegionListsClosure.
-// Independent of PrepareYoungGarbageCandidates: re-walks young-bearing lists and diffs vs candidate set.
-// Also reports young regions on lists PrepareYoung does NOT visit (tlRegionList / pinned / large) —
-// those are the positive control for defect C (young objects not in minor candidates).
-void RegionManager::VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates, size_t& youngSeen,
-                                          size_t& missingFromCandidates, size_t& unexpectedInCandidates)
+// Independent of PrepareYoungGarbageCandidates: re-walks lists and diffs vs candidate set.
+// Invariant (must abort if broken): every young region on the lists PrepareYoung *covers*
+// (from / unmovableFrom / recentFull) is in candidates; every candidate is still young.
+// Active TL young regions are intentionally not candidates (still allocating) — counted exempt.
+void RegionManager::VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates,
+                                          size_t& mustCoverYoung, size_t& missingFromCandidates,
+                                          size_t& unexpectedInCandidates, size_t& activeYoungExempt,
+                                          size_t& otherYoung)
 {
-    youngSeen = 0;
+    mustCoverYoung = 0;
     missingFromCandidates = 0;
     unexpectedInCandidates = 0;
-    std::unordered_set<RegionInfo*> youngOnLists;
+    activeYoungExempt = 0;
+    otherYoung = 0;
+    std::unordered_set<RegionInfo*> mustCover;
 
-    auto collectYoung = [&youngOnLists, &youngSeen](RegionInfo* region) {
-        if (region != nullptr && region->IsYoungRegion() && youngOnLists.insert(region).second) {
-            ++youngSeen;
+    auto collectInto = [](std::unordered_set<RegionInfo*>& out, size_t& count, RegionInfo* region) {
+        if (region != nullptr && region->IsYoungRegion() && out.insert(region).second) {
+            ++count;
         }
     };
 
-    // Lists PrepareYoung walks (after it has moved young into fromRegionList).
-    fromRegionList.VisitAllRegions(collectYoung);
-    unmovableFromRegionList.VisitAllRegions(collectYoung);
-    recentFullRegionList.VisitAllRegions(collectYoung);
+    // Lists PrepareYoung walks (after moving eligible young into fromRegionList).
+    fromRegionList.VisitAllRegions(
+        [&](RegionInfo* r) { collectInto(mustCover, mustCoverYoung, r); });
+    unmovableFromRegionList.VisitAllRegions(
+        [&](RegionInfo* r) { collectInto(mustCover, mustCoverYoung, r); });
+    recentFullRegionList.VisitAllRegions(
+        [&](RegionInfo* r) { collectInto(mustCover, mustCoverYoung, r); });
 
-    // Lists PrepareYoung never visits — any young here is "missing from candidates" by construction.
-    tlRegionList.VisitAllRegions(collectYoung);
-    fullTraceRegions.VisitAllRegions(collectYoung);
-    recentPinnedRegionList.VisitAllRegions(collectYoung);
-    oldPinnedRegionList.VisitAllRegions(collectYoung);
-    rawPointerPinnedRegionList.VisitAllRegions(collectYoung);
-    oldLargeRegionList.VisitAllRegions(collectYoung);
-    recentLargeRegionList.VisitAllRegions(collectYoung);
-    largeTraceRegions.VisitAllRegions(collectYoung);
-
-    for (RegionInfo* region : youngOnLists) {
+    for (RegionInfo* region : mustCover) {
         if (candidates.count(region) == 0) {
             ++missingFromCandidates;
         }
     }
     for (RegionInfo* region : candidates) {
-        if (region == nullptr) {
-            continue;
-        }
-        if (!region->IsYoungRegion() || youngOnLists.count(region) == 0) {
-            // unexpected: candidate not young on any list we re-scanned, or non-young slipped in
-            if (!region->IsYoungRegion()) {
-                ++unexpectedInCandidates;
-            }
+        if (region != nullptr && !region->IsYoungRegion()) {
+            ++unexpectedInCandidates;
         }
     }
+
+    std::unordered_set<RegionInfo*> active;
+    size_t activeCount = 0;
+    tlRegionList.VisitAllRegions([&](RegionInfo* r) { collectInto(active, activeCount, r); });
+    activeYoungExempt = activeCount;
+
+    std::unordered_set<RegionInfo*> other;
+    size_t otherCount = 0;
+    auto collectOther = [&](RegionInfo* r) { collectInto(other, otherCount, r); };
+    fullTraceRegions.VisitAllRegions(collectOther);
+    recentPinnedRegionList.VisitAllRegions(collectOther);
+    oldPinnedRegionList.VisitAllRegions(collectOther);
+    rawPointerPinnedRegionList.VisitAllRegions(collectOther);
+    oldLargeRegionList.VisitAllRegions(collectOther);
+    recentLargeRegionList.VisitAllRegions(collectOther);
+    largeTraceRegions.VisitAllRegions(collectOther);
+    otherYoung = otherCount;
 }
 
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
