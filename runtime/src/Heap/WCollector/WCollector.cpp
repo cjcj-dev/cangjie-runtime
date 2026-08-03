@@ -243,9 +243,9 @@ void EmitDeltaIfAny(BaseObject* holder, const HolderSnap& after)
     }
 }
 
-// Classify HasRefField without calling the inlined path first; then call real HasRefField.
-// Counts every branch. PageMapped avoids some hard crashes so we can log path first.
-bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool doRealCall)
+// Classify HasRefField by mirroring TypeInfo::HasRefField. On fail paths never call the real
+// inlined HasRefField (would hard-fault); counters + samples are the evidence.
+bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCall*/)
 {
     g_hrPath[HR_CALL].fetch_add(1, std::memory_order_relaxed);
     if (g_positiveControl.load(std::memory_order_relaxed) == 0) {
@@ -262,56 +262,53 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool doRealCall)
         return false;
     }
     uintptr_t typeAddr = reinterpret_cast<uintptr_t>(ti);
-    if (typeAddr >= (1ULL << StateWord::ADDRESS_BIT_COUNT)) {
-        g_hrPath[HR_TI_NONCANON].fetch_add(1, std::memory_order_relaxed);
-        if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 32) {
-            std::fprintf(stderr, "[GCDISPEL] HASREFFIELD_PATH path=ti_noncanon point=%s holder=%p ti=%p\n",
-                         point, holder, ti);
-        }
-        // Still attempt real call if requested (may hard-fault) — default skip to keep path evidence.
-        if (doRealCall) {
-            return holder->HasRefField();
+    // Low garbage pointers (0x1 etc) pass IsValidObject (non-null) but are not real TypeInfo.
+    if (typeAddr < 0x1000ULL || typeAddr >= (1ULL << StateWord::ADDRESS_BIT_COUNT)) {
+        if (typeAddr < 0x1000ULL) {
+            g_hrPath[HR_TI_UNMAPPED].fetch_add(1, std::memory_order_relaxed);
+            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
+                std::fprintf(stderr,
+                             "[GCDISPEL] HASREFFIELD_PATH path=ti_garbage_low point=%s holder=%p ti=%p\n",
+                             point, holder, ti);
+            }
+        } else {
+            g_hrPath[HR_TI_NONCANON].fetch_add(1, std::memory_order_relaxed);
+            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
+                std::fprintf(stderr, "[GCDISPEL] HASREFFIELD_PATH path=ti_noncanon point=%s holder=%p ti=%p\n",
+                             point, holder, ti);
+            }
         }
         return false;
     }
     if (!PageMapped(ti)) {
         g_hrPath[HR_TI_UNMAPPED].fetch_add(1, std::memory_order_relaxed);
-        if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 32) {
+        if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
             std::fprintf(stderr, "[GCDISPEL] HASREFFIELD_PATH path=ti_unmapped point=%s holder=%p ti=%p\n",
                          point, holder, ti);
-        }
-        if (doRealCall) {
-            return holder->HasRefField();
         }
         return false;
     }
 
     g_hrPath[HR_TYPE_READ].fetch_add(1, std::memory_order_relaxed);
-    // Mirror TypeInfo::HasRefField step by step.
     if (ti->IsArrayType()) {
         g_hrPath[HR_ARRAY_BRANCH].fetch_add(1, std::memory_order_relaxed);
         TypeInfo* componentTi = ti->GetComponentTypeInfo();
         if (componentTi == nullptr) {
             g_hrPath[HR_COMP_NULL].fetch_add(1, std::memory_order_relaxed);
-            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 32) {
+            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
                 std::fprintf(stderr,
                              "[GCDISPEL] HASREFFIELD_PATH path=comp_null point=%s holder=%p ti=%p\n",
                              point, holder, ti);
             }
-            if (doRealCall) {
-                return holder->HasRefField();
-            }
             return false;
         }
-        if (!PageMapped(componentTi)) {
+        uintptr_t compAddr = reinterpret_cast<uintptr_t>(componentTi);
+        if (compAddr < 0x1000ULL || !PageMapped(componentTi)) {
             g_hrPath[HR_COMP_UNMAPPED].fetch_add(1, std::memory_order_relaxed);
-            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 32) {
+            if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
                 std::fprintf(stderr,
                              "[GCDISPEL] HASREFFIELD_PATH path=comp_unmapped point=%s holder=%p ti=%p comp=%p\n",
                              point, holder, ti, componentTi);
-            }
-            if (doRealCall) {
-                return holder->HasRefField();
             }
             return false;
         }
@@ -321,10 +318,23 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool doRealCall)
             return true;
         }
         g_hrPath[HR_COMP_RECURSE].fetch_add(1, std::memory_order_relaxed);
-        // Recurse via real API for nested component (struct-in-array).
-        bool r = componentTi->HasRefField();
+        // Nested component HasRefField: only if component itself looks mapped.
+        bool r = false;
+        if (PageMapped(componentTi)) {
+            r = componentTi->HasRefField();
+        }
         g_hrPath[r ? HR_RETURN_TRUE : HR_RETURN_FALSE].fetch_add(1, std::memory_order_relaxed);
         return r;
+    }
+    // Non-array: flag bit. Also check IsVaildType for signature-shift evidence.
+    I8 ty = ti->GetType();
+    if (ty >= TypeKind::TYPE_KIND_MAX) {
+        // type field garbage → would pass IsValidObject, fail deeper
+        if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
+            std::fprintf(stderr,
+                         "[GCDISPEL] HASREFFIELD_PATH path=ti_type_invalid point=%s holder=%p ti=%p type=%d\n",
+                         point, holder, ti, static_cast<int>(ty));
+        }
     }
     bool flag = static_cast<bool>(ti->GetFlags() & FLAG_HAS_REF_FIELD);
     g_hrPath[flag ? HR_NONARRAY_FLAG_TRUE : HR_NONARRAY_FLAG_FALSE].fetch_add(1, std::memory_order_relaxed);
@@ -1286,7 +1296,21 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
             RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             bool live0 = hr != nullptr && hr->GetLiveByteCount() == 0 && !hr->IsYoungRegion();
             MaybeSnapAndDiagnose(holder, point, live0);
-            if (!DiagnoseHasRefField(holder, point, /*doRealCall=*/true)) {
+            bool hasRef = DiagnoseHasRefField(holder, point, /*doRealCall=*/false);
+            if (!hasRef) {
+                // On after-dispel fail: emit full snap for the failing holder (Q1).
+                if (std::strcmp(point, "after-dispel") == 0) {
+                    HolderSnap failSnap{};
+                    FillSnap(failSnap, holder, "after-dispel-fail");
+                    if (g_holderSnapEmitted.fetch_add(1, std::memory_order_relaxed) < 96) {
+                        EmitSnapLine(failSnap, "HOLDER_SNAP_FAIL");
+                    }
+                    EmitDeltaIfAny(holder, failSnap);
+                    static std::atomic<int> failDump{0};
+                    if (failDump.fetch_add(1, std::memory_order_relaxed) == 0) {
+                        DumpHrSummary("first-hasref-fail");
+                    }
+                }
                 return;
             }
         } else if (!holder->HasRefField()) {
