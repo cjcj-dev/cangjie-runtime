@@ -8,6 +8,7 @@
 #include "WCollector.h"
 
 #include <array>
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -639,7 +640,30 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    CHECK_DETAIL(object->IsValidObject(), "minor root/reference %p is not a valid object", object);
+    if (!object->IsValidObject()) {
+        // Rich diagnosis before fail-closed abort: address looks like a heap range
+        // but object header is not a valid managed object (stack-ish residue, stale
+        // slot, or stackmap-mislabeled root). Printed once per process by default.
+        static std::atomic<size_t> g_invalidMinorRootPrinted{ 0 };
+        size_t n = g_invalidMinorRootPrinted.fetch_add(1, std::memory_order_relaxed);
+        if (n < 8) {
+            RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            VLOG(REPORT,
+                 "[GCV2][invalid-minor-root] obj=%p region=%p regionStart=%#zx young=%u pinned=%u "
+                 "large=%u free=%u garbage=%u neverExamined=%u "
+                 "(fail-closed next; AS1 relation: bad header on stack-live slot vs SKIPPED frame)",
+                 object, region, region == nullptr ? 0 : static_cast<size_t>(region->GetRegionStart()),
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()),
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsPinnedRegion()),
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsLargeRegion()),
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsFreeRegion()),
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsGarbageRegion()),
+                 region == nullptr ? 0u
+                                   : static_cast<unsigned>(region->GetMarkBitmap() == nullptr &&
+                                                          region->GetRegionAllocPtr() > region->GetRegionStart()));
+        }
+        CHECK_DETAIL(false, "minor root/reference %p is not a valid object", object);
+    }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
         workStack.push_back(object);

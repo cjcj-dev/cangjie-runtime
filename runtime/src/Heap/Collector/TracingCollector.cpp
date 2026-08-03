@@ -53,6 +53,10 @@ void ResetSkippedStackMapCounts()
     g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
 }
 
+// Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
+// Default 16 distinct (reason,symbol) pairs; override with MRT_GCV2_SKIPPED_WHO_MAX.
+std::atomic<size_t> g_skippedWhoPrinted{ 0 };
+
 ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
                                           uintptr_t frameIP)
 {
@@ -70,6 +74,35 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
             break;
     }
     skippedCount->fetch_add(1, std::memory_order_relaxed);
+
+    // Always-on (cheap): print named identity for first N unique-ish samples so
+    // SKIPPED_PC_MISS is not just a counter. Gate detail volume with env.
+    {
+        size_t maxWho = 16;
+        const char* maxEnv = std::getenv("MRT_GCV2_SKIPPED_WHO_MAX");
+        if (maxEnv != nullptr && maxEnv[0] != '\0') {
+            char* end = nullptr;
+            unsigned long parsed = std::strtoul(maxEnv, &end, 10);
+            if (end != maxEnv) {
+                maxWho = static_cast<size_t>(parsed);
+            }
+        }
+        size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
+        if (printed < maxWho) {
+            if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
+                CString symbol = frame.GetFuncName();
+                uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+                U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+                LOG(RTLOG_ERROR,
+                    "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
+                    "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
+                    StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+                    reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+                    reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
+            }
+        }
+    }
+
     if (UNLIKELY(STRICT_STACKMAP_ENABLED)) {
         CString symbol = frame.GetFuncName();
         LOG(RTLOG_FATAL,
