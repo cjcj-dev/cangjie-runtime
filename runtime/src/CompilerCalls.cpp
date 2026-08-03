@@ -326,6 +326,7 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
 
 extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
 {
+    GcInitWin::NoteStaticRefWrite(field, ref, "MCC_WriteStaticRef");
     Heap::GetBarrier().WriteStaticRef(*field, ref);
 }
 
