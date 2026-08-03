@@ -210,6 +210,9 @@ private:
     void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
     void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
     void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
+    // Observation-only: referee full-scan vs remset marking when FULL_YOUNG_SCAN=0.
+    void ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable, const MinorObjectSet& allocationRoots,
+                                 const MinorSlotSet& rememberedSlots, bool fullYoungScan);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>

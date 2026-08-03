@@ -966,6 +966,206 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     }
 }
 
+void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
+                                         const MinorObjectSet& allocationRoots,
+                                         const MinorSlotSet& rememberedSlots, bool fullYoungScan)
+{
+    // Observation only. Does not change marking/evacuation decisions.
+    // Referee: full-heap young-closure from the same roots that VisitMinorRoots+alloc buffers provide.
+    // Missed = young objects in full closure but not in remsetReachable (the set that would be evacuated/kept).
+    (void)fullYoungScan;
+    const char* enabled = std::getenv("MRT_GCV2_REMSET_PROBE");
+    if (enabled != nullptr && std::strcmp(enabled, "0") == 0) {
+        return;
+    }
+
+    MinorObjectSet fullReachable;
+    MinorObjectSet fullYoung;
+    WorkStack pending = NewWorkStack();
+    MinorSlotSet staticSlots;
+    size_t staticRootsVisited = 0;
+
+    auto pushAny = [&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(object);
+        }
+    };
+
+    for (BaseObject* object : allocationRoots) {
+        pushAny(object);
+    }
+    VisitMinorRoots([&pushAny, &staticSlots, &staticRootsVisited](BaseObject* object) {
+        // VisitMinorRoots already walks static roots via VisitStaticRoots (WCollector.cpp:582).
+        ++staticRootsVisited;
+        pushAny(object);
+    });
+    // Count static slots separately for STATIC_ROOTS evidence.
+    Heap::GetHeap().VisitStaticRoots([&staticSlots](RefField<>& field) {
+        staticSlots.insert(reinterpret_cast<MAddress>(&field));
+    });
+
+    auto pushField = [this, &pending](RefField<>& field) {
+        BaseObject* target = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(target)) {
+            pending.push_back(target);
+        }
+    };
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
+            continue;
+        }
+        if (!object->IsValidObject()) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region->IsYoungRegion()) {
+            fullYoung.insert(object);
+        }
+        if (!object->HasRefField()) {
+            continue;
+        }
+        if (UNLIKELY(object->IsWeakRef())) {
+            RefField<>* referentField =
+                reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = ResolveMinorReference(*referentField);
+            if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
+                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+            }
+            continue;
+        }
+        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+    }
+
+    size_t judged = 0;
+    size_t missed = 0;
+    size_t originStatic = 0;
+    size_t originHeap = 0;
+    size_t originOther = 0;
+    size_t phaseIdleOrInit = 0; // phase <= GC_PHASE_INIT (8)
+    size_t phaseAboveInit = 0;
+    size_t phaseUnknown = 0;
+    constexpr size_t kSample = 8;
+    std::array<BaseObject*, kSample> missedSamples{};
+    std::array<MAddress, kSample> missedSlotSamples{};
+    std::array<uint8_t, kSample> missedOriginSamples{};
+    size_t sampleFill = 0;
+
+    for (BaseObject* object : fullYoung) {
+        ++judged;
+        if (remsetReachable.count(object) != 0) {
+            continue;
+        }
+        // Young object is full-scan-reachable but remset path did not mark it.
+        ++missed;
+        // Find at least one holder edge pointing at it for origin classification.
+        bool foundEdge = false;
+        auto considerSlot = [&](MAddress slot, BaseObject* holder, bool isStatic) {
+            if (foundEdge) {
+                return;
+            }
+            RefField<>* field = reinterpret_cast<RefField<>*>(slot);
+            BaseObject* target = ResolveMinorReference(*field);
+            if (target != object) {
+                return;
+            }
+            foundEdge = true;
+            uint8_t origin = 2; // other
+            if (isStatic || staticSlots.count(slot) != 0) {
+                origin = 0;
+                ++originStatic;
+            } else if (Heap::IsHeapAddress(holder)) {
+                RegionInfo* hr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                if (hr != nullptr && !hr->IsYoungRegion() && !hr->IsFreeRegion() && !hr->IsGarbageRegion()) {
+                    origin = 1;
+                    ++originHeap;
+                } else {
+                    ++originOther;
+                }
+            } else {
+                ++originOther;
+            }
+            // Phase of last write: optional table keyed by slot (filled by write probe if present).
+            // Without write-history instrumentation, count as unknown.
+            ++phaseUnknown;
+            if (sampleFill < kSample) {
+                missedSamples[sampleFill] = object;
+                missedSlotSamples[sampleFill] = slot;
+                missedOriginSamples[sampleFill] = origin;
+                ++sampleFill;
+            }
+        };
+
+        // Prefer remembered-set slots that *should* have covered this target but didn't keep it live.
+        for (MAddress slot : rememberedSlots) {
+            if (!Heap::IsHeapAddress(slot)) {
+                continue;
+            }
+            considerSlot(slot, nullptr, false);
+        }
+        // Static roots.
+        for (MAddress slot : staticSlots) {
+            considerSlot(slot, nullptr, true);
+        }
+        // Holders already in fullReachable (old or young).
+        if (!foundEdge) {
+            for (BaseObject* holder : fullReachable) {
+                if (!holder->IsValidObject() || !holder->HasRefField()) {
+                    continue;
+                }
+                if (UNLIKELY(holder->IsWeakRef())) {
+                    continue;
+                }
+                holder->ForEachRefField([holder, &considerSlot](RefField<>& field) {
+                    considerSlot(reinterpret_cast<MAddress>(&field), holder, false);
+                });
+                if (foundEdge) {
+                    break;
+                }
+            }
+        }
+        if (!foundEdge) {
+            ++originOther;
+            ++phaseUnknown;
+            if (sampleFill < kSample) {
+                missedSamples[sampleFill] = object;
+                missedSlotSamples[sampleFill] = 0;
+                missedOriginSamples[sampleFill] = 2;
+                ++sampleFill;
+            }
+        }
+    }
+
+    size_t remsetYoung = 0;
+    for (BaseObject* object : remsetReachable) {
+        if (!Heap::IsHeapAddress(object)) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region->IsYoungRegion()) {
+            ++remsetYoung;
+        }
+    }
+
+    VLOG(REPORT,
+         "[GCV2Minor] REMSET_PROBE missed=%zu judged=%zu fullYoung=%zu remsetYoung=%zu remsetSlots=%zu "
+         "staticSlots=%zu staticRootsVisited=%zu originStatic=%zu originHeap=%zu originOther=%zu "
+         "phaseIdleOrInit=%zu phaseAboveInit=%zu phaseUnknown=%zu",
+         missed, judged, fullYoung.size(), remsetYoung, rememberedSlots.size(), staticSlots.size(),
+         staticRootsVisited, originStatic, originHeap, originOther, phaseIdleOrInit, phaseAboveInit, phaseUnknown);
+    for (size_t i = 0; i < sampleFill; ++i) {
+        VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_SAMPLE i=%zu obj=%p slot=%#zx origin=%u", i, missedSamples[i],
+             static_cast<size_t>(missedSlotSamples[i]), static_cast<unsigned>(missedOriginSamples[i]));
+    }
+    // Machine-readable one-liners for the report harness.
+    VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_EDGES_%zu/%zu", missed, judged);
+    VLOG(REPORT, "[GCV2Minor] MISSED_EDGE_ORIGIN_static=%zu/heap=%zu/other=%zu_AND_phase_idleOrInit=%zu/"
+                 "aboveInit=%zu/unknown=%zu",
+         originStatic, originHeap, originOther, phaseIdleOrInit, phaseAboveInit, phaseUnknown);
+    VLOG(REPORT, "[GCV2Minor] STATIC_ROOTS_SCANNED_WHEN_FULLSCAN_OFF_yes_WCollector.cpp:582");
+}
+
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
     MinorObjectSet reachable;
@@ -1127,6 +1327,8 @@ void WCollector::DoYoungGarbageCollection()
     }
     if (fullYoungScan) {
         ValidateYoungMarking(reachableObjects, allocationRoots);
+    } else {
+        ProbeRemsetCompleteness(reachableObjects, allocationRoots, liveRememberedSlots, fullYoungScan);
     }
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
