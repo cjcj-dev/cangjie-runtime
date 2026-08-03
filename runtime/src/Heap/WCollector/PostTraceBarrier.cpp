@@ -138,6 +138,8 @@ void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dst
 void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                          const GCTib gctib) const
 {
+    GcInitWin::NoteStaticStructWrite(reinterpret_cast<const void*>(dst), dstLen,
+                                     reinterpret_cast<const void*>(src), "PostTraceBarrier::WriteStaticStruct");
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
