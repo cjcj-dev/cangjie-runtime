@@ -214,6 +214,8 @@ private:
     void VerifyYoungRegionSets(const char* point);
     // HotSpot card-table verify intent on our RememberedSet; gated by MRT_GCV2_VERIFY_REMSET.
     void VerifyRememberedSet(const char* point, const MinorSlotSet& rememberedSlots);
+    // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
+    void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
