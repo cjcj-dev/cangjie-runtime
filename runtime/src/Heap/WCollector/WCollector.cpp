@@ -16,6 +16,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "Verify/VerifyRegions.h"
 
 namespace MapleRuntime {
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
@@ -966,6 +967,18 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     }
 }
 
+void WCollector::VerifyRegionSets(const char* point)
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    size_t youngRunIndex = minorTotalRuns + 1;
+    if (std::strcmp(point, "after-young-mark") == 0) {
+        VerifyRegions::VerifyAfterYoungMark(manager, minorCandidateRegions, youngRunIndex, point);
+    } else {
+        VerifyRegions::VerifyAfterPrepareYoung(manager, minorCandidateRegions, youngRunIndex, point);
+    }
+}
+
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
     MinorObjectSet reachable;
@@ -1058,6 +1071,8 @@ void WCollector::DoYoungGarbageCollection()
     minorCandidateRegions.clear();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    // HotSpot g1HeapVerifier.cpp:424 verify_region_sets placement: after region accounting is stable.
+    VerifyRegionSets("after-prepare-young");
     if (stats.candidateRegions == 0) {
         manager.ReassembleFromSpace();
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
@@ -1127,6 +1142,8 @@ void WCollector::DoYoungGarbageCollection()
     }
     if (fullYoungScan) {
         ValidateYoungMarking(reachableObjects, allocationRoots);
+        // Positive control for young-marked-outside-candidates (4138-class).
+        VerifyRegionSets("after-young-mark");
     }
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);

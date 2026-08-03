@@ -26,6 +26,7 @@
 namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
+class VerifyRegions;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -77,6 +78,8 @@ struct FreePinnedSlotLists {
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
+    friend class VerifyRegions;
+
 public:
     /* region memory layout:
         1. region info for each region, part of heap metadata

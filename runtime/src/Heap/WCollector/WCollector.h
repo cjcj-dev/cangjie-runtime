@@ -210,6 +210,8 @@ private:
     void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
     void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
     void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
+    // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
+    void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
