@@ -19,6 +19,7 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -728,6 +729,11 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
                  static_cast<unsigned long long>(HeapZap::ZAP_WORD),
                  isZap ? "是毒值_乙" : (allZero ? "非毒值_全零" : "非毒值_有内容"));
             VLOG(REPORT, "[GCV2][ROOT_ORIGIN] origin=%s obj=%p", src, object);
+            // gcfwdfix: was this address inside a recent CompactRegion/ClearUnits zero range?
+            char clearDetail[256];
+            bool wasCleared = TraceClear::Lookup(reinterpret_cast<MAddress>(object), clearDetail, sizeof(clearDetail));
+            VLOG(REPORT, "[GCV2][WAS_LIVE_BEFORE_CLEAR] hit=%u detail=%s obj=%p",
+                 static_cast<unsigned>(wasCleared), clearDetail, object);
         }
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }

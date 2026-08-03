@@ -20,6 +20,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -1336,7 +1337,14 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
+        if (!TraceClear::SkipCompactMemset()) {
+            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
+                         "clear buffer failed");
+        } else {
+            VLOG(REPORT, "[GCV2][block] skip compact memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
+                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
+        }
     }
 
     if (region->IsFromRegion()) {
@@ -1396,7 +1404,14 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        TraceClear::NoteRange(cur, reclaimSize, "compact_partial", region, region->GetLiveByteCount());
+        if (!TraceClear::SkipCompactMemset()) {
+            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
+                         "clear buffer failed");
+        } else {
+            VLOG(REPORT, "[GCV2][block] skip compact_partial memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
+                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
+        }
     }
 
     if (region->IsFromRegion()) {

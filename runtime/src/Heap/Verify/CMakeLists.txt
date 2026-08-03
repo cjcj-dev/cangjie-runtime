@@ -14,6 +14,7 @@ set(SRC_LIST
     "MinorGCALot.cpp"
     "RemsetPhaseProbe.cpp"
     "DiffPathExplainer.cpp"
+    "TraceClear.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
