@@ -16,6 +16,9 @@
 #endif
 
 namespace MapleRuntime {
+// Defined in TagEpochProbe.cpp — observation only.
+void GctagidOnRefFieldWrite(const void* fieldAddr, MAddress newVal, uint32_t kind);
+
 template<bool isAtomic>
 void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_order order)
 {
@@ -36,6 +39,7 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
         Sanitizer::TsanWriteMemory(&fieldVal, GetSize());
 #endif
     }
+    GctagidOnRefFieldWrite(this, static_cast<MAddress>(newVal), 1u);
 
     DLOG(BARRIER, "write field @%p 0x%zx -> %p", this, oldVal, obj);
 }
@@ -58,6 +62,7 @@ void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
         Sanitizer::TsanWriteMemory(&fieldVal, GetSize());
 #endif
     }
+    GctagidOnRefFieldWrite(this, newVal, 1u);
     DLOG(BARRIER, "write field @%p 0x%zx -> 0x%zx", this, oldVal, newVal);
 }
 } // namespace MapleRuntime

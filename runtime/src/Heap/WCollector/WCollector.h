@@ -135,15 +135,7 @@ public:
         return space.GetRegionManager().RouteObject(fromObj, region);
     }
 
-    BaseObject* FindToVersion(BaseObject* obj) const override
-    {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-        if (fromRegionInfo == nullptr) {
-            return nullptr;
-        }
-        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(obj);
-    }
+    BaseObject* FindToVersion(BaseObject* obj) const override;
 
 protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);

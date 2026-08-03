@@ -83,10 +83,16 @@ public:
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedValue, newValue, succOrder, failOrder);
-        return (ret == expectedValue);
+        bool ok = (ret == expectedValue);
 #else
-        return __atomic_compare_exchange(&fieldVal, &expectedValue, &newValue, false, succOrder, failOrder);
+        bool ok = __atomic_compare_exchange(&fieldVal, &expectedValue, &newValue, false, succOrder, failOrder);
 #endif
+        if (ok) {
+            // Observation only (TagEpochProbe): record tagged stores.
+            extern void GctagidOnRefFieldWrite(const void* fieldAddr, MAddress newVal, uint32_t kind);
+            GctagidOnRefFieldWrite(this, newValue, 2u);
+        }
+        return ok;
     }
 
     bool CompareExchange(const BaseObject* expectedObj, const BaseObject* newObj,

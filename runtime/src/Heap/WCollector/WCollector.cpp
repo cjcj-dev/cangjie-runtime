@@ -13,6 +13,7 @@
 #include <limits>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/WCollector/TagEpochProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -59,6 +60,20 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
         return resurrected;
 }
 
+BaseObject* WCollector::FindToVersion(BaseObject* obj) const
+{
+    // Observation only: record if target is outside heap before GetUnitIdxAt aborts.
+    if (!Heap::IsHeapAddress(obj)) {
+        TagEpochProbe::OnPreFindToVersion(nullptr, obj, reinterpret_cast<MAddress>(obj), "FindToVersion");
+    }
+    RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    if (fromRegionInfo == nullptr) {
+        return nullptr;
+    }
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    return space.GetRegionManager().RouteObject(obj);
+}
+
 // this api updates current pointer as well as old pointer, caller should take care of this.
 template<bool forward>
 bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
@@ -67,6 +82,8 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
+        TagEpochProbe::OnPreFindToVersion(&field, fromObj, oldRef.GetFieldValue(),
+                                          forward ? "TryUpdateRefFieldImpl_fwd" : "TryUpdateRefFieldImpl");
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
@@ -566,6 +583,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     RefField<> value(field);
     BaseObject* object = value.GetTargetObject();
     if (IsOldPointer(value)) {
+        TagEpochProbe::OnPreFindToVersion(&field, object, value.GetFieldValue(), "ResolveMinorReference");
         BaseObject* latest = FindLatestVersion(object);
         if (latest != nullptr) {
             field.SetTargetObject(latest);
@@ -1142,6 +1160,7 @@ void WCollector::DoYoungGarbageCollection()
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     MergeResurrectExportObjects();
     ++minorTotalRuns;
+    TagEpochProbe::OnMinorEnd();
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
@@ -1167,6 +1186,7 @@ void WCollector::DoGarbageCollection()
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
+    TagEpochProbe::OnMajorFlip();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
 
     CollectSmallSpace();
