@@ -465,6 +465,12 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         if (!obj->IsValidObject()) {
             continue;
         }
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext vctx;
+            vctx.phase = "RecordStackPtrs";
+            vctx.kind = RootKind::STACK_OBJECT;
+            VerifyRoots::VerifyRootPayload(vctx, objSlot, obj);
+        }
         TypeInfo* tip = obj->GetTypeInfo();
         uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
         CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
