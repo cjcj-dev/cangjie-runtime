@@ -154,6 +154,44 @@ std::atomic<uint64_t> g_oldIdEmitted{0};
 std::atomic<uint64_t> g_badTiEvents{0};
 std::atomic<uint64_t> g_faultyRoundSlotDeltas{0};
 
+// FixMinorEvacuatedSlot write observation (gcfwdwrite).
+constexpr size_t kFixWriteSampleCap = 96;
+constexpr size_t kFixWriteRingCap = 512;
+std::atomic<uint64_t> g_fixWriteTotal{0};
+std::atomic<uint64_t> g_fixWriteValid{0};
+std::atomic<uint64_t> g_fixWriteInvalid{0};
+std::atomic<uint64_t> g_fixWriteEmitted{0};
+std::atomic<uint64_t> g_fixWriteDidForward{0};
+std::atomic<uint64_t> g_crashEqualsFixWriteYes{0};
+std::atomic<uint64_t> g_crashEqualsFixWriteNo{0};
+std::atomic<uint64_t> g_crashEqualsFixWriteChecked{0};
+
+struct FixWriteRec {
+    const void* slot;
+    const void* oldValue;
+    const void* target;
+    const void* current;
+    uintptr_t currentTi;
+    uint8_t tiValid; // 1=looks like real TypeInfo, 0=garbage/low/noncanon/unmapped
+    uint8_t didForward;
+    uint8_t ghostFrom;
+    uint8_t unmovable;
+    uint8_t young;
+    uint8_t validRegion;
+    uint8_t freeRegion;
+    uint8_t garbageRegion;
+    uint8_t inAlloc;
+    uint8_t regionType;
+    uint8_t watchIdx; // 0xff if not watched
+    uint32_t seq;
+    uint64_t round;
+    char slotName[kNameCap];
+};
+FixWriteRec g_fixWriteSamples[kFixWriteSampleCap];
+// Ring of current addresses written by FixMinorEvacuatedSlot (for crash-addr match).
+const void* g_fixWriteRing[kFixWriteRingCap];
+std::atomic<uint64_t> g_fixWriteRingN{0};
+
 // Active init file name (best-effort single mutator during package init).
 char g_activeInitFile[48] = {};
 std::atomic<bool> g_activeInitSet{false};
@@ -767,6 +805,134 @@ void NoteWriteGeneric(const void* obj, const void* field, size_t size, uint8_t g
     r.seq = static_cast<uint32_t>(n + 1);
 }
 
+// Classify TypeInfo pointer without calling real IsVaildType / HasRefField (observe only).
+// 1=plausible mapped TI, 0=null/low/noncanon/unmapped-like.
+uint8_t ClassifyTiPtrObserve(uintptr_t typeAddr)
+{
+    if (typeAddr == 0) {
+        return 0;
+    }
+    if (typeAddr < 0x1000ULL) {
+        return 0;
+    }
+    if (typeAddr >= (1ULL << 48)) {
+        return 0;
+    }
+    long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) {
+        pageSize = 4096;
+    }
+    unsigned char vec = 0;
+    uintptr_t page = typeAddr & ~static_cast<uintptr_t>(pageSize - 1);
+    if (mincore(reinterpret_cast<void*>(page), static_cast<size_t>(pageSize), &vec) != 0) {
+        return 0;
+    }
+    if ((vec & 1) == 0) {
+        return 0;
+    }
+    return 1;
+}
+
+bool PageReadableAt(const void* p)
+{
+    if (p == nullptr) {
+        return false;
+    }
+    long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) {
+        pageSize = 4096;
+    }
+    unsigned char vec = 0;
+    uintptr_t page = reinterpret_cast<uintptr_t>(p) & ~static_cast<uintptr_t>(pageSize - 1);
+    if (mincore(reinterpret_cast<void*>(page), static_cast<size_t>(pageSize), &vec) != 0) {
+        return false;
+    }
+    return (vec & 1) != 0;
+}
+
+void NoteFixWrite(const void* slot, const void* oldValue, const void* target, const void* current,
+                  uint8_t didForward, uint8_t ghostFrom, uint8_t unmovable,
+                  const MinorTargetFate& currentFate)
+{
+    if (!ProbeOn() || slot == nullptr) {
+        return;
+    }
+    TryResolveWatchSlots();
+    uint64_t total = g_fixWriteTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (didForward != 0) {
+        g_fixWriteDidForward.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    uintptr_t curTi = 0;
+    uint8_t tiValid = 0;
+    if (current != nullptr && currentFate.heap != 0 && currentFate.inAllocRange != 0 &&
+        currentFate.freeRegion == 0 && currentFate.garbageRegion == 0 && PageReadableAt(current)) {
+        // Read StateWord type-info bits the same way BaseObject::GetTypeInfo would (observe only).
+        // Layout: typeInfoLow32 | typeInfoHigh16 | objectState (StateWord.h:173-175).
+        uintptr_t head = *reinterpret_cast<const uintptr_t*>(current);
+        curTi = head & ((1ULL << 48) - 1ULL);
+        tiValid = ClassifyTiPtrObserve(curTi);
+    }
+    if (tiValid != 0) {
+        g_fixWriteValid.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_fixWriteInvalid.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // Always record current into ring for later crash-addr equality.
+    uint64_t rn = g_fixWriteRingN.fetch_add(1, std::memory_order_relaxed);
+    g_fixWriteRing[rn % kFixWriteRingCap] = current;
+
+    int wi = FindWatch(slot);
+    uint64_t emitted = g_fixWriteEmitted.fetch_add(1, std::memory_order_relaxed);
+    // Prefer: watched slots always; invalid TI always (bounded); first N overall.
+    bool emit = (emitted < kFixWriteSampleCap) || (wi >= 0 && emitted < kFixWriteSampleCap * 2) ||
+                (tiValid == 0 && emitted < kFixWriteSampleCap * 3);
+    if (!emit) {
+        return;
+    }
+    size_t idx = emitted < kFixWriteSampleCap ? static_cast<size_t>(emitted) : (emitted % kFixWriteSampleCap);
+    FixWriteRec& r = g_fixWriteSamples[idx];
+    r.slot = slot;
+    r.oldValue = oldValue;
+    r.target = target;
+    r.current = current;
+    r.currentTi = curTi;
+    r.tiValid = tiValid;
+    r.didForward = didForward;
+    r.ghostFrom = ghostFrom;
+    r.unmovable = unmovable;
+    r.young = currentFate.young;
+    r.validRegion = currentFate.validRegion;
+    r.freeRegion = currentFate.freeRegion;
+    r.garbageRegion = currentFate.garbageRegion;
+    r.inAlloc = currentFate.inAllocRange;
+    r.regionType = currentFate.regionType;
+    r.watchIdx = wi >= 0 ? static_cast<uint8_t>(wi) : 0xff;
+    r.seq = static_cast<uint32_t>(total);
+    r.round = g_minorRound.load(std::memory_order_acquire);
+    r.slotName[0] = '\0';
+    if (wi >= 0) {
+        std::strncpy(r.slotName, g_watch[wi].name, kNameCap - 1);
+        r.slotName[kNameCap - 1] = '\0';
+    }
+
+    std::fprintf(stderr,
+                 "[GCFWDWRITE] FIXWRITE seq=%u round=%llu slot=%p name=%s old=%p target=%p current=%p "
+                 "ti=0x%llx ti_valid=%u did_fwd=%u ghost=%u unmov=%u young=%u valid=%u free=%u garbage=%u "
+                 "in_alloc=%u rtype=%u\n",
+                 r.seq, static_cast<unsigned long long>(r.round), slot,
+                 r.slotName[0] != '\0' ? r.slotName : "?",
+                 oldValue, target, current, static_cast<unsigned long long>(curTi),
+                 static_cast<unsigned>(tiValid), static_cast<unsigned>(didForward),
+                 static_cast<unsigned>(ghostFrom), static_cast<unsigned>(unmovable),
+                 static_cast<unsigned>(currentFate.young), static_cast<unsigned>(currentFate.validRegion),
+                 static_cast<unsigned>(currentFate.freeRegion),
+                 static_cast<unsigned>(currentFate.garbageRegion),
+                 static_cast<unsigned>(currentFate.inAllocRange),
+                 static_cast<unsigned>(currentFate.regionType));
+}
+
 void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* point,
                           const MinorTargetFate& fate)
 {
@@ -879,12 +1045,30 @@ void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* po
         }
     }
 
+    // Q2: is this crash target equal to some current written by FixMinorEvacuatedSlot?
+    uint8_t crashEq = 0;
+    uint64_t fwRingN = g_fixWriteRingN.load(std::memory_order_acquire);
+    size_t scanFw = fwRingN < kFixWriteRingCap ? static_cast<size_t>(fwRingN) : kFixWriteRingCap;
+    for (size_t i = 0; i < scanFw; ++i) {
+        if (g_fixWriteRing[i % kFixWriteRingCap] == target) {
+            crashEq = 1;
+            break;
+        }
+    }
+    g_crashEqualsFixWriteChecked.fetch_add(1, std::memory_order_relaxed);
+    if (crashEq != 0) {
+        g_crashEqualsFixWriteYes.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_crashEqualsFixWriteNo.fetch_add(1, std::memory_order_relaxed);
+    }
+
     std::fprintf(stderr,
                  "[GCOLDREG] OLD_TARGET_MEMORY identity=%s point=%s target=%p ti=0x%llx "
                  "region=%p rtype=%u young=%u valid=%u free=%u garbage=%u heap=%u "
                  "in_alloc=%u marked=%u state=%u start=0x%llx alloc=0x%llx "
                  "off_start=%td off_alloc=%td last_wg_phase=%s last_wg_phase_id=%u "
-                 "last_wg_seq=%u last_wg_field=%p last_wg_size=%zu raw_ok=%u\n",
+                 "last_wg_seq=%u last_wg_field=%p last_wg_size=%zu raw_ok=%u "
+                 "crash_eq_fixwrite=%u\n",
                  identity, point != nullptr ? point : "?", target,
                  static_cast<unsigned long long>(typeAddr), fate.region,
                  static_cast<unsigned>(fate.regionType), static_cast<unsigned>(fate.young),
@@ -895,7 +1079,18 @@ void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* po
                  static_cast<unsigned long long>(regionStart),
                  static_cast<unsigned long long>(regionAlloc), offFromStart, offFromAlloc,
                  lastWgPhase, static_cast<unsigned>(lastWgPhaseId), lastWgSeq, lastWgField,
-                 lastWgSize, rawOk ? 1u : 0u);
+                 lastWgSize, rawOk ? 1u : 0u, static_cast<unsigned>(crashEq));
+    std::fprintf(stderr,
+                 "[GCFWDWRITE] CRASH_EQ_FIXWRITE target=%p eq=%u checked=%llu yes=%llu no=%llu "
+                 "fixwrite_ring_n=%llu\n",
+                 target, static_cast<unsigned>(crashEq),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteChecked.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteYes.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteNo.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(fwRingN));
 
     if (rawOk) {
         std::fprintf(stderr,
@@ -1254,6 +1449,21 @@ void DumpSummary(const char* reason)
         }
     }
     std::fprintf(stderr, "\n");
+    std::fprintf(stderr,
+                 "[GCFWDWRITE] FIXWRITE_SUMMARY total=%llu valid=%llu invalid=%llu did_forward=%llu "
+                 "emitted=%llu crash_eq_yes=%llu crash_eq_no=%llu crash_eq_checked=%llu ring_n=%llu\n",
+                 static_cast<unsigned long long>(g_fixWriteTotal.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_fixWriteValid.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_fixWriteInvalid.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_fixWriteDidForward.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_fixWriteEmitted.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteYes.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteNo.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_crashEqualsFixWriteChecked.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_fixWriteRingN.load(std::memory_order_relaxed)));
 }
 
 uint32_t GlobalInitDepth()

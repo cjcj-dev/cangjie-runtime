@@ -1680,13 +1680,24 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     RefField<> oldField(field);
     BaseObject* target = ResolveMinorReference(field);
     BaseObject* current = target;
-    if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
-        current = const_cast<WCollector*>(this)->ForwardObject(target);
+    uint8_t didForward = 0;
+    uint8_t ghostFrom = 0;
+    uint8_t unmovable = 0;
+    if (Heap::IsHeapAddress(target)) {
+        ghostFrom = IsGhostFromObject(target) ? 1 : 0;
+        unmovable = IsUnmovableFromObject(target) ? 1 : 0;
+        if (ghostFrom != 0 && unmovable == 0) {
+            current = const_cast<WCollector*>(this)->ForwardObject(target);
+            didForward = 1;
+        }
     }
     RefField<> newField(current);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return false;
     }
+    // Observe only: was `current` a complete object at the moment of the write?
+    GcInitWin::NoteFixWrite(&field, reinterpret_cast<const void*>(oldField.GetFieldValue()), target, current,
+                            didForward, ghostFrom, unmovable, CaptureMinorTargetFate(current));
     CHECK_DETAIL(field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue()),
                  "minor reference changed while the world was stopped field=%p from=%p to=%p",
                  &field, target, current);

@@ -49,6 +49,12 @@ void NoteWriteGeneric(const void* obj, const void* field, size_t size, uint8_t g
 void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* point,
                           const MinorTargetFate& fate);
 
+// Observe FixMinorEvacuatedSlot just before CompareExchange: is `current` a complete object?
+// target=resolved old referent; current=post-forward value about to be stored; didForward=1 if ForwardObject ran.
+void NoteFixWrite(const void* slot, const void* oldValue, const void* target, const void* current,
+                  uint8_t didForward, uint8_t ghostFrom, uint8_t unmovable,
+                  const MinorTargetFate& currentFate);
+
 // Bind static-root snapshots and target fate to one minor collection round.
 void NoteMinorCycleStart(uint64_t round);
 uint64_t CurrentMinorRound();
