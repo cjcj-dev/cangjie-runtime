@@ -78,6 +78,9 @@ private:
 class RegionInfo;
 void TraceGCProvLiveZero(RegionInfo* region, uint32_t oldValue, const char* writer, int line, const char* stage,
                          uint8_t targetUnitRole);
+void TraceGCProvLiveRaise(const char* site, uint32_t count, RegionInfo* region);
+void DumpGCProvLiveRaiseSummary(const char* reason);
+void NoteGCProvLive0HadRaise(RegionInfo* region);
 
 class RegionInfo {
 public:
@@ -1008,9 +1011,10 @@ public:
         TraceGCProvLiveZero(this, oldValue, __func__, __LINE__, stage, static_cast<uint8_t>(GetUnitRole()));
     }
 
-    void AddLiveByteCount(uint32_t count)
+    void AddLiveByteCount(uint32_t count, const char* site = "AddLiveByteCount")
     {
         (void)__atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        TraceGCProvLiveRaise(site, count, this);
     }
 
     void RemoveFromList()

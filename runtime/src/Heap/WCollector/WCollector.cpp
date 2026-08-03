@@ -42,7 +42,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
     size_t objectSize = obj->GetSize();
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
-        region->AddLiveByteCount(objectSize);
+        region->AddLiveByteCount(static_cast<uint32_t>(objectSize), "WCollector::MarkObject");
         (void)region;
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
@@ -54,7 +54,7 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
 {
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
-            region->AddLiveByteCount(obj->GetSize());
+            region->AddLiveByteCount(static_cast<uint32_t>(obj->GetSize()), "WCollector::ResurrectObject");
             DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
                  obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
         }
@@ -949,6 +949,10 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         bool liveZero = rootMask != 0 && holderRegion != nullptr && holderRegion->GetLiveByteCount() == 0;
         if (liveZero) {
             ++liveZeroVisits;
+            NoteGCProvLive0HadRaise(holderRegion);
+            if (liveZeroVisits == 1) {
+                DumpGCProvLiveRaiseSummary("first-live0-pre-has");
+            }
             std::fprintf(stderr,
                          "[GCPROV] PRE_HAS_REF_FIELD point=after-dispel sequence=%zu object=%p holder=%p "
                          "type_info=%p type_noncanonical=%u region=%p region_type=%u live=%u root_mask=0x%03x "

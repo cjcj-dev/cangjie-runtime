@@ -267,7 +267,7 @@ public:
         bool marked = regionInfo->MarkObject(obj);
         if (!marked) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
+            regionInfo->AddLiveByteCount(static_cast<uint32_t>(objSize), "TracingCollector::MarkObject");
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -285,7 +285,7 @@ public:
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
+            regionInfo->AddLiveByteCount(static_cast<uint32_t>(objSize), "TracingCollector::ResurrectObject");
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }

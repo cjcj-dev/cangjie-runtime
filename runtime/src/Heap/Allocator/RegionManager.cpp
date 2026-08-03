@@ -29,6 +29,133 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+namespace {
+std::atomic<uint64_t> gLiveRaiseWMark{ 0 };
+std::atomic<uint64_t> gLiveRaiseWResurrect{ 0 };
+std::atomic<uint64_t> gLiveRaiseTMark{ 0 };
+std::atomic<uint64_t> gLiveRaiseTResurrect{ 0 };
+std::atomic<uint64_t> gLiveRaiseCountLive{ 0 };
+std::atomic<uint64_t> gLiveRaiseOther{ 0 };
+std::atomic<uint64_t> gLiveRaiseTotal{ 0 };
+std::atomic<uint64_t> gLiveRaiseBytes{ 0 };
+std::atomic<uint64_t> gLiveRaiseToLive0Seen{ 0 };
+std::atomic<bool> gLiveRaiseSummaryRegistered{ false };
+std::atomic<bool> gLiveRaiseSummaryDumped{ false };
+
+// Bounded set of regions that received a raise (pointer identity only).
+constexpr size_t kRaiseRegionSlots = 4096;
+std::atomic<uintptr_t> gRaiseRegionSlots[kRaiseRegionSlots];
+
+void RememberRaiseRegion(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return;
+    }
+    uintptr_t key = reinterpret_cast<uintptr_t>(region);
+    size_t idx = (key / 64) % kRaiseRegionSlots;
+    for (size_t i = 0; i < 8; ++i) {
+        size_t slot = (idx + i) % kRaiseRegionSlots;
+        uintptr_t expected = 0;
+        if (gRaiseRegionSlots[slot].compare_exchange_strong(expected, key, std::memory_order_relaxed) ||
+            expected == key) {
+            return;
+        }
+    }
+}
+
+bool RegionWasRaised(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return false;
+    }
+    uintptr_t key = reinterpret_cast<uintptr_t>(region);
+    size_t idx = (key / 64) % kRaiseRegionSlots;
+    for (size_t i = 0; i < 8; ++i) {
+        size_t slot = (idx + i) % kRaiseRegionSlots;
+        if (gRaiseRegionSlots[slot].load(std::memory_order_relaxed) == key) {
+            return true;
+        }
+    }
+    return false;
+}
+} // namespace
+
+void DumpGCProvLiveRaiseSummary(const char* reason)
+{
+    const char* enabled = std::getenv("MRT_GCPROV");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+    std::fprintf(stderr,
+                 "[GCPROV] LIVE_RAISE_SUMMARY reason=%s "
+                 "WCollector::MarkObject=%llu WCollector::ResurrectObject=%llu "
+                 "TracingCollector::MarkObject=%llu TracingCollector::ResurrectObject=%llu "
+                 "RegionManager::CountLiveObject=%llu other=%llu total_calls=%llu total_bytes=%llu "
+                 "raise_hits_on_later_live0=%llu\n",
+                 reason == nullptr ? "unspecified" : reason,
+                 static_cast<unsigned long long>(gLiveRaiseWMark.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseWResurrect.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseTMark.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseTResurrect.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseCountLive.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseOther.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseTotal.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseBytes.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(gLiveRaiseToLive0Seen.load(std::memory_order_relaxed)));
+    std::fflush(stderr);
+}
+
+void TraceGCProvLiveRaise(const char* site, uint32_t count, RegionInfo* region)
+{
+    const char* enabled = std::getenv("MRT_GCPROV");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+    if (!gLiveRaiseSummaryRegistered.exchange(true, std::memory_order_acq_rel)) {
+        std::atexit([]() { DumpGCProvLiveRaiseSummary("atexit"); });
+    }
+    gLiveRaiseTotal.fetch_add(1, std::memory_order_relaxed);
+    gLiveRaiseBytes.fetch_add(count, std::memory_order_relaxed);
+    RememberRaiseRegion(region);
+    if (site == nullptr) {
+        gLiveRaiseOther.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(site, "WCollector::MarkObject") == 0) {
+        gLiveRaiseWMark.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(site, "WCollector::ResurrectObject") == 0) {
+        gLiveRaiseWResurrect.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(site, "TracingCollector::MarkObject") == 0) {
+        gLiveRaiseTMark.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(site, "TracingCollector::ResurrectObject") == 0) {
+        gLiveRaiseTResurrect.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(site, "RegionManager::CountLiveObject") == 0) {
+        gLiveRaiseCountLive.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        gLiveRaiseOther.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Extremely bounded per-call log: first 4 only (prove counter fires).
+    static std::atomic<uint32_t> sampleLeft{ 4 };
+    uint32_t left = sampleLeft.load(std::memory_order_relaxed);
+    while (left > 0) {
+        if (sampleLeft.compare_exchange_weak(left, left - 1, std::memory_order_relaxed)) {
+            std::fprintf(stderr,
+                         "[GCPROV] LIVE_RAISE_SAMPLE site=%s count=%u region=%p live_after=%u type=%u young=%u\n",
+                         site == nullptr ? "?" : site, count, region,
+                         region == nullptr ? 0u : region->GetLiveByteCount(),
+                         region == nullptr ? 0u : static_cast<unsigned>(region->GetRegionType()),
+                         region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
+            std::fflush(stderr);
+            break;
+        }
+    }
+}
+
+void NoteGCProvLive0HadRaise(RegionInfo* region)
+{
+    if (RegionWasRaised(region)) {
+        gLiveRaiseToLive0Seen.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void TraceGCProvLiveZero(RegionInfo* region, uint32_t oldValue, const char* writer, int line, const char* stage,
                          uint8_t targetUnitRole)
 {
@@ -546,7 +673,7 @@ void RegionManager::ReportGCProvRegionLifecycle(RegionInfo* region, const void* 
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    region->AddLiveByteCount(obj->GetSize());
+    region->AddLiveByteCount(static_cast<uint32_t>(obj->GetSize()), "RegionManager::CountLiveObject");
 }
 
 void RegionManager::AssembleSmallGarbageCandidates()
