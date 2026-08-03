@@ -1389,16 +1389,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
             }
+            // ForwardTask already TakeHeadRegion'd this off fromRegionList as LONE_FROM;
+            // re-home to unmovable so survivors stay reachable and list-owned.
             region->SetRouteState(RegionInfo::RouteState::NORMAL);
-            RegionInfo::RegionType oldType = region->GetRegionType();
-            if (oldType == RegionInfo::RegionType::FROM_REGION ||
-                oldType == RegionInfo::RegionType::LONE_FROM_REGION) {
-                if (fromRegionList.TryDeleteRegion(region, oldType,
-                        RegionInfo::RegionType::UNMOVABLE_FROM_REGION)) {
-                    unmovableFromRegionList.PrependRegion(region,
-                        RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-                }
-            }
+            unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
             return;
         }
         if (youngRegion) {
