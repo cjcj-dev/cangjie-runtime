@@ -179,6 +179,8 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
 
 void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    GcInitWin::NoteStaticStructWrite(reinterpret_cast<const void*>(dst), dstLen,
+                                     reinterpret_cast<const void*>(src), "EnumBarrier::WriteStaticStruct");
     Mutator* mutator = Mutator::GetMutator();
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
