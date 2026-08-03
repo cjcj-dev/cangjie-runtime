@@ -234,11 +234,19 @@ uint8_t WritePathId(const char* site)
     if (site == nullptr) {
         return PATH_OTHER;
     }
-    for (uint8_t i = 0; i < PATH_OTHER; ++i) {
-        if (std::strstr(site, WritePathName(i)) != nullptr) {
-            return i;
-        }
-    }
+    if (std::strstr(site, "MCC_WriteStaticRef") != nullptr) return PATH_MCC_STATIC_REF;
+    if (std::strstr(site, "IdleBarrier::WriteStaticRef") != nullptr) return PATH_IDLE_STATIC_REF;
+    if (std::strstr(site, "EnumBarrier::WriteStaticRef") != nullptr) return PATH_ENUM_STATIC_REF;
+    if (std::strstr(site, "PostTraceBarrier::WriteStaticRef") != nullptr) return PATH_POST_STATIC_REF;
+    if (std::strstr(site, "TraceBarrier::WriteStaticRef") != nullptr) return PATH_TRACE_STATIC_REF;
+    if (std::strstr(site, "Barrier::WriteStaticRef") != nullptr) return PATH_BARRIER_STATIC_REF;
+    if (std::strstr(site, "MCC_WriteStaticStruct") != nullptr) return PATH_MCC_STATIC_STRUCT;
+    if (std::strstr(site, "IdleBarrier::WriteStaticStruct") != nullptr) return PATH_IDLE_STATIC_STRUCT;
+    if (std::strstr(site, "EnumBarrier::WriteStaticStruct") != nullptr) return PATH_ENUM_STATIC_STRUCT;
+    if (std::strstr(site, "PostTraceBarrier::WriteStaticStruct") != nullptr) return PATH_POST_STATIC_STRUCT;
+    if (std::strstr(site, "TraceBarrier::WriteStaticStruct") != nullptr) return PATH_TRACE_STATIC_STRUCT;
+    if (std::strstr(site, "Barrier::WriteStaticStruct") != nullptr) return PATH_BARRIER_STATIC_STRUCT;
+    if (std::strstr(site, "WriteGeneric") != nullptr) return PATH_WRITE_GENERIC;
     return PATH_OTHER;
 }
 
@@ -738,6 +746,11 @@ void NoteMinorCycleStart(uint64_t round)
     }
     std::fprintf(stderr, "[GCSLOTDELTA] MINOR_CYCLE_START round=%llu watch_n=%zu\n",
                  static_cast<unsigned long long>(round), wn);
+}
+
+uint64_t CurrentMinorRound()
+{
+    return g_minorRound.load(std::memory_order_acquire);
 }
 
 const void* InitialMinorTarget(const void* slot, uint64_t round)
