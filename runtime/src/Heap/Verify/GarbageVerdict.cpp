@@ -117,7 +117,7 @@ void GarbageVerdict::Dump(const char* site, RegionInfo* region, const char* pred
             if (!o->IsValidObject()) {
                 break;
             }
-            size_t sz = o->GetSize();
+            size_t sz = RegionSpace::GetAllocSize(*o);
             if (sz == 0) {
                 break;
             }
