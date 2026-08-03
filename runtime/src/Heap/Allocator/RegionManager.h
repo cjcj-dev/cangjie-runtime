@@ -367,9 +367,9 @@ public:
             }
         }
 
-        // HotSpot HeapRegionRemSet::clear() analogue — drop remset slots whose field
-        // address falls in this region before it becomes garbage/free. See .cpp.
-        ScrubRememberedSetForRegion(region);
+        // STEER3: do NOT scrub here. Linux only enqueues GARBAGE; ReclaimRegion scrubs
+        // once when payload is actually freed (OHOS Collect→Reclaim still hits that path).
+        // Scrubbing at both sites doubled O(N) full-table scans under remset mutex.
 
         region->LockWriteRegion();
 #if defined(__OHOS__)
@@ -413,8 +413,10 @@ public:
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
     // Drop remset entries whose field address lies in [regionStart, regionEnd).
-    // HotSpot: HeapRegionRemSet::clear() when a region is freed.
+    // HotSpot: HeapRegionRemSet::clear() when a region is freed. Called from ReclaimRegion only.
     static void ScrubRememberedSetForRegion(RegionInfo* region);
+    // Emit + reset process-local scrub cost counters (STEER3).
+    static void DumpScrubCostAndReset(const char* point);
 
     void ReclaimGarbageRegions()
     {

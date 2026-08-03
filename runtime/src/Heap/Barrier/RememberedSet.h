@@ -86,12 +86,20 @@ private:
     // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
     // falls inside a region that is about to be reclaimed/reused. Without this, the
     // next minor RescanRememberedSet reads freed payload as if it were still a holder.
-    size_t EraseRange(MAddress start, MAddress end)
+    // COST: global unordered_set has no range index ⇒ O(N) full scan under lock.
+    // outScanned receives N at call time when non-null.
+    size_t EraseRange(MAddress start, MAddress end, size_t* outScanned = nullptr)
     {
         if (start >= end) {
+            if (outScanned != nullptr) {
+                *outScanned = 0;
+            }
             return 0;
         }
         std::lock_guard<std::mutex> guard(lock);
+        if (outScanned != nullptr) {
+            *outScanned = records.size();
+        }
         size_t erased = 0;
         for (auto it = records.begin(); it != records.end();) {
             MAddress slot = *it;

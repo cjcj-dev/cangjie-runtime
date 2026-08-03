@@ -15,6 +15,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
+#include "Base/TimeUtils.h"
 #include "Collector/Collector.h"
 #include "Collector/CopyCollector.h"
 #include "Common/BaseObject.h"
@@ -527,6 +528,16 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
+namespace {
+// STEER3 scrub-cost + remset-size process counters (observation only).
+std::atomic<uint64_t> g_scrubCalls{ 0 };
+std::atomic<uint64_t> g_scrubNs{ 0 };
+std::atomic<uint64_t> g_scrubScannedSum{ 0 };
+std::atomic<uint64_t> g_scrubErasedSum{ 0 };
+std::atomic<size_t> g_scrubScannedMax{ 0 };
+std::atomic<size_t> g_staleAtCollect{ 0 };
+} // namespace
+
 void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
 {
     if (region == nullptr) {
@@ -534,18 +545,46 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    // STEER1 decisive observation: remset still holds slots in this region at Collect?
-    // EraseRange returns the count of such stale entries — non-zero ⇒ H1 live.
-    size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd);
+    size_t scanned = 0;
+    uint64_t t0 = TimeUtil::NanoSeconds();
+    size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, &scanned);
+    uint64_t dt = TimeUtil::NanoSeconds() - t0;
+    g_scrubCalls.fetch_add(1, std::memory_order_relaxed);
+    g_scrubNs.fetch_add(dt, std::memory_order_relaxed);
+    g_scrubScannedSum.fetch_add(scanned, std::memory_order_relaxed);
+    g_scrubErasedSum.fetch_add(scrubbed, std::memory_order_relaxed);
+    size_t prevMax = g_scrubScannedMax.load(std::memory_order_relaxed);
+    while (scanned > prevMax &&
+           !g_scrubScannedMax.compare_exchange_weak(prevMax, scanned, std::memory_order_relaxed)) {
+    }
     if (scrubbed != 0) {
-        static std::atomic<size_t> g_staleAtCollect{ 0 };
         size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
         VLOG(REPORT,
-             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu region=%p [%#zx,%#zx) type=%u young=%u "
-             "sample=%zu (H1: remset retained slots into region about to be reclaimed)",
-             scrubbed, region, static_cast<size_t>(rStart), static_cast<size_t>(rEnd),
-             region->GetRegionType(), static_cast<unsigned>(region->IsYoungRegion()), n);
+             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu scannedN=%zu ns=%llu region=%p "
+             "[%#zx,%#zx) type=%u young=%u sample=%zu",
+             scrubbed, scanned, static_cast<unsigned long long>(dt), region,
+             static_cast<size_t>(rStart), static_cast<size_t>(rEnd), region->GetRegionType(),
+             static_cast<unsigned>(region->IsYoungRegion()), n);
     }
+}
+
+void RegionManager::DumpScrubCostAndReset(const char* point)
+{
+    uint64_t calls = g_scrubCalls.exchange(0, std::memory_order_relaxed);
+    uint64_t ns = g_scrubNs.exchange(0, std::memory_order_relaxed);
+    uint64_t scannedSum = g_scrubScannedSum.exchange(0, std::memory_order_relaxed);
+    uint64_t erasedSum = g_scrubErasedSum.exchange(0, std::memory_order_relaxed);
+    size_t scannedMax = g_scrubScannedMax.exchange(0, std::memory_order_relaxed);
+    if (calls == 0) {
+        return;
+    }
+    VLOG(REPORT,
+         "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu scannedSum=%llu "
+         "scannedMax=%zu erasedSum=%llu",
+         point == nullptr ? "?" : point, static_cast<unsigned long long>(calls),
+         static_cast<unsigned long long>(ns), static_cast<unsigned long long>(ns / calls),
+         static_cast<unsigned long long>(scannedSum), scannedMax,
+         static_cast<unsigned long long>(erasedSum));
 }
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
@@ -558,8 +597,10 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    // Also scrub here: garbageRegionList may hold a region for a while after CollectRegion;
-    // when payload is finally freed/reused, any late remset entry must already be gone.
+    // Sole scrub site (STEER3 CALLSITE_AUDIT): payload is about to enter free/dirty trees.
+    // CollectRegion no longer scrubs — on Linux it only enqueues GARBAGE; mid-window
+    // mutator cannot legally RecordCrossGenEdge into a garbage region's field addresses
+    // (no new alloc there; live holders would not be garbage). Double scrub was 2× O(N).
     ScrubRememberedSetForRegion(region);
 
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).

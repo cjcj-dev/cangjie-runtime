@@ -1653,8 +1653,10 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     MinorSlotSet rememberedSlots;
+    size_t remsetSizeAtAcquire = 0;
     {
         RememberedSet::Records records = Heap::GetHeap().GetRememberedSet().AcquireRecordsForMinor();
+        remsetSizeAtAcquire = records.size();
         rememberedSlots.insert(records.begin(), records.end());
     }
 
@@ -1789,11 +1791,15 @@ void WCollector::DoYoungGarbageCollection()
     MergeResurrectExportObjects();
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
+    size_t remsetSizeAfter = Heap::GetHeap().GetRememberedSet().Size();
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
-         "remembered=%zu reclaimedBytes=%zu pause=%zu us",
+         "remembered=%zu remsetAtAcquire=%zu remsetAfter=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveObjects, liveBytes, liveRememberedSlots.size(), remsetSizeAtAcquire, remsetSizeAfter,
+         stats.reclaimedBytes, pauseUs);
+    // STEER3: scrub-cost counters accumulated during this minor's Collect/Reclaim path.
+    RegionManager::DumpScrubCostAndReset("post-minor");
 }
 
 void WCollector::DoGarbageCollection()
