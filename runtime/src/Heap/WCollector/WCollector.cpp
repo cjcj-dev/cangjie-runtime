@@ -1141,9 +1141,9 @@ void WCollector::DoYoungGarbageCollection()
         });
     }
     if (fullYoungScan) {
-        ValidateYoungMarking(reachableObjects, allocationRoots);
-        // Positive control for young-marked-outside-candidates (4138-class).
+        // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
+        ValidateYoungMarking(reachableObjects, allocationRoots);
     }
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
