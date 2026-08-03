@@ -1317,6 +1317,26 @@ void WCollector::DoYoungGarbageCollection()
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
 
+    // Post-evacuate invariant P (HotSpot VerifyAfterGC analog for young): after
+    // fix+forward+remset rebuild inside EvacuateYoungRegions, every live ref must
+    // still be a legal object (VerifyHeap H) and remset must cover old→young (R).
+    // Gate default off: MRT_GCV2_VERIFY_POST_EVAC=1. Forward/ghost metadata is
+    // still valid here — before IDLE and before the next minor reclaims units.
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VerifyHeapObjects("post-evacuate");
+            std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
+            VerifyRememberedSetInvariant("post-evacuate", remsetSnap);
+            // Stale from-space slot probe (existing validator; report-only unless its own FATAL).
+            ValidateMinorReferences("post-evacuate", nullptr);
+            VLOG(REPORT,
+                 "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
+                 "env=MRT_GCV2_VERIFY_POST_EVAC=1 remsetSnap=%zu",
+                 minorTotalRuns + 1, remsetSnap.size());
+        }
+    }
+
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
     MergeResurrectExportObjects();
     ++minorTotalRuns;
