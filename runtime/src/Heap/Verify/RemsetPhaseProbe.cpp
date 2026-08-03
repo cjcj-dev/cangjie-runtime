@@ -80,7 +80,7 @@ void IncReason(std::array<std::atomic<uint64_t>, kReasonBuckets>& arr, size_t id
 
 bool Enabled()
 {
-    static const bool on = EnvOn("MRT_GCPHASE_PROBE");
+    static const bool on = EnvOn("MRT_GCV2_RECORD_REMSET_EVENTS") || EnvOn("MRT_GCPHASE_PROBE");
     return on;
 }
 
@@ -236,11 +236,21 @@ void NoteMissing(MAddress fieldAddress)
         // Count under UNDEF phase / Undef bar for distribution tables.
         Inc(gMissingByPhase, 0);
         IncBar(gMissingByBar, BAR_UNDEF);
+        VLOG(REPORT,
+             "[GCV2][remset][recorded][MISSING_EVENT] slot=%p event=no_barrier_record "
+             "env=MRT_GCV2_RECORD_REMSET_EVENTS=1",
+             reinterpret_cast<void*>(fieldAddress));
         return;
     }
     Inc(gMissingByPhase, st.phase);
     IncBar(gMissingByBar, st.barClass);
     IncReason(gMissingByReason, st.reason);
+    VLOG(REPORT,
+         "[GCV2][remset][recorded][MISSING_EVENT] slot=%p phase=%s(%u) barrier=%s reason=%s recorded=%u "
+         "env=MRT_GCV2_RECORD_REMSET_EVENTS=1",
+         reinterpret_cast<void*>(fieldAddress), PhaseName(static_cast<GCPhase>(st.phase)),
+         static_cast<unsigned int>(st.phase), BarrierClassName(static_cast<BarrierClass>(st.barClass)),
+         SkipReasonName(static_cast<SkipReason>(st.reason)), static_cast<unsigned int>(st.recorded));
 }
 
 void ClearSlotStamps()
