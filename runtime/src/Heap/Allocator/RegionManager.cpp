@@ -1559,6 +1559,23 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
+        // gcfwdresid/stdfull: optional fail-closed keep after FORWARDED (default off).
+        // Residual unmarked headers stay in from-space if CollectRegion reclaims.
+        {
+            static const bool blockFwd = []() {
+                const char* v = std::getenv("MRT_GCV2_BLOCK_FORWARDED_RESIDUAL");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (blockFwd) {
+                VLOG(REPORT,
+                     "[GCV2][block] ForwardRegion skip CollectRegion after FORWARDED region=%p "
+                     "start=%#zx env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                     region, region->GetRegionStart());
+                region->SetRouteState(RegionInfo::RouteState::NORMAL);
+                unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+                return;
+            }
+        }
         CollectRegion(region);
     }
 }

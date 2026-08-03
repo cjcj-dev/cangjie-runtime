@@ -325,6 +325,21 @@ public:
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        // gcfwdresid/stdfull: dual gate with ForwardRegion keep (default off).
+        {
+            static const bool blockFwd = []() {
+                const char* v = std::getenv("MRT_GCV2_BLOCK_FORWARDED_RESIDUAL");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (blockFwd && region != nullptr &&
+                region->GetRouteState() == RegionInfo::RouteState::FORWARDED) {
+                VLOG(REPORT,
+                     "[GCV2][block] CollectRegion skip FORWARDED region=%p start=%#zx "
+                     "env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                     region, region->GetRegionStart());
+                return 0;
+            }
+        }
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
