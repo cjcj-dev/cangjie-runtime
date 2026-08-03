@@ -90,7 +90,8 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                 return;
             }
             ++stats.holdersScanned;
-            holder->ForEachRefField([&fieldSlots, &stats, &remsetSnapshot, holder](RefField<>& field) {
+            holder->ForEachRefField([&fieldSlots, &stats, &remsetSnapshot, holder, holderRegion, point, invoke,
+                                     maxFailures](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
                 fieldSlots.insert(slot);
 
