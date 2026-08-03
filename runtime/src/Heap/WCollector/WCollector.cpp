@@ -338,15 +338,8 @@ const char* EnqTiName(uint8_t c)
 
 void DumpEnqSummary(const char* reason)
 {
-    bool expected = false;
-    if (!g_enqSummaryDumped.compare_exchange_strong(expected, true)) {
-        // allow re-dump with reason tag but keep one full dump for atexit-like use
-        // still print a short line if already dumped
-        std::fprintf(stderr, "[GCENQUEUE] ENQUEUE_SUMMARY_AGAIN reason=%s seq=%u ring=%zu\n", reason,
-                     g_enqSeq.load(std::memory_order_relaxed),
-                     g_enqRingN.load(std::memory_order_relaxed));
-        return;
-    }
+    // Always print full site/ti/hit counters (bounded line; needed after each validator point).
+    (void)g_enqSummaryDumped.exchange(true, std::memory_order_relaxed);
     std::fprintf(stderr, "[GCENQUEUE] ENQUEUE_SUMMARY reason=%s total=%u", reason,
                  g_enqSeq.load(std::memory_order_relaxed));
     for (size_t i = 0; i < kEnqCatCount; ++i) {
@@ -405,22 +398,27 @@ void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot,
     rec.pointId = pid;
     rec.seq = seq;
 
-    // Sample: always log first N bad-TI enqueues; sparse good samples.
+    // Sample: first N overall + all bad-TI enqueues up to cap (prefer bad).
+    static std::atomic<uint64_t> g_enqBadSample{0};
     bool interesting = tc != ENQ_TI_GOOD;
     uint64_t sampleN = g_enqSampleEmitted.load(std::memory_order_relaxed);
-    if (interesting || sampleN < 8) {
-        if (g_enqSampleEmitted.fetch_add(1, std::memory_order_relaxed) < kEnqSampleCap) {
-            ptrdiff_t off = 0;
-            if (slotHolder != nullptr && slot != nullptr) {
-                off = reinterpret_cast<const char*>(slot) - reinterpret_cast<const char*>(slotHolder);
-            }
-            std::fprintf(stderr,
-                         "[GCENQUEUE] ENQUEUE_SAMPLE seq=%u point=%s cat=%s target=%p ti=0x%llx ticlass=%s "
-                         "slot=%p holder=%p holder_ti=0x%llx holder_ticlass=%s slot_off=%td\n",
-                         seq, point, EnqCatName(category), target,
-                         static_cast<unsigned long long>(typeAddr), EnqTiName(tc), slot, slotHolder,
-                         static_cast<unsigned long long>(hTypeAddr), EnqTiName(htc), off);
+    bool take = false;
+    if (interesting) {
+        take = g_enqBadSample.fetch_add(1, std::memory_order_relaxed) < kEnqSampleCap;
+    } else {
+        take = sampleN < 8;
+    }
+    if (take && g_enqSampleEmitted.fetch_add(1, std::memory_order_relaxed) < (kEnqSampleCap + 8)) {
+        ptrdiff_t off = 0;
+        if (slotHolder != nullptr && slot != nullptr) {
+            off = reinterpret_cast<const char*>(slot) - reinterpret_cast<const char*>(slotHolder);
         }
+        std::fprintf(stderr,
+                     "[GCENQUEUE] ENQUEUE_SAMPLE seq=%u point=%s cat=%s target=%p ti=0x%llx ticlass=%s "
+                     "slot=%p holder=%p holder_ti=0x%llx holder_ticlass=%s slot_off=%td\n",
+                     seq, point, EnqCatName(category), target,
+                     static_cast<unsigned long long>(typeAddr), EnqTiName(tc), slot, slotHolder,
+                     static_cast<unsigned long long>(hTypeAddr), EnqTiName(htc), off);
     }
 }
 
