@@ -102,17 +102,37 @@ const char* RegionTypeName(RegionInfo* region)
     }
 }
 
-const char* HolderTypeName(BaseObject* holder)
+void ShortTypeName(BaseObject* obj, char* buf, size_t bufSize)
 {
-    if (holder == nullptr || !holder->IsValidObject()) {
-        return "?";
+    if (bufSize == 0) {
+        return;
     }
-    TypeInfo* ti = holder->GetTypeInfo();
+    buf[0] = '?';
+    if (bufSize == 1) {
+        buf[0] = '\0';
+        return;
+    }
+    buf[1] = '\0';
+    if (obj == nullptr || !obj->IsValidObject()) {
+        return;
+    }
+    TypeInfo* ti = obj->GetTypeInfo();
     if (ti == nullptr) {
-        return "?";
+        return;
     }
     const char* name = ti->GetName();
-    return name != nullptr ? name : "?";
+    if (name == nullptr) {
+        return;
+    }
+    // Prefer last path segment after ':' for short identity; still cap length.
+    const char* slash = std::strrchr(name, ':');
+    const char* use = (slash != nullptr && slash[1] != '\0') ? slash + 1 : name;
+    size_t n = std::strlen(use);
+    if (n >= bufSize) {
+        n = bufSize - 1;
+    }
+    std::memcpy(buf, use, n);
+    buf[n] = '\0';
 }
 
 bool EnvEnabled(const char* name)
@@ -234,29 +254,29 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
     for (const MissingEdge& e : missingEdges) {
         WriteHistEntry wh {};
         bool found = hist.Lookup(e.field, wh);
-        const char* holderName = HolderTypeName(e.holder);
-        byHolderType[holderName != nullptr ? holderName : "?"]++;
+        char holderName[96];
+        char targetName[96];
+        ShortTypeName(e.holder, holderName, sizeof(holderName));
+        ShortTypeName(e.target, targetName, sizeof(targetName));
+
+        // Full name for clustering map (short name can collide across modules).
+        const char* fullHolder = "?";
+        if (e.holder != nullptr && e.holder->IsValidObject()) {
+            TypeInfo* ti = e.holder->GetTypeInfo();
+            if (ti != nullptr && ti->GetName() != nullptr) {
+                fullHolder = ti->GetName();
+            }
+        }
+        byHolderType[fullHolder]++;
 
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.holder));
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.target));
         const char* holderReg = RegionTypeName(holderRegion);
         const char* targetReg = RegionTypeName(targetRegion);
-        unsigned holderYoung = holderRegion != nullptr && holderRegion->IsYoungRegion() ? 1 : 0;
-        unsigned targetYoung = targetRegion != nullptr && targetRegion->IsYoungRegion() ? 1 : 0;
-        unsigned holderAge = holderRegion != nullptr ? holderRegion->GetYoungAge() : 0;
-        unsigned targetAge = targetRegion != nullptr ? targetRegion->GetYoungAge() : 0;
-        const char* targetName = HolderTypeName(e.target);
 
         const char* causeTag = "other";
         const char* apiName = "none";
         const char* outName = "NONE";
-        const char* phaseName = "?";
-        unsigned api = 0;
-        unsigned phase = 0;
-        unsigned outcome = 0;
-        unsigned seq = 0;
-        unsigned epoch = 0;
-        void* histRef = nullptr;
 
         if (!found) {
             ++histMiss;
@@ -266,13 +286,6 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
             ++histHits;
             apiName = WriteHist::ApiName(wh.api);
             outName = WriteHist::OutcomeName(wh.outcome);
-            phaseName = Collector::GetGCPhaseName(static_cast<GCPhase>(wh.phase));
-            api = wh.api;
-            phase = wh.phase;
-            outcome = wh.outcome;
-            seq = wh.seq;
-            epoch = wh.epoch;
-            histRef = wh.ref;
             if (wh.outcome == static_cast<uint8_t>(CrossGenRecordOutcome::RECORDED)) {
                 ++causeConsumed;
                 causeTag = "c_consumed_lost";
@@ -288,39 +301,31 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
             }
         }
 
+        // Short lines: long generic type names + many %s overflow vsprintf_s (seen as WriteLogImpl fail).
         VLOG(REPORT,
-             "[GCV2][verify][remset][MISS] point=%s invoke=%zu i=%zu field=%p off=%zu holder=%p hType=%s hArr=%u "
-             "hReg=%s hYoung=%u hAge=%u target=%p tType=%s tReg=%s tYoung=%u tAge=%u hist=%s api=%s(%u) "
-             "phase=%s(%u) outcome=%s(%u) seq=%u epoch=%u histRef=%p cause=%s",
-             point == nullptr ? "?" : point, invoke, dumped, reinterpret_cast<void*>(e.field), e.fieldOffset,
-             e.holder, holderName, static_cast<unsigned>(e.holderIsArray), holderReg, holderYoung, holderAge, e.target,
-             targetName, targetReg, targetYoung, targetAge, found ? "HIT" : "NONE", apiName, api, phaseName, phase,
-             outName, outcome, seq, epoch, histRef, causeTag);
+             "[GCV2][MISS] i=%zu f=%p off=%zu h=%p ht=%s ha=%u hr=%s t=%p tt=%s tr=%s hist=%s api=%s out=%s cause=%s",
+             dumped, reinterpret_cast<void*>(e.field), e.fieldOffset, e.holder, holderName,
+             static_cast<unsigned>(e.holderIsArray), holderReg, e.target, targetName, targetReg,
+             found ? "HIT" : "NONE", apiName, outName, causeTag);
         ++dumped;
     }
 
     VLOG(REPORT,
-         "[GCV2][verify][remset][RESIDUAL_BY_CAUSE] point=%s invoke=%zu dumped=%zu "
-         "a_bare_store=%zu b_early_return=%zu c_consumed_lost=%zu other=%zu histHits=%zu histMiss=%zu "
-         "early_no_young=%zu early_null=%zu early_tgt_not_young=%zu early_src_young=%zu histTotal=%llu histWraps=%llu",
-         point == nullptr ? "?" : point, invoke, dumped, causeBare, causeEarly, causeConsumed, causeOther, histHits,
-         histMiss, earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
+         "[GCV2][RESIDUAL_BY_CAUSE] a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu "
+         "ey=%zu en=%zu et=%zu es=%zu tot=%llu wrap=%llu dumped=%zu",
+         causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss,
+         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
          earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)],
          earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)],
          earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)],
-         static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()));
+         static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()), dumped);
 
-    // Cluster by holder type (stable-ish order via map).
     size_t typeIdx = 0;
     for (const auto& kv : byHolderType) {
-        VLOG(REPORT,
-             "[GCV2][verify][remset][RESIDUAL_BY_HOLDER_TYPE] point=%s invoke=%zu i=%zu type=%s count=%zu",
-             point == nullptr ? "?" : point, invoke, typeIdx, kv.first.c_str(), kv.second);
+        VLOG(REPORT, "[GCV2][RESIDUAL_BY_HOLDER] i=%zu type=%s n=%zu", typeIdx, kv.first.c_str(), kv.second);
         ++typeIdx;
     }
-    VLOG(REPORT,
-         "[GCV2][verify][remset][RESIDUAL_HOLDER_TYPE_N] point=%s invoke=%zu distinctTypes=%zu totalDumped=%zu",
-         point == nullptr ? "?" : point, invoke, byHolderType.size(), dumped);
+    VLOG(REPORT, "[GCV2][RESIDUAL_HOLDER_N] types=%zu dumped=%zu", byHolderType.size(), dumped);
 }
 } // namespace
 
