@@ -726,6 +726,17 @@ public:
 
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
 
+    // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
+    void AssertGhostClearedAfterReuse(size_t nUnit) const
+    {
+        CHECK(!IsGhostFromRegion());
+        size_t baseIdx = GetUnitIdx();
+        for (size_t i = 1; i < nUnit; i++) {
+            MAddress addr = GetUnitAddress(baseIdx + i);
+            CHECK(!InGhostFromRegion(reinterpret_cast<BaseObject*>(addr)));
+        }
+    }
+
     // the interface can only be used to clear live info after gc.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
     {
@@ -1216,6 +1227,7 @@ private:
         void InitSubordinateUnit(RegionInfo* owner)
         {
             metadata.ownerRegion = owner;
+            SetInGhostRegion(0);
             SetUnitRole(UnitRole::SUBORDINATE_UNIT);
         }
 
@@ -1293,6 +1305,9 @@ private:
         metadata.liveInfo = nullptr;
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
+        // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
+        // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
+        SetInGhostRegion(0);
         SetMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
@@ -1312,6 +1327,7 @@ private:
         for (size_t i = 1; i < nUnit; i++) {
             array[i].InitSubordinateUnit(this);
         }
+        AssertGhostClearedAfterReuse(nUnit);
     }
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;

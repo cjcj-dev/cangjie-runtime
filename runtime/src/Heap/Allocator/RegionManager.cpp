@@ -746,9 +746,23 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     RequestForRegion(size);
 
 #if !defined(__OHOS__)
-    RegionInfo* head = garbageRegionList.TakeHeadRegion();
-    if (head != nullptr) {
-        DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
+    // Prefer non-ghost garbage: payload ClearUnits does not clear unit metadata ghost bits.
+    // Reusing a still-ghost region makes new objects look like ghost-from until dispel
+    // (RegionInfo.h:PrepareForwardableRegion). Skip ghost heads into ReclaimRegion;
+    // Dispel runs on next PrepareFromRegionList before any new ghost is installed.
+    for (size_t ghostSkip = 0; ghostSkip < 64; ++ghostSkip) {
+        RegionInfo* head = garbageRegionList.TakeHeadRegion();
+        if (head == nullptr) {
+            break;
+        }
+        DLOG(REGION, "take garbage region %p@[%#zx, %#zx) ghost=%u", head, head->GetRegionStart(),
+             head->GetRegionEnd(), static_cast<unsigned>(head->IsGhostFromRegion()));
+        if (head->IsGhostFromRegion()) {
+            DLOG(REGION, "defer ghost garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(),
+                 head->GetRegionEnd());
+            ReclaimRegion(head);
+            continue;
+        }
         if (head->GetUnitCount() == num) {
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
@@ -758,6 +772,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             ReclaimRegion(head);
         }
+        break;
     }
 #endif
 
@@ -1438,6 +1453,43 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     CHECK(forwarded);
     {
+        static const bool probe = []() {
+            const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (probe && !region->IsLargeRegion()) {
+            size_t start = region->GetRegionStart();
+            size_t alloc = region->GetRegionAllocPtr();
+            size_t totalObjs = 0;
+            size_t survivedObjs = 0;
+            size_t residualValid = 0;
+            uintptr_t pos = start;
+            while (pos < alloc) {
+                BaseObject* o = reinterpret_cast<BaseObject*>(pos);
+                if (!o->IsValidObject()) {
+                    break;
+                }
+                size_t sz = o->GetSize();
+                if (sz == 0) {
+                    break;
+                }
+                ++totalObjs;
+                size_t off = pos - start;
+                if (region->IsSurvivedObject(off)) {
+                    ++survivedObjs;
+                } else {
+                    ++residualValid;
+                }
+                pos += sz;
+            }
+            if (residualValid > 0) {
+                VLOG(REPORT,
+                     "[GCRECLAIM][fwd-residual] region=%p start=%#zx alloc=%#zx live=%u totalObjs=%zu "
+                     "survived=%zu residualUnmarked=%zu young=%u BYPASS=1",
+                     region, start, alloc, region->GetLiveByteCount(), totalObjs, survivedObjs, residualValid,
+                     static_cast<unsigned>(youngRegion));
+            }
+        }
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         if (youngRegion) {
             if (promotedRecords != 0) {
