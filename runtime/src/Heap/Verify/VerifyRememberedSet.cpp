@@ -280,27 +280,52 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
     size_t causeOther = 0;
     size_t histHits = 0;
     size_t histMiss = 0;
-    std::unordered_map<std::string, size_t> byHolderType;
+    // Cluster by TypeInfo* identity (no name deref — GetName/rodata walk has crashed dumps).
+    std::unordered_map<uintptr_t, size_t> byHolderTi;
+    std::unordered_map<uintptr_t, size_t> byTargetTi;
+    size_t arrayHolders = 0;
+    size_t nonArrayHolders = 0;
     std::array<size_t, 16> earlyByOutcome{};
 
-    // File dump avoids VLOG vsprintf limits and survives process crash after verify.
     char path[256];
     std::snprintf(path, sizeof(path), "/root/gcresid45-run/results/residual_miss_inv%zu.tsv", invoke);
     FILE* out = std::fopen(path, "w");
     if (out != nullptr) {
         std::fprintf(out,
-                     "i\tfield\toff\tholder\thType\thArr\thReg\ttarget\ttType\ttReg\thist\tapi\toutcome\tcause\n");
+                     "i\tfield\toff\tholder\thTi\thArr\thReg\ttarget\ttTi\ttReg\thist\tapi\toutcome\tcause\n");
+        std::fflush(out);
     }
 
     size_t dumped = 0;
     for (const MissingEdge& e : missingEdges) {
         WriteHistEntry wh {};
         bool found = hist.Lookup(e.field, wh);
-        char holderName[160];
-        char targetName[96];
-        SafeTypeName(e.holder, holderName, sizeof(holderName), false);
-        SafeTypeName(e.target, targetName, sizeof(targetName), true);
-        byHolderType[holderName]++;
+
+        uintptr_t holderTi = 0;
+        uintptr_t targetTi = 0;
+        // Only touch TypeInfo pointer word; do not follow name.
+        if (e.holder != nullptr && Heap::IsHeapAddress(e.holder) && e.holder->IsValidObject()) {
+            TypeInfo* ti = e.holder->GetTypeInfo();
+            holderTi = reinterpret_cast<uintptr_t>(ti);
+        }
+        if (e.target != nullptr && Heap::IsHeapAddress(e.target)) {
+            // Target is young/from — may be invalid mid-evac; still try header if valid.
+            if (e.target->IsValidObject()) {
+                TypeInfo* ti = e.target->GetTypeInfo();
+                targetTi = reinterpret_cast<uintptr_t>(ti);
+            }
+        }
+        if (holderTi != 0) {
+            byHolderTi[holderTi]++;
+        }
+        if (targetTi != 0) {
+            byTargetTi[targetTi]++;
+        }
+        if (e.holderIsArray) {
+            ++arrayHolders;
+        } else {
+            ++nonArrayHolders;
+        }
 
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.holder));
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.target));
@@ -335,34 +360,38 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
         }
 
         if (out != nullptr) {
-            std::fprintf(out, "%zu\t%p\t%zu\t%p\t%s\t%u\t%s\t%p\t%s\t%s\t%s\t%s\t%s\t%s\n", dumped,
-                         reinterpret_cast<void*>(e.field), e.fieldOffset, e.holder, holderName,
-                         static_cast<unsigned>(e.holderIsArray), holderReg, e.target, targetName, targetReg,
-                         found ? "HIT" : "NONE", apiName, outName, causeTag);
+            std::fprintf(out, "%zu\t%p\t%zu\t%p\t%p\t%u\t%s\t%p\t%p\t%s\t%s\t%s\t%s\t%s\n", dumped,
+                         reinterpret_cast<void*>(e.field), e.fieldOffset, e.holder,
+                         reinterpret_cast<void*>(holderTi), static_cast<unsigned>(e.holderIsArray), holderReg,
+                         e.target, reinterpret_cast<void*>(targetTi), targetReg, found ? "HIT" : "NONE", apiName,
+                         outName, causeTag);
+            std::fflush(out);
         }
         ++dumped;
     }
     if (out != nullptr) {
-        std::fprintf(out, "# RESIDUAL_BY_CAUSE a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu "
-                          "ey=%zu en=%zu et=%zu es=%zu tot=%llu wrap=%llu dumped=%zu point=%s\n",
+        std::fprintf(out,
+                     "# RESIDUAL_BY_CAUSE a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu "
+                     "ey=%zu en=%zu et=%zu es=%zu tot=%llu wrap=%llu dumped=%zu arr=%zu non=%zu point=%s\n",
                      causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss,
                      earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
                      earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)],
                      earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)],
                      earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)],
                      static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()),
-                     dumped, point == nullptr ? "?" : point);
-        for (const auto& kv : byHolderType) {
-            std::fprintf(out, "# HOLDER %s\t%zu\n", kv.first.c_str(), kv.second);
+                     dumped, arrayHolders, nonArrayHolders, point == nullptr ? "?" : point);
+        for (const auto& kv : byHolderTi) {
+            std::fprintf(out, "# HOLDER_TI %p\t%zu\n", reinterpret_cast<void*>(kv.first), kv.second);
         }
         std::fflush(out);
         std::fclose(out);
     }
 
     VLOG(REPORT,
-         "[GCV2][RESIDUAL_BY_CAUSE] a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu dumped=%zu path=%s",
-         causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss, dumped, path);
-    VLOG(REPORT, "[GCV2][RESIDUAL_HOLDER_N] types=%zu dumped=%zu", byHolderType.size(), dumped);
+         "[GCV2][RESIDUAL_BY_CAUSE] a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu dumped=%zu arr=%zu non=%zu path=%s",
+         causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss, dumped, arrayHolders, nonArrayHolders,
+         path);
+    VLOG(REPORT, "[GCV2][RESIDUAL_HOLDER_TI_N] types=%zu dumped=%zu", byHolderTi.size(), dumped);
 }
 } // namespace
 
