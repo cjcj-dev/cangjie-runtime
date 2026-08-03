@@ -15,6 +15,7 @@
 namespace MapleRuntime {
 class Barrier;
 class WCollector;
+class RegionManager;
 
 class RememberedSet final {
 public:
@@ -68,6 +69,7 @@ public:
 private:
     friend class Barrier;
     friend class WCollector;
+    friend class RegionManager;
 
     void Record(MAddress fieldAddress)
     {
