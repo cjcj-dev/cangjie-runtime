@@ -769,12 +769,17 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
 
     ForwardFromSpace();
 
+    size_t residualPromoteRecords = 0;
     for (RegionInfo* region : minorCandidateRegions) {
         if (region->IsYoungRegion()) {
+            // Residual candidates not forwarded above (e.g. raw-pointer pinned):
+            // still demote to old; must replay young→young edges that become old→young.
+            residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
     }
+    size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
 
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t rebuiltRecords = 0;
@@ -796,7 +801,9 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
             }
         });
     }
-    VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
+    VLOG(REPORT,
+         "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu",
+         rebuiltRecords, promotedPathRecords, residualPromoteRecords);
 
     fwdTable.PrepareForwardTable();
     ValidateMinorReferences("after-dispel", nullptr);
