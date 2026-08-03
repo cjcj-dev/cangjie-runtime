@@ -231,6 +231,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> oldField(field);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
+        // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
+                     targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
             workStack.push_back(targetObj);
         }
