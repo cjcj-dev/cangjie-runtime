@@ -44,6 +44,7 @@ void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, cons
 
 // Bind static-root snapshots and target fate to one minor collection round.
 void NoteMinorCycleStart(uint64_t round);
+uint64_t CurrentMinorRound();
 const void* InitialMinorTarget(const void* slot, uint64_t round);
 void NoteMinorSlotSnapshot(const void* slot, uint64_t round, const char* moment,
                            const MinorTargetFate& currentFate, const MinorTargetFate& initialFate);
