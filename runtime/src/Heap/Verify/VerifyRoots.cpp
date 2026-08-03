@@ -138,9 +138,14 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
             reason = "typeinfo-is-zap-pattern";
         } else if (tipRegion == AddrRegion::HEAP) {
             // Known AS1 defect: tip residue lands in heap anonymous area, not TypeInfoManager.
+            // Do not call tip->GetType() — tip is not a real TypeInfo; may SEGV/misread.
             bad = true;
             reason = "typeinfo-in-heap-not-typeinfo-manager";
-            typeByte = static_cast<int>(tip->GetType());
+            typeByte = static_cast<int>(*reinterpret_cast<const uint8_t*>(tipAddr));
+        } else if (tipRegion == AddrRegion::LOW_NON_HEAP || tipRegion == AddrRegion::STACK ||
+                   tipRegion == AddrRegion::ZAP_PATTERN) {
+            bad = true;
+            reason = "typeinfo-not-typeinfo-manager";
         } else if (!tip->IsVaildType()) {
             bad = true;
             reason = "invalid-type-kind";

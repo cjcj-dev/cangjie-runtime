@@ -305,14 +305,9 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         vctx.startIP = startIP;
         vctx.frameIP = frameIP;
         vctx.frameFA = frameAddress;
-        static thread_local char gcvrootNameBuf[256];
-        gcvrootNameBuf[0] = '\0';
-        CString fname = frame.GetFuncName();
-        if (fname.Str() != nullptr) {
-            std::strncpy(gcvrootNameBuf, fname.Str(), sizeof(gcvrootNameBuf) - 1);
-            gcvrootNameBuf[sizeof(gcvrootNameBuf) - 1] = '\0';
-            vctx.funcName = gcvrootNameBuf;
-        }
+        // Skip GetFuncName here: demangle/metadata walk can fault on partial frames and
+        // is not required for the BAD_ROOT payload (startIP/frameIP/FA/slotBias suffice).
+        vctx.funcName = nullptr;
         SlotDebugVisitor verifySlot = VerifyRoots::MakeSlotDebugVisitor(vctx);
         RegDebugVisitor verifyReg = VerifyRoots::MakeRegDebugVisitor(vctx);
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
