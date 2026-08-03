@@ -42,6 +42,13 @@ void NoteStaticRefWrite(const void* field, const void* ref, const char* site);
 // Observe static-struct stores that may overwrite ref fields (primitiveTys Array rawptr).
 void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, const char* site);
 
+// WriteGeneric path: count by GC phase + ring of recent writes for reverse lookup at bad-TI.
+void NoteWriteGeneric(const void* obj, const void* field, size_t size, uint8_t gcPhase);
+
+// On bad-TI: dump old-target memory identity + last WriteGeneric phase that touched it.
+void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* point,
+                          const MinorTargetFate& fate);
+
 // Bind static-root snapshots and target fate to one minor collection round.
 void NoteMinorCycleStart(uint64_t round);
 uint64_t CurrentMinorRound();

@@ -303,6 +303,11 @@ void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr 
 {
     WriteGenericImpl(obj, fieldPtr, src, size);
     GcInitWin::NoteStaticStructWrite(fieldPtr, size, fieldPtr, "Barrier::WriteGeneric");
+    uint8_t phase = 0;
+    if (Heap::GetHeap().GetGCPhase() <= GCPhase::GC_PHASE_FORWARD) {
+        phase = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
+    }
+    GcInitWin::NoteWriteGeneric(obj, fieldPtr, size, phase);
     RecordCrossGenEdgesInStruct(obj, reinterpret_cast<MAddress>(fieldPtr), size);
 }
 

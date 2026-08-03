@@ -11,6 +11,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <unistd.h>
+#include <sys/mman.h>
 
 namespace MapleRuntime {
 namespace GcInitWin {
@@ -24,6 +25,10 @@ constexpr size_t kInitEventCap = 32;
 constexpr size_t kNameCap = 96;
 constexpr size_t kSnapshotCap = 512;
 constexpr size_t kDeltaCap = 128;
+constexpr size_t kWgRingCap = 256;
+constexpr size_t kWgPhaseN = 16;
+constexpr size_t kOldIdCap = 32;
+constexpr size_t kRawWordN = 16; // 64B before + 64B at target = 16 words
 
 enum SnapshotMoment : uint8_t {
     SNAP_A = 0,
@@ -133,6 +138,22 @@ std::atomic<uint64_t> g_pathWatched[PATH_COUNT];
 std::atomic<bool> g_summaryDumped{false};
 std::atomic<bool> g_resolvedOnce{false};
 
+// WriteGeneric phase histogram + recent-write ring for reverse lookup at bad-TI.
+std::atomic<uint64_t> g_wgPhaseTotal[kWgPhaseN];
+std::atomic<uint64_t> g_wgTotal{0};
+struct WgRec {
+    const void* obj;
+    const void* field;
+    size_t size;
+    uint8_t phase;
+    uint32_t seq;
+};
+WgRec g_wgRing[kWgRingCap];
+std::atomic<uint64_t> g_wgRingN{0};
+std::atomic<uint64_t> g_oldIdEmitted{0};
+std::atomic<uint64_t> g_badTiEvents{0};
+std::atomic<uint64_t> g_faultyRoundSlotDeltas{0};
+
 // Active init file name (best-effort single mutator during package init).
 char g_activeInitFile[48] = {};
 std::atomic<bool> g_activeInitSet{false};
@@ -229,6 +250,25 @@ const char* WritePathName(uint8_t path)
         "Barrier::WriteGeneric", "other"
     };
     return path < PATH_COUNT ? names[path] : "?";
+}
+
+const char* GcPhaseNameLocal(uint8_t phase)
+{
+    // Mirrors Collector::GetGCPhaseName numeric slots used in this tree.
+    switch (phase) {
+        case 0: return "undef";
+        case 1: return "idle";
+        case 2: return "finish";
+        case 3: return "reclaim_satb";
+        case 8: return "init";
+        case 9: return "enum";
+        case 10: return "trace";
+        case 11: return "clear_satb";
+        case 12: return "post_trace";
+        case 13: return "preforward";
+        case 14: return "forward";
+        default: return "other";
+    }
 }
 
 uint8_t WritePathId(const char* site)
@@ -708,6 +748,207 @@ void NoteStaticRefWrite(const void* field, const void* ref, const char* site)
     }
 }
 
+void NoteWriteGeneric(const void* obj, const void* field, size_t size, uint8_t gcPhase)
+{
+    if (!ProbeOn()) {
+        return;
+    }
+    g_wgTotal.fetch_add(1, std::memory_order_relaxed);
+    if (gcPhase < kWgPhaseN) {
+        g_wgPhaseTotal[gcPhase].fetch_add(1, std::memory_order_relaxed);
+    }
+    // Sample every write into ring (overwrite old). Cost: one atomic index + store.
+    uint64_t n = g_wgRingN.fetch_add(1, std::memory_order_relaxed);
+    WgRec& r = g_wgRing[n % kWgRingCap];
+    r.obj = obj;
+    r.field = field;
+    r.size = size;
+    r.phase = gcPhase;
+    r.seq = static_cast<uint32_t>(n + 1);
+}
+
+void NoteOldTargetAtBadTi(const void* target, uintptr_t typeAddr, const char* point,
+                          const MinorTargetFate& fate)
+{
+    if (!ProbeOn() || target == nullptr) {
+        return;
+    }
+    g_badTiEvents.fetch_add(1, std::memory_order_relaxed);
+    uint64_t emitN = g_oldIdEmitted.fetch_add(1, std::memory_order_relaxed);
+    if (emitN >= kOldIdCap) {
+        return;
+    }
+
+    uintptr_t addr = reinterpret_cast<uintptr_t>(target);
+    uintptr_t regionStart = fate.regionStart;
+    uintptr_t regionAlloc = fate.regionAlloc;
+    ptrdiff_t offFromStart = (regionStart != 0) ? static_cast<ptrdiff_t>(addr - regionStart) : -1;
+    ptrdiff_t offFromAlloc = (regionAlloc != 0) ? static_cast<ptrdiff_t>(addr - regionAlloc) : -1;
+
+    // 64B before + 64B at target (16 words). Bound: only when page-readable.
+    uint64_t raw[kRawWordN] = {};
+    bool rawOk = false;
+    {
+        long pageSize = sysconf(_SC_PAGESIZE);
+        if (pageSize <= 0) {
+            pageSize = 4096;
+        }
+        uintptr_t base = addr >= 64 ? addr - 64 : addr;
+        uintptr_t page = base & ~static_cast<uintptr_t>(pageSize - 1);
+        unsigned char vec = 0;
+        if (mincore(reinterpret_cast<void*>(page), static_cast<size_t>(pageSize), &vec) == 0) {
+            const uint64_t* p = reinterpret_cast<const uint64_t*>(base);
+            for (size_t i = 0; i < kRawWordN; ++i) {
+                raw[i] = p[i];
+            }
+            rawOk = true;
+        }
+    }
+
+    // Classify memory identity from region flags + raw head shape.
+    const char* identity = "undetermined";
+    if (fate.heap == 0) {
+        identity = "not_heap";
+    } else if (fate.region == nullptr) {
+        identity = "no_region";
+    } else if (fate.freeRegion != 0) {
+        identity = "free_region";
+    } else if (fate.garbageRegion != 0) {
+        identity = "garbage_region";
+    } else if (fate.validRegion == 0) {
+        identity = "invalid_region";
+    } else if (fate.inAllocRange == 0) {
+        identity = "outside_alloc_range";
+    } else if (fate.young != 0) {
+        identity = "young_in_alloc";
+    } else {
+        // old + valid + in_alloc — refine by head shape
+        uint64_t head = rawOk ? raw[8] : typeAddr; // word at target when base=addr-64
+        if (!rawOk) {
+            head = typeAddr;
+        }
+        if (head == 0) {
+            identity = "old_zero_head_in_alloc";
+        } else if (head < 0x1000ULL || head == 0xffffffffffffULL || head == ~0ULL) {
+            // free-list-like: next at +8 often a heap pointer
+            uint64_t next = rawOk ? raw[9] : 0;
+            if (next >= 0x1000ULL && next < (1ULL << 48) && (next & 0x7ULL) == 0) {
+                identity = "old_slotlist_like_in_alloc";
+            } else {
+                identity = "old_garbage_ti_in_alloc";
+            }
+        } else if ((addr & 0x7ULL) != 0) {
+            identity = "old_misaligned_interior";
+        } else {
+            identity = "old_linked_alloc_payload";
+        }
+    }
+
+    // Reverse-scan WriteGeneric ring for last write whose [field, field+size) covers target
+    // or whose obj == target (struct write into this object).
+    const char* lastWgPhase = "none";
+    uint8_t lastWgPhaseId = 0xff;
+    uint32_t lastWgSeq = 0;
+    const void* lastWgField = nullptr;
+    size_t lastWgSize = 0;
+    uint64_t ringN = g_wgRingN.load(std::memory_order_acquire);
+    size_t scan = ringN < kWgRingCap ? static_cast<size_t>(ringN) : kWgRingCap;
+    for (size_t i = 0; i < scan; ++i) {
+        size_t idx = (ringN - 1 - i) % kWgRingCap;
+        const WgRec& r = g_wgRing[idx];
+        if (r.obj == nullptr && r.field == nullptr) {
+            continue;
+        }
+        bool hit = false;
+        if (r.obj == target) {
+            hit = true;
+        } else if (r.field != nullptr) {
+            uintptr_t f0 = reinterpret_cast<uintptr_t>(r.field);
+            uintptr_t f1 = f0 + r.size;
+            if (addr >= f0 && addr < f1) {
+                hit = true;
+            }
+        }
+        if (hit) {
+            lastWgPhaseId = r.phase;
+            lastWgPhase = GcPhaseNameLocal(r.phase);
+            lastWgSeq = r.seq;
+            lastWgField = r.field;
+            lastWgSize = r.size;
+            break;
+        }
+    }
+
+    std::fprintf(stderr,
+                 "[GCOLDREG] OLD_TARGET_MEMORY identity=%s point=%s target=%p ti=0x%llx "
+                 "region=%p rtype=%u young=%u valid=%u free=%u garbage=%u heap=%u "
+                 "in_alloc=%u marked=%u state=%u start=0x%llx alloc=0x%llx "
+                 "off_start=%td off_alloc=%td last_wg_phase=%s last_wg_phase_id=%u "
+                 "last_wg_seq=%u last_wg_field=%p last_wg_size=%zu raw_ok=%u\n",
+                 identity, point != nullptr ? point : "?", target,
+                 static_cast<unsigned long long>(typeAddr), fate.region,
+                 static_cast<unsigned>(fate.regionType), static_cast<unsigned>(fate.young),
+                 static_cast<unsigned>(fate.validRegion), static_cast<unsigned>(fate.freeRegion),
+                 static_cast<unsigned>(fate.garbageRegion), static_cast<unsigned>(fate.heap),
+                 static_cast<unsigned>(fate.inAllocRange), static_cast<unsigned>(fate.marked),
+                 static_cast<unsigned>(fate.state),
+                 static_cast<unsigned long long>(regionStart),
+                 static_cast<unsigned long long>(regionAlloc), offFromStart, offFromAlloc,
+                 lastWgPhase, static_cast<unsigned>(lastWgPhaseId), lastWgSeq, lastWgField,
+                 lastWgSize, rawOk ? 1u : 0u);
+
+    if (rawOk) {
+        std::fprintf(stderr,
+                     "[GCOLDREG] OLD_TARGET_RAW target=%p "
+                     "m64=0x%llx m56=0x%llx m48=0x%llx m40=0x%llx m32=0x%llx m24=0x%llx m16=0x%llx m8=0x%llx "
+                     "p0=0x%llx p8=0x%llx p16=0x%llx p24=0x%llx p32=0x%llx p40=0x%llx p48=0x%llx p56=0x%llx\n",
+                     target,
+                     static_cast<unsigned long long>(raw[0]), static_cast<unsigned long long>(raw[1]),
+                     static_cast<unsigned long long>(raw[2]), static_cast<unsigned long long>(raw[3]),
+                     static_cast<unsigned long long>(raw[4]), static_cast<unsigned long long>(raw[5]),
+                     static_cast<unsigned long long>(raw[6]), static_cast<unsigned long long>(raw[7]),
+                     static_cast<unsigned long long>(raw[8]), static_cast<unsigned long long>(raw[9]),
+                     static_cast<unsigned long long>(raw[10]), static_cast<unsigned long long>(raw[11]),
+                     static_cast<unsigned long long>(raw[12]), static_cast<unsigned long long>(raw[13]),
+                     static_cast<unsigned long long>(raw[14]), static_cast<unsigned long long>(raw[15]));
+    }
+
+    // On bad-TI also dump current watched-slot a/b/c for this round (faulty-round Q3).
+    size_t wn = g_watchCount.load(std::memory_order_acquire);
+    uint64_t round = g_minorRound.load(std::memory_order_acquire);
+    for (size_t i = 0; i < wn && i < kWatchN; ++i) {
+        WatchSlot& w = g_watch[i];
+        if (w.addr == nullptr || w.snapshotRound != round) {
+            continue;
+        }
+        if ((w.snapshotMask & 0xfU) == 0) {
+            continue;
+        }
+        if (g_faultyRoundSlotDeltas.fetch_add(1, std::memory_order_relaxed) >= 64) {
+            break;
+        }
+        uintptr_t cur = *reinterpret_cast<const uintptr_t*>(w.addr);
+        std::fprintf(stderr,
+                     "[GCOLDREG] SLOT_DELTA_FAULTY round=%llu class=%s name=%s mask=0x%x "
+                     "a=0x%llx b_pre=0x%llx b_post=0x%llx c=0x%llx cur=0x%llx "
+                     "a_to_b=%u b_to_c=%u a_target=%p a_young=%u a_rtype=%u\n",
+                     static_cast<unsigned long long>(round),
+                     i < kBadWatchN ? "bad" : "good", w.name,
+                     static_cast<unsigned>(w.snapshotMask),
+                     static_cast<unsigned long long>(w.snapshotValue[SNAP_A]),
+                     static_cast<unsigned long long>(w.snapshotValue[SNAP_B_PRE]),
+                     static_cast<unsigned long long>(w.snapshotValue[SNAP_B_POST]),
+                     static_cast<unsigned long long>(w.snapshotValue[SNAP_C]),
+                     static_cast<unsigned long long>(cur),
+                     static_cast<unsigned>((w.snapshotMask & 0x3U) == 0x3U &&
+                                           w.snapshotValue[SNAP_A] != w.snapshotValue[SNAP_B_PRE]),
+                     static_cast<unsigned>((w.snapshotMask & 0xcU) == 0xcU &&
+                                           w.snapshotValue[SNAP_B_POST] != w.snapshotValue[SNAP_C]),
+                     w.aFate.target, static_cast<unsigned>(w.aFate.young),
+                     static_cast<unsigned>(w.aFate.regionType));
+    }
+}
+
 void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, const char* site)
 {
     if (!ProbeOn() || dst == nullptr) {
@@ -998,6 +1239,21 @@ void DumpSummary(const char* reason)
                          static_cast<unsigned long long>(watched));
         }
     }
+    std::fprintf(stderr,
+                 "[GCOLDREG] WRITEGENERIC_PHASE_HISTOGRAM total=%llu bad_ti_events=%llu old_id_emitted=%llu "
+                 "faulty_slot_deltas=%llu",
+                 static_cast<unsigned long long>(g_wgTotal.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_badTiEvents.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_oldIdEmitted.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_faultyRoundSlotDeltas.load(std::memory_order_relaxed)));
+    for (size_t i = 0; i < kWgPhaseN; ++i) {
+        uint64_t c = g_wgPhaseTotal[i].load(std::memory_order_relaxed);
+        if (c != 0) {
+            std::fprintf(stderr, " %s=%llu", GcPhaseNameLocal(static_cast<uint8_t>(i)),
+                         static_cast<unsigned long long>(c));
+        }
+    }
+    std::fprintf(stderr, "\n");
 }
 
 uint32_t GlobalInitDepth()

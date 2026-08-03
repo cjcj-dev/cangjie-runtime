@@ -897,6 +897,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
             }
             EmitIsItEvenAnObject(holder, point, typeAddr);
             EmitEnqueueHit(holder, point, typeAddr);
+            GcInitWin::NoteOldTargetAtBadTi(holder, typeAddr, point, CaptureMinorTargetFate(holder));
         } else {
             g_hrPath[HR_TI_NONCANON].fetch_add(1, std::memory_order_relaxed);
             if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
@@ -905,6 +906,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
             }
             EmitIsItEvenAnObject(holder, point, typeAddr);
             EmitEnqueueHit(holder, point, typeAddr);
+            GcInitWin::NoteOldTargetAtBadTi(holder, typeAddr, point, CaptureMinorTargetFate(holder));
         }
         return false;
     }
@@ -916,6 +918,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
         }
         EmitIsItEvenAnObject(holder, point, typeAddr);
         EmitEnqueueHit(holder, point, typeAddr);
+        GcInitWin::NoteOldTargetAtBadTi(holder, typeAddr, point, CaptureMinorTargetFate(holder));
         return false;
     }
 
