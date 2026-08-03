@@ -9,9 +9,11 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "Base/CString.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -277,7 +279,7 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     DLOG(ENUM, "visit frame 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     auto gcInfo = GCInfoNode::BuildNodeForTrace(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&gcInfo](SlotBias off, const BaseObject* root) {
+    auto slotDebugFunc = [&gcInfo](SlotBias off, BaseObject* root) {
         if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
             gcInfo.InsertSlotRoots<true>(off, root);
         } else {
@@ -295,6 +297,44 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
 #endif
+    // gcvroot: optional rich root diagnostics (MRT_GCV2_VERIFY_ROOTS=1). Does not replace CHECKs.
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext vctx;
+        vctx.phase = "VisitStackRoots";
+        vctx.kind = RootKind::SLOT_STACK;
+        vctx.startIP = startIP;
+        vctx.frameIP = frameIP;
+        vctx.frameFA = frameAddress;
+        static thread_local char gcvrootNameBuf[256];
+        gcvrootNameBuf[0] = '\0';
+        CString fname = frame.GetFuncName();
+        if (fname.Str() != nullptr) {
+            std::strncpy(gcvrootNameBuf, fname.Str(), sizeof(gcvrootNameBuf) - 1);
+            gcvrootNameBuf[sizeof(gcvrootNameBuf) - 1] = '\0';
+            vctx.funcName = gcvrootNameBuf;
+        }
+        SlotDebugVisitor verifySlot = VerifyRoots::MakeSlotDebugVisitor(vctx);
+        RegDebugVisitor verifyReg = VerifyRoots::MakeRegDebugVisitor(vctx);
+#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
+        auto prevSlot = slotDebugFunc;
+        auto prevReg = regDebugFunc;
+        slotDebugFunc = [prevSlot, verifySlot](SlotBias off, BaseObject* root) {
+            verifySlot(off, root);
+            if (prevSlot) {
+                prevSlot(off, root);
+            }
+        };
+        regDebugFunc = [prevReg, verifyReg](RegisterNum i, const BaseObject* root) {
+            verifyReg(i, root);
+            if (prevReg) {
+                prevReg(i, root);
+            }
+        };
+#else
+        slotDebugFunc = verifySlot;
+        regDebugFunc = verifyReg;
+#endif
+    }
     if (rootMap.IsValid()) {
         rootMap.VisitSlotRoots(visitor, slotDebugFunc);
         if (!rootMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
