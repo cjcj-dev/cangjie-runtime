@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <unordered_map>
+#include <vector>
 
 #include "Concurrency/Concurrency.h"
 #include "Mutator/MutatorManager.h"
@@ -971,8 +973,9 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
                                          const MinorSlotSet& rememberedSlots, bool fullYoungScan)
 {
     // Observation only. Does not change marking/evacuation decisions.
-    // Referee: full-heap young-closure from the same roots that VisitMinorRoots+alloc buffers provide.
-    // Missed = young objects in full closure but not in remsetReachable (the set that would be evacuated/kept).
+    // Referee: full young-closure from VisitMinorRoots+alloc buffers.
+    // Missed = young objects in full closure but not in remsetReachable.
+    // Residual classification records the FIRST discovering edge's holder kind during BFS.
     (void)fullYoungScan;
     const char* enabled = std::getenv("MRT_GCV2_REMSET_PROBE");
     if (enabled != nullptr && std::strcmp(enabled, "0") == 0) {
@@ -982,150 +985,350 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
     VLOG(REPORT, "[GCV2Minor] REMSET_PROBE_START remsetReachable=%zu remsetSlots=%zu allocRoots=%zu",
          remsetReachable.size(), rememberedSlots.size(), allocationRoots.size());
 
+    // Holder kinds for the first edge that discovers a young object in the referee BFS.
+    enum HolderKind : uint8_t {
+        H_STATIC = 0,       // static root slot (WriteStaticRef by design no Record)
+        H_STACK = 1,        // mutator stack / register root
+        H_FINALIZER = 2,    // finalizer processor raw roots
+        H_EXPORT = 3,       // export roots + resurrected export / cycle stacks
+        H_ALLOC = 4,        // allocation buffer roots
+        H_OLD_ORD = 5,      // ordinary ref field of OLD heap object (remset duty)
+        H_OLD_ARR = 6,      // array element of OLD heap object (remset duty)
+        H_YNG_ORD = 7,      // ordinary ref field of YOUNG heap object (not remset duty)
+        H_YNG_ARR = 8,      // array element of YOUNG heap object
+        H_HEAP_WEAK = 9,    // edge discovered via weak-ref special path
+        H_OTHER = 10,
+        H_COUNT = 11,
+    };
+    static const char* kHolderName[H_COUNT] = {
+        "static", "stack", "finalizer", "export", "alloc",
+        "old_ord", "old_arr", "yng_ord", "yng_arr", "heap_weak", "other",
+    };
+
+    // Work item: object + how we discovered it (holder kind of the discovering edge).
+    struct WorkItem {
+        BaseObject* object;
+        uint8_t holder;
+    };
+    std::vector<WorkItem> pending;
+    pending.reserve(65536);
+
     MinorObjectSet fullReachable;
     MinorObjectSet fullYoung;
-    WorkStack pending = NewWorkStack();
+    // First-discover holder kind for each young object (only set once).
+    std::unordered_map<BaseObject*, uint8_t> youngFirstHolder;
     size_t staticSlots = 0;
-    size_t staticRootsVisited = 0;
-    // Cap expansion so a large live heap cannot stall STW forever.
+    size_t staticRootYoungHits = 0;
+    size_t stackRootYoungHits = 0;
+    size_t finalizerRootYoungHits = 0;
+    size_t exportRootYoungHits = 0;
+    size_t concurrencyRootYoungHits = 0;
+    size_t allocRootYoungHits = 0;
+    size_t staticRootFixupWouldChange = 0;
+    size_t staticRootFixupChecked = 0;
     constexpr size_t kMaxVisit = 500000;
     size_t visited = 0;
+    size_t weakPathExpansions = 0;
+    size_t invalidSkipped = 0;
 
-    auto pushAny = [&pending](BaseObject* object) {
+    auto pushRoot = [&pending](BaseObject* object, uint8_t holder) {
         if (Heap::IsHeapAddress(object)) {
-            pending.push_back(object);
+            pending.push_back(WorkItem{object, holder});
         }
     };
 
+    // Seed: allocation buffers.
     for (BaseObject* object : allocationRoots) {
-        pushAny(object);
-    }
-    VisitMinorRoots([&pushAny, &staticRootsVisited](BaseObject* object) {
-        // VisitMinorRoots already walks static roots via VisitStaticRoots (WCollector.cpp:582).
-        ++staticRootsVisited;
-        pushAny(object);
-    });
-    Heap::GetHeap().VisitStaticRoots([&staticSlots](RefField<>& field) {
-        (void)field;
-        ++staticSlots;
-    });
-
-    auto pushField = [this, &pending](RefField<>& field) {
-        BaseObject* target = ResolveMinorReference(field);
-        if (Heap::IsHeapAddress(target)) {
-            pending.push_back(target);
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++allocRootYoungHits;
+            }
         }
+        pushRoot(object, H_ALLOC);
+    }
+
+    // Seed roots with per-source classification (mirrors VisitMinorRootSlots + VisitMinorValueRoots).
+    RootVisitor stackVisitor = [this, &pushRoot, &stackRootYoungHits](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        BaseObject* object = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++stackRootYoungHits;
+            }
+        }
+        pushRoot(object, H_STACK);
     };
+    RefFieldVisitor staticVisitor = [this, &pushRoot, &staticSlots, &staticRootYoungHits,
+                                     &staticRootFixupChecked, &staticRootFixupWouldChange](RefField<>& field) {
+        ++staticSlots;
+        BaseObject* object = ResolveMinorReference(field);
+        // STATIC_ROOT_FIXUP check: would FixMinorEvacuatedSlot change this slot?
+        // (observation: compare resolved vs raw without mutating).
+        ++staticRootFixupChecked;
+        RefField<> raw(field);
+        BaseObject* rawObj = raw.GetTargetObject();
+        if (rawObj != object) {
+            ++staticRootFixupWouldChange;
+        }
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++staticRootYoungHits;
+            }
+        }
+        pushRoot(object, H_STATIC);
+    };
+    RootVisitor finalizerVisitor = [this, &pushRoot, &finalizerRootYoungHits](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        BaseObject* object = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++finalizerRootYoungHits;
+            }
+        }
+        pushRoot(object, H_FINALIZER);
+    };
+    RootVisitor exportVisitor = [this, &pushRoot, &exportRootYoungHits](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        BaseObject* object = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++exportRootYoungHits;
+            }
+        }
+        pushRoot(object, H_EXPORT);
+    };
+    RootVisitor concurrencyVisitor = [this, &pushRoot, &concurrencyRootYoungHits](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        BaseObject* object = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(object)) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                ++concurrencyRootYoungHits;
+            }
+        }
+        pushRoot(object, H_EXPORT); // group under export/other-root bucket for holder table
+    };
+
+    MutatorManager::Instance().VisitAllMutators(
+        [&stackVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(stackVisitor); });
+    Heap::GetHeap().VisitStaticRoots(staticVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&concurrencyVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(finalizerVisitor);
+    Heap::GetHeap().VisitAllExportRoots(exportVisitor);
+    {
+        std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        for (BaseObject* object : resurrectedExportObjectes) {
+            pushRoot(object, H_EXPORT);
+        }
+        for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
+            pushRoot(object, H_EXPORT);
+        }
+    }
+    {
+        std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+        for (const auto& entry : cycleRefWorkStack) {
+            pushRoot(entry.first, H_EXPORT);
+            for (BaseObject* object : entry.second) {
+                pushRoot(object, H_EXPORT);
+            }
+        }
+    }
+
+    // BFS: expand all reachable; record first-discover holder for young objects.
     while (!pending.empty() && visited < kMaxVisit) {
-        BaseObject* object = pending.back();
+        WorkItem item = pending.back();
         pending.pop_back();
+        BaseObject* object = item.object;
         if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
             continue;
         }
         ++visited;
         if (!object->IsValidObject()) {
+            ++invalidSkipped;
             continue;
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region->IsYoungRegion()) {
+        const bool isYoung = region->IsYoungRegion();
+        if (isYoung) {
             fullYoung.insert(object);
+            youngFirstHolder.emplace(object, item.holder);
         }
-        // Only expand through non-young when building the full-scan referee (old→young edges).
-        // Young objects still expand to complete the young closure.
         if (!object->HasRefField()) {
             continue;
         }
+
+        auto pushFieldEdge = [this, &pending](RefField<>& field, uint8_t edgeHolder) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (Heap::IsHeapAddress(target)) {
+                pending.push_back(WorkItem{target, edgeHolder});
+            }
+        };
+
         if (UNLIKELY(object->IsWeakRef())) {
+            ++weakPathExpansions;
             RefField<>* referentField =
                 reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             BaseObject* referent = ResolveMinorReference(*referentField);
+            // Same as TraceYoungClosure / prior probe: expand referent's fields via weak path.
             if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
-                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+                referent->ForEachRefField([&pushFieldEdge](RefField<>& field) {
+                    pushFieldEdge(field, H_HEAP_WEAK);
+                });
             }
             continue;
         }
-        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+
+        const bool isArr = object->IsArray();
+        uint8_t edgeHolder;
+        if (isYoung) {
+            edgeHolder = isArr ? H_YNG_ARR : H_YNG_ORD;
+        } else {
+            edgeHolder = isArr ? H_OLD_ARR : H_OLD_ORD;
+        }
+        object->ForEachRefField([&pushFieldEdge, edgeHolder](RefField<>& field) {
+            pushFieldEdge(field, edgeHolder);
+        });
     }
     const bool truncated = !pending.empty() || visited >= kMaxVisit;
 
+    // Residual counters by holder of first discovering edge.
     size_t judged = 0;
     size_t missed = 0;
-    size_t originStatic = 0;
-    size_t originHeap = 0;
-    size_t originOther = 0;
-    size_t phaseIdleOrInit = 0;
-    size_t phaseAboveInit = 0;
-    size_t phaseUnknown = 0;
-    constexpr size_t kSample = 8;
-    constexpr size_t kMaxOriginClassify = 64;
-    std::array<BaseObject*, kSample> missedSamples{};
-    std::array<MAddress, kSample> missedSlotSamples{};
-    std::array<uint8_t, kSample> missedOriginSamples{};
-    size_t sampleFill = 0;
-    size_t originClassified = 0;
+    size_t holderMissed[H_COUNT] = {};
+    size_t holderAll[H_COUNT] = {};
+    // Path: by_design (static first edge) / truly_missed (old-heap first edge) / undetermined.
+    size_t pathByDesign = 0;
+    size_t pathTrulyMissed = 0;
+    size_t pathUndetermined = 0;
+    // Sub-split of heap residual: holder region young vs old (old→young = remset duty).
+    size_t residualHeapFromOld = 0;
+    size_t residualHeapFromYoung = 0;
+    size_t residualRootLike = 0; // static/stack/finalizer/export/alloc — remset path also seeds these
 
-    // Pre-index edges from static roots and remembered slots only (cheap).
-    // Full holder scan is O(live*refs) and was observed to stall STW; skip it.
+    constexpr size_t kSample = 16;
+    std::array<BaseObject*, kSample> missedSamples{};
+    std::array<uint8_t, kSample> missedHolderSamples{};
+    size_t sampleFill = 0;
+
     for (BaseObject* object : fullYoung) {
         ++judged;
+        uint8_t holder = H_OTHER;
+        auto it = youngFirstHolder.find(object);
+        if (it != youngFirstHolder.end()) {
+            holder = it->second;
+        }
+        if (holder < H_COUNT) {
+            ++holderAll[holder];
+        }
         if (remsetReachable.count(object) != 0) {
             continue;
         }
         ++missed;
-        if (originClassified >= kMaxOriginClassify) {
-            ++originOther;
-            ++phaseUnknown;
-            continue;
+        if (holder < H_COUNT) {
+            ++holderMissed[holder];
         }
-        ++originClassified;
-        bool foundEdge = false;
-        uint8_t origin = 2;
-        MAddress foundSlot = 0;
-
-        auto trySlot = [this, object, &foundEdge, &origin, &foundSlot](MAddress slot, bool isStatic) {
-            if (foundEdge || !Heap::IsHeapAddress(slot)) {
-                return;
-            }
-            RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-            BaseObject* target = ResolveMinorReference(*field);
-            if (target != object) {
-                return;
-            }
-            foundEdge = true;
-            foundSlot = slot;
-            origin = isStatic ? 0 : 1;
-        };
-
-        // Static roots: re-walk (count was already taken).
-        Heap::GetHeap().VisitStaticRoots([&trySlot](RefField<>& field) {
-            trySlot(reinterpret_cast<MAddress>(&field), true);
-        });
-        if (!foundEdge) {
-            for (MAddress slot : rememberedSlots) {
-                trySlot(slot, false);
-                if (foundEdge) {
-                    break;
-                }
-            }
-        }
-        // Classify without full-heap holder walk.
-        if (foundEdge) {
-            if (origin == 0) {
-                ++originStatic;
-            } else {
-                ++originHeap;
-            }
+        // Path classification for residual.
+        if (holder == H_STATIC) {
+            ++pathByDesign;
+            ++residualRootLike;
+        } else if (holder == H_OLD_ORD || holder == H_OLD_ARR) {
+            // First edge is old→young: remset should have recorded this write.
+            ++pathTrulyMissed;
+            ++residualHeapFromOld;
+        } else if (holder == H_YNG_ORD || holder == H_YNG_ARR || holder == H_HEAP_WEAK) {
+            // Young→young or weak path: not remset duty for the discovering edge.
+            ++pathUndetermined;
+            ++residualHeapFromYoung;
+        } else if (holder == H_STACK || holder == H_FINALIZER || holder == H_EXPORT || holder == H_ALLOC) {
+            // Roots are visited on remset path too — residual via root first-edge is unexpected.
+            ++pathUndetermined;
+            ++residualRootLike;
         } else {
-            ++originOther;
+            ++pathUndetermined;
         }
-        ++phaseUnknown;
         if (sampleFill < kSample) {
             missedSamples[sampleFill] = object;
-            missedSlotSamples[sampleFill] = foundSlot;
-            missedOriginSamples[sampleFill] = foundEdge ? origin : 2;
+            missedHolderSamples[sampleFill] = holder;
             ++sampleFill;
         }
     }
+
+    // Secondary: single pass over fullReachable holders to find ANY old→young edge into residual.
+    // Complements first-edge (which may be young→young or root while an unrecorded old field also holds).
+    std::unordered_set<BaseObject*> residualSet;
+    residualSet.reserve(missed + 1);
+    for (BaseObject* object : fullYoung) {
+        if (remsetReachable.count(object) == 0) {
+            residualSet.insert(object);
+        }
+    }
+    size_t residualWithOldHolder = 0;
+    size_t residualWithStaticHolder = 0;
+    size_t residualWithRemsetSlot = 0;
+    size_t oldToYoungEdgesIntoResidual = 0;
+    size_t youngToYoungEdgesIntoResidual = 0;
+    {
+        std::unordered_set<BaseObject*> seenOld;
+        std::unordered_set<BaseObject*> seenStatic;
+        for (BaseObject* holder : fullReachable) {
+            if (!Heap::IsHeapAddress(holder) || !holder->IsValidObject() || !holder->HasRefField()) {
+                continue;
+            }
+            RegionInfo* hr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            const bool holderYoung = hr->IsYoungRegion();
+            holder->ForEachRefField([this, &residualSet, holderYoung, &residualWithOldHolder, &seenOld,
+                                     &oldToYoungEdgesIntoResidual, &youngToYoungEdgesIntoResidual](RefField<>& field) {
+                BaseObject* target = ResolveMinorReference(field);
+                if (residualSet.count(target) == 0) {
+                    return;
+                }
+                if (holderYoung) {
+                    ++youngToYoungEdgesIntoResidual;
+                } else {
+                    ++oldToYoungEdgesIntoResidual;
+                    if (seenOld.insert(target).second) {
+                        ++residualWithOldHolder;
+                    }
+                }
+            });
+        }
+        Heap::GetHeap().VisitStaticRoots(
+            [this, &residualSet, &residualWithStaticHolder, &seenStatic](RefField<>& field) {
+                BaseObject* target = ResolveMinorReference(field);
+                if (residualSet.count(target) != 0 && seenStatic.insert(target).second) {
+                    ++residualWithStaticHolder;
+                }
+            });
+        for (MAddress slot : rememberedSlots) {
+            if (!Heap::IsHeapAddress(slot)) {
+                continue;
+            }
+            RefField<>* field = reinterpret_cast<RefField<>*>(slot);
+            BaseObject* target = ResolveMinorReference(*field);
+            if (residualSet.count(target) != 0) {
+                ++residualWithRemsetSlot;
+            }
+        }
+    }
+    // Path re-estimate using secondary: if residual has old holder ⇒ truly_missed (remset duty).
+    // by_design only if static holds and no old heap holder.
+    size_t path2ByDesign = 0;
+    size_t path2Truly = residualWithOldHolder;
+    size_t path2Undet = missed > residualWithOldHolder ? missed - residualWithOldHolder : 0;
+    // Among undetermined, static-only holders are by_design.
+    // residualWithStaticHolder may overlap old; approximate by_design as static-only residual not in old set.
+    // We only have counts; use residualWithStaticHolder as upper bound for by_design.
+    path2ByDesign = residualWithStaticHolder; // may overcount if also old-held
+    if (path2ByDesign + path2Truly > missed) {
+        // overlap: attribute overlap to truly_missed (remset still needed)
+        path2ByDesign = missed > path2Truly ? missed - path2Truly : 0;
+    }
+    path2Undet = missed > (path2ByDesign + path2Truly) ? missed - path2ByDesign - path2Truly : 0;
 
     size_t remsetYoung = 0;
     for (BaseObject* object : remsetReachable) {
@@ -1138,21 +1341,61 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
         }
     }
 
+    // Probe self-check notes for Q3 (logged; rate computed offline from these).
+    // - weakPathExpansions: referee follows weak special path like TraceYoungClosure
+    // - invalidSkipped: objects failing IsValidObject not counted in fullYoung
+    // - truncated: visit cap may undercount gap
+    // - residual via root first-edge while roots are shared with remset path ⇒ suspect probe/ordering
+
     VLOG(REPORT,
          "[GCV2Minor] REMSET_PROBE missed=%zu judged=%zu fullYoung=%zu remsetYoung=%zu remsetSlots=%zu "
-         "staticSlots=%zu staticRootsVisited=%zu visited=%zu truncated=%u originStatic=%zu originHeap=%zu "
-         "originOther=%zu phaseIdleOrInit=%zu phaseAboveInit=%zu phaseUnknown=%zu",
-         missed, judged, fullYoung.size(), remsetYoung, rememberedSlots.size(), staticSlots, staticRootsVisited,
-         visited, static_cast<unsigned>(truncated), originStatic, originHeap, originOther, phaseIdleOrInit,
-         phaseAboveInit, phaseUnknown);
+         "staticSlots=%zu visited=%zu truncated=%u invalidSkipped=%zu weakPath=%zu",
+         missed, judged, fullYoung.size(), remsetYoung, rememberedSlots.size(), staticSlots, visited,
+         static_cast<unsigned>(truncated), invalidSkipped, weakPathExpansions);
+    VLOG(REPORT,
+         "[GCV2Minor] RESIDUAL_BY_HOLDER_static=%zu/stack=%zu/finalizer=%zu/export=%zu/alloc=%zu/"
+         "old_ord=%zu/old_arr=%zu/yng_ord=%zu/yng_arr=%zu/heap_weak=%zu/other=%zu_of_missed=%zu",
+         holderMissed[H_STATIC], holderMissed[H_STACK], holderMissed[H_FINALIZER], holderMissed[H_EXPORT],
+         holderMissed[H_ALLOC], holderMissed[H_OLD_ORD], holderMissed[H_OLD_ARR], holderMissed[H_YNG_ORD],
+         holderMissed[H_YNG_ARR], holderMissed[H_HEAP_WEAK], holderMissed[H_OTHER], missed);
+    VLOG(REPORT,
+         "[GCV2Minor] HOLDER_ALL_YOUNG_static=%zu/stack=%zu/finalizer=%zu/export=%zu/alloc=%zu/"
+         "old_ord=%zu/old_arr=%zu/yng_ord=%zu/yng_arr=%zu/heap_weak=%zu/other=%zu",
+         holderAll[H_STATIC], holderAll[H_STACK], holderAll[H_FINALIZER], holderAll[H_EXPORT], holderAll[H_ALLOC],
+         holderAll[H_OLD_ORD], holderAll[H_OLD_ARR], holderAll[H_YNG_ORD], holderAll[H_YNG_ARR],
+         holderAll[H_HEAP_WEAK], holderAll[H_OTHER]);
+    VLOG(REPORT,
+         "[GCV2Minor] RESIDUAL_BY_PATH_firstEdge_by_design=%zu/truly_missed=%zu/undetermined=%zu "
+         "residualRootLike=%zu residualOldDuty=%zu residualYngEdge=%zu",
+         pathByDesign, pathTrulyMissed, pathUndetermined, residualRootLike, residualHeapFromOld,
+         residualHeapFromYoung);
+    VLOG(REPORT,
+         "[GCV2Minor] RESIDUAL_BY_PATH_anyHolder_by_design=%zu/truly_missed=%zu/undetermined=%zu "
+         "residualWithOldHolder=%zu residualWithStaticHolder=%zu residualWithRemsetSlot=%zu "
+         "oldToYoungEdges=%zu youngToYoungEdges=%zu",
+         path2ByDesign, path2Truly, path2Undet, residualWithOldHolder, residualWithStaticHolder,
+         residualWithRemsetSlot, oldToYoungEdgesIntoResidual, youngToYoungEdgesIntoResidual);
+    VLOG(REPORT,
+         "[GCV2Minor] ROOT_YOUNG_HITS static=%zu stack=%zu finalizer=%zu export=%zu concurrency=%zu alloc=%zu",
+         staticRootYoungHits, stackRootYoungHits, finalizerRootYoungHits, exportRootYoungHits, concurrencyRootYoungHits,
+         allocRootYoungHits);
+    VLOG(REPORT,
+         "[GCV2Minor] STATIC_ROOT_FIXUP_OBSERVE checked=%zu wouldChange=%zu "
+         "(raw!=resolved before evacuate; not a post-evacuate proof)",
+         staticRootFixupChecked, staticRootFixupWouldChange);
     for (size_t i = 0; i < sampleFill; ++i) {
-        VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_SAMPLE i=%zu obj=%p slot=%#zx origin=%u", i, missedSamples[i],
-             static_cast<size_t>(missedSlotSamples[i]), static_cast<unsigned>(missedOriginSamples[i]));
+        uint8_t h = missedHolderSamples[i];
+        const char* name = (h < H_COUNT) ? kHolderName[h] : "other";
+        VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_SAMPLE i=%zu obj=%p holder=%u(%s)", i, missedSamples[i],
+             static_cast<unsigned>(h), name);
     }
     VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_EDGES_%zu/%zu", missed, judged);
-    VLOG(REPORT, "[GCV2Minor] MISSED_EDGE_ORIGIN_static=%zu/heap=%zu/other=%zu_AND_phase_idleOrInit=%zu/"
-                 "aboveInit=%zu/unknown=%zu",
-         originStatic, originHeap, originOther, phaseIdleOrInit, phaseAboveInit, phaseUnknown);
+    VLOG(REPORT, "[GCV2Minor] MISSED_EDGE_ORIGIN_static=%zu/old_heap=%zu/yng_heap=%zu/other=%zu_AND_phase_unknown=%zu",
+         holderMissed[H_STATIC], holderMissed[H_OLD_ORD] + holderMissed[H_OLD_ARR],
+         holderMissed[H_YNG_ORD] + holderMissed[H_YNG_ARR] + holderMissed[H_HEAP_WEAK],
+         holderMissed[H_STACK] + holderMissed[H_FINALIZER] + holderMissed[H_EXPORT] + holderMissed[H_ALLOC] +
+             holderMissed[H_OTHER],
+         missed);
     VLOG(REPORT, "[GCV2Minor] STATIC_ROOTS_SCANNED_WHEN_FULLSCAN_OFF_yes_WCollector.cpp:582");
     VLOG(REPORT, "[GCV2Minor] REMSET_PROBE_END");
 }
