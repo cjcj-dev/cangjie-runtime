@@ -79,29 +79,40 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
 {
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
+    auto recordFromObject = [&rememberedSet, &recorded](BaseObject* object) {
+        // Dead/free slots in pinned free-lists or residual garbage must not be walked:
+        // their "refs" are not live edges and can poison remset → SEGV on rescan.
+        if (object == nullptr || !object->IsValidObject() || !object->HasRefField()) {
+            return;
+        }
+        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+            BaseObject* target = field.GetTargetObject();
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                ++recorded;
+            }
+        });
+    };
+    auto scanRegion = [&recordFromObject](RegionInfo* region) {
         if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
             return;
         }
-        region->VisitAllObjects([&rememberedSet, &recorded](BaseObject* object) {
-            if (object == nullptr || !object->HasRefField()) {
-                return;
-            }
-            object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
-                BaseObject* target = field.GetTargetObject();
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                    ++recorded;
-                }
+        // Prefer live-only when mark authority exists (post-mark / major survivors).
+        // No markBitmap: never-examined / pinned without census → walk alloc range.
+        if (region->GetMarkBitmap() != nullptr) {
+            (void)region->VisitLiveObjectsUntilFalse([&recordFromObject](BaseObject* object) {
+                recordFromObject(object);
+                return true;
             });
-        });
+        } else {
+            region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
+        }
     };
-    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
-    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
+    // Born non-young (never SetYoungRegionFlag) + post-promote old lists.
     recentPinnedRegionList.VisitAllRegions(scanRegion);
     oldPinnedRegionList.VisitAllRegions(scanRegion);
     rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
