@@ -553,6 +553,57 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
+// Anchor: HotSpot g1HeapVerifier.cpp:424-438 verify_region_sets + VerifyRegionListsClosure.
+// Independent of PrepareYoungGarbageCandidates: re-walks young-bearing lists and diffs vs candidate set.
+// Also reports young regions on lists PrepareYoung does NOT visit (tlRegionList / pinned / large) —
+// those are the positive control for defect C (young objects not in minor candidates).
+void RegionManager::VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates, size_t& youngSeen,
+                                          size_t& missingFromCandidates, size_t& unexpectedInCandidates)
+{
+    youngSeen = 0;
+    missingFromCandidates = 0;
+    unexpectedInCandidates = 0;
+    std::unordered_set<RegionInfo*> youngOnLists;
+
+    auto collectYoung = [&youngOnLists, &youngSeen](RegionInfo* region) {
+        if (region != nullptr && region->IsYoungRegion() && youngOnLists.insert(region).second) {
+            ++youngSeen;
+        }
+    };
+
+    // Lists PrepareYoung walks (after it has moved young into fromRegionList).
+    fromRegionList.VisitAllRegions(collectYoung);
+    unmovableFromRegionList.VisitAllRegions(collectYoung);
+    recentFullRegionList.VisitAllRegions(collectYoung);
+
+    // Lists PrepareYoung never visits — any young here is "missing from candidates" by construction.
+    tlRegionList.VisitAllRegions(collectYoung);
+    fullTraceRegions.VisitAllRegions(collectYoung);
+    recentPinnedRegionList.VisitAllRegions(collectYoung);
+    oldPinnedRegionList.VisitAllRegions(collectYoung);
+    rawPointerPinnedRegionList.VisitAllRegions(collectYoung);
+    oldLargeRegionList.VisitAllRegions(collectYoung);
+    recentLargeRegionList.VisitAllRegions(collectYoung);
+    largeTraceRegions.VisitAllRegions(collectYoung);
+
+    for (RegionInfo* region : youngOnLists) {
+        if (candidates.count(region) == 0) {
+            ++missingFromCandidates;
+        }
+    }
+    for (RegionInfo* region : candidates) {
+        if (region == nullptr) {
+            continue;
+        }
+        if (!region->IsYoungRegion() || youngOnLists.count(region) == 0) {
+            // unexpected: candidate not young on any list we re-scanned, or non-young slipped in
+            if (!region->IsYoungRegion()) {
+                ++unexpectedInCandidates;
+            }
+        }
+    }
+}
+
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
 {
     regionList->DeleteRegionLocked(region);
