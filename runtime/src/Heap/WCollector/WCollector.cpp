@@ -1183,7 +1183,7 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
             continue;
         }
 
-        const bool isArr = object->IsArray();
+        const bool isArr = object->GetTypeInfo()->IsArrayType();
         uint8_t edgeHolder;
         if (isYoung) {
             edgeHolder = isArr ? H_YNG_ARR : H_YNG_ORD;
