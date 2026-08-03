@@ -5,14 +5,8 @@
 # See https://cangjie-lang.cn/pages/LICENSE for license information.
 
 set(SRC_LIST
-    "Heap.cpp"
-    "GcThreadPool.cpp"
+    "VerifyRememberedSet.cpp"
 )
 
-include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-add_subdirectory(Allocator)
-add_subdirectory(Barrier)
-add_subdirectory(Collector)
-add_subdirectory(WCollector)
-add_subdirectory(Verify)
-add_library(Heap STATIC ${SRC_LIST})
+include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
+add_library(Verify STATIC ${SRC_LIST})

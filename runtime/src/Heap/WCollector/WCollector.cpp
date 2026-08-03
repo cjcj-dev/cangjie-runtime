@@ -13,6 +13,7 @@
 #include <limits>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Verify/VerifyRememberedSet.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -1220,8 +1221,9 @@ void WCollector::DoYoungGarbageCollection()
     }
     RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
-    // Card-table-verify analog: independent old→young rescan vs remset (defects A/B intent).
-    VerifyRememberedSet("pre-evacuate", rememberedSlots);
+    // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
+    // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
+    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots);
 
     size_t liveObjects = 0;
     size_t liveBytes = 0;
