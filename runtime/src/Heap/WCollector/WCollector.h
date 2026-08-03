@@ -12,6 +12,7 @@
 
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
+#include "Heap/Verify/DiffPathExplainer.h"
 namespace MapleRuntime {
 
 class ForwardTable {
@@ -203,7 +204,8 @@ private:
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                            MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
-                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan);
+                             const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
+                             MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field) const;
     void FixMinorRootSlots();
     void FixMinorObjectSlots(BaseObject* object);

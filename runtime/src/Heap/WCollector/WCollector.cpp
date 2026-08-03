@@ -16,6 +16,7 @@
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
+#include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -698,15 +699,35 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                                     bool fullYoungScan)
+                                     bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
 {
     for (MAddress slot : rememberedSlots) {
-        if (!Heap::IsHeapAddress(slot) || weakSlots.count(slot) != 0 ||
-            (fullYoungScan && reachableSlots.count(slot) == 0)) {
+        if (!Heap::IsHeapAddress(slot)) {
+            if (statsOut != nullptr) {
+                ++statsOut->skippedNotHeap;
+            }
+            continue;
+        }
+        if (weakSlots.count(slot) != 0) {
+            if (statsOut != nullptr) {
+                ++statsOut->skippedWeak;
+            }
+            continue;
+        }
+        if (fullYoungScan && reachableSlots.count(slot) == 0) {
+            if (statsOut != nullptr) {
+                ++statsOut->skippedFysFilter;
+            }
             continue;
         }
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
         PushYoungObject(ResolveMinorReference(*field), workStack);
+        if (consumedOut != nullptr) {
+            consumedOut->insert(slot);
+        }
+        if (statsOut != nullptr) {
+            ++statsOut->consumed;
+        }
     }
 }
 
@@ -1521,8 +1542,27 @@ void WCollector::DoYoungGarbageCollection()
             liveRememberedSlots.insert(slot);
         }
     }
-    RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan);
+    // Remset consume-vs-recorded (G1SummarizeRSetStats analog) + optional dual-closure
+    // diff-path explainer. Both gated default-off; see DiffPathExplainer.h.
+    DiffPathRemsetStats remsetStats;
+    remsetStats.recorded = rememberedSlots.size();
+    remsetStats.live = liveRememberedSlots.size();
+    MinorSlotSet consumedSlots;
+    RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
+                        &remsetStats);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    {
+        size_t runIndex = minorTotalRuns + 1;
+        auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
+            for (BaseObject* object : allocationRoots) {
+                visitor(object);
+            }
+            VisitMinorRoots(visitor);
+        };
+        auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
+        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                             &minorCandidateRegions, remsetStats);
+    }
     // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
     // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
     VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots);
