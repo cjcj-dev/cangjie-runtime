@@ -192,10 +192,13 @@ void VerifyHeapObjects(const char* point)
 
             // H1 + H2 on holder.
             if (!CheckObjectH1H2(obj, stats, reason)) {
+                // Only sample typeByte when tip is aligned — misaligned tip is not a TypeInfo
+                // (typeByte=-128 was a garbage load, not a flag bit; see REPORT-gcvtag).
                 TypeInfo* tip = nullptr;
                 if (obj->IsValidObject()) {
                     tip = obj->GetTypeInfo();
-                    if (tip != nullptr) {
+                    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                    if (tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0) {
                         typeByte = static_cast<int>(tip->GetType());
                     }
                 }
@@ -222,7 +225,8 @@ void VerifyHeapObjects(const char* point)
                     int tByte = -1;
                     if (target->IsValidObject()) {
                         TypeInfo* tTip = target->GetTypeInfo();
-                        if (tTip != nullptr) {
+                        uintptr_t tAddr = reinterpret_cast<uintptr_t>(tTip);
+                        if (tTip != nullptr && (tAddr & StateWord::ADDRESS_ALIGN_MASK) == 0) {
                             tByte = static_cast<int>(tTip->GetType());
                         }
                     }
