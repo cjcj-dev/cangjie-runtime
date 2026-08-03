@@ -193,6 +193,8 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
 
 void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    GcInitWin::NoteStaticStructWrite(reinterpret_cast<const void*>(dst), dstLen,
+                                     reinterpret_cast<const void*>(src), "TraceBarrier::WriteStaticStruct");
     Mutator* mutator = Mutator::GetMutator();
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
