@@ -129,14 +129,15 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                         TypeInfo* targetTypeInfo = targetValid ? target->GetTypeInfo() : nullptr;
                         VLOG(REPORT,
                              "[GCV2][verify][remset][MISSING_EDGE] point=%s invoke=%zu failure=%zu max=%zu "
-                             "holder=%p holderType=%s holderRegion=%p holderRegionType=%s holderYoungAge=%u "
+                             "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
                              "holderRouteState=%u holderRegionStart=%p holderRegionOffset=0x%zx "
                              "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
-                             "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%s "
+                             "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
                              "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
                              point == nullptr ? "?" : point, invoke, stats.missing, maxFailures, holder,
                              typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(), holderRegion,
-                             holderRegion->GetTypeName(), static_cast<unsigned int>(holderRegion->GetYoungAge()),
+                             static_cast<unsigned int>(holderRegion->GetRegionType()),
+                             static_cast<unsigned int>(holderRegion->GetYoungAge()),
                              static_cast<unsigned int>(holderRegion->GetRouteState()),
                              reinterpret_cast<void*>(holderRegion->GetRegionStart()),
                              static_cast<size_t>(reinterpret_cast<MAddress>(holder) - holderRegion->GetRegionStart()),
@@ -145,7 +146,7 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                              static_cast<unsigned int>(targetValid),
                              targetTypeInfo == nullptr || targetTypeInfo->GetName() == nullptr ? "?" :
                                                                                                targetTypeInfo->GetName(),
-                             targetRegion, targetRegion->GetTypeName(),
+                             targetRegion, static_cast<unsigned int>(targetRegion->GetRegionType()),
                              static_cast<unsigned int>(targetRegion->GetYoungAge()),
                              static_cast<unsigned int>(targetRegion->GetRouteState()),
                              reinterpret_cast<void*>(targetRegion->GetRegionStart()),
