@@ -62,14 +62,11 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
 
 BaseObject* WCollector::FindToVersion(BaseObject* obj) const
 {
-    // Observation only: match GetUnitIdxAt bounds (may differ from Heap::IsHeapAddress end).
-    // Always probe before GetGhostFromRegionAt so abort path cannot skip the dump.
+    // Observation only. GetUnitIdxAt aborts outside unit range; Heap::IsHeapAddress is the
+    // public range check used everywhere else (may slightly differ from unit end — still covers
+    // ASCII garbage pointers that caused the known crash).
     MAddress addr = reinterpret_cast<MAddress>(obj);
-    uintptr_t unitStart = RegionInfo::UnitInfo::heapStartAddress;
-    size_t unitCount = RegionInfo::UnitInfo::totalUnitCount;
-    bool inUnitRange =
-        (unitStart != 0) && (addr >= unitStart) && (addr < unitStart + unitCount * RegionInfo::UNIT_SIZE);
-    if (!inUnitRange) {
+    if (!Heap::IsHeapAddress(obj)) {
         TagEpochProbe::OnPreFindToVersion(nullptr, obj, addr, "FindToVersion_out_of_unit");
     }
     RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(addr);
