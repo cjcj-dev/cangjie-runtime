@@ -118,15 +118,21 @@ void SafeTypeName(BaseObject* obj, char* buf, size_t bufSize, bool shortTail)
         return;
     }
     // Avoid IsValidObject on targets that may already be mid-corruption; still try TypeInfo.
+    // Holders already passed IsValidObject in the collector walk; targets may be
+    // mid-evacuate so skip validity on targets and only require a TypeInfo pointer.
     TypeInfo* ti = nullptr;
     if (obj->IsValidObject()) {
         ti = obj->GetTypeInfo();
+    } else {
+        // Still try header TypeInfo for clustering when object looks heap-like.
+        ti = obj->GetTypeInfo();
     }
-    if (ti == nullptr || !Heap::IsHeapAddress(ti)) {
+    if (ti == nullptr) {
         return;
     }
     const char* name = ti->GetName();
-    if (name == nullptr || !Heap::IsHeapAddress(const_cast<char*>(name))) {
+    // Type names live in static/rodata, NOT the managed heap — do not IsHeapAddress them.
+    if (name == nullptr) {
         return;
     }
     // Bounded printable scan (no strlen).
