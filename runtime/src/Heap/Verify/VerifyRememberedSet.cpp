@@ -130,7 +130,8 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                         VLOG(REPORT,
                              "[GCV2][verify][remset][MISSING_EDGE] point=%s invoke=%zu failure=%zu max=%zu "
                              "holder=%p holderType=%s holderRegion=%p holderRegionType=%u holderYoungAge=%u "
-                             "holderRouteState=%u holderRegionStart=%p holderRegionOffset=0x%zx "
+                             "holderRouteState=%u holderMarkBitmap=%p holderMarked=%u holderResurrected=%u "
+                             "holderRegionStart=%p holderRegionOffset=0x%zx "
                              "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
                              "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
                              "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
@@ -139,6 +140,9 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                              static_cast<unsigned int>(holderRegion->GetRegionType()),
                              static_cast<unsigned int>(holderRegion->GetYoungAge()),
                              static_cast<unsigned int>(holderRegion->GetRouteState()),
+                             holderRegion->GetMarkBitmap(),
+                             static_cast<unsigned int>(holderRegion->IsMarkedObject(holder)),
+                             static_cast<unsigned int>(holderRegion->IsResurrectedObject(holder)),
                              reinterpret_cast<void*>(holderRegion->GetRegionStart()),
                              static_cast<size_t>(reinterpret_cast<MAddress>(holder) - holderRegion->GetRegionStart()),
                              reinterpret_cast<void*>(slot), static_cast<size_t>(BaseObject::FieldOffset(holder, &field)),
