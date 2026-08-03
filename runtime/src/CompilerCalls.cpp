@@ -301,7 +301,8 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         return;
     }
     if (!Heap::IsHeapAddress(obj)) {
-        field->SetTargetObject(ref);
+        // Non-heap holder (static/global): same remset duty as WriteStaticRef.
+        Heap::GetBarrier().WriteStaticRef(*field, ref);
         return;
     }
     Heap::GetBarrier().WriteReference(obj, *field, ref);
@@ -316,8 +317,7 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
         return;
     }
     if (UNLIKELY(!Heap::IsHeapAddress(obj))) {
-        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
-                     "memcpy_s failed");
+        Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
         return;
     }
     Heap::GetBarrier().WriteStruct(obj, dst, dstLen, src, srcLen);

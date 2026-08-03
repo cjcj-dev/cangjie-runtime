@@ -113,11 +113,14 @@ protected:
     };
     Collector& theCollector;
 
-private:
+protected:
+    // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;
     void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const;
     void RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size) const;
+    void RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const;
 
+private:
     RememberedSet& theRememberedSet;
 };
 } // namespace MapleRuntime

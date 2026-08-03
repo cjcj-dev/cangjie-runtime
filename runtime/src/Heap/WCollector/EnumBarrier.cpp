@@ -134,7 +134,8 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, field.GetTargetObject(), ref);
-    WriteReference(nullptr, field, ref);
+    WriteReferenceImpl(nullptr, field, ref);
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
 void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -197,6 +198,7 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
             refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
         }
     });
+    RecordStaticCrossGenEdges(dst, gctib);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);

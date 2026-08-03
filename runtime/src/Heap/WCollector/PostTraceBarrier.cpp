@@ -106,6 +106,7 @@ void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) c
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
 void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -147,6 +148,7 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
             refField.CompareExchange(oldValue, newField.GetFieldValue());
         }
     });
+    RecordStaticCrossGenEdges(dst, gctib);
     DLOG(TRACE, "write static struct@[%#zx, %#zx) with [%#zx, %#zx)", dst, dst + dstLen, src, src + srcLen);
 
 #if defined(CANGJIE_TSAN_SUPPORT)

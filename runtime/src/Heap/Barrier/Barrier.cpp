@@ -99,6 +99,10 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     field.SetTargetObject(ref);
+    // Static/global slots are non-heap sources: treat as old→young when ref is young.
+    // VisitStaticRoots keeps the *target* live for the current minor, but does not
+    // register the slot for FixMinorRootSlots/evac; remset must track the edge.
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
@@ -110,6 +114,7 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), copyLen);
 #endif
+    RecordStaticCrossGenEdges(dst, gctib);
 }
 
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -359,18 +364,28 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     if (!HasYoungRegionsForRecording()) {
         return;
     }
-    if (obj == nullptr || ref == nullptr || !Heap::IsHeapAddress(obj) || !Heap::IsHeapAddress(fieldAddress) ||
-        !Heap::IsHeapAddress(ref)) {
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
     if (!targetRegion->IsYoungRegion()) {
         return;
     }
-    RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
-    if (!sourceRegion->IsYoungRegion()) {
+    // Heap holder: only record old→young (source not young).
+    if (Heap::IsHeapAddress(fieldAddress)) {
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return;
+        }
+        RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
+        if (sourceRegion->IsYoungRegion()) {
+            return;
+        }
         theRememberedSet.Record(fieldAddress);
+        return;
     }
+    // Non-heap field (static root / global struct): source is outside the heap ⇒ old.
+    (void)obj;
+    theRememberedSet.Record(fieldAddress);
 }
 
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
@@ -401,6 +416,16 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
         RefField<>* field = reinterpret_cast<RefField<>*>(current);
         RecordCrossGenEdge(obj, current, field->GetTargetObject());
     }
+}
+
+void Barrier::RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const
+{
+    if (!HasYoungRegionsForRecording()) {
+        return;
+    }
+    gctib.ForEachBitmapWord(start, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    });
 }
 
 } // namespace MapleRuntime
