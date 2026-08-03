@@ -13,6 +13,7 @@
 #include <limits>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Verify/VerifyRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -158,6 +159,12 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext vctx;
+        vctx.phase = "EnumRefFieldRoot";
+        vctx.kind = RootKind::STATIC_ROOT;
+        VerifyRoots::VerifyRootPayload(vctx, &field, latest);
+    }
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
@@ -184,6 +191,12 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     }
     BaseObject* root = oldField.GetTargetObject();
     if (Heap::IsHeapAddress(root)) {
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext vctx;
+            vctx.phase = "EnumAndTagRawRoot";
+            vctx.kind = RootKind::RUNTIME_ROOT;
+            VerifyRoots::VerifyRootPayload(vctx, &ref, root);
+        }
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         RefField<> newField = GetAndTryTagRefField(root);
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
