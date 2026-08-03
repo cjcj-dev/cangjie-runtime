@@ -7,6 +7,8 @@
 
 #include "Collector/Collector.h"
 
+#include "Base/Log.h"
+#include "Common/BaseObject.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
@@ -14,6 +16,28 @@ namespace MapleRuntime {
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
+}
+
+// F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.
+// Legal null (high-live / raw-pin survivor still at from, ghost=0) keeps returning obj.
+// Illegal null (D: old tag + ghost already dispelled + from cleared) fails loudly here.
+// See reports/REPORT-nullenum.md LEGAL_NULL_SET; reports/REPORT-tagaba.md F5.
+// Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
+BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
+{
+    if (obj == nullptr) {
+        return nullptr;
+    }
+
+    BaseObject* to = FindToVersion(obj);
+    if (to != nullptr) {
+        return to;
+    }
+    CHECK_DETAIL(obj->IsValidObject(),
+                 "FindLatestVersion: no to-version for invalid from-object %p "
+                 "(stale old-tag after ghost dispel; do not fall back to from)",
+                 obj);
+    return obj;
 }
 
 const char* Collector::GetGCPhaseName(GCPhase phase)
