@@ -20,12 +20,15 @@ class RegionInfo;
 // Gate (default off): MRT_GCV2_GARBAGE_VERDICT=1
 // Blocking (default off): MRT_GCV2_BLOCK_NEVEREXAMINED=1
 //   — neverExamined regions never CollectRegion (keep path at ForwardRegion + CollectRegion entry)
+// Blocking (default off): MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1
+//   — after RouteState::FORWARDED, skip CollectRegion (keep unmovable) to test residual UAF
 class GarbageVerdict {
 public:
     static bool Enabled();
     static bool BlockNeverExamined();
+    static bool BlockForwardedResidual();
 
-    // site: "collect" | "fwd_empty_keep" | "fwd_empty_collect" | "fwd_after" | "pinned_empty" | "large"
+    // site: "collect" | "fwd_empty_keep" | "fwd_empty_collect" | "fwd_after" | "fwd_after_keep" | "pinned_empty" | "large"
     static void Dump(const char* site, RegionInfo* region, const char* predicate);
 
     // At invalid-minor-root: match crash addr against recent dumps.

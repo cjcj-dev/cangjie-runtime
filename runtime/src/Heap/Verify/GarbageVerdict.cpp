@@ -66,6 +66,12 @@ bool GarbageVerdict::BlockNeverExamined()
     return on;
 }
 
+bool GarbageVerdict::BlockForwardedResidual()
+{
+    static const bool on = EnvIsOne("MRT_GCV2_BLOCK_FORWARDED_RESIDUAL");
+    return on;
+}
+
 size_t GarbageVerdict::CountValidObjectHeaders(RegionInfo* region)
 {
     if (region == nullptr) {

@@ -388,6 +388,13 @@ public:
                      region, region->GetRegionStart());
                 return 0;
             }
+            if (region->GetRouteState() == RegionInfo::RouteState::FORWARDED &&
+                GarbageVerdict::BlockForwardedResidual()) {
+                VLOG(REPORT,
+                     "[GCV2][block] CollectRegion skip FORWARDED region=%p start=%#zx env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                     region, region->GetRegionStart());
+                return 0;
+            }
         }
 
         region->LockWriteRegion();

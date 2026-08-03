@@ -1620,6 +1620,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungAge(0);
         }
         GarbageVerdict::Dump("fwd_after", region, "FORWARDED_then_CollectRegion");
+        // gcfwdresid: FORWARDED path always CollectRegion after VisitLiveObjects(IsSurvived).
+        // Mark-incomplete residual headers stay in from-space; reclaim clears them. Optional
+        // fail-closed keep (default off) for causal blocking test.
+        if (GarbageVerdict::BlockForwardedResidual()) {
+            GarbageVerdict::Dump("fwd_after_keep", region, "FORWARDED_block_residual");
+            VLOG(REPORT,
+                 "[GCV2][block] ForwardRegion skip CollectRegion after FORWARDED region=%p "
+                 "start=%#zx env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                 region, region->GetRegionStart());
+            region->SetRouteState(RegionInfo::RouteState::NORMAL);
+            unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            return;
+        }
         CollectRegion(region);
     }
 }
