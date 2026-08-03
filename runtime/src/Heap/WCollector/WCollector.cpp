@@ -96,6 +96,39 @@ bool GcdispelOn()
     return cached == 1;
 }
 
+GcInitWin::MinorTargetFate CaptureMinorTargetFate(const void* value)
+{
+    GcInitWin::MinorTargetFate fate{};
+    fate.target = value;
+    fate.regionType = 0xff;
+    fate.marked = 2;
+    fate.state = 0xff;
+    BaseObject* target = reinterpret_cast<BaseObject*>(const_cast<void*>(value));
+    fate.heap = Heap::IsHeapAddress(target) ? 1 : 0;
+    if (fate.heap == 0) {
+        return fate;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    fate.region = region;
+    if (region == nullptr) {
+        return fate;
+    }
+    fate.regionStart = region->GetRegionStart();
+    fate.regionAlloc = region->GetRegionAllocPtr();
+    fate.regionType = static_cast<uint8_t>(region->GetRegionType());
+    fate.validRegion = region->IsValidRegion() ? 1 : 0;
+    fate.young = region->IsYoungRegion() ? 1 : 0;
+    fate.freeRegion = region->IsFreeRegion() ? 1 : 0;
+    fate.garbageRegion = region->IsGarbageRegion() ? 1 : 0;
+    uintptr_t address = reinterpret_cast<uintptr_t>(target);
+    fate.inAllocRange = address >= fate.regionStart && address < fate.regionAlloc ? 1 : 0;
+    if (fate.validRegion != 0 && fate.freeRegion == 0 && fate.garbageRegion == 0 && fate.inAllocRange != 0) {
+        fate.marked = region->IsMarkedObject(target) ? 1 : 0;
+        fate.state = static_cast<uint8_t>(target->GetStateWord().GetStateCode());
+    }
+    return fate;
+}
+
 bool PageMapped(const void* p)
 {
     if (p == nullptr) {
@@ -676,8 +709,11 @@ void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot,
             EmitStaticSlotLoc(slot, tc, seq, tc != ENQ_TI_GOOD ? "bad" : "good");
         }
         // gcinitwin: lifecycle phase of static slot at enqueue.
+        uint64_t round = GcInitWin::CurrentMinorRound();
+        const void* initialTarget = GcInitWin::InitialMinorTarget(slot, round);
         GcInitWin::NoteStaticEnqueueLifecycle(slot, target, tc, point,
-                                              tc != ENQ_TI_GOOD ? "bad" : "good");
+                                              tc != ENQ_TI_GOOD ? "bad" : "good",
+                                              CaptureMinorTargetFate(target), CaptureMinorTargetFate(initialTarget));
     }
 }
 
@@ -1549,7 +1585,12 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         visitor(ResolveMinorReference(field));
     };
-    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
+    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) {
+        BaseObject* target = ResolveMinorReference(field);
+        GcInitWin::MinorTargetFate fate = CaptureMinorTargetFate(target);
+        GcInitWin::NoteMinorSlotSnapshot(&field, minorTotalRuns + 1, "a-root", fate, fate);
+        visitor(target);
+    };
     VisitMinorRootSlots(rawRootVisitor, fieldVisitor);
     VisitMinorValueRoots(visitor);
 }
@@ -1649,13 +1690,21 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     return true;
 }
 
-void WCollector::FixMinorRootSlots()
+void WCollector::FixMinorRootSlots(const char* moment)
 {
     RootVisitor rawRootVisitor = [this](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         (void)FixMinorEvacuatedSlot(field);
     };
-    RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+    RefFieldVisitor fieldVisitor = [this, moment](RefField<>& field) {
+        (void)FixMinorEvacuatedSlot(field);
+        RefField<> value(field);
+        BaseObject* target = value.GetTargetObject();
+        uint64_t round = minorTotalRuns + 1;
+        const void* initialTarget = GcInitWin::InitialMinorTarget(&field, round);
+        GcInitWin::NoteMinorSlotSnapshot(&field, round, moment, CaptureMinorTargetFate(target),
+                                         CaptureMinorTargetFate(initialTarget));
+    };
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
@@ -1683,7 +1732,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     };
 
     auto fixForwardedReferences = [this, &reachableObjects, &rememberedSlots, &currentObject]() {
-        FixMinorRootSlots();
+        FixMinorRootSlots("b-post-fix");
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
         for (BaseObject* object : reachableObjects) {
@@ -1698,7 +1747,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
 
     // pre-evacuate: collection set already in fromRegionList via PrepareYoungGarbageCandidates
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    FixMinorRootSlots();
+    FixMinorRootSlots("b-pre-fix");
     PreforwardDiscoveredExternObjects();
     PreforwardAllResurrectExportFromObjects();
 
@@ -2038,6 +2087,7 @@ void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    GcInitWin::NoteMinorCycleStart(minorTotalRuns + 1);
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();
     if (minorTotalRuns != 0) {
