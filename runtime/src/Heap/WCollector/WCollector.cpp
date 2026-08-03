@@ -751,6 +751,18 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    auto postEvacPoint = [this](const char* point, bool runHeap = true) {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac == nullptr || std::strcmp(postEvac, "1") != 0) {
+            return;
+        }
+        // Breadcrumb first (survives if VerifyHeap SEGV); force=true skips VERIFY_HEAP env.
+        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=%s run=%zu", point, minorTotalRuns + 1);
+        if (runHeap) {
+            VerifyHeapObjects(point, true);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
+        }
+    };
     auto currentObject = [this](BaseObject* object) {
         if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
             return ForwardObject(object);
@@ -772,34 +784,30 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         }
     };
 
+    // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
+    postEvacPoint("evac-enter", true);
+
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
     FixMinorRootSlots();
     PreforwardDiscoveredExternObjects();
     PreforwardAllResurrectExportFromObjects();
+    postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
     fwdTable.PrepareForwardTable();
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+    postEvacPoint("pre-fix-forwarded", false);
     fixForwardedReferences();
     ValidateMinorReferences("before-return", &reachableObjects);
-    // Mid-evac checkpoint: after slot fix, before region reclaim. force=true under POST_EVAC.
-    {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VerifyHeapObjects("post-fix-pre-forward", true);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-fix-pre-forward run=%zu",
-                 minorTotalRuns + 1);
-        }
-    }
+    // Mid-evac checkpoint: after slot fix, before region reclaim.
+    postEvacPoint("post-fix-pre-forward", true);
 
     ForwardFromSpace();
+    postEvacPoint("post-forward-pre-reclaim", true);
     {
         const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VerifyHeapObjects("post-forward-pre-reclaim", true);
             ValidateMinorReferences("post-forward-pre-reclaim", &reachableObjects);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-forward-pre-reclaim run=%zu",
-                 minorTotalRuns + 1);
         }
     }
 
