@@ -140,9 +140,9 @@ public:
     // old→young out-edge that mutators skipped while the source was still young.
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
     static size_t ConsumePromotedCrossGenEdgeCount();
-    // Pinned/large holders are never young (AllocPinned/AllocLarge never SetYoungRegionFlag).
-    // IDLE write-barrier fast path (phase < ENUM) stores bare; those old→young edges
-    // never enter RecordCrossGenEdge. Stamp them into remset before each minor.
+    // Non-young holders (pinned/large at birth, or post-promote old) + IDLE bare store:
+    // edges never enter RecordCrossGenEdge. Stamp remset before each minor.
+    // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
     size_t RecordPinnedCrossGenEdges();
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);

@@ -100,13 +100,19 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
             });
         });
     };
+    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
+    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
     recentPinnedRegionList.VisitAllRegions(scanRegion);
     oldPinnedRegionList.VisitAllRegions(scanRegion);
     rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
-    // Large objects also skip young (AllocLarge never SetYoungRegionFlag); same IDLE
-    // bare-store gap for array holders (B2 invoke3 arrayHolder=16384 family).
     recentLargeRegionList.VisitAllRegions(scanRegion);
     oldLargeRegionList.VisitAllRegions(scanRegion);
+    largeTraceRegions.VisitAllRegions(scanRegion);
+    recentFullRegionList.VisitAllRegions(scanRegion);
+    fullTraceRegions.VisitAllRegions(scanRegion);
+    unmovableFromRegionList.VisitAllRegions(scanRegion);
+    fromRegionList.VisitAllRegions(scanRegion);
+    tlRegionList.VisitAllRegions(scanRegion);
     return recorded;
 }
 
