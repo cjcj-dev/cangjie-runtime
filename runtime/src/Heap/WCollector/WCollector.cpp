@@ -243,6 +243,105 @@ void EmitDeltaIfAny(BaseObject* holder, const HolderSnap& after)
     }
 }
 
+// gcgarbti Q2: is the holder address still an object, or already reused as free-list / metadata?
+std::atomic<uint64_t> g_objectIdEmitted{0};
+void EmitIsItEvenAnObject(BaseObject* holder, const char* point, uintptr_t typeAddr)
+{
+    if (g_objectIdEmitted.fetch_add(1, std::memory_order_relaxed) >= 24) {
+        return;
+    }
+    uintptr_t addr = reinterpret_cast<uintptr_t>(holder);
+    bool aligned8 = (addr & 0x7ULL) == 0;
+    bool pageMapped = PageMapped(holder);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    uint8_t regionType = 0xff;
+    uint8_t unitRole = 0xff;
+    uint8_t young = 0;
+    uint8_t freeR = 0;
+    uint8_t garbageR = 0;
+    uint8_t validR = 0;
+    uint32_t live = 0;
+    uint8_t authority = 0;
+    uint8_t knownEmpty = 0;
+    uintptr_t regionStart = 0;
+    uintptr_t regionEnd = 0;
+    uintptr_t allocPtr = 0;
+    uint8_t inAllocRange = 0;
+    if (region != nullptr) {
+        regionType = static_cast<uint8_t>(region->GetRegionType());
+        unitRole = static_cast<uint8_t>(region->GetUnitRole());
+        young = region->IsYoungRegion() ? 1 : 0;
+        freeR = region->IsFreeRegion() ? 1 : 0;
+        garbageR = region->IsGarbageRegion() ? 1 : 0;
+        validR = region->IsValidRegion() ? 1 : 0;
+        live = region->GetLiveByteCount();
+        authority = region->IsLiveCountAuthoritative() ? 1 : 0;
+        knownEmpty = region->IsKnownEmpty() ? 1 : 0;
+        regionStart = region->GetRegionStart();
+        regionEnd = region->GetRegionEnd();
+        allocPtr = region->GetRegionAllocPtr();
+        inAllocRange = (addr >= regionStart && addr < allocPtr) ? 1 : 0;
+    }
+    uint64_t raw0 = 0;
+    uint64_t raw1 = 0;
+    uint64_t raw2 = 0;
+    uint64_t raw3 = 0;
+    if (pageMapped) {
+        const uint64_t* p = reinterpret_cast<const uint64_t*>(holder);
+        raw0 = p[0];
+        raw1 = p[1];
+        raw2 = p[2];
+        raw3 = p[3];
+    }
+    // ObjectSlot = { StateWord; ObjectSlot* next } — next at +8 if free-list node.
+    uintptr_t nextCand = static_cast<uintptr_t>(raw1);
+    bool nextLooksHeap = nextCand != 0 && nextCand >= 0x1000ULL &&
+                         nextCand < (1ULL << StateWord::ADDRESS_BIT_COUNT) && (nextCand & 0x7ULL) == 0;
+    bool nextMapped = nextLooksHeap && PageMapped(reinterpret_cast<const void*>(nextCand));
+    bool allZeroHead = (raw0 == 0 && raw1 == 0);
+    bool allOnesLow = (typeAddr == ~0ULL) || (typeAddr == 0xffffffffffffULL);
+    bool smallIntTi = typeAddr > 0 && typeAddr < 0x1000ULL;
+    // Classification (bounded; not product logic).
+    const char* verdict = "undetermined";
+    if (!pageMapped || region == nullptr) {
+        verdict = "no_unmapped_or_no_region";
+    } else if (freeR || garbageR || !validR) {
+        verdict = "no_region_free_or_garbage";
+    } else if (!inAllocRange) {
+        verdict = "no_outside_alloc_range";
+    } else if (allZeroHead) {
+        verdict = "no_zero_fill_head";
+    } else if (smallIntTi || allOnesLow) {
+        // still in alloc range of a linked region, but head is not a TypeInfo address shape
+        if (nextLooksHeap && nextMapped) {
+            verdict = "no_reused_slotlist_like";
+        } else if (!aligned8) {
+            verdict = "no_misaligned_interior";
+        } else {
+            verdict = "no_garbage_ti_in_alloc_range";
+        }
+    } else if (aligned8 && inAllocRange && validR && pageMapped) {
+        verdict = "yes_header_looks_object_slot";
+    }
+    std::fprintf(stderr,
+                 "[GCGARBTI] IS_IT_EVEN_AN_OBJECT point=%s holder=%p ti=0x%llx aligned8=%u page=%u "
+                 "region=%p rtype=%u urole=%u young=%u free=%u garbage=%u valid=%u live=%u auth=%u "
+                 "known_empty=%u start=0x%llx end=0x%llx alloc=0x%llx in_alloc=%u "
+                 "raw0=0x%llx raw1=0x%llx raw2=0x%llx raw3=0x%llx next_heap=%u next_map=%u "
+                 "verdict=%s\n",
+                 point, holder, static_cast<unsigned long long>(typeAddr), aligned8 ? 1u : 0u,
+                 pageMapped ? 1u : 0u, region, static_cast<unsigned>(regionType),
+                 static_cast<unsigned>(unitRole), static_cast<unsigned>(young),
+                 static_cast<unsigned>(freeR), static_cast<unsigned>(garbageR),
+                 static_cast<unsigned>(validR), live, static_cast<unsigned>(authority),
+                 static_cast<unsigned>(knownEmpty), static_cast<unsigned long long>(regionStart),
+                 static_cast<unsigned long long>(regionEnd), static_cast<unsigned long long>(allocPtr),
+                 static_cast<unsigned>(inAllocRange), static_cast<unsigned long long>(raw0),
+                 static_cast<unsigned long long>(raw1), static_cast<unsigned long long>(raw2),
+                 static_cast<unsigned long long>(raw3), nextLooksHeap ? 1u : 0u, nextMapped ? 1u : 0u,
+                 verdict);
+}
+
 // Classify HasRefField by mirroring TypeInfo::HasRefField. On fail paths never call the real
 // inlined HasRefField (would hard-fault); counters + samples are the evidence.
 bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCall*/)
@@ -271,12 +370,14 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
                              "[GCDISPEL] HASREFFIELD_PATH path=ti_garbage_low point=%s holder=%p ti=%p\n",
                              point, holder, ti);
             }
+            EmitIsItEvenAnObject(holder, point, typeAddr);
         } else {
             g_hrPath[HR_TI_NONCANON].fetch_add(1, std::memory_order_relaxed);
             if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
                 std::fprintf(stderr, "[GCDISPEL] HASREFFIELD_PATH path=ti_noncanon point=%s holder=%p ti=%p\n",
                              point, holder, ti);
             }
+            EmitIsItEvenAnObject(holder, point, typeAddr);
         }
         return false;
     }
@@ -286,6 +387,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
             std::fprintf(stderr, "[GCDISPEL] HASREFFIELD_PATH path=ti_unmapped point=%s holder=%p ti=%p\n",
                          point, holder, ti);
         }
+        EmitIsItEvenAnObject(holder, point, typeAddr);
         return false;
     }
 
