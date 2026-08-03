@@ -14,6 +14,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/Verify/MinorGCALot.h"
 #include "Heap/Verify/Zap.h"
 
 namespace MapleRuntime {
@@ -173,6 +174,9 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
+        // MinorGCALot: every N mutator allocs force young GC (HotSpot ScavengeALot intent).
+        // Safe: mutator path only; async RequestGC(YOUNG); same surface as TakeRegion heuristic.
+        MinorGCALot::AfterSuccessfulAlloc(totalSize);
     }
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;

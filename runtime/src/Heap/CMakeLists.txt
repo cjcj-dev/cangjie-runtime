@@ -9,6 +9,7 @@ set(SRC_LIST
     "GcThreadPool.cpp"
     "Verify/VerifyRoots.cpp"
     "Verify/Zap.cpp"
+    "Verify/MinorGCALot.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
