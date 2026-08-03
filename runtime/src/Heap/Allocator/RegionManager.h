@@ -269,9 +269,13 @@ public:
 
     // HotSpot g1HeapVerifier.cpp:424 verify_region_sets — independent young-region membership check.
     // Walks young-bearing lists without using PrepareYoungGarbageCandidates' visitor path.
-    // Fills: youngSeen / missingFromCandidates / unexpectedInCandidates (non-young in candidate set).
-    void VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates, size_t& youngSeen,
-                               size_t& missingFromCandidates, size_t& unexpectedInCandidates);
+    // mustCoverYoung: young on lists PrepareYoung walks (from/unmovable/recentFull) — must ⊆ candidates.
+    // activeYoungExempt: young on tlRegionList (still allocating) — expected not in candidates.
+    // otherYoung: young on pinned/large/trace lists (informational).
+    // unexpectedInCandidates: candidate that is not young.
+    void VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates, size_t& mustCoverYoung,
+                               size_t& missingFromCandidates, size_t& unexpectedInCandidates,
+                               size_t& activeYoungExempt, size_t& otherYoung);
 
     void MergeRawPointerPinnedRegions()
     {

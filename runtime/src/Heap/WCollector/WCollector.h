@@ -212,6 +212,8 @@ private:
     void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
     // HotSpot g1HeapVerifier verify_region_sets isomorphic check; gated by MRT_GCV2_VERIFY_REGION_SETS.
     void VerifyYoungRegionSets(const char* point);
+    // HotSpot card-table verify intent on our RememberedSet; gated by MRT_GCV2_VERIFY_REMSET.
+    void VerifyRememberedSet(const char* point, const MinorSlotSet& rememberedSlots);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>
