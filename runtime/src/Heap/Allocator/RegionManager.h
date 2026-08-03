@@ -7,6 +7,8 @@
 #ifndef MRT_REGION_MANAGER_H
 #define MRT_REGION_MANAGER_H
 
+#include <cstdlib>
+#include <cstring>
 #include <list>
 #include <map>
 #include <set>
@@ -16,6 +18,8 @@
 
 #include "AllocBuffer.h"
 #include "Allocator.h"
+#include "Base/Log.h"
+#include "Common/BaseObject.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
@@ -317,6 +321,47 @@ public:
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
+        {
+            static const bool probe = []() {
+                const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (probe && region != nullptr && region->IsKnownEmpty()) {
+                size_t start = region->GetRegionStart();
+                size_t alloc = region->GetRegionAllocPtr();
+                size_t end = region->GetRegionEnd();
+                size_t residual = alloc > start ? (alloc - start) : 0;
+                size_t validObjs = 0;
+                size_t markedObjs = 0;
+                if (residual > 0 && !region->IsLargeRegion()) {
+                    uintptr_t pos = start;
+                    while (pos < alloc) {
+                        BaseObject* o = reinterpret_cast<BaseObject*>(pos);
+                        if (!o->IsValidObject()) {
+                            break;
+                        }
+                        size_t sz = o->GetSize();
+                        if (sz == 0) {
+                            break;
+                        }
+                        ++validObjs;
+                        if (region->IsMarkedObject(o)) {
+                            ++markedObjs;
+                        }
+                        pos += sz;
+                    }
+                }
+                if (validObjs > 0) {
+                    VLOG(REPORT,
+                         "[GCRECLAIM][collect-empty] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
+                         "live=%u residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
+                         region, start, alloc, end, region->GetRegionType(),
+                         static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
+                         validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
+                }
+            }
+        }
 
         region->LockWriteRegion();
 #if defined(__OHOS__)

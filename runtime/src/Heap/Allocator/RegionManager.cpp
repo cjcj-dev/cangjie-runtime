@@ -8,6 +8,8 @@
 #include "Allocator/RegionManager.h"
 
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -1355,6 +1357,40 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     bool youngRegion = region->IsYoungRegion();
     if (region->IsKnownEmpty()) {
+        {
+            static const bool probe = []() {
+                const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (probe) {
+                size_t start = region->GetRegionStart();
+                size_t alloc = region->GetRegionAllocPtr();
+                size_t residual = alloc > start ? (alloc - start) : 0;
+                size_t validObjs = 0;
+                if (residual > 0 && !region->IsLargeRegion()) {
+                    uintptr_t pos = start;
+                    while (pos < alloc) {
+                        BaseObject* o = reinterpret_cast<BaseObject*>(pos);
+                        if (!o->IsValidObject()) {
+                            break;
+                        }
+                        size_t sz = o->GetSize();
+                        if (sz == 0) {
+                            break;
+                        }
+                        ++validObjs;
+                        pos += sz;
+                    }
+                }
+                VLOG(REPORT,
+                     "[GCRECLAIM][fwd-empty] region=%p start=%#zx alloc=%#zx residual=%zu validObjs=%zu "
+                     "young=%u live=%u auth=%u type=%u",
+                     region, start, alloc, residual, validObjs,
+                     static_cast<unsigned>(youngRegion), region->GetLiveByteCount(),
+                     static_cast<unsigned>(region->IsLiveCountAuthoritative()),
+                     region->GetRegionType());
+            }
+        }
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.
             region->SetYoungRegionFlag(0);
