@@ -27,7 +27,8 @@ namespace MapleRuntime {
 // Report-only; optional abort: MRT_GCV2_VERIFY_HEAP_FATAL=1
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
-void VerifyHeapObjects(const char* point);
+// force=true: run even when MRT_GCV2_VERIFY_HEAP is unset (post-evac hook uses this).
+void VerifyHeapObjects(const char* point, bool force = false);
 
 } // namespace MapleRuntime
 

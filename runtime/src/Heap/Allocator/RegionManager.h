@@ -132,6 +132,10 @@ public:
     void ForwardFromRegions(GCThreadPool* threadPool);
     void ForwardFromRegions();
     void ForwardRegion(RegionInfo* region);
+    // Before clearing the young flag on a promoted region, record every live
+    // old→young out-edge that mutators skipped while the source was still young.
+    static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
+    static size_t ConsumePromotedCrossGenEdgeCount();
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 

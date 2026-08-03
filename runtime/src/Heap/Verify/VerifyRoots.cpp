@@ -7,6 +7,7 @@
 #include "Heap/Verify/VerifyRoots.h"
 
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 
@@ -19,13 +20,18 @@
 
 namespace MapleRuntime {
 namespace {
-std::atomic<size_t> g_badRootCount{ 0 };
+std::atomic<size_t> g_badRootCount{ 0 };  // defect channel
+std::atomic<size_t> g_infoRootCount{ 0 }; // INFO channel (misaligned etc.)
 
 bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
     return v != nullptr && std::strcmp(v, "1") == 0;
 }
+
+// Defect vs INFO split (gcvheap2): typeinfo-misaligned is a true phenomenon but not
+// defect D; keep reporting it, never filter it out — only demote off BAD_ROOT.
+enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
 } // namespace
 
 bool VerifyRoots::Enabled()
@@ -110,7 +116,7 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
     uintptr_t objAddr = reinterpret_cast<uintptr_t>(obj);
     AddrRegion objRegion = ClassifyAddress(objAddr);
 
-    bool bad = false;
+    RootVerifyChannel channel = RootVerifyChannel::Ok;
     const char* reason = "ok";
     TypeInfo* tip = nullptr;
     uintptr_t tipAddr = 0;
@@ -118,31 +124,32 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
     int typeByte = -1;
 
     if (objRegion == AddrRegion::ZAP_PATTERN) {
-        bad = true;
+        channel = RootVerifyChannel::Defect;
         reason = "slot-value-is-zap-pattern";
     } else if (objRegion == AddrRegion::LOW_NON_HEAP) {
-        bad = true;
+        channel = RootVerifyChannel::Defect;
         reason = "slot-value-low-non-heap";
     } else {
         tip = obj->GetTypeInfo();
         tipAddr = reinterpret_cast<uintptr_t>(tip);
         tipRegion = ClassifyAddress(tipAddr);
         if (tip == nullptr) {
-            bad = true;
+            channel = RootVerifyChannel::Defect;
             reason = "null-typeinfo";
         } else if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
-            bad = true;
+            // INFO only: true misaligned tip word; not defect D (gcvtag CORE_PC).
+            channel = RootVerifyChannel::Info;
             reason = "typeinfo-misaligned";
         } else if (tipRegion == AddrRegion::ZAP_PATTERN) {
-            bad = true;
+            channel = RootVerifyChannel::Defect;
             reason = "typeinfo-is-zap-pattern";
         } else if (tipRegion == AddrRegion::HEAP) {
             // Known AS1 defect: tip residue lands in heap anonymous area, not TypeInfoManager.
-            bad = true;
+            channel = RootVerifyChannel::Defect;
             reason = "typeinfo-in-heap-not-typeinfo-manager";
             typeByte = static_cast<int>(tip->GetType());
         } else if (!tip->IsVaildType()) {
-            bad = true;
+            channel = RootVerifyChannel::Defect;
             reason = "invalid-type-kind";
             typeByte = static_cast<int>(tip->GetType());
         } else {
@@ -150,19 +157,24 @@ void VerifyRoots::VerifyRootPayload(const RootVerifyContext& ctx, void* slotOrRe
         }
     }
 
-    if (!bad) {
+    if (channel == RootVerifyChannel::Ok) {
         return;
     }
 
-    g_badRootCount.fetch_add(1, std::memory_order_relaxed);
+    const char* tag = (channel == RootVerifyChannel::Info) ? "INFO_ROOT" : "BAD_ROOT";
+    if (channel == RootVerifyChannel::Info) {
+        g_infoRootCount.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_badRootCount.fetch_add(1, std::memory_order_relaxed);
+    }
     const char* fname = (ctx.funcName != nullptr && ctx.funcName[0] != '\0') ? ctx.funcName : "?";
     VLOG(REPORT,
-         "[GCV2][verify][roots] BAD_ROOT kind=%s phase=%s reason=%s "
+         "[GCV2][verify][roots] %s kind=%s phase=%s reason=%s "
          "func=%s startIP=%p frameIP=%p frameFA=%p pcOff=0x%zx "
          "slotBias=%zd reg=%d slotOrReg=%p "
          "obj=%p objRegion=%s tip=%p tipRegion=%s typeByte=%d "
          "env=MRT_GCV2_VERIFY_ROOTS=1",
-         KindName(ctx.kind), ctx.phase, reason, fname,
+         tag, KindName(ctx.kind), ctx.phase, reason, fname,
          reinterpret_cast<void*>(ctx.startIP), reinterpret_cast<void*>(ctx.frameIP),
          reinterpret_cast<void*>(ctx.frameFA),
          (ctx.startIP != 0 && ctx.frameIP >= ctx.startIP) ? (ctx.frameIP - ctx.startIP) : 0,
@@ -211,9 +223,15 @@ size_t VerifyRoots::BadRootCount()
     return g_badRootCount.load(std::memory_order_relaxed);
 }
 
+size_t VerifyRoots::InfoRootCount()
+{
+    return g_infoRootCount.load(std::memory_order_relaxed);
+}
+
 void VerifyRoots::ResetStats()
 {
     g_badRootCount.store(0, std::memory_order_relaxed);
+    g_infoRootCount.store(0, std::memory_order_relaxed);
 }
 
 } // namespace MapleRuntime
