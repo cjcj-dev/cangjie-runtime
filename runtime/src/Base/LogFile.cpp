@@ -137,20 +137,38 @@ static void WriteLogImpl(bool addPrefix, LogType type, const char* format, va_li
         return;
     }
     int index = 0;
+    size_t requiredCapacity = 0;
     if (addPrefix) {
-        index = sprintf_s(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
-        if (index == -1) {
-            PRINT_ERROR("WriteLogImpl sprintf_s failed. msg: %s\n", strerror(errno));
-            return;
+        index = snprintf(buf, sizeof(buf), "%s %d ", TimeUtil::GetTimestamp().Str(), MapleRuntime::GetTid());
+        if (index < 0) {
+            index = snprintf(buf, sizeof(buf), "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
+                sizeof(buf), LOG_TYPE_NAMES[type]);
+        } else if (static_cast<size_t>(index) >= sizeof(buf)) {
+            requiredCapacity = static_cast<size_t>(index) + 1;
         }
     }
 
-    int ret = vsprintf_s(buf + index, sizeof(buf) - index, format, args);
-    if (ret == -1) {
-        PRINT_ERROR("WriteLogImpl vsprintf_s failed. msg: %s\n", strerror(errno));
-        return;
+    if (requiredCapacity == 0) {
+        size_t remainingCapacity = sizeof(buf) - static_cast<size_t>(index);
+        int ret = vsnprintf(buf + index, remainingCapacity, format, args);
+        if (ret < 0) {
+            ret = snprintf(buf + index, remainingCapacity, "[FORMAT ERROR bufferCapacity=%zu bytes logType=%s]",
+                sizeof(buf), LOG_TYPE_NAMES[type]);
+        } else if (static_cast<size_t>(ret) >= remainingCapacity) {
+            requiredCapacity = static_cast<size_t>(index) + static_cast<size_t>(ret) + 1;
+        }
+        index += ret;
     }
-    index += ret;
+
+    if (requiredCapacity != 0) {
+        char marker[128];
+        int markerLength = snprintf(marker, sizeof(marker),
+            "...[TRUNCATED requiredCapacity=%zu bytes bufferCapacity=%zu bytes logType=%s]", requiredCapacity,
+            sizeof(buf), LOG_TYPE_NAMES[type]);
+        size_t markerOffset = sizeof(buf) - static_cast<size_t>(markerLength) - 1;
+        (void)memcpy_s(buf + markerOffset, sizeof(buf) - markerOffset, marker, static_cast<size_t>(markerLength));
+        index = static_cast<int>(sizeof(buf) - 1);
+    }
 
     LogFile::LogFileLock(type);
 #if defined(__OHOS__) && (__OHOS__ == 1)
