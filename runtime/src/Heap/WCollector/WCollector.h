@@ -200,7 +200,8 @@ private:
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
-    void PushYoungObject(BaseObject* object, WorkStack& workStack) const;
+    // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
+    void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                            MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,

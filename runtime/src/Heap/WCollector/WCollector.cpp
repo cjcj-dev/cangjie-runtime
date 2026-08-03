@@ -9,6 +9,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -19,6 +20,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -594,34 +596,50 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     return object;
 }
 
+namespace {
+// gcbadroot: tag which root family is currently being walked so PushYoungObject
+// can attribute invalid headers without threading origin through every visitor.
+thread_local const char* gMinorRootOrigin = "unknown";
+} // namespace
+
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
 {
+    gMinorRootOrigin = "mutator_stack";
     MutatorManager::Instance().VisitAllMutators(
         [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+    gMinorRootOrigin = "static";
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    gMinorRootOrigin = "finalizer";
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
+    gMinorRootOrigin = "export";
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    gMinorRootOrigin = "unknown";
 }
 
 void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
 {
     {
         std::lock_guard<std::mutex> lock(resurrectExportMtx);
+        gMinorRootOrigin = "value_export";
         for (BaseObject* object : resurrectedExportObjectes) {
             visitor(object);
         }
+        gMinorRootOrigin = "value_export_fwd";
         for (BaseObject* object : resurrectedExportObjectesForwardPhase) {
             visitor(object);
         }
     }
     std::lock_guard<std::mutex> lock(cycleWorkStackMtx);
+    gMinorRootOrigin = "value_cycle";
     for (const auto& entry : cycleRefWorkStack) {
         visitor(entry.first);
         for (BaseObject* object : entry.second) {
             visitor(object);
         }
     }
+    gMinorRootOrigin = "unknown";
 }
 
 void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
@@ -635,7 +653,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     VisitMinorValueRoots(visitor);
 }
 
-void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
+void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
@@ -646,13 +664,24 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
         // slot, or stackmap-mislabeled root). Printed once per process by default.
         static std::atomic<size_t> g_invalidMinorRootPrinted{ 0 };
         size_t n = g_invalidMinorRootPrinted.fetch_add(1, std::memory_order_relaxed);
+        // Prefer explicit non-generic origin; "minor_root" is a placeholder that
+        // should yield to the TLS tag set by VisitMinorRootSlots/ValueRoots.
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            } else if (src == nullptr) {
+                src = "unknown";
+            }
+        }
         if (n < 8) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
             VLOG(REPORT,
-                 "[GCV2][invalid-minor-root] obj=%p region=%p regionStart=%#zx young=%u pinned=%u "
+                 "[GCV2][invalid-minor-root] obj=%p origin=%s region=%p regionStart=%#zx young=%u pinned=%u "
                  "large=%u free=%u garbage=%u neverExamined=%u "
                  "(fail-closed next; AS1 relation: bad header on stack-live slot vs SKIPPED frame)",
-                 object, region, region == nullptr ? 0 : static_cast<size_t>(region->GetRegionStart()),
+                 object, src, region,
+                 region == nullptr ? 0 : static_cast<size_t>(region->GetRegionStart()),
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()),
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsPinnedRegion()),
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsLargeRegion()),
@@ -661,8 +690,46 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack) const
                  region == nullptr ? 0u
                                    : static_cast<unsigned>(region->GetMarkBitmap() == nullptr &&
                                                           region->GetRegionAllocPtr() > region->GetRegionStart()));
+            // HEADER_DUMP: first 64 bytes as hex + field decode + zap check.
+            auto* bytes = reinterpret_cast<const uint8_t*>(object);
+            char hex[64 * 2 + 16];
+            size_t pos = 0;
+            for (size_t i = 0; i < 64 && pos + 2 < sizeof(hex); ++i) {
+                static const char* kHex = "0123456789abcdef";
+                hex[pos++] = kHex[(bytes[i] >> 4) & 0xf];
+                hex[pos++] = kHex[bytes[i] & 0xf];
+            }
+            hex[pos] = '\0';
+            uint64_t w0 = 0;
+            uint64_t w1 = 0;
+            uint64_t w2 = 0;
+            uint64_t w3 = 0;
+            std::memcpy(&w0, bytes + 0, sizeof(w0));
+            std::memcpy(&w1, bytes + 8, sizeof(w1));
+            std::memcpy(&w2, bytes + 16, sizeof(w2));
+            std::memcpy(&w3, bytes + 24, sizeof(w3));
+            bool allZero = true;
+            for (size_t i = 0; i < 64; ++i) {
+                if (bytes[i] != 0) {
+                    allZero = false;
+                    break;
+                }
+            }
+            bool isZap = HeapZap::IsZapWord(static_cast<uintptr_t>(w0));
+            // tipBits: raw first 48 bits of header word (layout-dependent; not GetTypeInfo).
+            uintptr_t tipBits = (static_cast<uintptr_t>(w0) & 0xffffffffffffULL);
+            VLOG(REPORT,
+                 "[GCV2][HEADER_DUMP] obj=%p hex64=%s w0=%#llx w1=%#llx w2=%#llx w3=%#llx "
+                 "allZero=%u isZapWord=%u tipBits48=%#zx ZAP_WORD=%#llx "
+                 "ZAP_VERDICT_%s",
+                 object, hex, static_cast<unsigned long long>(w0), static_cast<unsigned long long>(w1),
+                 static_cast<unsigned long long>(w2), static_cast<unsigned long long>(w3),
+                 static_cast<unsigned>(allZero), static_cast<unsigned>(isZap), tipBits,
+                 static_cast<unsigned long long>(HeapZap::ZAP_WORD),
+                 isZap ? "是毒值_乙" : (allZero ? "非毒值_全零" : "非毒值_有内容"));
+            VLOG(REPORT, "[GCV2][ROOT_ORIGIN] origin=%s obj=%p", src, object);
         }
-        CHECK_DETAIL(false, "minor root/reference %p is not a valid object", object);
+        CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
@@ -680,7 +747,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                 workStack.push_back(target);
             }
         } else {
-            PushYoungObject(target, workStack);
+            PushYoungObject(target, workStack, "closure_edge");
         }
     };
     while (!workStack.empty()) {
@@ -745,7 +812,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-        PushYoungObject(ResolveMinorReference(*field), workStack);
+        PushYoungObject(ResolveMinorReference(*field), workStack, "remset");
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
@@ -1547,7 +1614,7 @@ void WCollector::DoYoungGarbageCollection()
                 workStack.push_back(object);
             }
         } else {
-            PushYoungObject(object, workStack);
+            PushYoungObject(object, workStack, "alloc_buffer");
         }
     }
     VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
@@ -1556,7 +1623,8 @@ void WCollector::DoYoungGarbageCollection()
                 workStack.push_back(object);
             }
         } else {
-            PushYoungObject(object, workStack);
+            // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
+            PushYoungObject(object, workStack, "minor_root");
         }
     });
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
