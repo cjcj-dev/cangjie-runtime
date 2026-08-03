@@ -75,6 +75,37 @@ size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
     return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
 }
 
+size_t RegionManager::RecordPinnedCrossGenEdges()
+{
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t recorded = 0;
+    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
+        if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
+            return;
+        }
+        region->VisitAllObjects([&rememberedSet, &recorded](BaseObject* object) {
+            if (object == nullptr || !object->HasRefField()) {
+                return;
+            }
+            object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+                BaseObject* target = field.GetTargetObject();
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                    ++recorded;
+                }
+            });
+        });
+    };
+    recentPinnedRegionList.VisitAllRegions(scanRegion);
+    oldPinnedRegionList.VisitAllRegions(scanRegion);
+    rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
+    return recorded;
+}
+
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
 {
     std::lock_guard<std::mutex> lock(youngRegionFlagMutex);

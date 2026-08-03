@@ -1468,6 +1468,14 @@ void WCollector::DoYoungGarbageCollection()
         return;
     }
 
+    // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
+    // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
+    // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
+    size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
+    if (pinnedRemsetRecords != 0) {
+        VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
+    }
+
     MinorSlotSet rememberedSlots;
     {
         RememberedSet::Records records = Heap::GetHeap().GetRememberedSet().AcquireRecordsForMinor();
