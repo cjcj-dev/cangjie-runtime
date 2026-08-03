@@ -136,7 +136,8 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                              "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
                              "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
                              point == nullptr ? "?" : point, invoke, stats.missing, maxFailures, holder,
-                             typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(), holderRegion,
+                             typeInfo == nullptr || typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(),
+                             holderRegion,
                              static_cast<unsigned int>(holderRegion->GetRegionType()),
                              static_cast<unsigned int>(holderRegion->GetYoungAge()),
                              static_cast<unsigned int>(holderRegion->GetRouteState()),
