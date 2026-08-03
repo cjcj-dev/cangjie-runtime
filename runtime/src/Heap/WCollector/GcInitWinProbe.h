@@ -13,6 +13,22 @@
 namespace MapleRuntime {
 namespace GcInitWin {
 
+struct MinorTargetFate {
+    const void* target;
+    const void* region;
+    uintptr_t regionStart;
+    uintptr_t regionAlloc;
+    uint8_t regionType;
+    uint8_t heap;
+    uint8_t validRegion;
+    uint8_t young;
+    uint8_t marked;
+    uint8_t freeRegion;
+    uint8_t garbageRegion;
+    uint8_t inAllocRange;
+    uint8_t state;
+};
+
 // Gated by MRT_GCINITWIN=1 (also auto-on when MRT_GCDISPEL=1 for this lane).
 bool ProbeOn();
 
@@ -26,9 +42,16 @@ void NoteStaticRefWrite(const void* field, const void* ref, const char* site);
 // Observe static-struct stores that may overwrite ref fields (primitiveTys Array rawptr).
 void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, const char* site);
 
+// Bind static-root snapshots and target fate to one minor collection round.
+void NoteMinorCycleStart(uint64_t round);
+const void* InitialMinorTarget(const void* slot, uint64_t round);
+void NoteMinorSlotSnapshot(const void* slot, uint64_t round, const char* moment,
+                           const MinorTargetFate& currentFate, const MinorTargetFate& initialFate);
+
 // At static-root enqueue / bad-TI hit: report lifecycle phase of watched slots.
 void NoteStaticEnqueueLifecycle(const void* slot, const void* target, uint8_t tiClass, const char* point,
-                                const char* kind);
+                                const char* kind, const MinorTargetFate& currentFate,
+                                const MinorTargetFate& initialFate);
 
 // Resolve symbol names for watched slots once maps are stable (first GC cycle ok).
 void TryResolveWatchSlots();
