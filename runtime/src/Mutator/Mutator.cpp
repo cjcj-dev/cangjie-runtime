@@ -15,6 +15,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Verify/VerifyRoots.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -464,6 +465,12 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
         if (!obj->IsValidObject()) {
             continue;
         }
+        if (VerifyRoots::Enabled()) {
+            RootVerifyContext vctx;
+            vctx.phase = "RecordStackPtrs";
+            vctx.kind = RootKind::STACK_OBJECT;
+            VerifyRoots::VerifyRootPayload(vctx, objSlot, obj);
+        }
         TypeInfo* tip = obj->GetTypeInfo();
         uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
         CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,
@@ -604,6 +611,8 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     if (!rootSet.insert(obj).second || !obj->IsValidObject()) {
         return;
     }
+    // gcvroot: rich diagnostic before existing CHECK_DETAIL (does not replace/relax it).
+    VerifyRoots::BeforeCheckAndPush(obj);
     TypeInfo* tip = obj->GetTypeInfo();
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
     CHECK_DETAIL((tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0,

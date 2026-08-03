@@ -14,6 +14,7 @@
 #endif
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/Verify/Zap.h"
 
 namespace MapleRuntime {
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
@@ -169,6 +170,10 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         addr = AllocateImpl(totalSize, allocType);
     }
 
+    // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
+    if (addr != 0) {
+        HeapZap::ZapAllocated(addr, totalSize);
+    }
     DLOG(ALLOC, "alloc 0x%zx(%zu)", addr, totalSize);
     return addr;
 }
