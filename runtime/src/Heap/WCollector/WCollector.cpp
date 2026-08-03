@@ -50,6 +50,7 @@ std::atomic<uint64_t> g_holderDeltaEmitted{0};
 std::atomic<uint64_t> g_positiveControl{0};
 std::atomic<bool> g_summaryDumped{false};
 void DumpHrSummary(const char* reason);
+void DumpEnqSummary(const char* reason);
 
 constexpr size_t kSnapCap = 64;
 struct HolderSnap {
@@ -83,7 +84,10 @@ bool GcdispelOn()
         const char* e = std::getenv("MRT_GCDISPEL");
         cached = (e != nullptr && std::strcmp(e, "1") == 0) ? 1 : 0;
         if (cached == 1) {
-            std::atexit([]() { DumpHrSummary("atexit"); });
+            std::atexit([]() {
+                DumpHrSummary("atexit");
+                DumpEnqSummary("atexit");
+            });
         }
     }
     return cached == 1;
@@ -243,6 +247,234 @@ void EmitDeltaIfAny(BaseObject* holder, const HolderSnap& after)
     }
 }
 
+// gcenqueue Q1/Q2: who enqueues into after-dispel closure, and TI state at enqueue.
+enum EnqTiClass : uint8_t {
+    ENQ_TI_GOOD = 0,
+    ENQ_TI_NULL = 1,
+    ENQ_TI_GARBAGE_LOW = 2,
+    ENQ_TI_NONCANON = 3,
+    ENQ_TI_UNMAPPED = 4,
+    ENQ_TI_CLASS_COUNT = 5
+};
+constexpr size_t kEnqCatCount = 12;
+constexpr size_t kEnqRingCap = 8192;
+constexpr size_t kEnqSampleCap = 48;
+constexpr size_t kEnqHitCap = 64;
+struct EnqRec {
+    BaseObject* target;
+    BaseObject* slotHolder;
+    const void* slot;
+    uintptr_t tiAtEnq;
+    uintptr_t holderTiAtEnq;
+    uint8_t category;
+    uint8_t tiClass;
+    uint8_t holderTiClass;
+    uint8_t pointId; // 1=after-dispel 2=round2-start 3=other
+    uint32_t seq;
+};
+EnqRec g_enqRing[kEnqRingCap];
+std::atomic<uint32_t> g_enqSeq{0};
+std::atomic<size_t> g_enqRingN{0};
+std::atomic<uint64_t> g_enqSiteCount[kEnqCatCount];
+std::atomic<uint64_t> g_enqTiClassCount[ENQ_TI_CLASS_COUNT];
+std::atomic<uint64_t> g_enqSampleEmitted{0};
+std::atomic<uint64_t> g_enqHitEmitted{0};
+std::atomic<uint64_t> g_enqHitGoodThenBad{0};
+std::atomic<uint64_t> g_enqHitBadAlready{0};
+std::atomic<uint64_t> g_enqHitMiss{0};
+std::atomic<bool> g_enqSummaryDumped{false};
+
+uint8_t PointIdOf(const char* point)
+{
+    if (point == nullptr) {
+        return 3;
+    }
+    if (std::strcmp(point, "after-dispel") == 0) {
+        return 1;
+    }
+    if (std::strcmp(point, "round2-start") == 0) {
+        return 2;
+    }
+    return 3;
+}
+
+uint8_t ClassifyTiAddr(uintptr_t typeAddr, TypeInfo* ti)
+{
+    if (ti == nullptr || typeAddr == 0) {
+        return ENQ_TI_NULL;
+    }
+    if (typeAddr < 0x1000ULL) {
+        return ENQ_TI_GARBAGE_LOW;
+    }
+    if (typeAddr >= (1ULL << StateWord::ADDRESS_BIT_COUNT)) {
+        return ENQ_TI_NONCANON;
+    }
+    if (!PageMapped(ti)) {
+        return ENQ_TI_UNMAPPED;
+    }
+    return ENQ_TI_GOOD;
+}
+
+const char* EnqCatName(size_t cat)
+{
+    static const char* names[kEnqCatCount] = {
+        "stack", "register", "derived", "static", "heap", "weak", "finalizer", "export",
+        "concurrency", "external_resurrection", "exception", "raw_object"
+    };
+    return cat < kEnqCatCount ? names[cat] : "?";
+}
+
+const char* EnqTiName(uint8_t c)
+{
+    switch (c) {
+        case ENQ_TI_GOOD: return "good";
+        case ENQ_TI_NULL: return "null";
+        case ENQ_TI_GARBAGE_LOW: return "garbage_low";
+        case ENQ_TI_NONCANON: return "noncanon";
+        case ENQ_TI_UNMAPPED: return "unmapped";
+        default: return "?";
+    }
+}
+
+void DumpEnqSummary(const char* reason)
+{
+    bool expected = false;
+    if (!g_enqSummaryDumped.compare_exchange_strong(expected, true)) {
+        // allow re-dump with reason tag but keep one full dump for atexit-like use
+        // still print a short line if already dumped
+        std::fprintf(stderr, "[GCENQUEUE] ENQUEUE_SUMMARY_AGAIN reason=%s seq=%u ring=%zu\n", reason,
+                     g_enqSeq.load(std::memory_order_relaxed),
+                     g_enqRingN.load(std::memory_order_relaxed));
+        return;
+    }
+    std::fprintf(stderr, "[GCENQUEUE] ENQUEUE_SUMMARY reason=%s total=%u", reason,
+                 g_enqSeq.load(std::memory_order_relaxed));
+    for (size_t i = 0; i < kEnqCatCount; ++i) {
+        uint64_t c = g_enqSiteCount[i].load(std::memory_order_relaxed);
+        if (c != 0) {
+            std::fprintf(stderr, " %s=%llu", EnqCatName(i), static_cast<unsigned long long>(c));
+        }
+    }
+    std::fprintf(stderr, " ti_good=%llu ti_null=%llu ti_garbage_low=%llu ti_noncanon=%llu ti_unmapped=%llu",
+                 static_cast<unsigned long long>(g_enqTiClassCount[ENQ_TI_GOOD].load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqTiClassCount[ENQ_TI_NULL].load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(
+                     g_enqTiClassCount[ENQ_TI_GARBAGE_LOW].load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqTiClassCount[ENQ_TI_NONCANON].load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqTiClassCount[ENQ_TI_UNMAPPED].load(std::memory_order_relaxed)));
+    std::fprintf(stderr,
+                 " hit_good_then_bad=%llu hit_bad_already=%llu hit_miss=%llu hit_emitted=%llu\n",
+                 static_cast<unsigned long long>(g_enqHitGoodThenBad.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqHitBadAlready.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqHitMiss.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_enqHitEmitted.load(std::memory_order_relaxed)));
+}
+
+void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot, size_t category,
+                   const char* point)
+{
+    if (!GcdispelOn() || target == nullptr || category >= kEnqCatCount) {
+        return;
+    }
+    // Only track closure construction for after-dispel / round2-start (buildReachableClosure path).
+    uint8_t pid = PointIdOf(point);
+    if (pid == 3) {
+        return;
+    }
+    TypeInfo* ti = target->GetTypeInfo();
+    uintptr_t typeAddr = reinterpret_cast<uintptr_t>(ti);
+    uint8_t tc = ClassifyTiAddr(typeAddr, ti);
+    TypeInfo* hti = slotHolder != nullptr ? slotHolder->GetTypeInfo() : nullptr;
+    uintptr_t hTypeAddr = reinterpret_cast<uintptr_t>(hti);
+    uint8_t htc = slotHolder != nullptr ? ClassifyTiAddr(hTypeAddr, hti) : ENQ_TI_NULL;
+
+    g_enqSiteCount[category].fetch_add(1, std::memory_order_relaxed);
+    g_enqTiClassCount[tc].fetch_add(1, std::memory_order_relaxed);
+
+    uint32_t seq = g_enqSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+    size_t idx = g_enqRingN.fetch_add(1, std::memory_order_relaxed);
+    EnqRec& rec = g_enqRing[idx % kEnqRingCap];
+    rec.target = target;
+    rec.slotHolder = slotHolder;
+    rec.slot = slot;
+    rec.tiAtEnq = typeAddr;
+    rec.holderTiAtEnq = hTypeAddr;
+    rec.category = static_cast<uint8_t>(category);
+    rec.tiClass = tc;
+    rec.holderTiClass = htc;
+    rec.pointId = pid;
+    rec.seq = seq;
+
+    // Sample: always log first N bad-TI enqueues; sparse good samples.
+    bool interesting = tc != ENQ_TI_GOOD;
+    uint64_t sampleN = g_enqSampleEmitted.load(std::memory_order_relaxed);
+    if (interesting || sampleN < 8) {
+        if (g_enqSampleEmitted.fetch_add(1, std::memory_order_relaxed) < kEnqSampleCap) {
+            ptrdiff_t off = 0;
+            if (slotHolder != nullptr && slot != nullptr) {
+                off = reinterpret_cast<const char*>(slot) - reinterpret_cast<const char*>(slotHolder);
+            }
+            std::fprintf(stderr,
+                         "[GCENQUEUE] ENQUEUE_SAMPLE seq=%u point=%s cat=%s target=%p ti=0x%llx ticlass=%s "
+                         "slot=%p holder=%p holder_ti=0x%llx holder_ticlass=%s slot_off=%td\n",
+                         seq, point, EnqCatName(category), target,
+                         static_cast<unsigned long long>(typeAddr), EnqTiName(tc), slot, slotHolder,
+                         static_cast<unsigned long long>(hTypeAddr), EnqTiName(htc), off);
+        }
+    }
+}
+
+void EmitEnqueueHit(BaseObject* holder, const char* point, uintptr_t failTi)
+{
+    if (!GcdispelOn() || holder == nullptr) {
+        return;
+    }
+    // Reverse lookup newest matching target in ring.
+    size_t n = g_enqRingN.load(std::memory_order_acquire);
+    size_t scan = n < kEnqRingCap ? n : kEnqRingCap;
+    const EnqRec* hit = nullptr;
+    for (size_t i = 0; i < scan; ++i) {
+        size_t idx = (n - 1 - i) % kEnqRingCap;
+        if (g_enqRing[idx].target == holder) {
+            hit = &g_enqRing[idx];
+            break;
+        }
+    }
+    uint8_t failClass = ClassifyTiAddr(failTi, reinterpret_cast<TypeInfo*>(failTi));
+    if (hit == nullptr) {
+        g_enqHitMiss.fetch_add(1, std::memory_order_relaxed);
+        if (g_enqHitEmitted.fetch_add(1, std::memory_order_relaxed) < kEnqHitCap) {
+            std::fprintf(stderr,
+                         "[GCENQUEUE] ENQUEUE_HIT miss=1 point=%s holder=%p fail_ti=0x%llx fail_class=%s "
+                         "ring_n=%zu\n",
+                         point, holder, static_cast<unsigned long long>(failTi), EnqTiName(failClass), n);
+        }
+        return;
+    }
+    bool badAtEnq = hit->tiClass != ENQ_TI_GOOD;
+    if (badAtEnq) {
+        g_enqHitBadAlready.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_enqHitGoodThenBad.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (g_enqHitEmitted.fetch_add(1, std::memory_order_relaxed) < kEnqHitCap) {
+        ptrdiff_t off = 0;
+        if (hit->slotHolder != nullptr && hit->slot != nullptr) {
+            off = reinterpret_cast<const char*>(hit->slot) - reinterpret_cast<const char*>(hit->slotHolder);
+        }
+        std::fprintf(stderr,
+                     "[GCENQUEUE] ENQUEUE_HIT miss=0 point=%s holder=%p fail_ti=0x%llx fail_class=%s "
+                     "enq_seq=%u enq_cat=%s enq_ti=0x%llx enq_ticlass=%s "
+                     "slot=%p slot_holder=%p slot_holder_ti=0x%llx slot_holder_ticlass=%s slot_off=%td "
+                     "state=%s\n",
+                     point, holder, static_cast<unsigned long long>(failTi), EnqTiName(failClass), hit->seq,
+                     EnqCatName(hit->category), static_cast<unsigned long long>(hit->tiAtEnq),
+                     EnqTiName(hit->tiClass), hit->slot, hit->slotHolder,
+                     static_cast<unsigned long long>(hit->holderTiAtEnq), EnqTiName(hit->holderTiClass), off,
+                     badAtEnq ? "bad_already_at_enqueue" : "good_then_corrupted");
+    }
+}
+
 // gcgarbti Q2: is the holder address still an object, or already reused as free-list / metadata?
 std::atomic<uint64_t> g_objectIdEmitted{0};
 void EmitIsItEvenAnObject(BaseObject* holder, const char* point, uintptr_t typeAddr)
@@ -371,6 +603,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
                              point, holder, ti);
             }
             EmitIsItEvenAnObject(holder, point, typeAddr);
+            EmitEnqueueHit(holder, point, typeAddr);
         } else {
             g_hrPath[HR_TI_NONCANON].fetch_add(1, std::memory_order_relaxed);
             if (g_hrSampleEmitted.fetch_add(1, std::memory_order_relaxed) < 64) {
@@ -378,6 +611,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
                              point, holder, ti);
             }
             EmitIsItEvenAnObject(holder, point, typeAddr);
+            EmitEnqueueHit(holder, point, typeAddr);
         }
         return false;
     }
@@ -388,6 +622,7 @@ bool DiagnoseHasRefField(BaseObject* holder, const char* point, bool /*doRealCal
                          point, holder, ti);
         }
         EmitIsItEvenAnObject(holder, point, typeAddr);
+        EmitEnqueueHit(holder, point, typeAddr);
         return false;
     }
 
@@ -1318,7 +1553,7 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         }
         return true;
     };
-    auto inspectTarget = [&record, &pending, buildReachableClosure](
+    auto inspectTarget = [&record, &pending, buildReachableClosure, point](
                              size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
         if (record(category, slot, holder, target, tag)) {
             return;
@@ -1328,6 +1563,8 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         }
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
         if (region != nullptr && !region->IsGarbageRegion() && !region->IsFreeRegion() && target->IsValidObject()) {
+            // gcenqueue: record who enqueued this addr into after-dispel closure.
+            RecordEnqueue(target, holder, slot, category, point);
             pending.push_back(target);
         }
     };
@@ -1459,6 +1696,7 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     }
     if (GcdispelOn()) {
         DumpHrSummary(point);
+        DumpEnqSummary(point);
     }
 }
 
