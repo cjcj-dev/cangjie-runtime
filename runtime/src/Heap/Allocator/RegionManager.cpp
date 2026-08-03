@@ -20,6 +20,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/GarbageVerdict.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -949,6 +950,7 @@ size_t RegionManager::CollectPinnedGarbage()
             auto fixToObj = [](BaseObject* obj) { ReleaseNativeResource(obj); };
             del->VisitAllObjects(fixToObj);
 
+            GarbageVerdict::Dump("pinned_empty", del, "CollectPinned_IsKnownEmpty");
             garbageSize += CollectRegion(del);
             continue;
         } else {
@@ -1450,6 +1452,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         bool neverExamined = region->GetMarkBitmap() == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
         if (neverExamined) {
+            GarbageVerdict::Dump("fwd_empty_keep", region, "IsKnownEmpty_and_neverExamined");
             VLOG(REPORT,
                  "[GCRECLAIM][fwd-empty-keep] region=%p start=%#zx alloc=%#zx young=%u "
                  "live=%u neverExamined=1 — skip CollectRegion",
@@ -1466,6 +1469,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
             return;
         }
+        GarbageVerdict::Dump("fwd_empty_collect", region, "IsKnownEmpty_examined");
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.
             region->SetYoungRegionFlag(0);
@@ -1559,6 +1563,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
+        GarbageVerdict::Dump("fwd_after", region, "FORWARDED_then_CollectRegion");
         CollectRegion(region);
     }
 }

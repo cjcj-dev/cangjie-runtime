@@ -20,6 +20,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/GarbageVerdict.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -734,6 +735,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             bool wasCleared = TraceClear::Lookup(reinterpret_cast<MAddress>(object), clearDetail, sizeof(clearDetail));
             VLOG(REPORT, "[GCV2][WAS_LIVE_BEFORE_CLEAR] hit=%u detail=%s obj=%p",
                  static_cast<unsigned>(wasCleared), clearDetail, object);
+            GarbageVerdict::CrossCheck(reinterpret_cast<MAddress>(object));
         }
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }

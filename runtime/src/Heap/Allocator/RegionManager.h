@@ -23,6 +23,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
+#include "Heap/Verify/GarbageVerdict.h"
 #include "RegionList.h"
 #include "securec.h"
 #include "SlotList.h"
@@ -364,6 +365,19 @@ public:
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
                          validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
                 }
+            }
+        }
+
+        // gclivecount: dump live vs independent valid headers at garbage verdict.
+        if (region != nullptr) {
+            bool neverExamined = region->GetMarkBitmap() == nullptr &&
+                region->GetRegionAllocPtr() > region->GetRegionStart();
+            GarbageVerdict::Dump("collect", region, "CollectRegion_to_GARBAGE_REGION");
+            if (neverExamined && GarbageVerdict::BlockNeverExamined()) {
+                VLOG(REPORT,
+                     "[GCV2][block] CollectRegion skip neverExamined region=%p start=%#zx env=MRT_GCV2_BLOCK_NEVEREXAMINED=1",
+                     region, region->GetRegionStart());
+                return 0;
             }
         }
 
