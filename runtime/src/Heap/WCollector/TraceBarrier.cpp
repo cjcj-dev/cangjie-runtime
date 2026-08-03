@@ -11,6 +11,7 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include "GcInitWinProbe.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -139,6 +140,7 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
 
 void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
+    GcInitWin::NoteStaticRefWrite(&field, ref, "TraceBarrier::WriteStaticRef");
     RememberNewReference(Mutator::GetMutator(), ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);

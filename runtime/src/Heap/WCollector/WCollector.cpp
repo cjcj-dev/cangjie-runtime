@@ -22,6 +22,7 @@
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "GcInitWinProbe.h"
 
 namespace MapleRuntime {
 namespace {
@@ -581,6 +582,7 @@ void DumpEnqSummary(const char* reason)
 {
     // Always print full site/ti/hit counters (bounded line; needed after each validator point).
     (void)g_enqSummaryDumped.exchange(true, std::memory_order_relaxed);
+    GcInitWin::DumpSummary(reason);
     std::fprintf(stderr, "[GCENQUEUE] ENQUEUE_SUMMARY reason=%s total=%u", reason,
                  g_enqSeq.load(std::memory_order_relaxed));
     for (size_t i = 0; i < kEnqCatCount; ++i) {
@@ -673,6 +675,9 @@ void RecordEnqueue(BaseObject* target, BaseObject* slotHolder, const void* slot,
         if (takeLoc) {
             EmitStaticSlotLoc(slot, tc, seq, tc != ENQ_TI_GOOD ? "bad" : "good");
         }
+        // gcinitwin: lifecycle phase of static slot at enqueue.
+        GcInitWin::NoteStaticEnqueueLifecycle(slot, target, tc, point,
+                                              tc != ENQ_TI_GOOD ? "bad" : "good");
     }
 }
 

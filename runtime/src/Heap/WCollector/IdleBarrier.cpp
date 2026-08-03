@@ -10,6 +10,7 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
+#include "GcInitWinProbe.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -154,7 +155,11 @@ void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
 #endif
 }
 
-void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const { WriteReference(nullptr, field, ref); }
+void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+{
+    GcInitWin::NoteStaticRefWrite(&field, ref, "IdleBarrier::WriteStaticRef");
+    WriteReference(nullptr, field, ref);
+}
 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {

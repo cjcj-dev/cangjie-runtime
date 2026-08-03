@@ -10,6 +10,7 @@
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
+#include "GcInitWinProbe.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -104,6 +105,7 @@ void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& fiel
 
 void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
+    GcInitWin::NoteStaticRefWrite(&field, ref, "PostTraceBarrier::WriteStaticRef");
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
 }

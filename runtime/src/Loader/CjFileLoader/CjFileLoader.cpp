@@ -10,6 +10,7 @@
 #include "ExceptionManager.inline.h"
 #include "ObjectManager.inline.h"
 #include "TypeInfoManager.h"
+#include "Heap/WCollector/GcInitWinProbe.h"
 namespace MapleRuntime {
 
 void CJFileLoader::Fini()
@@ -472,6 +473,8 @@ Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) cons
 bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
 {
     ScopedEntryTrace trace((CString("CJRT_INIT_LIBRARY_") + baseFile->GetBaseName()).Str());
+    const char* baseName = baseFile->GetBaseName().Str();
+    GcInitWin::NoteGlobalInitBegin(baseName);
     std::vector<Uptr> funcs;
     baseFile->GetGlobalInitFunc(funcs);
     for (Uptr func : funcs) {
@@ -495,11 +498,13 @@ bool CJFileLoader::DoInitImage(BaseFile* baseFile) const
                 LOG(RTLOG_ERROR, "Init Image fail! exception occurrence when init image, exception:%s ",
                     ex->GetTypeInfo()->GetName());
                 ExceptionManager::ClearPendingException();
+                GcInitWin::NoteGlobalInitEnd(baseName, false);
                 return false;
             }
 #endif
         }
     }
+    GcInitWin::NoteGlobalInitEnd(baseName, true);
     return true;
 }
 

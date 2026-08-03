@@ -11,6 +11,7 @@
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Collector/CopyCollector.h"
+#include "GcInitWinProbe.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -134,6 +135,7 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, field.GetTargetObject(), ref);
+    GcInitWin::NoteStaticRefWrite(&field, ref, "EnumBarrier::WriteStaticRef");
     WriteReference(nullptr, field, ref);
 }
 

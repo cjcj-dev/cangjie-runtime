@@ -30,6 +30,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/WCollector/GcInitWinProbe.h" // GlobalInit phase only; static writes observed in barriers
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -331,6 +332,9 @@ extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
 {
     CHECK_DETAIL((dst != 0u && src != 0u), "MCC_WriteStaticStruct wrong parameter, dst: %p src: %p", dst, src);
+    // Observe before barrier store (struct path may overwrite watched ref fields).
+    GcInitWin::NoteStaticStructWrite(reinterpret_cast<const void*>(dst), dstLen, reinterpret_cast<const void*>(src),
+                                     "MCC_WriteStaticStruct");
     Heap::GetBarrier().WriteStaticStruct(dst, dstLen, src, srcLen, gcTib);
 }
 

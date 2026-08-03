@@ -12,6 +12,7 @@ set(SRC_LIST
     "PreforwardBarrier.cpp"
     "ForwardBarrier.cpp"
     "WCollector.cpp"
+    "GcInitWinProbe.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/..)
