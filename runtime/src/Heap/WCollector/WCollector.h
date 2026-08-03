@@ -210,6 +210,8 @@ private:
     void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
     void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
     void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
+    // HotSpot g1HeapVerifier verify_region_sets isomorphic check; gated by MRT_GCV2_VERIFY_REGION_SETS.
+    void VerifyYoungRegionSets(const char* point);
     void DoYoungGarbageCollection();
     void FlushAllocationRegions();
     template<bool forward>

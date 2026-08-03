@@ -968,6 +968,15 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
 
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
+    // Gate mirrors ValidateMinorReferences (WCollector.cpp:808-811). Default OFF — product path must not abort.
+    // CHECK_DETAIL body unchanged: when enabled, still reports truth (defect C). Details of this validator
+    // belong to gcyoungcand; this lane only adds the env door.
+    // Env: MRT_GCV2_VERIFY_YOUNG_MARKING=1 to enable (default unset/other = off).
+    const char* enabled = std::getenv("MRT_GCV2_VERIFY_YOUNG_MARKING");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+
     MinorObjectSet reachable;
     MinorObjectSet expectedYoung;
     WorkStack pending = NewWorkStack();
@@ -1031,11 +1040,39 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, co
             ++missingYoung;
         }
     }
-    VLOG(REPORT, "[GCV2Minor] mark-equivalence=%zu/%zu missing=%zu unexpected=%zu",
-         actualYoung - unexpectedYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
+    VLOG(REPORT,
+         "[GCV2][verify][young-marking] run=%zu phase=post-trace env=MRT_GCV2_VERIFY_YOUNG_MARKING=1 "
+         "mark-equivalence=%zu/%zu missing=%zu unexpected=%zu",
+         minorTotalRuns + 1, actualYoung - unexpectedYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
     CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 && actualYoung == expectedYoung.size(),
                  "minor marking differs from full marking: actual=%zu expected=%zu missing=%zu unexpected=%zu",
                  actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
+}
+
+void WCollector::VerifyYoungRegionSets(const char* point)
+{
+    // HotSpot: G1HeapVerifier::verify_region_sets (g1HeapVerifier.cpp:424) — independent list membership.
+    // Env: MRT_GCV2_VERIFY_REGION_SETS=1 (default off). Failure still aborts (gate ≠ silence).
+    const char* enabled = std::getenv("MRT_GCV2_VERIFY_REGION_SETS");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    size_t youngSeen = 0;
+    size_t missingFromCandidates = 0;
+    size_t unexpectedInCandidates = 0;
+    manager.VerifyYoungRegionSets(minorCandidateRegions, youngSeen, missingFromCandidates, unexpectedInCandidates);
+    VLOG(REPORT,
+         "[GCV2][verify][region-sets] point=%s run=%zu phase=post-prepare "
+         "env=MRT_GCV2_VERIFY_REGION_SETS=1 candidates=%zu youngOnLists=%zu missing=%zu unexpected=%zu",
+         point, minorTotalRuns + 1, minorCandidateRegions.size(), youngSeen, missingFromCandidates,
+         unexpectedInCandidates);
+    CHECK_DETAIL(missingFromCandidates == 0 && unexpectedInCandidates == 0,
+                 "young region sets differ from minor candidates: point=%s candidates=%zu youngOnLists=%zu "
+                 "missing=%zu unexpected=%zu",
+                 point, minorCandidateRegions.size(), youngSeen, missingFromCandidates, unexpectedInCandidates);
 }
 
 void WCollector::FlushAllocationRegions()
@@ -1058,6 +1095,8 @@ void WCollector::DoYoungGarbageCollection()
     minorCandidateRegions.clear();
     YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
+    VerifyYoungRegionSets("after-prepare-young");
     if (stats.candidateRegions == 0) {
         manager.ReassembleFromSpace();
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
