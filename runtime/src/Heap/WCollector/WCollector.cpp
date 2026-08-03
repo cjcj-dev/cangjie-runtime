@@ -1471,7 +1471,11 @@ void WCollector::DoYoungGarbageCollection()
     // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
+    const char* scanCostEnv = std::getenv("MRT_GCV2_SCAN_COST");
+    bool measureScanCost = scanCostEnv != nullptr && std::strcmp(scanCostEnv, "1") == 0;
+    uint64_t scanStartNs = measureScanCost ? TimeUtil::NanoSeconds() : 0;
     size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
+    uint64_t preMinorScanNs = measureScanCost ? TimeUtil::NanoSeconds() - scanStartNs : 0;
     if (pinnedRemsetRecords != 0) {
         VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
     }
@@ -1595,9 +1599,10 @@ void WCollector::DoYoungGarbageCollection()
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
-         "remembered=%zu reclaimedBytes=%zu pause=%zu us",
+         "remembered=%zu reclaimedBytes=%zu preMinorScanNs=%llu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes,
+         static_cast<unsigned long long>(preMinorScanNs), pauseUs);
 }
 
 void WCollector::DoGarbageCollection()
