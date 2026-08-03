@@ -76,10 +76,11 @@ void PushSample(std::array<MAddress, kSampleLimit>& samples, size_t& count, MAdd
 // Build field-address index of every ref slot on non-young live holders.
 // Independence: enumeration is full-heap VisitAllObjects, not minor closure / remset.
 void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetVerifyStats& stats,
-                               const std::unordered_set<MAddress>& remsetSnapshot)
+                               const std::unordered_set<MAddress>& remsetSnapshot, const char* point, size_t invoke,
+                               size_t maxFailures)
 {
     Heap::GetHeap().ForEachObj(
-        [&fieldSlots, &stats, &remsetSnapshot](BaseObject* holder) {
+        [&fieldSlots, &stats, &remsetSnapshot, point, invoke, maxFailures](BaseObject* holder) {
             if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
                 return;
             }
@@ -122,6 +123,27 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                     }
                     PushSample(stats.missingSamples, stats.missingSampleCount, slot);
                     RemsetPhaseProbe::NoteMissing(slot);
+                    if (stats.missing <= maxFailures) {
+                        bool targetValid = target->IsValidObject();
+                        TypeInfo* targetTypeInfo = targetValid ? target->GetTypeInfo() : nullptr;
+                        VLOG(REPORT,
+                             "[GCV2][verify][remset][MISSING_EDGE] point=%s invoke=%zu failure=%zu max=%zu "
+                             "holder=%p holderType=%s holderRegion=%p holderRegionStart=%p holderRegionOffset=0x%zx "
+                             "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
+                             "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionStart=%p "
+                             "targetRegionOffset=0x%zx",
+                             point == nullptr ? "?" : point, invoke, stats.missing, maxFailures, holder,
+                             typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(), holderRegion,
+                             reinterpret_cast<void*>(holderRegion->GetRegionStart()),
+                             static_cast<size_t>(reinterpret_cast<MAddress>(holder) - holderRegion->GetRegionStart()),
+                             reinterpret_cast<void*>(slot), static_cast<size_t>(BaseObject::FieldOffset(holder, &field)),
+                             static_cast<size_t>(slot - holderRegion->GetRegionStart()), target,
+                             static_cast<unsigned int>(targetValid),
+                             targetTypeInfo == nullptr || targetTypeInfo->GetName() == nullptr ? "?" :
+                                                                                               targetTypeInfo->GetName(),
+                             targetRegion, reinterpret_cast<void*>(targetRegion->GetRegionStart()),
+                             static_cast<size_t>(reinterpret_cast<MAddress>(target) - targetRegion->GetRegionStart()));
+                    }
                 }
             });
         },
@@ -172,9 +194,10 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     uint64_t startNs = TimeUtil::NanoSeconds();
     RemsetVerifyStats stats;
     stats.remsetSize = remsetSnapshot.size();
+    size_t maxFailures = EnvSizeT("MRT_GCV2_VERIFY_REMSET_MAX_FAILURES", 20);
 
     std::unordered_set<MAddress> fieldSlots;
-    CollectNonYoungFieldSlots(fieldSlots, stats, remsetSnapshot);
+    CollectNonYoungFieldSlots(fieldSlots, stats, remsetSnapshot, point, invoke, maxFailures);
     ClassifyRemsetOnlySlots(remsetSnapshot, fieldSlots, stats);
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
 
