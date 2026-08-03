@@ -52,6 +52,19 @@ public:
 
     Records AcquireRecordsForMinor() { return Records(*this); }
 
+    // Non-destructive snapshot for diagnostic verify (does not clear).
+    std::unordered_set<MAddress> Snapshot() const
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        return records;
+    }
+
+    bool Contains(MAddress fieldAddress) const
+    {
+        std::lock_guard<std::mutex> guard(lock);
+        return records.count(fieldAddress) != 0;
+    }
+
 private:
     friend class Barrier;
     friend class WCollector;
@@ -62,7 +75,7 @@ private:
         records.insert(fieldAddress);
     }
 
-    std::mutex lock;
+    mutable std::mutex lock;
     std::unordered_set<MAddress> records;
 };
 } // namespace MapleRuntime
