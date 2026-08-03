@@ -78,6 +78,17 @@ size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
 
 size_t RegionManager::RecordPinnedCrossGenEdges()
 {
+    // gcscanoff blocking test: skip whole conservative pinned/old scan (default off).
+    {
+        static const bool skip = []() {
+            const char* v = std::getenv("MRT_GCV2_SKIP_PINNED_SCAN");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (skip) {
+            VLOG(REPORT, "[GCV2][block] skip RecordPinnedCrossGenEdges env=MRT_GCV2_SKIP_PINNED_SCAN=1");
+            return 0;
+        }
+    }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
     auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
