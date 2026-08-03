@@ -1028,6 +1028,175 @@ void WCollector::VerifyRegionSets(const char* point)
     }
 }
 
+void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots)
+{
+    // Default off. When on: independent full-heap retrace from roots (no remset filter),
+    // collect young objs reachable that way, compare to region mark bitmap after young-only mark.
+    // For each unmarked-but-full-reachable young object, scan non-young holders for incoming
+    // old→young edges and report whether that field is in the minor-acquired remset.
+    const char* enabled = std::getenv("MRT_GCMARKGAP_PROBE");
+    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+        return;
+    }
+
+    MinorObjectSet fullReachable;
+    MinorObjectSet fullYoung;
+    WorkStack pending = NewWorkStack();
+    VisitMinorRoots([&pending](BaseObject* object) {
+        if (Heap::IsHeapAddress(object)) {
+            pending.push_back(object);
+        }
+    });
+    for (BaseObject* object : allocationRoots) {
+        pending.push_back(object);
+    }
+    auto pushField = [this, &pending](RefField<>& field) {
+        BaseObject* target = ResolveMinorReference(field);
+        if (Heap::IsHeapAddress(target)) {
+            pending.push_back(target);
+        }
+    };
+    while (!pending.empty()) {
+        BaseObject* object = pending.back();
+        pending.pop_back();
+        if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
+            continue;
+        }
+        if (!object->IsValidObject()) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region == nullptr) {
+            continue;
+        }
+        if (region->IsYoungRegion()) {
+            fullYoung.insert(object);
+        }
+        if (!object->HasRefField()) {
+            continue;
+        }
+        if (UNLIKELY(object->IsWeakRef())) {
+            RefField<>* referentField =
+                reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = ResolveMinorReference(*referentField);
+            if (Heap::IsHeapAddress(referent)) {
+                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+            }
+            continue;
+        }
+        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+    }
+
+    size_t unmarkedLive = 0;
+    size_t markedYoung = 0;
+    size_t missingEdgeHolders = 0;
+    size_t edgeInRemset = 0;
+    size_t edgeNotInRemset = 0;
+    size_t noIncomingOldFound = 0;
+    size_t sampleLimit = 8;
+    size_t samples = 0;
+
+    for (BaseObject* object : fullYoung) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (region == nullptr) {
+            continue;
+        }
+        if (region->IsMarkedObject(object)) {
+            ++markedYoung;
+            continue;
+        }
+        ++unmarkedLive;
+
+        // Find old→young incoming edges by independent non-young holder walk.
+        size_t incomingOld = 0;
+        size_t incomingMissing = 0;
+        MAddress sampleField = 0;
+        BaseObject* sampleHolder = nullptr;
+        Heap::GetHeap().ForEachObj(
+            [&](BaseObject* holder) {
+                if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
+                    return;
+                }
+                RegionInfo* hReg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                if (hReg == nullptr || hReg->IsYoungRegion() || hReg->IsGarbageRegion() || hReg->IsFreeRegion()) {
+                    return;
+                }
+                holder->ForEachRefField([&](RefField<>& field) {
+                    BaseObject* target = field.GetTargetObject();
+                    if (target != object) {
+                        return;
+                    }
+                    ++incomingOld;
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    bool inRemset = rememberedSlots.count(slot) != 0;
+                    if (inRemset) {
+                        ++edgeInRemset;
+                    } else {
+                        ++edgeNotInRemset;
+                        ++incomingMissing;
+                        if (sampleField == 0) {
+                            sampleField = slot;
+                            sampleHolder = holder;
+                        }
+                    }
+                });
+            },
+            false);
+
+        if (incomingMissing > 0) {
+            ++missingEdgeHolders;
+        }
+        if (incomingOld == 0) {
+            ++noIncomingOldFound;
+        }
+
+        if (samples < sampleLimit) {
+            ++samples;
+            TypeInfo* ti = object->IsValidObject() ? object->GetTypeInfo() : nullptr;
+            TypeInfo* hti = (sampleHolder != nullptr && sampleHolder->IsValidObject()) ? sampleHolder->GetTypeInfo()
+                                                                                      : nullptr;
+            VLOG(REPORT,
+                 "[GCMARKGAP][unmarked-live] run=%zu obj=%p region=%p start=%#zx marked=0 "
+                 "fullReachable=1 incomingOld=%zu incomingMissing=%zu sampleField=%p sampleHolder=%p "
+                 "objTi=%p holderTi=%p inRemsetSample=%u",
+                 minorTotalRuns + 1, object, region, region->GetRegionStart(), incomingOld, incomingMissing,
+                 reinterpret_cast<void*>(sampleField), sampleHolder, ti, hti,
+                 static_cast<unsigned>(sampleField != 0 && rememberedSlots.count(sampleField) != 0));
+        }
+    }
+
+    // Also count residual unmarked valid objs on candidates (may be truly dead).
+    size_t residualUnmarkedValid = 0;
+    size_t residualUnmarkedAndFullReachable = 0;
+    size_t neverExaminedCandidates = 0;
+    for (RegionInfo* region : minorCandidateRegions) {
+        if (region->GetMarkBitmap() == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart()) {
+            ++neverExaminedCandidates;
+        }
+        region->VisitAllObjects([&](BaseObject* object) {
+            if (region->IsMarkedObject(object)) {
+                return;
+            }
+            if (!object->IsValidObject()) {
+                return;
+            }
+            ++residualUnmarkedValid;
+            if (fullYoung.count(object) != 0) {
+                ++residualUnmarkedAndFullReachable;
+            }
+        });
+    }
+
+    VLOG(REPORT,
+         "[GCMARKGAP][summary] run=%zu fullYoung=%zu markedYoung=%zu UNMARKED_LIVE=%zu "
+         "missingEdgeHolders=%zu edgeInRemset=%zu edgeNotInRemset=%zu noIncomingOld=%zu "
+         "residualUnmarkedValid=%zu residualUnmarkedAndFullReachable=%zu neverExaminedCandidates=%zu "
+         "remsetSize=%zu env=MRT_GCMARKGAP_PROBE=1",
+         minorTotalRuns + 1, fullYoung.size(), markedYoung, unmarkedLive, missingEdgeHolders, edgeInRemset,
+         edgeNotInRemset, noIncomingOldFound, residualUnmarkedValid, residualUnmarkedAndFullReachable,
+         neverExaminedCandidates, rememberedSlots.size());
+}
+
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
     // Gate mirrors ValidateMinorReferences. Default OFF — product path must not abort.
@@ -1379,6 +1548,9 @@ void WCollector::DoYoungGarbageCollection()
         VerifyRegionSets("after-young-mark");
         ValidateYoungMarking(reachableObjects, allocationRoots);
     }
+    // Always-available (gated) probe: full-heap independent reachability vs young-only bitmap.
+    // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
+    ProbeUnmarkedLive(allocationRoots, rememberedSlots);
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
     WeakRefBuffer::Instance().ClearWeakRefBuffer();
