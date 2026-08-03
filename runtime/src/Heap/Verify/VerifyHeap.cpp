@@ -190,10 +190,11 @@ int SampleTypeByte(BaseObject* obj)
 }
 } // namespace
 
-void VerifyHeapObjects(const char* point)
+void VerifyHeapObjects(const char* point, bool force)
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC DIAGNOSTIC pattern.
-    if (!EnvEnabled("MRT_GCV2_VERIFY_HEAP")) {
+    // force=true lets post-evac run without enabling the global pre-evacuate gate.
+    if (!force && !EnvEnabled("MRT_GCV2_VERIFY_HEAP")) {
         return;
     }
 

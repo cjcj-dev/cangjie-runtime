@@ -141,10 +141,11 @@ void ClassifyRemsetOnlySlots(const std::unordered_set<MAddress>& remsetSnapshot,
 }
 } // namespace
 
-void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot)
+void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot, bool force)
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC pattern (gc_globals DIAGNOSTIC false).
-    if (!EnvEnabled("MRT_GCV2_VERIFY_REMSET")) {
+    // force=true lets post-evac run without enabling the global pre-evacuate gate.
+    if (!force && !EnvEnabled("MRT_GCV2_VERIFY_REMSET")) {
         return;
     }
 

@@ -782,8 +782,26 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
     fixForwardedReferences();
     ValidateMinorReferences("before-return", &reachableObjects);
+    // Mid-evac checkpoint: after slot fix, before region reclaim. force=true under POST_EVAC.
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VerifyHeapObjects("post-fix-pre-forward", true);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-fix-pre-forward run=%zu",
+                 minorTotalRuns + 1);
+        }
+    }
 
     ForwardFromSpace();
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VerifyHeapObjects("post-forward-pre-reclaim", true);
+            ValidateMinorReferences("post-forward-pre-reclaim", &reachableObjects);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-forward-pre-reclaim run=%zu",
+                 minorTotalRuns + 1);
+        }
+    }
 
     size_t residualPromoteRecords = 0;
     for (RegionInfo* region : minorCandidateRegions) {
@@ -1320,15 +1338,14 @@ void WCollector::DoYoungGarbageCollection()
     // Post-evacuate invariant P (HotSpot VerifyAfterGC analog for young): after
     // fix+forward+remset rebuild inside EvacuateYoungRegions, every live ref must
     // still be a legal object (VerifyHeap H) and remset must cover old→young (R).
-    // Gate default off: MRT_GCV2_VERIFY_POST_EVAC=1. Forward/ghost metadata is
-    // still valid here — before IDLE and before the next minor reclaims units.
+    // Gate default off: MRT_GCV2_VERIFY_POST_EVAC=1. force=true so this does not
+    // require MRT_GCV2_VERIFY_HEAP/REMSET (avoids pre-evacuate side effects).
     {
         const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VerifyHeapObjects("post-evacuate");
+            VerifyHeapObjects("post-evacuate", true);
             std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
-            VerifyRememberedSetInvariant("post-evacuate", remsetSnap);
-            // Stale from-space slot probe (existing validator; report-only unless its own FATAL).
+            VerifyRememberedSetInvariant("post-evacuate", remsetSnap, true);
             ValidateMinorReferences("post-evacuate", nullptr);
             VLOG(REPORT,
                  "[GCV2][verify][post-evac] point=post-evacuate run=%zu "

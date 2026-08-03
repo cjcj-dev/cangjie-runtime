@@ -28,7 +28,9 @@ namespace MapleRuntime {
 //
 // remsetSnapshot: non-owning view of remset slots at the verification point
 // (typically the post-AcquireRecordsForMinor local set; live remset is empty then).
-void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot);
+// force=true: run even when MRT_GCV2_VERIFY_REMSET is unset (post-evac hook uses this).
+void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot,
+                                  bool force = false);
 } // namespace MapleRuntime
 
 #endif // MRT_VERIFY_REMEMBERED_SET_H
