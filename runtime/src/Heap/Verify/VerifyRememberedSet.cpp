@@ -8,6 +8,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <string>
@@ -102,37 +103,63 @@ const char* RegionTypeName(RegionInfo* region)
     }
 }
 
-void ShortTypeName(BaseObject* obj, char* buf, size_t bufSize)
+// Safe copy of TypeInfo name: never strlen on potentially non-C-string garbage targets.
+void SafeTypeName(BaseObject* obj, char* buf, size_t bufSize, bool shortTail)
 {
     if (bufSize == 0) {
         return;
     }
-    buf[0] = '?';
+    std::memset(buf, 0, bufSize);
     if (bufSize == 1) {
-        buf[0] = '\0';
         return;
     }
-    buf[1] = '\0';
-    if (obj == nullptr || !obj->IsValidObject()) {
+    buf[0] = '?';
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
-    TypeInfo* ti = obj->GetTypeInfo();
-    if (ti == nullptr) {
+    // Avoid IsValidObject on targets that may already be mid-corruption; still try TypeInfo.
+    TypeInfo* ti = nullptr;
+    if (obj->IsValidObject()) {
+        ti = obj->GetTypeInfo();
+    }
+    if (ti == nullptr || !Heap::IsHeapAddress(ti)) {
         return;
     }
     const char* name = ti->GetName();
-    if (name == nullptr) {
+    if (name == nullptr || !Heap::IsHeapAddress(const_cast<char*>(name))) {
         return;
     }
-    // Prefer last path segment after ':' for short identity; still cap length.
-    const char* slash = std::strrchr(name, ':');
-    const char* use = (slash != nullptr && slash[1] != '\0') ? slash + 1 : name;
-    size_t n = std::strlen(use);
-    if (n >= bufSize) {
-        n = bufSize - 1;
+    // Bounded printable scan (no strlen).
+    char raw[192];
+    size_t n = 0;
+    for (; n + 1 < sizeof(raw); ++n) {
+        char c = name[n];
+        if (c == '\0') {
+            break;
+        }
+        if (static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) > 0x7e) {
+            raw[n] = '?';
+        } else {
+            raw[n] = c;
+        }
     }
-    std::memcpy(buf, use, n);
-    buf[n] = '\0';
+    raw[n] = '\0';
+    if (n == 0) {
+        return;
+    }
+    const char* use = raw;
+    if (shortTail) {
+        const char* slash = std::strrchr(raw, ':');
+        if (slash != nullptr && slash[1] != '\0') {
+            use = slash + 1;
+        }
+    }
+    size_t m = std::strlen(use);
+    if (m >= bufSize) {
+        m = bufSize - 1;
+    }
+    std::memcpy(buf, use, m);
+    buf[m] = '\0';
 }
 
 bool EnvEnabled(const char* name)
@@ -250,24 +277,24 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
     std::unordered_map<std::string, size_t> byHolderType;
     std::array<size_t, 16> earlyByOutcome{};
 
+    // File dump avoids VLOG vsprintf limits and survives process crash after verify.
+    char path[256];
+    std::snprintf(path, sizeof(path), "/root/gcresid45-run/results/residual_miss_inv%zu.tsv", invoke);
+    FILE* out = std::fopen(path, "w");
+    if (out != nullptr) {
+        std::fprintf(out,
+                     "i\tfield\toff\tholder\thType\thArr\thReg\ttarget\ttType\ttReg\thist\tapi\toutcome\tcause\n");
+    }
+
     size_t dumped = 0;
     for (const MissingEdge& e : missingEdges) {
         WriteHistEntry wh {};
         bool found = hist.Lookup(e.field, wh);
-        char holderName[96];
+        char holderName[160];
         char targetName[96];
-        ShortTypeName(e.holder, holderName, sizeof(holderName));
-        ShortTypeName(e.target, targetName, sizeof(targetName));
-
-        // Full name for clustering map (short name can collide across modules).
-        const char* fullHolder = "?";
-        if (e.holder != nullptr && e.holder->IsValidObject()) {
-            TypeInfo* ti = e.holder->GetTypeInfo();
-            if (ti != nullptr && ti->GetName() != nullptr) {
-                fullHolder = ti->GetName();
-            }
-        }
-        byHolderType[fullHolder]++;
+        SafeTypeName(e.holder, holderName, sizeof(holderName), false);
+        SafeTypeName(e.target, targetName, sizeof(targetName), true);
+        byHolderType[holderName]++;
 
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.holder));
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(e.target));
@@ -301,30 +328,34 @@ void DumpMissingEdges(const char* point, size_t invoke, const std::vector<Missin
             }
         }
 
-        // Short lines: long generic type names + many %s overflow vsprintf_s (seen as WriteLogImpl fail).
-        VLOG(REPORT,
-             "[GCV2][MISS] i=%zu f=%p off=%zu h=%p ht=%s ha=%u hr=%s t=%p tt=%s tr=%s hist=%s api=%s out=%s cause=%s",
-             dumped, reinterpret_cast<void*>(e.field), e.fieldOffset, e.holder, holderName,
-             static_cast<unsigned>(e.holderIsArray), holderReg, e.target, targetName, targetReg,
-             found ? "HIT" : "NONE", apiName, outName, causeTag);
+        if (out != nullptr) {
+            std::fprintf(out, "%zu\t%p\t%zu\t%p\t%s\t%u\t%s\t%p\t%s\t%s\t%s\t%s\t%s\t%s\n", dumped,
+                         reinterpret_cast<void*>(e.field), e.fieldOffset, e.holder, holderName,
+                         static_cast<unsigned>(e.holderIsArray), holderReg, e.target, targetName, targetReg,
+                         found ? "HIT" : "NONE", apiName, outName, causeTag);
+        }
         ++dumped;
+    }
+    if (out != nullptr) {
+        std::fprintf(out, "# RESIDUAL_BY_CAUSE a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu "
+                          "ey=%zu en=%zu et=%zu es=%zu tot=%llu wrap=%llu dumped=%zu point=%s\n",
+                     causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss,
+                     earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
+                     earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)],
+                     earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)],
+                     earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)],
+                     static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()),
+                     dumped, point == nullptr ? "?" : point);
+        for (const auto& kv : byHolderType) {
+            std::fprintf(out, "# HOLDER %s\t%zu\n", kv.first.c_str(), kv.second);
+        }
+        std::fflush(out);
+        std::fclose(out);
     }
 
     VLOG(REPORT,
-         "[GCV2][RESIDUAL_BY_CAUSE] a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu "
-         "ey=%zu en=%zu et=%zu es=%zu tot=%llu wrap=%llu dumped=%zu",
-         causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss,
-         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
-         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)],
-         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)],
-         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)],
-         static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()), dumped);
-
-    size_t typeIdx = 0;
-    for (const auto& kv : byHolderType) {
-        VLOG(REPORT, "[GCV2][RESIDUAL_BY_HOLDER] i=%zu type=%s n=%zu", typeIdx, kv.first.c_str(), kv.second);
-        ++typeIdx;
-    }
+         "[GCV2][RESIDUAL_BY_CAUSE] a=%zu b=%zu c=%zu o=%zu hits=%zu miss=%zu dumped=%zu path=%s",
+         causeBare, causeEarly, causeConsumed, causeOther, histHits, histMiss, dumped, path);
     VLOG(REPORT, "[GCV2][RESIDUAL_HOLDER_N] types=%zu dumped=%zu", byHolderType.size(), dumped);
 }
 } // namespace
