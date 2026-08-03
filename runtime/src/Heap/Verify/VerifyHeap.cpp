@@ -135,6 +135,32 @@ HeapVerifyChannel CheckObjectH1H2(BaseObject* obj, HeapVerifyStats& stats, const
     return CheckTypeInfoRegion(obj->GetTypeInfo(), stats, reason);
 }
 
+const char* RegionKindName(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return "null-region";
+    }
+    if (region->IsFreeRegion()) {
+        return "free";
+    }
+    if (region->IsGarbageRegion()) {
+        return "garbage";
+    }
+    if (region->IsYoungRegion()) {
+        return "young";
+    }
+    if (region->IsFromRegion()) {
+        return "from";
+    }
+    if (region->IsUnmovableFromRegion()) {
+        return "unmovable-from";
+    }
+    if (region->IsLargeRegion()) {
+        return "large";
+    }
+    return "old-or-other";
+}
+
 void ReportDefect(HeapVerifyStats& stats, size_t maxFailures, const char* reason, BaseObject* obj,
                   BaseObject* related, int typeByte)
 {
@@ -144,10 +170,24 @@ void ReportDefect(HeapVerifyStats& stats, size_t maxFailures, const char* reason
         return;
     }
     PushSample(stats, obj);
+    RegionInfo* region = obj == nullptr ? nullptr : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    uintptr_t header0 = 0;
+    uintptr_t header1 = 0;
+    TypeInfo* tip = nullptr;
+    if (obj != nullptr) {
+        // Object header is StateWord (typeinfo packing) then optional next word.
+        const uintptr_t* raw = reinterpret_cast<const uintptr_t*>(obj);
+        header0 = raw[0];
+        header1 = raw[1];
+        tip = obj->GetTypeInfo();
+    }
     VLOG(REPORT,
          "[GCV2][verify][heap] BAD_OBJ reason=%s obj=%p related=%p typeByte=%d "
+         "region=%s regionBase=%p tip=%p header0=%#zx header1=%#zx "
          "failure=%zu max=%zu env=MRT_GCV2_VERIFY_HEAP=1",
-         reason, obj, related, typeByte, stats.failures, maxFailures);
+         reason, obj, related, typeByte, RegionKindName(region),
+         region == nullptr ? nullptr : reinterpret_cast<void*>(region->GetRegionStart()),
+         tip, static_cast<size_t>(header0), static_cast<size_t>(header1), stats.failures, maxFailures);
 }
 
 void ReportInfo(HeapVerifyStats& stats, size_t maxFailures, const char* reason, BaseObject* obj,

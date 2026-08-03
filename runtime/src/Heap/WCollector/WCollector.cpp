@@ -1243,6 +1243,17 @@ void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
+    // force via POST_EVAC so we do not need global VERIFY_HEAP (avoids pre-evac side effects).
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
+                 minorTotalRuns + 1, minorTotalRuns);
+            VerifyHeapObjects("stw-enter", true);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
+        }
+    }
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();
     if (minorTotalRuns != 0) {
@@ -1256,6 +1267,15 @@ void WCollector::DoYoungGarbageCollection()
         [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
     VerifyYoungRegionSets("after-prepare-young");
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
+                 minorTotalRuns + 1);
+            VerifyHeapObjects("post-prepare-young", true);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
+        }
+    }
     if (stats.candidateRegions == 0) {
         manager.ReassembleFromSpace();
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
@@ -1317,7 +1337,18 @@ void WCollector::DoYoungGarbageCollection()
     VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots);
     // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
-    VerifyHeapObjects("pre-evacuate");
+    // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing
+    // does not require global VERIFY_HEAP.
+    {
+        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
+            VerifyHeapObjects("post-mark", true);
+            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
+        } else {
+            VerifyHeapObjects("pre-evacuate");
+        }
+    }
 
     size_t liveObjects = 0;
     size_t liveBytes = 0;
