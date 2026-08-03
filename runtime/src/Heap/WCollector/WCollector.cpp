@@ -11,8 +11,12 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <string>
+#include <unordered_map>
+#include <utility>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -1031,6 +1035,82 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, co
             ++missingYoung;
         }
     }
+
+    // gcyoungcand: classify expectedYoung objects whose region is outside minorCandidateRegions.
+    {
+        RegionManager& mgr = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+        std::unordered_map<RegionInfo*, size_t> missingByRegion;
+        size_t notInCandidateObjs = 0;
+        for (BaseObject* object : expectedYoung) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (minorCandidateRegions.count(region) == 0) {
+                ++notInCandidateObjs;
+                ++missingByRegion[region];
+            }
+        }
+        std::unordered_map<std::string, std::pair<size_t, size_t>> byList; // list -> (regions, objs)
+        std::unordered_map<uint8_t, std::pair<size_t, size_t>> byType;
+        size_t sampleN = 0;
+        for (const auto& entry : missingByRegion) {
+            RegionInfo* region = entry.first;
+            size_t objs = entry.second;
+            const char* listName = mgr.DiagnoseRegionListName(region);
+            auto& listStat = byList[listName];
+            listStat.first += 1;
+            listStat.second += objs;
+            uint8_t rtype = static_cast<uint8_t>(region->GetRegionType());
+            auto& typeStat = byType[rtype];
+            typeStat.first += 1;
+            typeStat.second += objs;
+            if (sampleN < 8) {
+                VLOG(REPORT,
+                     "[GCV2Minor] MISSING_CAND_SAMPLE region=%p type=%u young=%u age=%u units=%zu "
+                     "alloc=%zu liveBytes=%u rawPtr=%ld list=%s objs=%zu start=0x%zx",
+                     region, static_cast<unsigned>(rtype), region->IsYoungRegion() ? 1u : 0u,
+                     static_cast<unsigned>(region->GetYoungAge()), region->GetUnitCount(),
+                     region->GetRegionAllocatedSize(), region->GetLiveByteCount(),
+                     static_cast<long>(region->GetRawPointerObjectCount()), listName, objs,
+                     region->GetRegionStart());
+                ++sampleN;
+            }
+        }
+        std::string listSummary;
+        for (const auto& entry : byList) {
+            if (!listSummary.empty()) {
+                listSummary += ", ";
+            }
+            listSummary += entry.first;
+            listSummary += ":";
+            listSummary += std::to_string(entry.second.first);
+            listSummary += ":";
+            listSummary += std::to_string(entry.second.second);
+        }
+        std::string typeSummary;
+        for (const auto& entry : byType) {
+            if (!typeSummary.empty()) {
+                typeSummary += ", ";
+            }
+            typeSummary += "type";
+            typeSummary += std::to_string(static_cast<unsigned>(entry.first));
+            typeSummary += ":";
+            typeSummary += std::to_string(entry.second.first);
+            typeSummary += ":";
+            typeSummary += std::to_string(entry.second.second);
+        }
+        VLOG(REPORT,
+             "[GCV2Minor] MISSING_CANDIDATE_REGIONS_%s notInCandidateObjs=%zu distinctRegions=%zu "
+             "types={%s} actual=%zu expected=%zu",
+             listSummary.empty() ? "none" : listSummary.c_str(), notInCandidateObjs, missingByRegion.size(),
+             typeSummary.empty() ? "none" : typeSummary.c_str(), actualYoung, expectedYoung.size());
+        VLOG(REPORT,
+             "[GCV2Minor] CANDIDATE_LIST_SIZES tl=%zu recentFull=%zu fullTrace=%zu from=%zu "
+             "unmovable=%zu ghost=%zu candidates=%zu",
+             mgr.GetThreadLocalRegionCountForDiag(), mgr.GetRecentFullRegionCountForDiag(),
+             mgr.GetFullTraceRegionCountForDiag(), mgr.GetFromRegionCountForDiag(),
+             mgr.GetUnmovableFromRegionCountForDiag(), mgr.GetGhostFromRegionCountForDiag(),
+             minorCandidateRegions.size());
+    }
+
     VLOG(REPORT, "[GCV2Minor] mark-equivalence=%zu/%zu missing=%zu unexpected=%zu",
          actualYoung - unexpectedYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
     CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 && actualYoung == expectedYoung.size(),
