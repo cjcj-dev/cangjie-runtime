@@ -103,6 +103,10 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     recentPinnedRegionList.VisitAllRegions(scanRegion);
     oldPinnedRegionList.VisitAllRegions(scanRegion);
     rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
+    // Large objects also skip young (AllocLarge never SetYoungRegionFlag); same IDLE
+    // bare-store gap for array holders (B2 invoke3 arrayHolder=16384 family).
+    recentLargeRegionList.VisitAllRegions(scanRegion);
+    oldLargeRegionList.VisitAllRegions(scanRegion);
     return recorded;
 }
 
