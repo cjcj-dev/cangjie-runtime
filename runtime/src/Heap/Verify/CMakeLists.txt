@@ -12,6 +12,7 @@ set(SRC_LIST
     "Zap.cpp"
     "VerifyRegions.cpp"
     "MinorGCALot.cpp"
+    "RemsetPhaseProbe.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

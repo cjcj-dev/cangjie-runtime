@@ -9,6 +9,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/RemsetPhaseProbe.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -361,31 +362,60 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
-    if (!HasYoungRegionsForRecording()) {
+    using namespace RemsetPhaseProbe;
+    const bool probeOn = Enabled();
+    const bool forceRecord = ForceRecordEnabled();
+    GCPhase phase = GCPhase::GC_PHASE_UNDEF;
+    if (probeOn) {
+        phase = Heap::GetHeap().GetGCPhase();
+    }
+
+    if (!HasYoungRegionsForRecording() && !forceRecord) {
+        if (probeOn) {
+            NoteWrite(fieldAddress, phase, REASON_NO_YOUNG, false);
+        }
         return;
     }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        if (probeOn) {
+            NoteWrite(fieldAddress, phase, REASON_REF_NULL_OR_NONHEAP, false);
+        }
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
     if (!targetRegion->IsYoungRegion()) {
+        if (probeOn) {
+            NoteWrite(fieldAddress, phase, REASON_REF_NOT_YOUNG, false);
+        }
         return;
     }
     // Heap holder: only record old→young (source not young).
     if (Heap::IsHeapAddress(fieldAddress)) {
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            if (probeOn) {
+                NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
+            }
             return;
         }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
         if (sourceRegion->IsYoungRegion()) {
+            if (probeOn) {
+                NoteWrite(fieldAddress, phase, REASON_HOLDER_YOUNG, false);
+            }
             return;
         }
         theRememberedSet.Record(fieldAddress);
+        if (probeOn) {
+            NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
+        }
         return;
     }
     // Non-heap field (static root / global struct): source is outside the heap ⇒ old.
     (void)obj;
     theRememberedSet.Record(fieldAddress);
+    if (probeOn) {
+        NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
+    }
 }
 
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
