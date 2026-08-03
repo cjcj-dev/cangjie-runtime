@@ -979,11 +979,17 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
         return;
     }
 
+    VLOG(REPORT, "[GCV2Minor] REMSET_PROBE_START remsetReachable=%zu remsetSlots=%zu allocRoots=%zu",
+         remsetReachable.size(), rememberedSlots.size(), allocationRoots.size());
+
     MinorObjectSet fullReachable;
     MinorObjectSet fullYoung;
     WorkStack pending = NewWorkStack();
-    MinorSlotSet staticSlots;
+    size_t staticSlots = 0;
     size_t staticRootsVisited = 0;
+    // Cap expansion so a large live heap cannot stall STW forever.
+    constexpr size_t kMaxVisit = 500000;
+    size_t visited = 0;
 
     auto pushAny = [&pending](BaseObject* object) {
         if (Heap::IsHeapAddress(object)) {
@@ -994,14 +1000,14 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
     for (BaseObject* object : allocationRoots) {
         pushAny(object);
     }
-    VisitMinorRoots([&pushAny, &staticSlots, &staticRootsVisited](BaseObject* object) {
+    VisitMinorRoots([&pushAny, &staticRootsVisited](BaseObject* object) {
         // VisitMinorRoots already walks static roots via VisitStaticRoots (WCollector.cpp:582).
         ++staticRootsVisited;
         pushAny(object);
     });
-    // Count static slots separately for STATIC_ROOTS evidence.
     Heap::GetHeap().VisitStaticRoots([&staticSlots](RefField<>& field) {
-        staticSlots.insert(reinterpret_cast<MAddress>(&field));
+        (void)field;
+        ++staticSlots;
     });
 
     auto pushField = [this, &pending](RefField<>& field) {
@@ -1010,12 +1016,13 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
             pending.push_back(target);
         }
     };
-    while (!pending.empty()) {
+    while (!pending.empty() && visited < kMaxVisit) {
         BaseObject* object = pending.back();
         pending.pop_back();
         if (!Heap::IsHeapAddress(object) || !fullReachable.insert(object).second) {
             continue;
         }
+        ++visited;
         if (!object->IsValidObject()) {
             continue;
         }
@@ -1023,6 +1030,8 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
         if (region->IsYoungRegion()) {
             fullYoung.insert(object);
         }
+        // Only expand through non-young when building the full-scan referee (old→young edges).
+        // Young objects still expand to complete the young closure.
         if (!object->HasRefField()) {
             continue;
         }
@@ -1037,32 +1046,44 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
         }
         object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
     }
+    const bool truncated = !pending.empty() || visited >= kMaxVisit;
 
     size_t judged = 0;
     size_t missed = 0;
     size_t originStatic = 0;
     size_t originHeap = 0;
     size_t originOther = 0;
-    size_t phaseIdleOrInit = 0; // phase <= GC_PHASE_INIT (8)
+    size_t phaseIdleOrInit = 0;
     size_t phaseAboveInit = 0;
     size_t phaseUnknown = 0;
     constexpr size_t kSample = 8;
+    constexpr size_t kMaxOriginClassify = 64;
     std::array<BaseObject*, kSample> missedSamples{};
     std::array<MAddress, kSample> missedSlotSamples{};
     std::array<uint8_t, kSample> missedOriginSamples{};
     size_t sampleFill = 0;
+    size_t originClassified = 0;
 
+    // Pre-index edges from static roots and remembered slots only (cheap).
+    // Full holder scan is O(live*refs) and was observed to stall STW; skip it.
     for (BaseObject* object : fullYoung) {
         ++judged;
         if (remsetReachable.count(object) != 0) {
             continue;
         }
-        // Young object is full-scan-reachable but remset path did not mark it.
         ++missed;
-        // Find at least one holder edge pointing at it for origin classification.
+        if (originClassified >= kMaxOriginClassify) {
+            ++originOther;
+            ++phaseUnknown;
+            continue;
+        }
+        ++originClassified;
         bool foundEdge = false;
-        auto considerSlot = [&](MAddress slot, BaseObject* holder, bool isStatic) {
-            if (foundEdge) {
+        uint8_t origin = 2;
+        MAddress foundSlot = 0;
+
+        auto trySlot = [this, object, &foundEdge, &origin, &foundSlot](MAddress slot, bool isStatic) {
+            if (foundEdge || !Heap::IsHeapAddress(slot)) {
                 return;
             }
             RefField<>* field = reinterpret_cast<RefField<>*>(slot);
@@ -1071,69 +1092,38 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
                 return;
             }
             foundEdge = true;
-            uint8_t origin = 2; // other
-            if (isStatic || staticSlots.count(slot) != 0) {
-                origin = 0;
-                ++originStatic;
-            } else if (Heap::IsHeapAddress(holder)) {
-                RegionInfo* hr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-                if (hr != nullptr && !hr->IsYoungRegion() && !hr->IsFreeRegion() && !hr->IsGarbageRegion()) {
-                    origin = 1;
-                    ++originHeap;
-                } else {
-                    ++originOther;
-                }
-            } else {
-                ++originOther;
-            }
-            // Phase of last write: optional table keyed by slot (filled by write probe if present).
-            // Without write-history instrumentation, count as unknown.
-            ++phaseUnknown;
-            if (sampleFill < kSample) {
-                missedSamples[sampleFill] = object;
-                missedSlotSamples[sampleFill] = slot;
-                missedOriginSamples[sampleFill] = origin;
-                ++sampleFill;
-            }
+            foundSlot = slot;
+            origin = isStatic ? 0 : 1;
         };
 
-        // Prefer remembered-set slots that *should* have covered this target but didn't keep it live.
-        for (MAddress slot : rememberedSlots) {
-            if (!Heap::IsHeapAddress(slot)) {
-                continue;
-            }
-            considerSlot(slot, nullptr, false);
-        }
-        // Static roots.
-        for (MAddress slot : staticSlots) {
-            considerSlot(slot, nullptr, true);
-        }
-        // Holders already in fullReachable (old or young).
+        // Static roots: re-walk (count was already taken).
+        Heap::GetHeap().VisitStaticRoots([&trySlot](RefField<>& field) {
+            trySlot(reinterpret_cast<MAddress>(&field), true);
+        });
         if (!foundEdge) {
-            for (BaseObject* holder : fullReachable) {
-                if (!holder->IsValidObject() || !holder->HasRefField()) {
-                    continue;
-                }
-                if (UNLIKELY(holder->IsWeakRef())) {
-                    continue;
-                }
-                holder->ForEachRefField([holder, &considerSlot](RefField<>& field) {
-                    considerSlot(reinterpret_cast<MAddress>(&field), holder, false);
-                });
+            for (MAddress slot : rememberedSlots) {
+                trySlot(slot, false);
                 if (foundEdge) {
                     break;
                 }
             }
         }
-        if (!foundEdge) {
-            ++originOther;
-            ++phaseUnknown;
-            if (sampleFill < kSample) {
-                missedSamples[sampleFill] = object;
-                missedSlotSamples[sampleFill] = 0;
-                missedOriginSamples[sampleFill] = 2;
-                ++sampleFill;
+        // Classify without full-heap holder walk.
+        if (foundEdge) {
+            if (origin == 0) {
+                ++originStatic;
+            } else {
+                ++originHeap;
             }
+        } else {
+            ++originOther;
+        }
+        ++phaseUnknown;
+        if (sampleFill < kSample) {
+            missedSamples[sampleFill] = object;
+            missedSlotSamples[sampleFill] = foundSlot;
+            missedOriginSamples[sampleFill] = foundEdge ? origin : 2;
+            ++sampleFill;
         }
     }
 
@@ -1150,20 +1140,21 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
 
     VLOG(REPORT,
          "[GCV2Minor] REMSET_PROBE missed=%zu judged=%zu fullYoung=%zu remsetYoung=%zu remsetSlots=%zu "
-         "staticSlots=%zu staticRootsVisited=%zu originStatic=%zu originHeap=%zu originOther=%zu "
-         "phaseIdleOrInit=%zu phaseAboveInit=%zu phaseUnknown=%zu",
-         missed, judged, fullYoung.size(), remsetYoung, rememberedSlots.size(), staticSlots.size(),
-         staticRootsVisited, originStatic, originHeap, originOther, phaseIdleOrInit, phaseAboveInit, phaseUnknown);
+         "staticSlots=%zu staticRootsVisited=%zu visited=%zu truncated=%u originStatic=%zu originHeap=%zu "
+         "originOther=%zu phaseIdleOrInit=%zu phaseAboveInit=%zu phaseUnknown=%zu",
+         missed, judged, fullYoung.size(), remsetYoung, rememberedSlots.size(), staticSlots, staticRootsVisited,
+         visited, static_cast<unsigned>(truncated), originStatic, originHeap, originOther, phaseIdleOrInit,
+         phaseAboveInit, phaseUnknown);
     for (size_t i = 0; i < sampleFill; ++i) {
         VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_SAMPLE i=%zu obj=%p slot=%#zx origin=%u", i, missedSamples[i],
              static_cast<size_t>(missedSlotSamples[i]), static_cast<unsigned>(missedOriginSamples[i]));
     }
-    // Machine-readable one-liners for the report harness.
     VLOG(REPORT, "[GCV2Minor] REMSET_MISSED_EDGES_%zu/%zu", missed, judged);
     VLOG(REPORT, "[GCV2Minor] MISSED_EDGE_ORIGIN_static=%zu/heap=%zu/other=%zu_AND_phase_idleOrInit=%zu/"
                  "aboveInit=%zu/unknown=%zu",
          originStatic, originHeap, originOther, phaseIdleOrInit, phaseAboveInit, phaseUnknown);
     VLOG(REPORT, "[GCV2Minor] STATIC_ROOTS_SCANNED_WHEN_FULLSCAN_OFF_yes_WCollector.cpp:582");
+    VLOG(REPORT, "[GCV2Minor] REMSET_PROBE_END");
 }
 
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
