@@ -59,18 +59,11 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             }
         });
     };
-    // VisitLiveObjects filters on IsSurvived; markBitmap==nullptr ⇒ IsSurvived false for every
-    // offset ⇒ zero records. Never-examined / residual promote demotes young holders that still
-    // own young→young edges; scan the allocated range instead of the empty live set.
-    // When a mark bitmap exists, keep the live-only walk (cheaper; dead holders need no remset).
-    if (region->GetMarkBitmap() == nullptr) {
-        region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
-    } else {
-        (void)region->VisitLiveObjectsUntilFalse([&recordFromObject](BaseObject* object) {
-            recordFromObject(object);
-            return true;
-        });
-    }
+    // Never VisitLiveObjects here: IsSurvived is false when markBitmap is null, and is also false
+    // for unmarked-but-still-live holders (B2 residual / neverExamined). Those are exactly the
+    // demoted holders whose young→young edges must become remset entries. VisitAllObjects walks
+    // the allocated range (RegionManager.cpp:184-197) without consulting the mark bitmap.
+    region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
     }
