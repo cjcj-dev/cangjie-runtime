@@ -14,6 +14,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
+#include "ObjectModel/MClass.inline.h"
 
 namespace MapleRuntime {
 namespace {
@@ -41,6 +42,7 @@ struct Slot {
     uint32_t knownEmpty = 0;
     size_t validObjs = 0;
     size_t markedObjs = 0;
+    size_t arrayObjs = 0;
     char site[24] = {};
     char predicate[48] = {};
     uint64_t seq = 0;
@@ -108,9 +110,10 @@ void GarbageVerdict::Dump(const char* site, RegionInfo* region, const char* pred
     uint32_t neverExamined =
         (region->GetMarkBitmap() == nullptr && alloc > start) ? 1u : 0u;
     uint32_t knownEmpty = region->IsKnownEmpty() ? 1u : 0u;
-    size_t validObjs = CountValidObjectHeaders(region);
+    size_t validObjs = 0;
     size_t markedObjs = 0;
-    if (!large && alloc > start && region->GetMarkBitmap() != nullptr) {
+    size_t arrayObjs = 0;
+    if (!large) {
         uintptr_t pos = start;
         while (pos < alloc) {
             BaseObject* o = reinterpret_cast<BaseObject*>(pos);
@@ -121,11 +124,18 @@ void GarbageVerdict::Dump(const char* site, RegionInfo* region, const char* pred
             if (sz == 0) {
                 break;
             }
-            if (region->IsMarkedObject(o)) {
+            ++validObjs;
+            TypeInfo* ti = o->GetTypeInfo();
+            if (ti != nullptr && ti->IsArrayType()) {
+                ++arrayObjs;
+            }
+            if (region->GetMarkBitmap() != nullptr && region->IsMarkedObject(o)) {
                 ++markedObjs;
             }
             pos += sz;
         }
+    } else {
+        validObjs = CountValidObjectHeaders(region);
     }
 
     uint64_t seq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -145,6 +155,7 @@ void GarbageVerdict::Dump(const char* site, RegionInfo* region, const char* pred
     s.knownEmpty = knownEmpty;
     s.validObjs = validObjs;
     s.markedObjs = markedObjs;
+    s.arrayObjs = arrayObjs;
     s.seq = seq;
     std::snprintf(s.site, sizeof(s.site), "%s", site != nullptr ? site : "?");
     std::snprintf(s.predicate, sizeof(s.predicate), "%s", predicate != nullptr ? predicate : "?");
@@ -152,11 +163,11 @@ void GarbageVerdict::Dump(const char* site, RegionInfo* region, const char* pred
     VLOG(REPORT,
          "[GCV2][GARBAGE_VERDICT_DUMP] seq=%llu site=%s pred=%s region=%p start=%#zx alloc=%#zx end=%#zx "
          "size=%zu type=%u young=%u pinned=%u large=%u tl=%u neverExamined=%u knownEmpty=%u "
-         "live=%u liveAuth=%u validObjs=%zu markedObjs=%zu liveSrc=%s",
+         "live=%u liveAuth=%u validObjs=%zu markedObjs=%zu arrayObjs=%zu liveSrc=%s",
          static_cast<unsigned long long>(seq), s.site, s.predicate, region,
          static_cast<size_t>(start), static_cast<size_t>(alloc), static_cast<size_t>(end),
          static_cast<size_t>(end - start), s.regionType, young, pinned, large, tl, neverExamined,
-         knownEmpty, live, liveAuth, validObjs, markedObjs,
+         knownEmpty, live, liveAuth, validObjs, markedObjs, arrayObjs,
          neverExamined ? "ClearLiveInfo_AUTHORITY0_no_bitmap"
                        : (liveAuth ? "mark_AddLiveByteCount" : "bare_zero_no_authority"));
 }
@@ -180,10 +191,10 @@ void GarbageVerdict::CrossCheck(MAddress crashAddr)
         VLOG(REPORT,
              "[GCV2][CROSS_CHECK] crash=%#zx hitSeq=%llu site=%s pred=%s regionStart=%#zx end=%#zx "
              "live=%u liveAuth=%u neverExamined=%u knownEmpty=%u validObjs=%zu markedObjs=%zu "
-             "inRange=1",
+             "arrayObjs=%zu inRange=1",
              static_cast<size_t>(crashAddr), static_cast<unsigned long long>(s.seq), s.site,
              s.predicate, static_cast<size_t>(s.start), static_cast<size_t>(s.end), s.live,
-             s.liveAuth, s.neverExamined, s.knownEmpty, s.validObjs, s.markedObjs);
+             s.liveAuth, s.neverExamined, s.knownEmpty, s.validObjs, s.markedObjs, s.arrayObjs);
     }
     if (hits == 0) {
         VLOG(REPORT,

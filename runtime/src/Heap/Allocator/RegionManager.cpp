@@ -654,6 +654,62 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     return stats;
 }
 
+// Port of diag/gcyoungcand@fac158a8 — list membership for young-outside-candidates classification.
+const char* RegionManager::DiagnoseRegionListName(RegionInfo* region) const
+{
+    if (region == nullptr) {
+        return "null";
+    }
+    auto contains = [region](const RegionList& list) {
+        for (RegionInfo* node = list.GetHeadRegion(); node != nullptr; node = node->GetNextRegion()) {
+            if (node == region) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (contains(tlRegionList)) {
+        return "tlRegionList";
+    }
+    if (contains(recentFullRegionList)) {
+        return "recentFullRegionList";
+    }
+    if (contains(fullTraceRegions)) {
+        return "fullTraceRegions";
+    }
+    if (contains(fromRegionList)) {
+        return "fromRegionList";
+    }
+    if (contains(ghostFromRegionList)) {
+        return "ghostFromRegionList";
+    }
+    if (contains(unmovableFromRegionList)) {
+        return "unmovableFromRegionList";
+    }
+    if (contains(garbageRegionList)) {
+        return "garbageRegionList";
+    }
+    if (contains(recentPinnedRegionList)) {
+        return "recentPinnedRegionList";
+    }
+    if (contains(oldPinnedRegionList)) {
+        return "oldPinnedRegionList";
+    }
+    if (contains(rawPointerPinnedRegionList)) {
+        return "rawPointerPinnedRegionList";
+    }
+    if (contains(oldLargeRegionList)) {
+        return "oldLargeRegionList";
+    }
+    if (contains(recentLargeRegionList)) {
+        return "recentLargeRegionList";
+    }
+    if (contains(largeTraceRegions)) {
+        return "largeTraceRegions";
+    }
+    return "not_on_any_list";
+}
+
 // Anchor: HotSpot g1HeapVerifier.cpp:424-438 verify_region_sets + VerifyRegionListsClosure.
 // Independent of PrepareYoungGarbageCandidates: re-walks lists and diffs vs candidate set.
 // Invariant (must abort if broken): every young region on the lists PrepareYoung *covers*
