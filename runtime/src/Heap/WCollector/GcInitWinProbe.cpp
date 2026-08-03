@@ -16,11 +16,40 @@ namespace MapleRuntime {
 namespace GcInitWin {
 namespace {
 
-constexpr size_t kWatchN = 8;
-constexpr size_t kWriteCap = 64;
+constexpr size_t kWatchN = 12;
+constexpr size_t kBadWatchN = 6;
+constexpr size_t kWriteCap = 96;
 constexpr size_t kLifeCap = 48;
 constexpr size_t kInitEventCap = 32;
 constexpr size_t kNameCap = 96;
+constexpr size_t kSnapshotCap = 512;
+constexpr size_t kDeltaCap = 128;
+
+enum SnapshotMoment : uint8_t {
+    SNAP_A = 0,
+    SNAP_B_PRE,
+    SNAP_B_POST,
+    SNAP_C,
+    SNAP_COUNT
+};
+
+enum WritePath : uint8_t {
+    PATH_MCC_STATIC_REF = 0,
+    PATH_IDLE_STATIC_REF,
+    PATH_ENUM_STATIC_REF,
+    PATH_TRACE_STATIC_REF,
+    PATH_POST_STATIC_REF,
+    PATH_BARRIER_STATIC_REF,
+    PATH_MCC_STATIC_STRUCT,
+    PATH_IDLE_STATIC_STRUCT,
+    PATH_ENUM_STATIC_STRUCT,
+    PATH_TRACE_STATIC_STRUCT,
+    PATH_POST_STATIC_STRUCT,
+    PATH_BARRIER_STATIC_STRUCT,
+    PATH_WRITE_GENERIC,
+    PATH_OTHER,
+    PATH_COUNT
+};
 
 struct WatchSlot {
     const void* addr;
@@ -33,6 +62,17 @@ struct WatchSlot {
     std::atomic<uint8_t> seenNonNull;
     std::atomic<uint8_t> seenPlausible;
     std::atomic<uint8_t> resolved;
+    uint64_t snapshotRound;
+    uint8_t snapshotMask;
+    uintptr_t snapshotValue[SNAP_COUNT];
+    MinorTargetFate aFate;
+    std::atomic<uint64_t> snapshotCount[SNAP_COUNT];
+    std::atomic<uint64_t> aToBPreCompared;
+    std::atomic<uint64_t> aToBPreChanged;
+    std::atomic<uint64_t> aToBPostCompared;
+    std::atomic<uint64_t> aToBPostChanged;
+    std::atomic<uint64_t> bPostToCCompared;
+    std::atomic<uint64_t> bPostToCChanged;
 };
 
 struct WriteRec {
@@ -85,6 +125,11 @@ std::atomic<uint64_t> g_writeTotal{0};
 std::atomic<uint64_t> g_writeWatched{0};
 std::atomic<uint64_t> g_writeGarbageVal{0};
 std::atomic<uint64_t> g_structWriteTotal{0};
+std::atomic<uint64_t> g_minorRound{0};
+std::atomic<uint64_t> g_snapshotEmitted{0};
+std::atomic<uint64_t> g_deltaEmitted{0};
+std::atomic<uint64_t> g_pathTotal[PATH_COUNT];
+std::atomic<uint64_t> g_pathWatched[PATH_COUNT];
 std::atomic<bool> g_summaryDumped{false};
 std::atomic<bool> g_resolvedOnce{false};
 
@@ -151,6 +196,78 @@ const char* LifecycleName(uint8_t l)
         case 4: return "unknown";
         default: return "?";
     }
+}
+
+const char* SnapshotMomentName(uint8_t moment)
+{
+    static const char* names[SNAP_COUNT] = {"a-root", "b-pre-fix", "b-post-fix", "c-enqueue"};
+    return moment < SNAP_COUNT ? names[moment] : "?";
+}
+
+int SnapshotMomentId(const char* moment)
+{
+    if (moment == nullptr) {
+        return -1;
+    }
+    for (uint8_t i = 0; i < SNAP_COUNT; ++i) {
+        if (std::strcmp(moment, SnapshotMomentName(i)) == 0) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+const char* WritePathName(uint8_t path)
+{
+    static const char* names[PATH_COUNT] = {
+        "MCC_WriteStaticRef", "IdleBarrier::WriteStaticRef", "EnumBarrier::WriteStaticRef",
+        "TraceBarrier::WriteStaticRef", "PostTraceBarrier::WriteStaticRef", "Barrier::WriteStaticRef",
+        "MCC_WriteStaticStruct", "IdleBarrier::WriteStaticStruct", "EnumBarrier::WriteStaticStruct",
+        "TraceBarrier::WriteStaticStruct", "PostTraceBarrier::WriteStaticStruct", "Barrier::WriteStaticStruct",
+        "Barrier::WriteGeneric", "other"
+    };
+    return path < PATH_COUNT ? names[path] : "?";
+}
+
+uint8_t WritePathId(const char* site)
+{
+    if (site == nullptr) {
+        return PATH_OTHER;
+    }
+    for (uint8_t i = 0; i < PATH_OTHER; ++i) {
+        if (std::strstr(site, WritePathName(i)) != nullptr) {
+            return i;
+        }
+    }
+    return PATH_OTHER;
+}
+
+void RecordWritePath(const char* site, size_t watched)
+{
+    uint8_t path = WritePathId(site);
+    g_pathTotal[path].fetch_add(1, std::memory_order_relaxed);
+    if (watched != 0) {
+        g_pathWatched[path].fetch_add(watched, std::memory_order_relaxed);
+    }
+}
+
+MinorTargetFate EmptyFate()
+{
+    MinorTargetFate fate{};
+    fate.regionType = 0xff;
+    fate.marked = 2;
+    fate.state = 0xff;
+    return fate;
+}
+
+void ResetSnapshot(WatchSlot& watch, uint64_t round)
+{
+    watch.snapshotRound = round;
+    watch.snapshotMask = 0;
+    for (size_t i = 0; i < SNAP_COUNT; ++i) {
+        watch.snapshotValue[i] = 0;
+    }
+    watch.aFate = EmptyFate();
 }
 
 uint32_t CurrentPhase()
@@ -267,9 +384,13 @@ const KnownOff kKnown[] = {
     {0x259aa30ULL, "primitiveTys", "sema"},
     {0x259aaa0ULL, "MacroProcMsger.instance", "macro"},
     {0x259ac08ULL, "OP_KIND_MAP", "modules"},
-    // good-cluster anchors (approx from gcstatic good file_off 0x259a170-0x259a318)
-    {0x259a170ULL, "good_cluster_low", "good"},
-    {0x259a300ULL, "good_cluster_high", "good"},
+    // Exact good controls from gcaddrdelta (all are precise GC_ROOT_TABLE entries).
+    {0x259a170ULL, "X86_64_TARGET_CPUS", "good"},
+    {0x259a188ULL, "AARCH64_TARGET_CPUS", "good"},
+    {0x259a1a0ULL, "OPTIMIZATION_LEVEL_TO_BACKEND_OPTION", "good"},
+    {0x259a1e0ULL, "g_cjdAstCache", "good"},
+    {0x259a258ULL, "INTEGER_CONVERT_MAP", "good"},
+    {0x259a318ULL, "G_FLOAT2INT_BOUND_MAP", "good"},
 };
 constexpr size_t kKnownN = sizeof(kKnown) / sizeof(kKnown[0]);
 
@@ -304,6 +425,16 @@ void ResolveFromKnownOffsets()
         w.seenNonNull.store(0, std::memory_order_relaxed);
         w.seenPlausible.store(0, std::memory_order_relaxed);
         w.resolved.store(1, std::memory_order_relaxed);
+        ResetSnapshot(w, 0);
+        for (size_t moment = 0; moment < SNAP_COUNT; ++moment) {
+            w.snapshotCount[moment].store(0, std::memory_order_relaxed);
+        }
+        w.aToBPreCompared.store(0, std::memory_order_relaxed);
+        w.aToBPreChanged.store(0, std::memory_order_relaxed);
+        w.aToBPostCompared.store(0, std::memory_order_relaxed);
+        w.aToBPostChanged.store(0, std::memory_order_relaxed);
+        w.bPostToCCompared.store(0, std::memory_order_relaxed);
+        w.bPostToCChanged.store(0, std::memory_order_relaxed);
         std::fprintf(stderr,
                      "[GCINITWIN] WATCH_SLOT idx=%zu name=%s pkg=%s va=%p file_off=0x%llx maps=%s "
                      "map_start=0x%llx map_off=0x%llx\n",
@@ -532,6 +663,7 @@ void NoteStaticRefWrite(const void* field, const void* ref, const char* site)
         g_writeGarbageVal.fetch_add(1, std::memory_order_relaxed);
     }
     int wi = FindWatch(field);
+    RecordWritePath(site, wi >= 0 ? 1 : 0);
     if (wi >= 0) {
         g_writeWatched.fetch_add(1, std::memory_order_relaxed);
         g_watch[wi].writeCount.fetch_add(1, std::memory_order_relaxed);
@@ -571,14 +703,17 @@ void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, cons
     size_t wn = g_watchCount.load(std::memory_order_acquire);
     uintptr_t d0 = reinterpret_cast<uintptr_t>(dst);
     uintptr_t d1 = d0 + dstLen;
+    size_t watched = 0;
     for (size_t i = 0; i < wn && i < kWatchN; ++i) {
         uintptr_t a = reinterpret_cast<uintptr_t>(g_watch[i].addr);
         if (a >= d0 && a < d1) {
+            ++watched;
             uintptr_t value = 0;
             if (src != nullptr) {
                 value = *reinterpret_cast<const uintptr_t*>(reinterpret_cast<const char*>(src) + (a - d0));
             }
             g_watch[i].writeCount.fetch_add(1, std::memory_order_relaxed);
+            g_writeWatched.fetch_add(1, std::memory_order_relaxed);
             g_watch[i].lastValue.store(value, std::memory_order_relaxed);
             g_watch[i].lastPhase.store(CurrentPhase(), std::memory_order_relaxed);
             g_watch[i].lastValueClass.store(ClassifyValue(value), std::memory_order_relaxed);
@@ -587,15 +722,147 @@ void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, cons
             EmitWrite(g_watch[i].addr, value, site2, static_cast<int>(i));
         }
     }
+    RecordWritePath(site, watched);
+}
+
+void NoteMinorCycleStart(uint64_t round)
+{
+    if (!ProbeOn()) {
+        return;
+    }
+    TryResolveWatchSlots();
+    g_minorRound.store(round, std::memory_order_release);
+    size_t wn = g_watchCount.load(std::memory_order_acquire);
+    for (size_t i = 0; i < wn && i < kWatchN; ++i) {
+        ResetSnapshot(g_watch[i], round);
+    }
+    std::fprintf(stderr, "[GCSLOTDELTA] MINOR_CYCLE_START round=%llu watch_n=%zu\n",
+                 static_cast<unsigned long long>(round), wn);
+}
+
+const void* InitialMinorTarget(const void* slot, uint64_t round)
+{
+    if (!ProbeOn() || slot == nullptr) {
+        return nullptr;
+    }
+    TryResolveWatchSlots();
+    int wi = FindWatch(slot);
+    if (wi < 0 || g_watch[wi].snapshotRound != round || (g_watch[wi].snapshotMask & (1U << SNAP_A)) == 0) {
+        return nullptr;
+    }
+    return g_watch[wi].aFate.target;
+}
+
+void NoteMinorSlotSnapshot(const void* slot, uint64_t round, const char* moment,
+                           const MinorTargetFate& currentFate, const MinorTargetFate& initialFate)
+{
+    if (!ProbeOn() || slot == nullptr || round == 0) {
+        return;
+    }
+    TryResolveWatchSlots();
+    int wi = FindWatch(slot);
+    int momentId = SnapshotMomentId(moment);
+    if (wi < 0 || momentId < 0) {
+        return;
+    }
+    WatchSlot& watch = g_watch[wi];
+    if (watch.snapshotRound != round) {
+        ResetSnapshot(watch, round);
+    }
+    uint8_t bit = static_cast<uint8_t>(1U << momentId);
+    if ((watch.snapshotMask & bit) != 0) {
+        return;
+    }
+    uintptr_t value = *reinterpret_cast<const uintptr_t*>(slot);
+    watch.snapshotMask |= bit;
+    watch.snapshotValue[momentId] = value;
+    watch.snapshotCount[momentId].fetch_add(1, std::memory_order_relaxed);
+    if (momentId == SNAP_A) {
+        watch.aFate = currentFate;
+    } else if ((watch.snapshotMask & (1U << SNAP_A)) != 0) {
+        if (momentId == SNAP_B_PRE) {
+            watch.aToBPreCompared.fetch_add(1, std::memory_order_relaxed);
+            if (watch.snapshotValue[SNAP_A] != value) {
+                watch.aToBPreChanged.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (momentId == SNAP_B_POST) {
+            watch.aToBPostCompared.fetch_add(1, std::memory_order_relaxed);
+            if (watch.snapshotValue[SNAP_A] != value) {
+                watch.aToBPostChanged.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (momentId == SNAP_C) {
+            int b = (watch.snapshotMask & (1U << SNAP_B_POST)) != 0 ? SNAP_B_POST : SNAP_B_PRE;
+            if ((watch.snapshotMask & (1U << b)) != 0) {
+                watch.bPostToCCompared.fetch_add(1, std::memory_order_relaxed);
+                if (watch.snapshotValue[b] != value) {
+                    watch.bPostToCChanged.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
+    }
+
+    uint64_t emitted = g_snapshotEmitted.fetch_add(1, std::memory_order_relaxed);
+    if (emitted < kSnapshotCap) {
+        std::fprintf(stderr,
+                     "[GCSLOTDELTA] SLOT_SNAPSHOT round=%llu moment=%s class=%s name=%s slot=%p "
+                     "value=0x%llx target=%p region=%p rtype=%u heap=%u valid=%u young=%u marked=%u "
+                     "free=%u garbage=%u in_alloc=%u state=%u initial=%p initial_region=%p "
+                     "initial_rtype=%u initial_young=%u initial_marked=%u initial_free=%u "
+                     "initial_garbage=%u initial_state=%u\n",
+                     static_cast<unsigned long long>(round), SnapshotMomentName(static_cast<uint8_t>(momentId)),
+                     static_cast<size_t>(wi) < kBadWatchN ? "bad" : "good", watch.name, slot,
+                     static_cast<unsigned long long>(value), currentFate.target, currentFate.region,
+                     static_cast<unsigned>(currentFate.regionType), static_cast<unsigned>(currentFate.heap),
+                     static_cast<unsigned>(currentFate.validRegion), static_cast<unsigned>(currentFate.young),
+                     static_cast<unsigned>(currentFate.marked), static_cast<unsigned>(currentFate.freeRegion),
+                     static_cast<unsigned>(currentFate.garbageRegion), static_cast<unsigned>(currentFate.inAllocRange),
+                     static_cast<unsigned>(currentFate.state), initialFate.target, initialFate.region,
+                     static_cast<unsigned>(initialFate.regionType), static_cast<unsigned>(initialFate.young),
+                     static_cast<unsigned>(initialFate.marked), static_cast<unsigned>(initialFate.freeRegion),
+                     static_cast<unsigned>(initialFate.garbageRegion), static_cast<unsigned>(initialFate.state));
+    }
+
+    if (momentId == SNAP_C && g_deltaEmitted.fetch_add(1, std::memory_order_relaxed) < kDeltaCap) {
+        bool haveA = (watch.snapshotMask & (1U << SNAP_A)) != 0;
+        bool haveBPre = (watch.snapshotMask & (1U << SNAP_B_PRE)) != 0;
+        bool haveBPost = (watch.snapshotMask & (1U << SNAP_B_POST)) != 0;
+        uintptr_t bValue = haveBPost ? watch.snapshotValue[SNAP_B_POST] : watch.snapshotValue[SNAP_B_PRE];
+        bool recycled = haveA && (watch.aFate.region != initialFate.region ||
+                        watch.aFate.regionType != initialFate.regionType || initialFate.freeRegion != 0 ||
+                        initialFate.garbageRegion != 0);
+        std::fprintf(stderr,
+                     "[GCSLOTDELTA] SLOT_DELTA round=%llu class=%s name=%s slot=%p mask=0x%x "
+                     "a=0x%llx b_pre=0x%llx b_post=0x%llx c=0x%llx a_to_b=%u b_to_c=%u "
+                     "a_target=%p a_young=%u a_marked=%u a_region=%p a_rtype=%u "
+                     "a_target_now_marked=%u a_target_now_state=%u a_region_recycled=%u\n",
+                     static_cast<unsigned long long>(round), static_cast<size_t>(wi) < kBadWatchN ? "bad" : "good",
+                     watch.name, slot, static_cast<unsigned>(watch.snapshotMask),
+                     static_cast<unsigned long long>(watch.snapshotValue[SNAP_A]),
+                     static_cast<unsigned long long>(watch.snapshotValue[SNAP_B_PRE]),
+                     static_cast<unsigned long long>(watch.snapshotValue[SNAP_B_POST]),
+                     static_cast<unsigned long long>(watch.snapshotValue[SNAP_C]),
+                     static_cast<unsigned>(haveA && (haveBPre || haveBPost) &&
+                                           watch.snapshotValue[SNAP_A] != bValue),
+                     static_cast<unsigned>((haveBPre || haveBPost) && bValue != watch.snapshotValue[SNAP_C]),
+                     watch.aFate.target, static_cast<unsigned>(watch.aFate.young),
+                     static_cast<unsigned>(watch.aFate.marked), watch.aFate.region,
+                     static_cast<unsigned>(watch.aFate.regionType), static_cast<unsigned>(initialFate.marked),
+                     static_cast<unsigned>(initialFate.state), static_cast<unsigned>(recycled));
+    }
 }
 
 void NoteStaticEnqueueLifecycle(const void* slot, const void* target, uint8_t tiClass, const char* point,
-                                const char* kind)
+                                const char* kind, const MinorTargetFate& currentFate,
+                                const MinorTargetFate& initialFate)
 {
     if (!ProbeOn() || slot == nullptr) {
         return;
     }
     TryResolveWatchSlots();
+    if (point != nullptr && std::strcmp(point, "after-dispel") == 0) {
+        NoteMinorSlotSnapshot(slot, g_minorRound.load(std::memory_order_acquire), "c-enqueue",
+                              currentFate, initialFate);
+    }
     int wi = FindWatch(slot);
     uintptr_t value = reinterpret_cast<uintptr_t>(target);
     // also re-read slot
@@ -647,6 +914,7 @@ void DumpSummary(const char* reason)
                  static_cast<unsigned long long>(g_initCompleted.load(std::memory_order_relaxed)),
                  g_initDepth.load(std::memory_order_relaxed),
                  g_watchCount.load(std::memory_order_relaxed));
+    size_t controlComplete = 0;
     size_t wn = g_watchCount.load(std::memory_order_acquire);
     for (size_t i = 0; i < wn && i < kWatchN; ++i) {
         uintptr_t cur = 0;
@@ -664,6 +932,41 @@ void DumpSummary(const char* reason)
                      static_cast<unsigned>(g_watch[i].seenNonNull.load(std::memory_order_relaxed)),
                      static_cast<unsigned>(g_watch[i].seenPlausible.load(std::memory_order_relaxed)),
                      static_cast<unsigned long long>(cur), ValueClassName(ClassifyValue(cur)));
+        if (i >= kBadWatchN && (g_watch[i].snapshotMask & 0xfU) == 0xfU) {
+            ++controlComplete;
+        }
+        std::fprintf(stderr,
+                     "[GCSLOTDELTA] SLOT_DELTA_SUMMARY class=%s name=%s a=%llu b_pre=%llu b_post=%llu c=%llu "
+                     "a_b_pre_changed=%llu/%llu a_b_post_changed=%llu/%llu b_post_c_changed=%llu/%llu "
+                     "write_hits=%llu\n",
+                     i < kBadWatchN ? "bad" : "good", g_watch[i].name,
+                     static_cast<unsigned long long>(g_watch[i].snapshotCount[SNAP_A].load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(
+                         g_watch[i].snapshotCount[SNAP_B_PRE].load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(
+                         g_watch[i].snapshotCount[SNAP_B_POST].load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].snapshotCount[SNAP_C].load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].aToBPreChanged.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].aToBPreCompared.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].aToBPostChanged.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].aToBPostCompared.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].bPostToCChanged.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].bPostToCCompared.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(g_watch[i].writeCount.load(std::memory_order_relaxed)));
+    }
+    std::fprintf(stderr, "[GCSLOTDELTA] CONTROL_SUMMARY complete=%zu total=%zu snapshot_emitted=%llu cap=%zu "
+                         "delta_emitted=%llu delta_cap=%zu\n",
+                 controlComplete, wn > kBadWatchN ? wn - kBadWatchN : 0,
+                 static_cast<unsigned long long>(g_snapshotEmitted.load(std::memory_order_relaxed)), kSnapshotCap,
+                 static_cast<unsigned long long>(g_deltaEmitted.load(std::memory_order_relaxed)), kDeltaCap);
+    for (size_t i = 0; i < PATH_COUNT; ++i) {
+        uint64_t total = g_pathTotal[i].load(std::memory_order_relaxed);
+        uint64_t watched = g_pathWatched[i].load(std::memory_order_relaxed);
+        if (total != 0 || watched != 0) {
+            std::fprintf(stderr, "[GCSLOTDELTA] WRITE_PATH site=%s total=%llu watched=%llu\n",
+                         WritePathName(static_cast<uint8_t>(i)), static_cast<unsigned long long>(total),
+                         static_cast<unsigned long long>(watched));
+        }
     }
 }
 
