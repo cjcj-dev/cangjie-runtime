@@ -66,6 +66,18 @@ public:
     TypeInfo* GetObjectTypeInfo() { return objectTi; }
     void FillOffsets(TypeInfo* newTypeInfo, TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
     void CalculateGCTib(TypeInfo* typeInfo);
+    // Online range test for TypeInfo pointers allocated by this manager (generic TI mmap).
+    // Static TypeInfos live in load modules and are outside these ranges — callers must
+    // also accept non-heap addresses (see VerifyHeap / VerifyRoots).
+    bool ContainsAddress(uintptr_t addr) const
+    {
+        for (const auto& m : mmapList) {
+            if (addr >= m.first && addr < m.first + m.second) {
+                return true;
+            }
+        }
+        return false;
+    }
 private:
     uintptr_t Allocate(size_t size);
     CString GetGCTibStr(TypeInfo* typeInfo);

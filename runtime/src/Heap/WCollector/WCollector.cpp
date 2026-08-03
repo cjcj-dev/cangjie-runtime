@@ -13,6 +13,8 @@
 #include <limits>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Verify/VerifyHeap.h"
+#include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Mutator/MutatorManager.h"
@@ -982,85 +984,128 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
 
 void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
 {
-    // Gate mirrors ValidateMinorReferences (WCollector.cpp:808-811). Default OFF — product path must not abort.
-    // CHECK_DETAIL body unchanged: when enabled, still reports truth (defect C). Details of this validator
-    // belong to gcyoungcand; this lane only adds the env door.
+    // Gate mirrors ValidateMinorReferences. Default OFF — product path must not abort.
     // Env: MRT_GCV2_VERIFY_YOUNG_MARKING=1 to enable (default unset/other = off).
+    // Mark source: MRT_GCV2_VERIFY_MARK_SOURCE (HotSpot VerifyOption isomorphic).
+    // Default IndependentVsBitmap — does NOT require MinorClosure membership, so fullYoungScan
+    // is not tautological (gcvheap / HotSpot inventory #22).
     const char* enabled = std::getenv("MRT_GCV2_VERIFY_YOUNG_MARKING");
     if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
         return;
     }
 
+    VerifyMarkSource markSource = ParseVerifyMarkSource();
+    const bool useIndependent = markSource == VerifyMarkSource::IndependentVsBitmap ||
+                                markSource == VerifyMarkSource::IndependentRetrace ||
+                                markSource == VerifyMarkSource::MinorClosure;
+    const bool useBitmap = markSource == VerifyMarkSource::IndependentVsBitmap ||
+                           markSource == VerifyMarkSource::RegionMarkBitmap ||
+                           markSource == VerifyMarkSource::MinorClosure;
+    const bool requireMinorClosure = markSource == VerifyMarkSource::MinorClosure;
+
     MinorObjectSet reachable;
     MinorObjectSet expectedYoung;
-    WorkStack pending = NewWorkStack();
-    VisitMinorRoots([&pending](BaseObject* object) {
-        if (Heap::IsHeapAddress(object)) {
+    if (useIndependent) {
+        WorkStack pending = NewWorkStack();
+        VisitMinorRoots([&pending](BaseObject* object) {
+            if (Heap::IsHeapAddress(object)) {
+                pending.push_back(object);
+            }
+        });
+        for (BaseObject* object : allocationRoots) {
             pending.push_back(object);
         }
-    });
-    for (BaseObject* object : allocationRoots) {
-        pending.push_back(object);
-    }
-    auto pushField = [this, &pending](RefField<>& field) {
-        BaseObject* target = ResolveMinorReference(field);
-        if (Heap::IsHeapAddress(target)) {
-            pending.push_back(target);
-        }
-    };
-    while (!pending.empty()) {
-        BaseObject* object = pending.back();
-        pending.pop_back();
-        if (!reachable.insert(object).second) {
-            continue;
-        }
-        CHECK_DETAIL(object->IsValidObject(), "minor marking validator reached invalid object %p", object);
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region->IsYoungRegion()) {
-            expectedYoung.insert(object);
-        }
-        if (!object->HasRefField()) {
-            continue;
-        }
-        if (UNLIKELY(object->IsWeakRef())) {
-            RefField<>* referentField = reinterpret_cast<RefField<>*>(
-                reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            BaseObject* referent = ResolveMinorReference(*referentField);
-            if (Heap::IsHeapAddress(referent)) {
-                referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+        auto pushField = [this, &pending](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (Heap::IsHeapAddress(target)) {
+                pending.push_back(target);
             }
-            continue;
+        };
+        while (!pending.empty()) {
+            BaseObject* object = pending.back();
+            pending.pop_back();
+            if (!reachable.insert(object).second) {
+                continue;
+            }
+            CHECK_DETAIL(object->IsValidObject(), "minor marking validator reached invalid object %p", object);
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (region->IsYoungRegion()) {
+                expectedYoung.insert(object);
+            }
+            if (!object->HasRefField()) {
+                continue;
+            }
+            if (UNLIKELY(object->IsWeakRef())) {
+                RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                    reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+                BaseObject* referent = ResolveMinorReference(*referentField);
+                if (Heap::IsHeapAddress(referent)) {
+                    referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+                }
+                continue;
+            }
+            object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
         }
-        object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
     }
 
     size_t actualYoung = 0;
     size_t unexpectedYoung = 0;
-    for (RegionInfo* region : minorCandidateRegions) {
-        region->VisitAllObjects([&](BaseObject* object) {
-            if (!region->IsMarkedObject(object)) {
-                return;
-            }
-            ++actualYoung;
-            if (expectedYoung.count(object) == 0 || reachableObjects.count(object) == 0) {
-                ++unexpectedYoung;
-            }
-        });
-    }
-    size_t missingYoung = 0;
-    for (BaseObject* object : expectedYoung) {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (!region->IsMarkedObject(object) || reachableObjects.count(object) == 0) {
-            ++missingYoung;
+    if (useBitmap) {
+        for (RegionInfo* region : minorCandidateRegions) {
+            region->VisitAllObjects([&](BaseObject* object) {
+                if (!region->IsMarkedObject(object)) {
+                    return;
+                }
+                ++actualYoung;
+                bool bad = false;
+                if (useIndependent && expectedYoung.count(object) == 0) {
+                    bad = true;
+                }
+                if (requireMinorClosure && reachableObjects.count(object) == 0) {
+                    bad = true;
+                }
+                if (bad) {
+                    ++unexpectedYoung;
+                }
+            });
         }
     }
+
+    size_t missingYoung = 0;
+    if (useIndependent) {
+        for (BaseObject* object : expectedYoung) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            bool missing = false;
+            if (useBitmap && !region->IsMarkedObject(object)) {
+                missing = true;
+            }
+            if (requireMinorClosure && reachableObjects.count(object) == 0) {
+                missing = true;
+            }
+            if (missing) {
+                ++missingYoung;
+            }
+        }
+    }
+
+    size_t matchCount = (actualYoung >= unexpectedYoung) ? (actualYoung - unexpectedYoung) : 0;
+    size_t expectedSize = useIndependent ? expectedYoung.size() : actualYoung;
     VLOG(REPORT,
          "[GCV2][verify][young-marking] run=%zu phase=post-trace env=MRT_GCV2_VERIFY_YOUNG_MARKING=1 "
-         "mark-equivalence=%zu/%zu missing=%zu unexpected=%zu",
-         minorTotalRuns + 1, actualYoung - unexpectedYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
-    CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 && actualYoung == expectedYoung.size(),
-                 "minor marking differs from full marking: actual=%zu expected=%zu missing=%zu unexpected=%zu",
-                 actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung);
+         "markSource=%s mark-equivalence=%zu/%zu missing=%zu unexpected=%zu "
+         "requireMinorClosure=%u",
+         minorTotalRuns + 1, VerifyMarkSourceName(markSource), matchCount, expectedSize, missingYoung,
+         unexpectedYoung, static_cast<unsigned>(requireMinorClosure));
+    if (markSource == VerifyMarkSource::IndependentRetrace || markSource == VerifyMarkSource::RegionMarkBitmap) {
+        // Single-source modes only report; cross-check needs two sides.
+        return;
+    }
+    CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 &&
+                     (!useIndependent || !useBitmap || actualYoung == expectedYoung.size()),
+                 "minor marking differs from full marking: actual=%zu expected=%zu missing=%zu unexpected=%zu "
+                 "markSource=%s",
+                 actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung,
+                 VerifyMarkSourceName(markSource));
 }
 
 void WCollector::VerifyRememberedSet(const char* point, const MinorSlotSet& rememberedSlots)
@@ -1237,6 +1282,9 @@ void WCollector::DoYoungGarbageCollection()
     // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
     // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
     VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots);
+    // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
+    // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
+    VerifyHeapObjects("pre-evacuate");
 
     size_t liveObjects = 0;
     size_t liveBytes = 0;
