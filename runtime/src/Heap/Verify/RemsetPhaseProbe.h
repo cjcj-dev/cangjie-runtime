@@ -13,6 +13,9 @@
 namespace MapleRuntime {
 namespace RemsetPhaseProbe {
 
+// Product diagnostic gate (default off): MRT_GCV2_RECORD_REMSET_EVENTS=1.
+// MRT_GCPHASE_PROBE=1 remains accepted for compatibility with earlier evidence scripts.
+
 // skipReason for NoteWrite / MISSING attribution (observation-only names).
 enum SkipReason : uint8_t {
     REASON_RECORDED = 0,
