@@ -11,6 +11,7 @@ set(SRC_LIST
     "VerifyOption.cpp"
     "Zap.cpp"
     "VerifyRegions.cpp"
+    "MinorGCALot.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
