@@ -14,8 +14,10 @@
 #include "Base/CString.h"
 #include "Collector/Collector.h"
 #include "Collector/CopyCollector.h"
+#include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -30,6 +32,42 @@ uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::mutex RegionInfo::youngRegionFlagMutex;
+std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
+
+size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
+{
+    if (region == nullptr || !region->IsYoungRegion()) {
+        return 0;
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t recorded = 0;
+    (void)region->VisitLiveObjectsUntilFalse([&rememberedSet, &recorded](BaseObject* object) {
+        if (object == nullptr || !object->HasRefField()) {
+            return true;
+        }
+        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+            BaseObject* target = field.GetTargetObject();
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                ++recorded;
+            }
+        });
+        return true;
+    });
+    if (recorded != 0) {
+        g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
+    }
+    return recorded;
+}
+
+size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
+{
+    return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
+}
 
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
 {
@@ -1318,6 +1356,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     bool youngRegion = region->IsYoungRegion();
     if (region->IsKnownEmpty()) {
         if (youngRegion) {
+            // No live objects → no out-edges; still demote so young-count stays honest.
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
@@ -1327,6 +1366,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     if (!RouteRegion(region)) {
         if (youngRegion) {
+            // In-place promote (compacted / unrouted): scan before clearing young flag.
+            (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
@@ -1336,13 +1377,36 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     int32_t rawPointerCount = region->GetRawPointerObjectCount();
     CHECK(rawPointerCount == 0);
     Collector& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t promotedRecords = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector](BaseObject* obj) { return collector.ForwardObject(obj); });
+        [&collector, youngRegion, &rememberedSet, &promotedRecords](BaseObject* obj) {
+            BaseObject* toObj = collector.ForwardObject(obj);
+            // Remset slots must address the surviving (to-space) holder, not the from copy
+            // that CollectRegion is about to reclaim.
+            if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
+                toObj->ForEachRefField([&rememberedSet, &promotedRecords](RefField<>& field) {
+                    BaseObject* target = field.GetTargetObject();
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                        rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                        ++promotedRecords;
+                    }
+                });
+            }
+            return toObj != nullptr;
+        });
 
     CHECK(forwarded);
     {
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         if (youngRegion) {
+            if (promotedRecords != 0) {
+                g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
+            }
             region->ResetLiveByteCount();
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
