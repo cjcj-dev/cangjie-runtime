@@ -50,6 +50,18 @@ static inline size_t HashAddr(uintptr_t a)
     return static_cast<size_t>(x & (TagEpochProbe::kCapacity - 1));
 }
 
+static void GctagidWriteLine(const char* line)
+{
+    std::fputs(line, stderr);
+    std::fflush(stderr);
+    FILE* f = std::fopen("/root/gctagid-run/probe_live.log", "a");
+    if (f != nullptr) {
+        std::fputs(line, f);
+        std::fflush(f);
+        std::fclose(f);
+    }
+}
+
 void TagEpochProbe::InitOnce()
 {
     static std::atomic<bool> inited{false};
@@ -61,12 +73,13 @@ void TagEpochProbe::InitOnce()
     if (env != nullptr && std::strcmp(env, "0") == 0) {
         enabled.store(false, std::memory_order_relaxed);
     }
-    std::fprintf(stderr,
-                 "[GCTAGID] PROBE_INIT capacity=%zu LOG_BOUNDED_openhash_overwrite_%zu_slots "
-                 "sizeof_entry=%zu table_bytes=%zu enabled=%d\n",
-                 kCapacity, kCapacity, sizeof(Entry), sizeof(table),
-                 enabled.load(std::memory_order_relaxed) ? 1 : 0);
-    std::fflush(stderr);
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "[GCTAGID] PROBE_INIT capacity=%zu LOG_BOUNDED_openhash_overwrite_%zu_slots "
+                  "sizeof_entry=%zu table_bytes=%zu enabled=%d\n",
+                  kCapacity, kCapacity, sizeof(Entry), sizeof(table),
+                  enabled.load(std::memory_order_relaxed) ? 1 : 0);
+    GctagidWriteLine(buf);
 }
 
 void TagEpochProbe::OnMajorFlip()
@@ -96,11 +109,15 @@ void TagEpochProbe::OnMajorFlip()
     minorPerMajorHist[b].fetch_add(1, std::memory_order_relaxed);
     majorEpoch.fetch_add(1, std::memory_order_relaxed);
     majorTotal.fetch_add(1, std::memory_order_relaxed);
-    std::fprintf(stderr, "[GCTAGID] MAJOR_FLIP majEpoch=%llu minorSincePrev=%llu totalMajor=%llu\n",
-                 static_cast<unsigned long long>(majorEpoch.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(m),
-                 static_cast<unsigned long long>(majorTotal.load(std::memory_order_relaxed)));
-    std::fflush(stderr);
+    char buf[256];
+    std::snprintf(buf, sizeof(buf),
+                  "[GCTAGID] MAJOR_FLIP majEpoch=%llu minorSincePrev=%llu totalMajor=%llu tagWrites=%llu\n",
+                  static_cast<unsigned long long>(majorEpoch.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(m),
+                  static_cast<unsigned long long>(majorTotal.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(tagWriteCount.load(std::memory_order_relaxed)));
+    GctagidWriteLine(buf);
+    DumpSummary("after_major_flip");
 }
 
 void TagEpochProbe::OnMinorEnd()
@@ -180,6 +197,7 @@ void TagEpochProbe::OnPreFindToVersion(const void* fieldAddr, BaseObject* target
     probeFireCount.fetch_add(1, std::memory_order_relaxed);
     OnTaggedSeen(fieldAddr, fieldVal, site);
 
+    MAddress taddr = reinterpret_cast<MAddress>(target);
     bool inHeap = Heap::IsHeapAddress(target);
     uintptr_t key = reinterpret_cast<uintptr_t>(fieldAddr);
     uint64_t majNow = majorEpoch.load(std::memory_order_relaxed);
@@ -193,13 +211,48 @@ void TagEpochProbe::OnPreFindToVersion(const void* fieldAddr, BaseObject* target
     uint32_t kind = 0;
     uint64_t seq = 0;
     bool found = fieldAddr != nullptr && Lookup(key, tagMaj, tagMin, tagId, phase, kind, seq);
-    // if lookup miss, still use live field bits for tagId
     if (!found) {
         tagId = ValTagID(fieldVal);
     }
     uint64_t delta = found ? (majNow >= tagMaj ? majNow - tagMaj : 0) : UINT64_MAX;
 
-    if (!inHeap) {
+    // Always record delta histogram for tagged old-pointer consumers (even when target is in-heap).
+    // This is the decisive Q1 signal for hypothesis 13.
+    if (ValIsTagged(fieldVal) && fieldAddr != nullptr) {
+        if (delta != UINT64_MAX) {
+            size_t b = delta < (kDeltaBuckets - 1) ? static_cast<size_t>(delta) : (kDeltaBuckets - 1);
+            deltaHist[b].fetch_add(1, std::memory_order_relaxed);
+        } else {
+            deltaHist[kDeltaBuckets - 1].fetch_add(1, std::memory_order_relaxed);
+        }
+        // sample: log every 1024th tagged consumer, or any delta>=1, or non-heap
+        uint64_t fires = probeFireCount.load(std::memory_order_relaxed);
+        bool interesting = (!inHeap) || (delta != UINT64_MAX && delta >= 1) || (delta == UINT64_MAX) ||
+                           ((fires & 0x3ffu) == 0);
+        if (interesting) {
+            char deltaStr[32];
+            if (delta == UINT64_MAX) {
+                std::snprintf(deltaStr, sizeof(deltaStr), "MISS");
+            } else {
+                std::snprintf(deltaStr, sizeof(deltaStr), "%llu", static_cast<unsigned long long>(delta));
+            }
+            char buf[512];
+            std::snprintf(buf, sizeof(buf),
+                          "[GCTAGID] TAG_CONSUME site=%s field=%p target=%p fieldVal=%#zx tagged=%d tagID=%u "
+                          "found=%d tagMajor=%llu tagMinor=%llu majNow=%llu minNow=%llu delta=%s msm=%llu "
+                          "inHeap=%d writePhase=%u writeKind=%u seq=%llu\n",
+                          site != nullptr ? site : "?", fieldAddr, target, static_cast<size_t>(fieldVal),
+                          ValIsTagged(fieldVal) ? 1 : 0, ValTagID(fieldVal), found ? 1 : 0,
+                          static_cast<unsigned long long>(tagMaj), static_cast<unsigned long long>(tagMin),
+                          static_cast<unsigned long long>(majNow), static_cast<unsigned long long>(minNow), deltaStr,
+                          static_cast<unsigned long long>(msm), inHeap ? 1 : 0, phase, kind,
+                          static_cast<unsigned long long>(seq));
+            GctagidWriteLine(buf);
+        }
+    }
+
+    bool force = site != nullptr && std::strstr(site, "out_of_unit") != nullptr;
+    if (!inHeap || force) {
         staleCrashCount.fetch_add(1, std::memory_order_relaxed);
         lastCrashMinorSinceMajor.store(msm, std::memory_order_relaxed);
         lastCrashDelta.store(delta, std::memory_order_relaxed);
@@ -210,28 +263,23 @@ void TagEpochProbe::OnPreFindToVersion(const void* fieldAddr, BaseObject* target
             lastCrashField.store(key, std::memory_order_relaxed);
         }
         lastCrashTarget.store(reinterpret_cast<uintptr_t>(target), std::memory_order_relaxed);
-        if (delta != UINT64_MAX) {
-            size_t b = delta < (kDeltaBuckets - 1) ? static_cast<size_t>(delta) : (kDeltaBuckets - 1);
-            deltaHist[b].fetch_add(1, std::memory_order_relaxed);
-        } else {
-            deltaHist[kDeltaBuckets - 1].fetch_add(1, std::memory_order_relaxed);
-        }
         char deltaStr[32];
         if (delta == UINT64_MAX) {
             std::snprintf(deltaStr, sizeof(deltaStr), "MISS");
         } else {
             std::snprintf(deltaStr, sizeof(deltaStr), "%llu", static_cast<unsigned long long>(delta));
         }
-        std::fprintf(stderr,
-                     "[GCTAGID] STALE_TAG_HIT site=%s field=%p target=%p fieldVal=%#zx tagged=%d tagID=%u "
-                     "found=%d tagMajor=%llu tagMinor=%llu majNow=%llu minNow=%llu delta=%s msm=%llu "
-                     "writePhase=%u writeKind=%u seq=%llu\n",
-                     site != nullptr ? site : "?", fieldAddr, target, static_cast<size_t>(fieldVal),
-                     ValIsTagged(fieldVal) ? 1 : 0, ValTagID(fieldVal), found ? 1 : 0,
-                     static_cast<unsigned long long>(tagMaj), static_cast<unsigned long long>(tagMin),
-                     static_cast<unsigned long long>(majNow), static_cast<unsigned long long>(minNow), deltaStr,
-                     static_cast<unsigned long long>(msm), phase, kind, static_cast<unsigned long long>(seq));
-        std::fflush(stderr);
+        char buf[512];
+        std::snprintf(buf, sizeof(buf),
+                      "[GCTAGID] STALE_TAG_HIT site=%s field=%p target=%p fieldVal=%#zx tagged=%d tagID=%u "
+                      "found=%d tagMajor=%llu tagMinor=%llu majNow=%llu minNow=%llu delta=%s msm=%llu "
+                      "writePhase=%u writeKind=%u seq=%llu\n",
+                      site != nullptr ? site : "?", fieldAddr, target, static_cast<size_t>(fieldVal),
+                      ValIsTagged(fieldVal) ? 1 : 0, ValTagID(fieldVal), found ? 1 : 0,
+                      static_cast<unsigned long long>(tagMaj), static_cast<unsigned long long>(tagMin),
+                      static_cast<unsigned long long>(majNow), static_cast<unsigned long long>(minNow), deltaStr,
+                      static_cast<unsigned long long>(msm), phase, kind, static_cast<unsigned long long>(seq));
+        GctagidWriteLine(buf);
         DumpSummary("pre_find_to_version_nonheap");
     }
 }
@@ -283,28 +331,29 @@ void TagEpochProbe::DumpSummary(const char* reason)
         std::snprintf(mpmBuf, sizeof(mpmBuf), "empty");
     }
 
-    std::fprintf(stderr,
-                 "[GCTAGID] SUMMARY reason=%s majorTotal=%llu minorTotal=%llu majEpoch=%llu minEpoch=%llu "
-                 "tagWrites=%llu probeFires=%llu controlFires=%llu staleCrash=%llu "
-                 "STALE_TAG_EPOCH_DELTA_{%s} MINOR_PER_MAJOR_{%s} lastCrashMsm=%llu lastCrashDelta=%llu "
-                 "lastCrashWritePhase=%u lastCrashTagID=%u lastCrashTagMajor=%llu lastField=%p lastTarget=%p "
-                 "TAG_WRITER_PHASE_{%s}\n",
-                 reason != nullptr ? reason : "?",
-                 static_cast<unsigned long long>(majorTotal.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(minorTotal.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(majorEpoch.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(minorEpoch.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(tagWriteCount.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(probeFireCount.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(controlFireCount.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(staleCrashCount.load(std::memory_order_relaxed)), deltaBuf, mpmBuf,
-                 static_cast<unsigned long long>(lastCrashMinorSinceMajor.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(lastCrashDelta.load(std::memory_order_relaxed)),
-                 lastCrashPhase.load(std::memory_order_relaxed), lastCrashTagID.load(std::memory_order_relaxed),
-                 static_cast<unsigned long long>(lastCrashTagMajor.load(std::memory_order_relaxed)),
-                 reinterpret_cast<void*>(lastCrashField.load(std::memory_order_relaxed)),
-                 reinterpret_cast<void*>(lastCrashTarget.load(std::memory_order_relaxed)), phaseBuf);
-    std::fflush(stderr);
+    char buf[1024];
+    std::snprintf(buf, sizeof(buf),
+                  "[GCTAGID] SUMMARY reason=%s majorTotal=%llu minorTotal=%llu majEpoch=%llu minEpoch=%llu "
+                  "tagWrites=%llu probeFires=%llu controlFires=%llu staleCrash=%llu "
+                  "STALE_TAG_EPOCH_DELTA_{%s} MINOR_PER_MAJOR_{%s} lastCrashMsm=%llu lastCrashDelta=%llu "
+                  "lastCrashWritePhase=%u lastCrashTagID=%u lastCrashTagMajor=%llu lastField=%p lastTarget=%p "
+                  "TAG_WRITER_PHASE_{%s}\n",
+                  reason != nullptr ? reason : "?",
+                  static_cast<unsigned long long>(majorTotal.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(minorTotal.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(majorEpoch.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(minorEpoch.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(tagWriteCount.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(probeFireCount.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(controlFireCount.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(staleCrashCount.load(std::memory_order_relaxed)), deltaBuf, mpmBuf,
+                  static_cast<unsigned long long>(lastCrashMinorSinceMajor.load(std::memory_order_relaxed)),
+                  static_cast<unsigned long long>(lastCrashDelta.load(std::memory_order_relaxed)),
+                  lastCrashPhase.load(std::memory_order_relaxed), lastCrashTagID.load(std::memory_order_relaxed),
+                  static_cast<unsigned long long>(lastCrashTagMajor.load(std::memory_order_relaxed)),
+                  reinterpret_cast<void*>(lastCrashField.load(std::memory_order_relaxed)),
+                  reinterpret_cast<void*>(lastCrashTarget.load(std::memory_order_relaxed)), phaseBuf);
+    GctagidWriteLine(buf);
     (void)dumpedOnce;
 }
 

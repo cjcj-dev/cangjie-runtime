@@ -62,11 +62,17 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
 
 BaseObject* WCollector::FindToVersion(BaseObject* obj) const
 {
-    // Observation only: record if target is outside heap before GetUnitIdxAt aborts.
-    if (!Heap::IsHeapAddress(obj)) {
-        TagEpochProbe::OnPreFindToVersion(nullptr, obj, reinterpret_cast<MAddress>(obj), "FindToVersion");
+    // Observation only: match GetUnitIdxAt bounds (may differ from Heap::IsHeapAddress end).
+    // Always probe before GetGhostFromRegionAt so abort path cannot skip the dump.
+    MAddress addr = reinterpret_cast<MAddress>(obj);
+    uintptr_t unitStart = RegionInfo::UnitInfo::heapStartAddress;
+    size_t unitCount = RegionInfo::UnitInfo::totalUnitCount;
+    bool inUnitRange =
+        (unitStart != 0) && (addr >= unitStart) && (addr < unitStart + unitCount * RegionInfo::UNIT_SIZE);
+    if (!inUnitRange) {
+        TagEpochProbe::OnPreFindToVersion(nullptr, obj, addr, "FindToVersion_out_of_unit");
     }
-    RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(addr);
     if (fromRegionInfo == nullptr) {
         return nullptr;
     }
@@ -82,6 +88,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
+        // Record field provenance before FindToVersion (which may abort).
         TagEpochProbe::OnPreFindToVersion(&field, fromObj, oldRef.GetFieldValue(),
                                           forward ? "TryUpdateRefFieldImpl_fwd" : "TryUpdateRefFieldImpl");
         if (forward) {
