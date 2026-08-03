@@ -139,6 +139,8 @@ std::atomic<bool> g_activeInitSet{false};
 
 WatchSlot g_watch[kWatchN];
 std::atomic<size_t> g_watchCount{0};
+std::atomic<uintptr_t> g_watchMin{0};
+std::atomic<uintptr_t> g_watchMax{0};
 WriteRec g_writes[kWriteCap];
 LifeRec g_lives[kLifeCap];
 InitEvent g_inits[kInitEventCap];
@@ -414,6 +416,8 @@ void ResolveFromKnownOffsets()
     }
     // maps offset for start corresponds to file_off of that page; slot_va = start + (fileOff - maps_offset)
     size_t added = 0;
+    uintptr_t watchMin = ~static_cast<uintptr_t>(0);
+    uintptr_t watchMax = 0;
     for (size_t i = 0; i < kKnownN && added < kWatchN; ++i) {
         if (kKnown[i].fileOff < img.fileOffBase) {
             continue;
@@ -424,6 +428,8 @@ void ResolveFromKnownOffsets()
         }
         WatchSlot& w = g_watch[added];
         w.addr = reinterpret_cast<const void*>(va);
+        watchMin = va < watchMin ? va : watchMin;
+        watchMax = va > watchMax ? va : watchMax;
         CopyStr(w.name, sizeof(w.name), kKnown[i].name);
         CopyStr(w.packageHint, sizeof(w.packageHint), kKnown[i].pkg);
         w.writeCount.store(0, std::memory_order_relaxed);
@@ -459,6 +465,8 @@ void ResolveFromKnownOffsets()
                      ValueClassName(ClassifyValue(cur)), PhaseName(CurrentPhase()));
         ++added;
     }
+    g_watchMin.store(added == 0 ? 0 : watchMin, std::memory_order_release);
+    g_watchMax.store(watchMax, std::memory_order_release);
     g_watchCount.store(added, std::memory_order_release);
     std::fprintf(stderr, "[GCINITWIN] RESOLVE_DONE count=%zu image=%s\n", added, img.path);
 }
@@ -708,9 +716,16 @@ void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, cons
     TryResolveWatchSlots();
     g_structWriteTotal.fetch_add(1, std::memory_order_relaxed);
     // if any watched slot overlaps [dst, dst+dstLen), log
-    size_t wn = g_watchCount.load(std::memory_order_acquire);
     uintptr_t d0 = reinterpret_cast<uintptr_t>(dst);
     uintptr_t d1 = d0 + dstLen;
+    uint8_t path = WritePathId(site);
+    g_pathTotal[path].fetch_add(1, std::memory_order_relaxed);
+    uintptr_t watchMin = g_watchMin.load(std::memory_order_acquire);
+    uintptr_t watchMax = g_watchMax.load(std::memory_order_acquire);
+    if (watchMin == 0 || d1 <= watchMin || d0 > watchMax) {
+        return;
+    }
+    size_t wn = g_watchCount.load(std::memory_order_acquire);
     size_t watched = 0;
     for (size_t i = 0; i < wn && i < kWatchN; ++i) {
         uintptr_t a = reinterpret_cast<uintptr_t>(g_watch[i].addr);
@@ -730,7 +745,9 @@ void NoteStaticStructWrite(const void* dst, size_t dstLen, const void* src, cons
             EmitWrite(g_watch[i].addr, value, site2, static_cast<int>(i));
         }
     }
-    RecordWritePath(site, watched);
+    if (watched != 0) {
+        g_pathWatched[path].fetch_add(watched, std::memory_order_relaxed);
+    }
 }
 
 void NoteMinorCycleStart(uint64_t round)
