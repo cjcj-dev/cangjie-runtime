@@ -158,8 +158,9 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 
 bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func)
 {
-    // no need to visit this region.
-    if (GetLiveByteCount() == 0) {
+    // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
+    // is not an emptiness proof — fall through and consult the mark bitmap.
+    if (IsKnownEmpty()) {
         return true;
     }
     if (IsLargeRegion()) {
@@ -765,7 +766,7 @@ size_t RegionManager::CollectPinnedGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        if (region->GetLiveByteCount() == 0) {
+        if (region->IsKnownEmpty()) {
             RegionInfo* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
@@ -1252,7 +1253,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->GetRegionType(), region->GetLiveByteCount());
 
     bool youngRegion = region->IsYoungRegion();
-    if (region->GetLiveByteCount() == 0) {
+    if (region->IsKnownEmpty()) {
         if (youngRegion) {
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);

@@ -737,6 +737,7 @@ public:
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
             metadata.liveInfo = nullptr;
+            // Tracking phase ended: live counter is no longer a mark-period truth.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         }
     }
@@ -745,7 +746,8 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
-        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
 
     // only from-region should be locked.
@@ -988,19 +990,40 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
+    // liveByteCount: bit31 = LIVE_AUTHORITY (mark-period established), bits0-30 = live bytes.
+    // InitRegionInfo zeros without authority; minor never marks non-young, so bare live==0 there is not
+    // a reclaim predicate. Readers that decide "empty ⇒ reclaim/skip" must use IsKnownEmpty().
+    static constexpr uint32_t LIVE_AUTHORITY_BIT = 1u << 31;
+    static constexpr uint32_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1u;
+
     uint32_t GetLiveByteCount() const
     {
-        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
+    }
+
+    bool IsLiveCountAuthoritative() const
+    {
+        return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
+    }
+
+    bool IsKnownEmpty() const
+    {
+        uint32_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        return (raw & LIVE_AUTHORITY_BIT) != 0 && (raw & LIVE_BYTES_MASK) == 0;
     }
 
     void ResetLiveByteCount()
     {
-        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        // Young region fully forwarded: known empty.
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
 
     void AddLiveByteCount(uint32_t count)
     {
-        (void)__atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        uint32_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        if ((prev & LIVE_AUTHORITY_BIT) == 0) {
+            (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
+        }
     }
 
     void RemoveFromList()
