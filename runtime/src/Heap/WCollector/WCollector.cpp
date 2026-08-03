@@ -12,11 +12,14 @@
 #include <cstring>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 #include "Concurrency/Concurrency.h"
+#include "Heap/Barrier/WriteHist.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -1272,6 +1275,24 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
     size_t residualWithRemsetSlot = 0;
     size_t oldToYoungEdgesIntoResidual = 0;
     size_t youngToYoungEdgesIntoResidual = 0;
+
+    // Direct old→young missed edges (field-level) for write-history attribution.
+    struct MissedDirectEdge {
+        MAddress field;
+        BaseObject* holder;
+        BaseObject* target;
+        bool holderIsArray;
+        bool inRemsetSnapshot;
+    };
+    std::vector<MissedDirectEdge> missedDirectEdges;
+    missedDirectEdges.reserve(128);
+    std::unordered_set<MAddress> seenMissedFields;
+    seenMissedFields.reserve(128);
+    std::unordered_set<MAddress> remsetSlotSet;
+    remsetSlotSet.reserve(rememberedSlots.size() + 1);
+    for (MAddress slot : rememberedSlots) {
+        remsetSlotSet.insert(slot);
+    }
     {
         std::unordered_set<BaseObject*> seenOld;
         std::unordered_set<BaseObject*> seenStatic;
@@ -1281,8 +1302,11 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
             }
             RegionInfo* hr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             const bool holderYoung = hr->IsYoungRegion();
-            holder->ForEachRefField([this, &residualSet, holderYoung, &residualWithOldHolder, &seenOld,
-                                     &oldToYoungEdgesIntoResidual, &youngToYoungEdgesIntoResidual](RefField<>& field) {
+            const bool holderArr = holder->GetTypeInfo()->IsArrayType();
+            holder->ForEachRefField([this, &residualSet, holderYoung, holderArr, holder, &residualWithOldHolder,
+                                     &seenOld, &oldToYoungEdgesIntoResidual, &youngToYoungEdgesIntoResidual,
+                                     &missedDirectEdges, &seenMissedFields,
+                                     &remsetSlotSet](RefField<>& field) {
                 BaseObject* target = ResolveMinorReference(field);
                 if (residualSet.count(target) == 0) {
                     return;
@@ -1293,6 +1317,16 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
                     ++oldToYoungEdgesIntoResidual;
                     if (seenOld.insert(target).second) {
                         ++residualWithOldHolder;
+                    }
+                    MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+                    if (seenMissedFields.insert(fieldAddr).second) {
+                        MissedDirectEdge e;
+                        e.field = fieldAddr;
+                        e.holder = holder;
+                        e.target = target;
+                        e.holderIsArray = holderArr;
+                        e.inRemsetSnapshot = remsetSlotSet.count(fieldAddr) != 0;
+                        missedDirectEdges.push_back(e);
                     }
                 }
             });
@@ -1396,6 +1430,129 @@ void WCollector::ProbeRemsetCompleteness(const MinorObjectSet& remsetReachable,
          holderMissed[H_STACK] + holderMissed[H_FINALIZER] + holderMissed[H_EXPORT] + holderMissed[H_ALLOC] +
              holderMissed[H_OTHER],
          missed);
+
+    // Write-history attribution for each direct old→young residual edge.
+    WriteHist& hist = WriteHist::Instance();
+    size_t causeBare = 0;       // (a) no hist entry ⇒ never hit RecordCrossGenEdge
+    size_t causeEarly = 0;      // (b) barrier early return
+    size_t causeConsumed = 0;   // (c) RECORDED but not in remset snapshot / still residual
+    size_t causeRecordedInSnap = 0; // RECORDED and field IS in snapshot ⇒ probe/path oddity
+    size_t histHits = 0;
+    size_t histMiss = 0;
+    size_t earlyByOutcome[16] = {};
+    size_t apiByCause[16] = {};
+    size_t phaseByEdge[32] = {};
+    const size_t kDumpCap = 96;
+    size_t dumped = 0;
+    for (const MissedDirectEdge& e : missedDirectEdges) {
+        WriteHistEntry wh {};
+        bool found = hist.Lookup(e.field, wh);
+        const char* holderName = "?";
+        if (e.holder != nullptr && e.holder->IsValidObject()) {
+            TypeInfo* ti = e.holder->GetTypeInfo();
+            if (ti != nullptr && ti->GetName() != nullptr) {
+                holderName = ti->GetName();
+            }
+        }
+        if (!found) {
+            ++histMiss;
+            ++causeBare;
+            if (dumped < kDumpCap) {
+                VLOG(REPORT,
+                     "[GCV2Minor] MISSED_EDGE_WRITE_SITE i=%zu field=%p holder=%p type=%s arr=%u target=%p "
+                     "inRemset=%u hist=NONE cause=a_bare_store",
+                     dumped, reinterpret_cast<void*>(e.field), e.holder, holderName,
+                     static_cast<unsigned>(e.holderIsArray), e.target, static_cast<unsigned>(e.inRemsetSnapshot));
+                ++dumped;
+            }
+            continue;
+        }
+        ++histHits;
+        if (wh.phase < 32) {
+            ++phaseByEdge[wh.phase];
+        }
+        if (wh.api < 16) {
+            ++apiByCause[wh.api];
+        }
+        const char* apiName = WriteHist::ApiName(wh.api);
+        const char* outName = WriteHist::OutcomeName(wh.outcome);
+        const char* phaseName = Collector::GetGCPhaseName(static_cast<GCPhase>(wh.phase));
+        const char* causeTag = "undetermined";
+        if (wh.outcome == static_cast<uint8_t>(CrossGenRecordOutcome::RECORDED)) {
+            if (e.inRemsetSnapshot) {
+                ++causeRecordedInSnap;
+                causeTag = "c_recorded_in_snapshot_still_residual";
+            } else {
+                ++causeConsumed;
+                causeTag = "c_consumed_side_lost";
+            }
+        } else {
+            ++causeEarly;
+            if (wh.outcome < 16) {
+                ++earlyByOutcome[wh.outcome];
+            }
+            causeTag = "b_barrier_early_return";
+        }
+        if (dumped < kDumpCap) {
+            VLOG(REPORT,
+                 "[GCV2Minor] MISSED_EDGE_WRITE_SITE i=%zu field=%p holder=%p type=%s arr=%u target=%p "
+                 "inRemset=%u hist=HIT api=%s(%u) phase=%s(%u) outcome=%s(%u) seq=%u epoch=%u histRef=%p cause=%s",
+                 dumped, reinterpret_cast<void*>(e.field), e.holder, holderName,
+                 static_cast<unsigned>(e.holderIsArray), e.target, static_cast<unsigned>(e.inRemsetSnapshot), apiName,
+                 static_cast<unsigned>(wh.api), phaseName, static_cast<unsigned>(wh.phase), outName,
+                 static_cast<unsigned>(wh.outcome), wh.seq, wh.epoch, wh.ref, causeTag);
+            ++dumped;
+        }
+    }
+    VLOG(REPORT,
+         "[GCV2Minor] MISSED_EDGE_COUNT_directFields=%zu residualWithOldHolder=%zu oldToYoungEdges=%zu "
+         "histHits=%zu histMiss=%zu dumped=%zu",
+         missedDirectEdges.size(), residualWithOldHolder, oldToYoungEdgesIntoResidual, histHits, histMiss, dumped);
+    VLOG(REPORT,
+         "[GCV2Minor] MISS_CAUSE_a_bare_store=%zu/b_barrier_early_return=%zu/c_consumed_side_lost=%zu/"
+         "c_recorded_in_snapshot_still_residual=%zu",
+         causeBare, causeEarly, causeConsumed, causeRecordedInSnap);
+    VLOG(REPORT,
+         "[GCV2Minor] MISS_EARLY_OUTCOME no_young_regions=%zu null_non_heap=%zu target_not_young=%zu "
+         "source_is_young=%zu",
+         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)],
+         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)],
+         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)],
+         earlyByOutcome[static_cast<uint8_t>(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)]);
+    VLOG(REPORT,
+         "[GCV2Minor] MISS_API WriteRef=%zu WriteStruct=%zu AtomicWrite=%zu AtomicSwap=%zu CAS=%zu "
+         "CopyRefArr=%zu CopyStructArr=%zu WriteGeneric=%zu ReadGeneric=%zu",
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::WRITE_REF)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::WRITE_STRUCT)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::ATOMIC_WRITE)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::ATOMIC_SWAP)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::CAS)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::COPY_REF_ARR)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::COPY_STRUCT_ARR)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::WRITE_GENERIC)],
+         apiByCause[static_cast<uint8_t>(CrossGenWriteApi::READ_GENERIC)]);
+    VLOG(REPORT,
+         "[GCV2Minor] MISSED_EDGE_TIMING minorEpoch=%u histTotal=%llu histWraps=%llu histCap=%zu "
+         "phase_idle=%zu enum=%zu clear_satb=%zu post_trace=%zu preforward=%zu forward=%zu other_sum=%zu",
+         hist.Epoch(), static_cast<unsigned long long>(hist.Total()),
+         static_cast<unsigned long long>(hist.Wraps()), WriteHist::kCapacity,
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_IDLE)],
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_ENUM)],
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)],
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_POST_TRACE)],
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_PREFORWARD)],
+         phaseByEdge[static_cast<uint8_t>(GCPhase::GC_PHASE_FORWARD)],
+         phaseByEdge[0] + phaseByEdge[2] + phaseByEdge[3] + phaseByEdge[8] + phaseByEdge[10] + phaseByEdge[12]);
+    VLOG(REPORT,
+         "[GCV2Minor] WRITE_HIST_GLOBAL total=%llu wraps=%llu recorded=%llu early_no_young=%llu "
+         "early_null=%llu early_tgt_old=%llu early_src_young=%llu",
+         static_cast<unsigned long long>(hist.Total()), static_cast<unsigned long long>(hist.Wraps()),
+         static_cast<unsigned long long>(hist.OutcomeCount(CrossGenRecordOutcome::RECORDED)),
+         static_cast<unsigned long long>(hist.OutcomeCount(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS)),
+         static_cast<unsigned long long>(hist.OutcomeCount(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP)),
+         static_cast<unsigned long long>(hist.OutcomeCount(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG)),
+         static_cast<unsigned long long>(hist.OutcomeCount(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG)));
+    VLOG(REPORT, "[GCV2Minor] DIRECT_EDGE_CRITERION_old_holder_field_into_residual_young_not_in_remsetReachable");
     VLOG(REPORT, "[GCV2Minor] STATIC_ROOTS_SCANNED_WHEN_FULLSCAN_OFF_yes_WCollector.cpp:582");
     VLOG(REPORT, "[GCV2Minor] REMSET_PROBE_END");
 }
@@ -1480,6 +1637,7 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    WriteHist::Instance().BumpEpoch();
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     FlushAllocationRegions();

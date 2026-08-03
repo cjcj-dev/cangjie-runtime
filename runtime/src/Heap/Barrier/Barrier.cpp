@@ -7,6 +7,7 @@
 
 #include "Barrier.inline.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Barrier/WriteHist.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/Field.inline.h"
@@ -21,6 +22,15 @@ namespace {
 std::atomic<uint64_t> generationalBarrierFastPathHits { 0 };
 std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
 #endif
+
+// Thread-local write API context for RecordCrossGenEdge history (observation only).
+thread_local CrossGenWriteApi g_writeHistApi = CrossGenWriteApi::NONE;
+
+struct WriteHistApiScope {
+    explicit WriteHistApiScope(CrossGenWriteApi api) : prev(g_writeHistApi) { g_writeHistApi = api; }
+    ~WriteHistApiScope() { g_writeHistApi = prev; }
+    CrossGenWriteApi prev;
+};
 
 inline bool HasYoungRegionsForRecording()
 {
@@ -68,6 +78,7 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::WRITE_REF);
     WriteReferenceImpl(obj, field, ref);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
@@ -80,6 +91,7 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::WRITE_STRUCT);
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
     RecordCrossGenEdgesInStruct(obj, dst, dstLen);
 }
@@ -149,6 +161,7 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::ATOMIC_WRITE);
     AtomicWriteReferenceImpl(obj, field, ref, order);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
@@ -168,6 +181,7 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                          MemoryOrder order) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::ATOMIC_SWAP);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     return oldRef;
@@ -202,6 +216,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::CAS);
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
@@ -225,6 +240,7 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
 void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                            MIndex srcSize) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::COPY_REF_ARR);
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
     RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize);
 }
@@ -245,6 +261,7 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
 void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                               MAddress srcField, MIndex srcSize) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::COPY_STRUCT_ARR);
     CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
     RecordCrossGenEdgesInStruct(dstObj, dstField, dstSize);
 }
@@ -297,6 +314,7 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
 
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::WRITE_GENERIC);
     WriteGenericImpl(obj, fieldPtr, src, size);
     RecordCrossGenEdgesInStruct(obj, reinterpret_cast<MAddress>(fieldPtr), size);
 }
@@ -330,6 +348,7 @@ void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const Object
 }
 void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
+    WriteHistApiScope scope(CrossGenWriteApi::READ_GENERIC);
     ReadGenericImpl(dstObj, obj, fieldPtr, size);
     if (Heap::IsHeapAddress(dstObj)) {
         RecordCrossGenEdgesInStruct(dstObj, reinterpret_cast<MAddress>(dstObj) + TYPEINFO_PTR_SIZE, size);
@@ -356,20 +375,31 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
+    CrossGenWriteApi api = g_writeHistApi;
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    auto note = [&](CrossGenRecordOutcome outcome) {
+        WriteHist::Instance().Note(fieldAddress, obj, ref, api, phase, outcome);
+    };
     if (!HasYoungRegionsForRecording()) {
+        note(CrossGenRecordOutcome::EARLY_NO_YOUNG_REGIONS);
         return;
     }
     if (obj == nullptr || ref == nullptr || !Heap::IsHeapAddress(obj) || !Heap::IsHeapAddress(fieldAddress) ||
         !Heap::IsHeapAddress(ref)) {
+        note(CrossGenRecordOutcome::EARLY_NULL_OR_NON_HEAP);
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
     if (!targetRegion->IsYoungRegion()) {
+        note(CrossGenRecordOutcome::EARLY_TARGET_NOT_YOUNG);
         return;
     }
     RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
     if (!sourceRegion->IsYoungRegion()) {
         theRememberedSet.Record(fieldAddress);
+        note(CrossGenRecordOutcome::RECORDED);
+    } else {
+        note(CrossGenRecordOutcome::EARLY_SOURCE_IS_YOUNG);
     }
 }
 
