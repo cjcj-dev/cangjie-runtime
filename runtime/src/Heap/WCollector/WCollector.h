@@ -7,6 +7,7 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
+#include <atomic>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -228,6 +229,8 @@ private:
     // gc index 0 or 1 is used to distinguish previous gc and current gc.
     uint16_t currentTagID = 0;
     uint64_t minorTotalRuns = 0;
+    std::atomic<size_t> minorEvacuatedObjects{0};
+    std::atomic<size_t> minorEvacuatedBytes{0};
     MinorRegionSet minorCandidateRegions;
 };
 } // namespace MapleRuntime

@@ -735,6 +735,8 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    minorEvacuatedObjects.store(0, std::memory_order_relaxed);
+    minorEvacuatedBytes.store(0, std::memory_order_relaxed);
     auto currentObject = [this](BaseObject* object) {
         if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
             return ForwardObject(object);
@@ -756,6 +758,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         }
     };
 
+    // pre-evacuate: collection set already in fromRegionList via PrepareYoungGarbageCandidates
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
     FixMinorRootSlots();
     PreforwardDiscoveredExternObjects();
@@ -764,6 +767,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
     fwdTable.PrepareForwardTable();
     TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+    // evacuate + fix references (roots / holders / remembered slots)
     fixForwardedReferences();
     ValidateMinorReferences("before-return", &reachableObjects);
 
@@ -776,6 +780,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         }
     }
 
+    // post-evacuate: rebuild remembered set for survivors that remain young
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t rebuiltRecords = 0;
     for (BaseObject* object : reachableObjects) {
@@ -796,8 +801,13 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
             }
         });
     }
-    VLOG(REPORT, "[GCV2Minor] remembered-set rebuilt=%zu", rebuiltRecords);
+    size_t evacuatedObjects = minorEvacuatedObjects.load(std::memory_order_relaxed);
+    size_t evacuatedBytes = minorEvacuatedBytes.load(std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2Minor] evacuation objects=%zu bytes=%zu remembered-set rebuilt=%zu",
+         evacuatedObjects, evacuatedBytes, rebuiltRecords);
 
+    // dispel ghost routes before reassembly (c51e156d order)
     fwdTable.PrepareForwardTable();
     ValidateMinorReferences("after-dispel", nullptr);
     manager.ReassembleFromSpace();
@@ -1145,9 +1155,11 @@ void WCollector::DoYoungGarbageCollection()
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
     VLOG(REPORT,
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
-         "remembered=%zu reclaimedBytes=%zu pause=%zu us",
+         "remembered=%zu reclaimedBytes=%zu evacuatedObjects=%zu evacuatedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes,
+         minorEvacuatedObjects.load(std::memory_order_relaxed),
+         minorEvacuatedBytes.load(std::memory_order_relaxed), pauseUs);
 }
 
 void WCollector::DoGarbageCollection()
@@ -1255,6 +1267,10 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
+    if (gcReason == GC_REASON_YOUNG) {
+        minorEvacuatedObjects.fetch_add(1, std::memory_order_relaxed);
+        minorEvacuatedBytes.fetch_add(size, std::memory_order_relaxed);
+    }
     return toObj;
 }
 
