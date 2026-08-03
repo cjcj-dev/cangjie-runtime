@@ -43,9 +43,9 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    (void)region->VisitLiveObjectsUntilFalse([&rememberedSet, &recorded](BaseObject* object) {
+    auto recordFromObject = [&rememberedSet, &recorded](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
-            return true;
+            return;
         }
         object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
             BaseObject* target = field.GetTargetObject();
@@ -58,8 +58,19 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 ++recorded;
             }
         });
-        return true;
-    });
+    };
+    // VisitLiveObjects filters on IsSurvived; markBitmap==nullptr ⇒ IsSurvived false for every
+    // offset ⇒ zero records. Never-examined / residual promote demotes young holders that still
+    // own young→young edges; scan the allocated range instead of the empty live set.
+    // When a mark bitmap exists, keep the live-only walk (cheaper; dead holders need no remset).
+    if (region->GetMarkBitmap() == nullptr) {
+        region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
+    } else {
+        (void)region->VisitLiveObjectsUntilFalse([&recordFromObject](BaseObject* object) {
+            recordFromObject(object);
+            return true;
+        });
+    }
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
     }
