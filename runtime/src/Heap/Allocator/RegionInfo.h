@@ -1263,6 +1263,7 @@ private:
             obj, objSize, this, regionStart, regionEnd, allocatedEnd, static_cast<unsigned>(GetRegionType()),
             static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
             kMarkedBytesPerBit);
+        std::abort();
     }
 
     static std::atomic<size_t> youngRegionCount;
