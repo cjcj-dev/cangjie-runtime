@@ -1061,12 +1061,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 if (holderRegion->IsLargeRegion()) {
                     holderSurvived = holderRegion->IsSurvivedObject(0);
                 } else {
+                    // Use GetAllocSize (same as VisitAllObjects) — GetSize can abort on bad headers.
                     uintptr_t position = holderRegion->GetRegionStart();
                     uintptr_t allocPtr = holderRegion->GetRegionAllocPtr();
                     uintptr_t slotAddr = static_cast<uintptr_t>(slot);
                     while (position < allocPtr && position <= slotAddr) {
                         BaseObject* obj = reinterpret_cast<BaseObject*>(position);
-                        size_t size = obj->GetSize();
+                        size_t size = RegionSpace::GetAllocSize(*obj);
                         if (size == 0) {
                             break;
                         }
