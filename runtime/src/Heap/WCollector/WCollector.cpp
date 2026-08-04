@@ -47,6 +47,16 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 bool WCollector::MarkObject(BaseObject* obj) const
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    // s3cause: CheckAndPush (Mutator.cpp:618-623) already rejects non-aligned TypeInfo on
+    // stack objects, but MarkObject used to call GetSize with no gate. An interior
+    // pointer (observed: Node*+8 where id is non-zero) passes IsValidObject (TypeInfo!=null)
+    // then SIGSEGV in TypeInfo::IsArrayType. Fail-closed before GetSize.
+    TypeInfo* tip = obj->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    CHECK_DETAIL(tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 && tip->IsVaildType(),
+                 "MarkObject: obj %p has non-object header tip=%p (interior/corrupt; "
+                 "aligned TypeInfo + IsVaildType required before GetSize)",
+                 obj, tip);
     size_t objectSize = obj->GetSize();
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
