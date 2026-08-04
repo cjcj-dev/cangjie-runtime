@@ -1540,7 +1540,9 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
 
         MinorObjectSet floatingClosure;
         WorkStack floatingPending = NewWorkStack();
-        floatingPending.insert(floatingPending.end(), floatingSeeds.begin(), floatingSeeds.end());
+        for (BaseObject* object : floatingSeeds) {
+            floatingPending.push_back(object);
+        }
         while (!floatingPending.empty()) {
             BaseObject* object = floatingPending.back();
             floatingPending.pop_back();
