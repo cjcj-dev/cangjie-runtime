@@ -425,6 +425,8 @@ public:
             ReclaimRegion(garbage);
             garbage = garbageRegionList.TakeHeadRegion();
         }
+        // STEER3: scrub runs here (async reclaim), not inside young STW.
+        DumpScrubCostAndReset("post-reclaim-batch");
     }
 
     size_t CollectLargeGarbage();
