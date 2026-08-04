@@ -1153,8 +1153,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             BaseObject* holder = originIt->second;
             RegionInfo* originRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
             if (originRegion == holderRegion) {
-                ++originFound;
                 if (retainedProbe) {
+                    ++originFound;
                     MAddress holderAddress = reinterpret_cast<MAddress>(holder);
                     size_t holderSize = RegionSpace::GetAllocSize(*holder);
                     if (slot >= holderAddress && slot < holderAddress + holderSize) {
@@ -1163,29 +1163,39 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 }
                 RegionInfo::RetainedLiveInfoState retainedState = holderRegion->GetRetainedLiveInfoState();
                 if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
-                    ++retainedNever;
+                    if (retainedProbe) {
+                        ++retainedNever;
+                    }
                 } else if (!holderRegion->IsRetainedSnapshotValid()) {
-                    ++retainedStale;
+                    if (retainedProbe) {
+                        ++retainedStale;
+                    }
                 } else {
                     MAddress coveredUpTo = holderRegion->GetRetainedLiveInfoCoveredUpTo();
                     CHECK(coveredUpTo >= holderRegion->GetRegionStart() &&
                           coveredUpTo <= holderRegion->GetRegionAllocPtr());
                     MAddress holderAddress = reinterpret_cast<MAddress>(holder);
                     if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
-                        ++retainedEmpty;
+                        if (retainedProbe) {
+                            ++retainedEmpty;
+                        }
                     } else {
-                        ++retainedValid;
+                        if (retainedProbe) {
+                            ++retainedValid;
+                        }
                     }
                     if (holderAddress < coveredUpTo) {
                         if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
                             keepByRetainedSnapshot = false;
-                            ++safeEmptyDrop;
+                            if (retainedProbe) {
+                                ++safeEmptyDrop;
+                            }
                         } else if (holderRegion->IsLargeRegion()) {
                             LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
                             keepByRetainedSnapshot = retainedLiveInfo != nullptr
                                 ? retainedLiveInfo->IsSurvivedObject(0)
                                 : holderRegion->IsSurvivedObject(0);
-                            if (!keepByRetainedSnapshot) {
+                            if (retainedProbe && !keepByRetainedSnapshot) {
                                 ++directDeadDrop;
                             }
                         } else {
@@ -1193,7 +1203,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                             CHECK(retainedLiveInfo != nullptr);
                             size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
                             keepByRetainedSnapshot = retainedLiveInfo->IsSurvivedObject(holderOffset);
-                            if (!keepByRetainedSnapshot) {
+                            if (retainedProbe && !keepByRetainedSnapshot) {
                                 ++directDeadDrop;
                             }
                         }
@@ -1201,17 +1211,21 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 }
             }
         }
-        if (keepByRetainedSnapshot) {
-            ++retainedKeep;
-        } else {
-            ++retainedDrop;
+        if (retainedProbe) {
+            if (keepByRetainedSnapshot) {
+                ++retainedKeep;
+            } else {
+                ++retainedDrop;
+            }
         }
         if (fullYoungScan) {
             bool oracleKeep = reachableSlots.count(slot) != 0;
-            if (keepByRetainedSnapshot == oracleKeep) {
-                ++filterCorrect;
-            } else {
-                ++filterIncorrect;
+            if (retainedProbe) {
+                if (keepByRetainedSnapshot == oracleKeep) {
+                    ++filterCorrect;
+                } else {
+                    ++filterIncorrect;
+                }
             }
             if (!oracleKeep) {
                 if (statsOut != nullptr) {
