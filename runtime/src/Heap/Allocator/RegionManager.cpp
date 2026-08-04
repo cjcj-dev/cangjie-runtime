@@ -823,16 +823,44 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // a chance to invoke heuristic gc.
     if (!Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
-        constexpr size_t youngRegionTriggerBytes = 32 * MB;
+        size_t heapThreshold = collector.GetGCStats().GetThreshold();
+        size_t youngRegionTriggerBytes = 32 * MB;
+        const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
+        const bool useJvmYoungTrigger =
+            jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
+        size_t youngTriggerFloor = 0;
+        size_t youngTriggerTarget = 0;
+        size_t youngTriggerCeiling = 0;
+        if (useJvmYoungTrigger) {
+            // G1 sizes young between 5% and 60% of its heap. This runtime has no eden/survivor
+            // pause controller, so apply those bounds to the HEU budget and target half that budget.
+            constexpr size_t youngTriggerFloorPercent = 5;
+            constexpr size_t youngTriggerTargetPercent = 50;
+            constexpr size_t youngTriggerCeilingPercent = 60;
+            youngTriggerFloor = heapThreshold * youngTriggerFloorPercent / 100;
+            youngTriggerTarget = heapThreshold * youngTriggerTargetPercent / 100;
+            youngTriggerCeiling = heapThreshold * youngTriggerCeilingPercent / 100;
+            youngRegionTriggerBytes =
+                std::min(std::max(youngTriggerTarget, youngTriggerFloor), youngTriggerCeiling);
+            CHECK_DETAIL(youngRegionTriggerBytes < heapThreshold,
+                         "young GC threshold %zu must stay below HEU threshold %zu",
+                         youngRegionTriggerBytes, heapThreshold);
+        }
         size_t youngAllocated = GetYoungAllocatedSize();
         if (youngAllocated >= youngRegionTriggerBytes) {
+            if (useJvmYoungTrigger) {
+                VLOG(REPORT,
+                     "[GCV2][jvm-young-trigger] young=%zu trigger=%zu HEU=%zu floor=%zu target=%zu ceiling=%zu "
+                     "invariant=%d",
+                     youngAllocated, youngRegionTriggerBytes, heapThreshold, youngTriggerFloor, youngTriggerTarget,
+                     youngTriggerCeiling, youngRegionTriggerBytes < heapThreshold);
+            }
             DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
             collector.RequestGC(GC_REASON_YOUNG, true);
         } else {
-            size_t threshold = collector.GetGCStats().GetThreshold();
             size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-            if (allocated >= threshold) {
-                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, threshold);
+            if (allocated >= heapThreshold) {
+                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
                 collector.RequestGC(GC_REASON_HEU, true);
             }
         }
