@@ -590,7 +590,7 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 
 void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 {
-    MRT_PHASE_TIMER("InvalidateOldTaggedRefs");
+    MRT_PHASE_TIMER(requireSurvivedMark ? "InvalidateOldTaggedRefs.preflip" : "InvalidateOldTaggedRefs.postflip");
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
 
