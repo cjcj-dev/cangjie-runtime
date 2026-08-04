@@ -28,7 +28,7 @@ inline void LogInteriorRefSink(const void* slot, const BaseObject* obj, MAddress
         return;
     }
     // tip = first word at obj; do not invoke TypeInfo methods.
-    TypeInfo* tip = *reinterpret_cast<TypeInfo* const*>(obj);
+    void* tip = *reinterpret_cast<void* const*>(obj);
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
     bool clearInterior = tip == nullptr || (tipAddr & 7) != 0 || tipAddr < 0x10000;
     if (!clearInterior) {

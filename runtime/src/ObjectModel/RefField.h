@@ -85,7 +85,7 @@ public:
         {
             BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newValue).GetAddress());
             if (asObj != nullptr) {
-                TypeInfo* tip = *reinterpret_cast<TypeInfo* const*>(asObj);
+                void* tip = *reinterpret_cast<void* const*>(asObj);
                 uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
                 if (tip == nullptr || (tipAddr & 7) != 0 || tipAddr < 0x10000) {
                     static std::atomic<size_t> g_cas{ 0 };
