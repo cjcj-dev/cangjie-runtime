@@ -23,6 +23,7 @@
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/WalkAlignProbe.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
@@ -295,15 +296,31 @@ const char* RegionInfo::GetTypeName() const
 void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 {
     if (IsLargeRegion()) {
+        if (WalkAlignProbe::Enabled()) {
+            size_t total = 0;
+            (void)WalkAlignProbe::CheckBeforeSize(this, GetRegionStart(), GetRegionStart() + GetRegionAllocatedSize(),
+                                                  0, nullptr, 0, total);
+        }
         func(reinterpret_cast<BaseObject*>(GetRegionStart()));
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
+        BaseObject* prev = nullptr;
+        size_t prevSize = 0;
+        size_t stepInRegion = 0;
         while (position < allocPtr) {
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
+            if (WalkAlignProbe::Enabled()) {
+                size_t total = 0;
+                // Read-only: dump first bad step then fall through so original crash shape is preserved.
+                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total);
+            }
             size_t size = RegionSpace::GetAllocSize(*reinterpret_cast<BaseObject*>(position));
             func(reinterpret_cast<BaseObject*>(position));
+            prev = reinterpret_cast<BaseObject*>(position);
+            prevSize = size;
             position += size;
+            ++stepInRegion;
         }
     }
 }
