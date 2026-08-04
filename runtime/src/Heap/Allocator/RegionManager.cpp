@@ -633,6 +633,9 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
+    // Large regions above the release threshold bypass CollectRegion. Invalidate
+    // their two owned bitmap slices before the address range can be unmapped/reused.
+    ScrubRememberedSetForRegion(region);
     if (num >= HUGE_PAGE) {
         UntagHugePage(region, num);
     }
