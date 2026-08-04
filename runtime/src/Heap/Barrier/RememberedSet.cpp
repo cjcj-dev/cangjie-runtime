@@ -11,6 +11,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <dlfcn.h>
 #endif
 
 #include "Base/Log.h"
@@ -340,10 +341,11 @@ size_t RememberedSet::FinishFullClear(uint8_t scanBuffer)
 }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-void RememberedSet::RecordStaticForCrossCheck(MAddress fieldAddress)
+void RememberedSet::RecordStaticForCrossCheck(MAddress fieldAddress, MAddress callsite)
 {
     std::lock_guard<std::mutex> guard(oracleLock);
     staticRecords.insert(fieldAddress);
+    staticRecordSites[fieldAddress] = callsite;
 }
 
 void RememberedSet::VisitStaticForCrossCheck(MAddress fieldAddress)
@@ -359,11 +361,24 @@ void RememberedSet::CheckStaticCoverageForMinor()
     const char* inject = std::getenv("MRT_GCV2_VERIFY_STATIC_COVERAGE_INJECT_MISSING");
     if (inject != nullptr && std::strcmp(inject, "1") == 0) {
         staticRecords.insert(heapStart);
+        staticRecordSites[heapStart] = 0;
         injected = true;
     }
     size_t missing = 0;
     for (MAddress slot : staticRecords) {
-        missing += visitedStaticRoots.count(slot) == 0 ? 1 : 0;
+        if (visitedStaticRoots.count(slot) != 0) {
+            continue;
+        }
+        ++missing;
+        MAddress callsite = staticRecordSites[slot];
+        Dl_info info {};
+        bool resolved = callsite != 0 && dladdr(reinterpret_cast<void*>(callsite), &info) != 0;
+        MAddress base = resolved ? reinterpret_cast<MAddress>(info.dli_fbase) : 0;
+        std::fprintf(stderr,
+                     "REMSET_STATIC_MISSING slot=%#zx callsite=%#zx dso_offset=%#zx symbol=%s\n",
+                     static_cast<size_t>(slot), static_cast<size_t>(callsite),
+                     static_cast<size_t>(callsite - base),
+                     resolved && info.dli_sname != nullptr ? info.dli_sname : "?");
     }
     ++staticCrossCheckRounds;
     size_t legacyTotal = lastDrainedHeapRecords + staticRecords.size();
@@ -381,6 +396,7 @@ void RememberedSet::CheckStaticCoverageForMinor()
         std::abort();
     }
     staticRecords.clear();
+    staticRecordSites.clear();
     visitedStaticRoots.clear();
     lastDrainedHeapRecords = 0;
 }
