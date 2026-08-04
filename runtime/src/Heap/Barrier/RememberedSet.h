@@ -11,9 +11,9 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <mutex>
 #include <unordered_set>
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-#include <mutex>
 #include <unordered_map>
 #endif
 
@@ -75,6 +75,7 @@ private:
     static constexpr size_t kBufferCount = 2;
 
     void Record(MAddress fieldAddress);
+    void RecordExternal(MAddress fieldAddress);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
     size_t FinishFullClear(uint8_t scanBuffer);
@@ -99,6 +100,8 @@ private:
     std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;
+    mutable std::mutex externalLock;
+    std::unordered_set<MAddress> externalRecords[kBufferCount];
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     mutable std::mutex oracleLock;
