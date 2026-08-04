@@ -1042,7 +1042,20 @@ public:
         if (GetRegionAllocPtr() <= GetRegionStart()) {
             return true;
         }
-        return GetMarkBitmap() != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion();
+        if (IsLargeRegion()) {
+            return true;
+        }
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (liveInfo == nullptr ||
+            reinterpret_cast<uintptr_t>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+            return false;
+        }
+        RegionBitmap* mark = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        RegionBitmap* resurrect = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+        auto real = [](RegionBitmap* b) {
+            return b != nullptr && reinterpret_cast<MAddress>(b) != LiveInfo::TEMPORARY_PTR;
+        };
+        return real(mark) || real(resurrect);
     }
 
     void ResetLiveByteCount()
