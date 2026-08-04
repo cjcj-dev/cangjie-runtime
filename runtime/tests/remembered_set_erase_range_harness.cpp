@@ -6,6 +6,7 @@
 
 #include <cstdlib>
 #include <iostream>
+#include <unordered_set>
 
 #include "Heap/Barrier/RememberedSet.h"
 
@@ -14,15 +15,22 @@ class RememberedSetTest {
 public:
     static void Record(RememberedSet& rememberedSet, MAddress address) { rememberedSet.Record(address); }
 
-    static size_t EraseRange(RememberedSet& rememberedSet, MAddress start, MAddress end, size_t* scanned)
+    static size_t ClearRegion(RememberedSet& rememberedSet, MAddress start, MAddress end, size_t* words)
     {
-        return rememberedSet.EraseRange(start, end, scanned);
+        return rememberedSet.ClearRegion(start, end, words);
+    }
+
+    static uint8_t BeginFullClear(RememberedSet& rememberedSet) { return rememberedSet.BeginFullClear(); }
+
+    static size_t FinishFullClear(RememberedSet& rememberedSet, uint8_t buffer)
+    {
+        return rememberedSet.FinishFullClear(buffer);
     }
 
     static size_t CrossCheckCount(const RememberedSet& rememberedSet)
     {
-        std::lock_guard<std::mutex> guard(rememberedSet.lock);
-        return rememberedSet.crossCheckCount;
+        std::lock_guard<std::mutex> guard(rememberedSet.oracleLock);
+        return rememberedSet.bitmapCrossCheckCount;
     }
 };
 } // namespace MapleRuntime
@@ -30,45 +38,53 @@ public:
 int main()
 {
     using namespace MapleRuntime;
-    if (setenv("MRT_GCV2_VERIFY_REMSET_ERASE_RANGE", "1", 1) != 0) {
-        return EXIT_FAILURE;
-    }
+    constexpr MAddress start = 0x100000;
+    constexpr size_t heapSize = 0x4000;
+    constexpr size_t fieldSize = sizeof(RefField<>);
 
     RememberedSet rememberedSet;
-    RememberedSetTest::Record(rememberedSet, 0x100);
-    RememberedSetTest::Record(rememberedSet, 0x100);
-    RememberedSetTest::Record(rememberedSet, 0x180);
-    RememberedSetTest::Record(rememberedSet, 0x1ff);
-    RememberedSetTest::Record(rememberedSet, 0x200);
-    RememberedSetTest::Record(rememberedSet, 0x500);
+    rememberedSet.Initialize(start, heapSize);
+    bool passed = rememberedSet.MemoryOverhead() > 0;
 
-    size_t scanned = 1;
-    bool passed = RememberedSetTest::EraseRange(rememberedSet, 0x300, 0x300, &scanned) == 0 && scanned == 0;
-    scanned = 1;
-    passed = RememberedSetTest::EraseRange(rememberedSet, 0x400, 0x300, &scanned) == 0 && scanned == 0 && passed;
+    // Exact boundaries: bit 0, bit 63, and bit 0 of the next bitmap word.
+    RememberedSetTest::Record(rememberedSet, start);
+    RememberedSetTest::Record(rememberedSet, start + 63 * fieldSize);
+    RememberedSetTest::Record(rememberedSet, start + 64 * fieldSize);
+    RememberedSetTest::Record(rememberedSet, start + 64 * fieldSize);
+    passed = rememberedSet.Size() == 3 && rememberedSet.Contains(start) &&
+             rememberedSet.Contains(start + 63 * fieldSize) &&
+             rememberedSet.Contains(start + 64 * fieldSize) && passed;
 
-    scanned = 0;
-    passed = RememberedSetTest::EraseRange(rememberedSet, 0x100, 0x200, &scanned) == 3 && scanned == 5 && passed;
-    passed = rememberedSet.Size() == 2 && rememberedSet.Contains(0x200) && rememberedSet.Contains(0x500) && passed;
+    std::unordered_set<MAddress> drained;
+    passed = rememberedSet.DrainForMinor(drained) == 3 && drained.size() == 3 && rememberedSet.Size() == 0 && passed;
 
-    scanned = 0;
-    passed = RememberedSetTest::EraseRange(rememberedSet, 0x300, 0x400, &scanned) == 0 && scanned == 2 && passed;
-    scanned = 0;
-    passed = RememberedSetTest::EraseRange(rememberedSet, 0x200, 0x201, &scanned) == 1 && scanned == 2 && passed;
-    scanned = 0;
-    passed = RememberedSetTest::EraseRange(rememberedSet, 0x0, 0x600, &scanned) == 1 && scanned == 1 && passed;
-    passed = rememberedSet.Size() == 0 && passed;
+    // Region cleanup is half-open and touches both owned bitmap slices.
+    RememberedSetTest::Record(rememberedSet, start + 127 * fieldSize);
+    RememberedSetTest::Record(rememberedSet, start + 128 * fieldSize);
+    size_t words = 0;
+    passed = RememberedSetTest::ClearRegion(
+                 rememberedSet, start, start + 128 * fieldSize, &words) == 1 &&
+             words == 4 && !rememberedSet.Contains(start + 127 * fieldSize) &&
+             rememberedSet.Contains(start + 128 * fieldSize) && passed;
 
-    RememberedSetTest::Record(rememberedSet, 0x700);
-    {
-        auto records = rememberedSet.AcquireRecordsForMinor();
-        passed = records.size() == 1 && passed;
-    }
-    passed = rememberedSet.Size() == 0 && passed;
+    // A full-GC rotation drops the captured old buffer and preserves writes made
+    // after the clean buffer has been published.
+    RememberedSetTest::Record(rememberedSet, start + 192 * fieldSize);
+    uint8_t oldBuffer = RememberedSetTest::BeginFullClear(rememberedSet);
+    RememberedSetTest::Record(rememberedSet, start + 256 * fieldSize);
+    passed = RememberedSetTest::FinishFullClear(rememberedSet, oldBuffer) == 2 &&
+             rememberedSet.Size() == 1 && rememberedSet.Contains(start + 256 * fieldSize) && passed;
 
-    size_t crossChecks = RememberedSetTest::CrossCheckCount(rememberedSet);
-    passed = crossChecks == 4 && passed;
-    std::cout << "EQUIVALENCE_ERASE_RANGE checks=" << crossChecks << "/4 result="
+    // Product removes static slots from the heap bitmap; validation proves that the
+    // independently scanned static-root channel visits every former set element.
+    constexpr MAddress staticSlot = 0x80000;
+    rememberedSet.RecordStaticForCrossCheck(staticSlot);
+    rememberedSet.VisitStaticForCrossCheck(staticSlot);
+    rememberedSet.CheckStaticCoverageForMinor();
+
+    size_t checks = RememberedSetTest::CrossCheckCount(rememberedSet);
+    passed = checks == 3 && passed;
+    std::cout << "EQUIVALENCE_BITMAP checks=" << checks << "/3 precision=1field/bit result="
               << (passed ? "PASS" : "FAIL") << '\n';
     return passed ? EXIT_SUCCESS : EXIT_FAILURE;
 }
