@@ -1138,7 +1138,7 @@ public:
         return (raw & LIVE_AUTHORITY_BIT) != 0 && (raw & LIVE_BYTES_MASK) == 0;
     }
 
-    bool IsSafeKnownEmpty() const
+    bool IsSafeKnownEmpty()
     {
         if (!IsKnownEmpty()) {
             return false;
