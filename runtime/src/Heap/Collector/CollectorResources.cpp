@@ -7,6 +7,12 @@
 
 #include "CollectorResources.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#if defined(__linux__) || defined(hongmeng)
+#include <sched.h>
+#endif
 #include <thread>
 
 #include "Base/SysCall.h"
@@ -222,9 +228,42 @@ void CollectorResources::StartGCThreads()
     }
     // starts the thread pool.
     if (gcThreadPool == nullptr) {
-        int32_t helperThreads = 1;
-        gcThreadCount = helperThreads + 1;
-        VLOG(REPORT, "total gc thread count %d, helper thread count %d", gcThreadCount, helperThreads);
+        const char* jvmThreadsEnv = std::getenv("MRT_GCV2_JVM_GC_THREADS");
+        const bool useJvmThreads = jvmThreadsEnv == nullptr || std::strcmp(jvmThreadsEnv, "0") != 0;
+        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
+        bool affinityDetected = false;
+#if defined(__linux__) || defined(hongmeng)
+        cpu_set_t cpuSet;
+        CPU_ZERO(&cpuSet);
+        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
+            int affinityProcessorCount = CPU_COUNT(&cpuSet);
+            if (affinityProcessorCount > 0) {
+                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
+                affinityDetected = true;
+            }
+        }
+#endif
+        activeProcessorCount = std::max(activeProcessorCount, 1U);
+        if (useJvmThreads) {
+            constexpr unsigned int parallelThreadSwitchPoint = 8;
+            constexpr unsigned int parallelThreadNumerator = 5;
+            constexpr unsigned int parallelThreadDenominator = 8;
+            unsigned int parallelThreads = activeProcessorCount <= parallelThreadSwitchPoint ?
+                activeProcessorCount : parallelThreadSwitchPoint +
+                    (activeProcessorCount - parallelThreadSwitchPoint) * parallelThreadNumerator /
+                        parallelThreadDenominator;
+            gcThreadCount = static_cast<int32_t>(parallelThreads);
+            concurrentGcThreadCount = std::max(static_cast<int32_t>((parallelThreads + 2) / 4), 1);
+        } else {
+            gcThreadCount = 2;
+            concurrentGcThreadCount = 2;
+        }
+        int32_t helperThreads = gcThreadCount - 1;
+        VLOG(REPORT,
+             "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "
+             "active processor count %u, affinity detected %d, jvm formula %d",
+             gcThreadCount, helperThreads, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
+             useJvmThreads);
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
     }
@@ -246,11 +285,7 @@ int32_t CollectorResources::GetGCThreadCount(const bool isConcurrent) const
     if (GetThreadPool() == nullptr) {
         return 1;
     }
-    if (isConcurrent) {
-        return gcThreadCount;
-    }
-    // default to 2
-    return 2;
+    return isConcurrent ? concurrentGcThreadCount : gcThreadCount;
 }
 
 void CollectorResources::BroadcastGCCompletion()
