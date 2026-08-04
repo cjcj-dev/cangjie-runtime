@@ -308,10 +308,12 @@ void DumpObjIdentity(const BaseObject* obj, size_t reportedObjSize, uintptr_t re
         } else {
             MARKWHY_LOG("TI name_str: unreadable nameQ=%#llx", static_cast<unsigned long long>(nameQ));
         }
-        // Public getters (may diverge if TI corrupt mid-read)
-        MARKWHY_LOG("TI api: IsArray=%u IsObject=%u IsVaild=%u GetInstanceSize=%u GetName=%s",
-                    ti->IsArrayType() ? 1u : 0u, ti->IsObjectType() ? 1u : 0u, ti->IsVaildType() ? 1u : 0u,
-                    static_cast<unsigned>(ti->GetInstanceSize()), ti->GetName() != nullptr ? ti->GetName() : "(null)");
+        // Do NOT call TypeInfo methods on a pointer that may land in .text — they SEGV.
+        // Reconstruct GetSize arithmetic from raw instanceSize only.
+        size_t recon = static_cast<size_t>(instSz) + 8u; // TYPEINFO_PTR_SIZE
+        recon = (recon + 7u) & ~static_cast<size_t>(7u); // AlignUp 8
+        MARKWHY_LOG("TI recon_GetSize=%zu reported=%zu match=%u (instSz+8 align8)", recon, reportedObjSize,
+                    recon == reportedObjSize ? 1u : 0u);
     }
     DumpBacktrace("CALLER");
 }
