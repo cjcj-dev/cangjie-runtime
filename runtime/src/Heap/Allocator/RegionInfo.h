@@ -27,7 +27,6 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
-#include "Heap/Allocator/Allocator.h"
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
@@ -1243,7 +1242,8 @@ private:
     {
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
         MAddress allocatedEnd = std::min(GetRegionAllocPtr(), regionEnd);
-        if (UNLIKELY(objSize == 0 || (objSize % Allocator::ALLOC_ALIGN) != 0 || objAddr < regionStart ||
+        // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
+        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objAddr < regionStart ||
                      objAddr >= allocatedEnd || objSize > allocatedEnd - objAddr)) {
             ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd, allocatedEnd);
         }
@@ -1262,7 +1262,7 @@ private:
             "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
             obj, objSize, this, regionStart, regionEnd, allocatedEnd, static_cast<unsigned>(GetRegionType()),
             static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
-            Allocator::ALLOC_ALIGN);
+            kMarkedBytesPerBit);
     }
 
     static std::atomic<size_t> youngRegionCount;
