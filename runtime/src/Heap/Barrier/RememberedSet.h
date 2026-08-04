@@ -10,6 +10,11 @@
 #include <mutex>
 #include <set>
 #include <unordered_set>
+#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#endif
 
 #include "Common/TypeDef.h"
 
@@ -77,6 +82,9 @@ private:
     friend class Barrier;
     friend class WCollector;
     friend class RegionManager;
+#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+    friend class RememberedSetTest;
+#endif
 
     void Record(MAddress fieldAddress)
     {
@@ -98,6 +106,14 @@ private:
             return 0;
         }
         std::lock_guard<std::mutex> guard(lock);
+#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+        const char* crossCheckEnv = std::getenv("MRT_GCV2_VERIFY_REMSET_ERASE_RANGE");
+        bool crossCheck = crossCheckEnv != nullptr && std::strcmp(crossCheckEnv, "1") == 0;
+        std::unordered_set<MAddress> legacyRecords;
+        if (crossCheck) {
+            legacyRecords.insert(records.cbegin(), records.cend());
+        }
+#endif
         if (outScanned != nullptr) {
             *outScanned = records.size();
         }
@@ -105,11 +121,46 @@ private:
         auto last = records.lower_bound(end);
         size_t erased = static_cast<size_t>(std::distance(first, last));
         records.erase(first, last);
+#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+        if (crossCheck) {
+            size_t legacyErased = 0;
+            for (auto it = legacyRecords.begin(); it != legacyRecords.end();) {
+                MAddress slot = *it;
+                if (slot >= start && slot < end) {
+                    it = legacyRecords.erase(it);
+                    ++legacyErased;
+                } else {
+                    ++it;
+                }
+            }
+            const char* injectEnv = std::getenv("MRT_GCV2_VERIFY_REMSET_ERASE_RANGE_INJECT_MISMATCH");
+            bool injected = injectEnv != nullptr && std::strcmp(injectEnv, "1") == 0;
+            if (injected) {
+                legacyRecords.insert(start);
+            }
+            bool equivalent = erased == legacyErased && records.size() == legacyRecords.size();
+            for (MAddress slot : records) {
+                equivalent = equivalent && legacyRecords.count(slot) != 0;
+            }
+            if (!equivalent) {
+                std::fprintf(stderr,
+                    "ERASE_RANGE_CROSSCHECK_MISMATCH injected=%u start=%#zx end=%#zx new_erased=%zu "
+                    "legacy_erased=%zu new_size=%zu legacy_size=%zu\n",
+                    static_cast<unsigned>(injected), static_cast<size_t>(start), static_cast<size_t>(end), erased,
+                    legacyErased, records.size(), legacyRecords.size());
+                std::abort();
+            }
+            ++crossCheckCount;
+        }
+#endif
         return erased;
     }
 
     mutable std::mutex lock;
     std::set<MAddress> records;
+#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+    size_t crossCheckCount = 0;
+#endif
 };
 } // namespace MapleRuntime
 #endif // MRT_REMEMBERED_SET_H
