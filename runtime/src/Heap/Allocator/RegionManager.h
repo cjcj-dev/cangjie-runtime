@@ -367,9 +367,11 @@ public:
             }
         }
 
-        // STEER3: do NOT scrub here. Linux only enqueues GARBAGE; ReclaimRegion scrubs
-        // once when payload is actually freed (OHOS Collect→Reclaim still hits that path).
-        // Scrubbing at both sites doubled O(N) full-table scans under remset mutex.
+        // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
+        // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
+        // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
+        // therefore never ran on the hot path. Collect is the unique "region dies" edge.
+        ScrubRememberedSetForRegion(region);
 
         region->LockWriteRegion();
 #if defined(__OHOS__)
@@ -413,7 +415,7 @@ public:
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
     // Drop remset entries whose field address lies in [regionStart, regionEnd).
-    // HotSpot: HeapRegionRemSet::clear() when a region is freed. Called from ReclaimRegion only.
+    // HotSpot: HeapRegionRemSet::clear() when a region is freed. Called from CollectRegion only.
     static void ScrubRememberedSetForRegion(RegionInfo* region);
     // Emit + reset process-local scrub cost counters (STEER3).
     static void DumpScrubCostAndReset(const char* point);

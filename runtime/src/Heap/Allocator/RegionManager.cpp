@@ -603,11 +603,8 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    // Sole scrub site (STEER3 CALLSITE_AUDIT): payload is about to enter free/dirty trees.
-    // CollectRegion no longer scrubs — on Linux it only enqueues GARBAGE; mid-window
-    // mutator cannot legally RecordCrossGenEdge into a garbage region's field addresses
-    // (no new alloc there; live holders would not be garbage). Double scrub was 2× O(N).
-    ScrubRememberedSetForRegion(region);
+    // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
+    // must not re-scan O(N) under remset mutex.
 
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
