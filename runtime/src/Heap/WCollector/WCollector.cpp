@@ -595,12 +595,47 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
 
+    static const bool account = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
+    std::array<size_t, regionTypeCount> regionTypes{};
+    RegionInfo* lastRegion = nullptr;
+    size_t regions = 0;
+    size_t objects = 0;
+    size_t invalidObjects = 0;
+    size_t filteredObjects = 0;
+    size_t refHolders = 0;
+    size_t fields = 0;
+    size_t oldTaggedSlots = 0;
+    size_t rootSlots = 0;
+    size_t oldTaggedRootSlots = 0;
+    size_t youngTargetSlots = 0;
+    size_t fromRegions = 0;
+    size_t fromLiveObjects = 0;
+    size_t fromLiveFields = 0;
+
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
-    RootVisitor fixRoot = [this](ObjectRef& root) {
+    RootVisitor fixRoot = [this, account, &rootSlots, &oldTaggedRootSlots](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        if (account) {
+            ++rootSlots;
+            if (IsOldPointer(field)) {
+                ++oldTaggedRootSlots;
+            }
+        }
         FixOldTaggedRefField(nullptr, field);
     };
-    RefFieldVisitor fixRootField = [this](RefField<>& field) { FixOldTaggedRefField(nullptr, field); };
+    RefFieldVisitor fixRootField = [this, account, &rootSlots, &oldTaggedRootSlots](RefField<>& field) {
+        if (account) {
+            ++rootSlots;
+            if (IsOldPointer(field)) {
+                ++oldTaggedRootSlots;
+            }
+        }
+        FixOldTaggedRefField(nullptr, field);
+    };
 
     MutatorManager::Instance().VisitAllMutators(
         [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
@@ -618,15 +653,46 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
     size_t rebuilt = 0;
     space.ForEachObj(
-        [this, requireSurvivedMark, rebuildRemset, &rebuilt](BaseObject* obj) {
+        [this, requireSurvivedMark, rebuildRemset, account, &regionTypes, &lastRegion, &regions, &objects,
+         &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &youngTargetSlots, &fromRegions,
+         &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
+            RegionInfo* accountRegion = nullptr;
+            if (account) {
+                ++objects;
+                if (obj != nullptr) {
+                    accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                }
+                if (accountRegion != nullptr && accountRegion != lastRegion) {
+                    lastRegion = accountRegion;
+                    ++regions;
+                    ++regionTypes[static_cast<size_t>(accountRegion->GetRegionType())];
+                    if (requireSurvivedMark && accountRegion->IsFromRegion()) {
+                        ++fromRegions;
+                    }
+                }
+            }
             if (obj == nullptr || !obj->IsValidObject()) {
+                if (account) {
+                    ++invalidObjects;
+                }
                 return;
             }
-            if (requireSurvivedMark && !IsSurvivedObject(obj)) {
-                return;
+            if (requireSurvivedMark) {
+                if (!IsSurvivedObject(obj)) {
+                    if (account) {
+                        ++filteredObjects;
+                    }
+                    return;
+                }
+                if (account && accountRegion != nullptr && accountRegion->IsFromRegion()) {
+                    ++fromLiveObjects;
+                }
             }
             if (!obj->HasRefField()) {
                 return;
+            }
+            if (account) {
+                ++refHolders;
             }
             bool recordCrossGen = false;
             if (rebuildRemset != nullptr) {
@@ -634,7 +700,19 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
                                  !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
             }
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, &rebuilt](RefField<>& field) {
+            bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
+                                 accountRegion->IsFromRegion();
+            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, account, forwardHolder, &fields,
+                                  &oldTaggedSlots, &youngTargetSlots, &fromLiveFields, &rebuilt](RefField<>& field) {
+                if (account) {
+                    ++fields;
+                    if (forwardHolder) {
+                        ++fromLiveFields;
+                    }
+                    if (IsOldPointer(field)) {
+                        ++oldTaggedSlots;
+                    }
+                }
                 FixOldTaggedRefField(obj, field);
                 if (!recordCrossGen) {
                     return;
@@ -645,6 +723,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
                 RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                 if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    if (account) {
+                        ++youngTargetSlots;
+                    }
                     rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
                     ++rebuilt;
                 }
@@ -653,6 +734,23 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         false);
     if (rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
+    }
+    if (account) {
+        VLOG(REPORT,
+             "[GCV2][preflip-account] phase=%s regions=%zu objects=%zu invalid=%zu filtered=%zu survived=%zu "
+             "refHolders=%zu fields=%zu oldTagged=%zu rootSlots=%zu oldTaggedRoots=%zu youngTargets=%zu "
+             "rebuilt=%zu fromRegions=%zu fromLiveObjects=%zu fromLiveFields=%zu "
+             "env=MRT_GCV2_PREFLIP_ACCOUNT=1",
+             requireSurvivedMark ? "preflip" : "postflip", regions, objects, invalidObjects, filteredObjects,
+             objects - invalidObjects - filteredObjects, refHolders, fields, oldTaggedSlots, rootSlots,
+             oldTaggedRootSlots, youngTargetSlots, rebuilt, fromRegions, fromLiveObjects, fromLiveFields);
+        VLOG(REPORT,
+             "[GCV2][preflip-region-types] phase=%s type0=%zu type1=%zu type2=%zu type3=%zu type4=%zu "
+             "type5=%zu type6=%zu type7=%zu type8=%zu type9=%zu type10=%zu type11=%zu type12=%zu type13=%zu "
+             "type14=%zu env=MRT_GCV2_PREFLIP_ACCOUNT=1",
+             requireSurvivedMark ? "preflip" : "postflip", regionTypes[0], regionTypes[1], regionTypes[2],
+             regionTypes[3], regionTypes[4], regionTypes[5], regionTypes[6], regionTypes[7], regionTypes[8],
+             regionTypes[9], regionTypes[10], regionTypes[11], regionTypes[12], regionTypes[13], regionTypes[14]);
     }
 }
 
