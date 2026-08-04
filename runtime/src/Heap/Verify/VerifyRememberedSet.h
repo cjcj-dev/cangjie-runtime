@@ -25,6 +25,7 @@ namespace MapleRuntime {
 // Optional abort: MRT_GCV2_VERIFY_REMSET_FATAL=1
 // Optional start-at: MRT_GCV2_VERIFY_REMSET_START_AT=<N> (1-based invoke count)
 // Optional every: MRT_GCV2_VERIFY_REMSET_EVERY=<N>
+// Detailed failure cap: MRT_GCV2_VERIFY_REMSET_MAX_FAILURES=<N> (default 20)
 //
 // remsetSnapshot: non-owning view of remset slots at the verification point
 // (typically the post-AcquireRecordsForMinor local set; live remset is empty then).
