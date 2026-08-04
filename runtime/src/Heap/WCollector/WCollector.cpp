@@ -52,14 +52,46 @@ bool WCollector::MarkObject(BaseObject* obj) const
         const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    if (fysGapProbe &&
-        (static_cast<uint64_t>(objectSize) > RegionInfo::LIVE_BYTES_MASK ||
-         region->GetLiveByteCount() > RegionInfo::LIVE_BYTES_MASK - static_cast<uint64_t>(objectSize))) {
-        VLOG(REPORT,
-             "[FYSGAP][width] object=%p objectSize=%zu region=%p liveBefore=%zu mask=%llu "
-             "env=MRT_GCV2_FYSGAP_PROBE=1",
-             obj, objectSize, region, static_cast<size_t>(region->GetLiveByteCount()),
-             static_cast<unsigned long long>(RegionInfo::LIVE_BYTES_MASK));
+    static const uint64_t fysGapWidthLimit = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_WIDTH_LIMIT");
+        if (value == nullptr) {
+            return RegionInfo::LIVE_BYTES_MASK;
+        }
+        char* end = nullptr;
+        uint64_t limit = std::strtoull(value, &end, 0);
+        return end != value && *end == '\0' ? limit : RegionInfo::LIVE_BYTES_MASK;
+    }();
+    static std::atomic<uint64_t> fysGapMaxObjectSize{ 0 };
+    static std::atomic<uint64_t> fysGapMaxLiveAfter{ 0 };
+    if (fysGapProbe) {
+        uint64_t objectBytes = static_cast<uint64_t>(objectSize);
+        uint64_t liveBefore = region->GetLiveByteCount();
+        uint64_t liveAfter = liveBefore + objectBytes;
+        uint64_t oldObjectMax = fysGapMaxObjectSize.load(std::memory_order_relaxed);
+        while (oldObjectMax < objectBytes && !fysGapMaxObjectSize.compare_exchange_weak(
+                   oldObjectMax, objectBytes, std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+        uint64_t oldLiveMax = fysGapMaxLiveAfter.load(std::memory_order_relaxed);
+        while (oldLiveMax < liveAfter && !fysGapMaxLiveAfter.compare_exchange_weak(
+                   oldLiveMax, liveAfter, std::memory_order_relaxed, std::memory_order_relaxed)) {
+        }
+        if (oldObjectMax < objectBytes || oldLiveMax < liveAfter) {
+            VLOG(REPORT,
+                 "[FYSGAP][width-max] object=%p objectSize=%llu region=%p liveBefore=%llu liveAfter=%llu "
+                 "maxObject=%llu maxLiveAfter=%llu limit=%llu",
+                 obj, static_cast<unsigned long long>(objectBytes), region,
+                 static_cast<unsigned long long>(liveBefore), static_cast<unsigned long long>(liveAfter),
+                 static_cast<unsigned long long>(fysGapMaxObjectSize.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(fysGapMaxLiveAfter.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(fysGapWidthLimit));
+        }
+        if (objectBytes > fysGapWidthLimit || liveBefore > fysGapWidthLimit - objectBytes) {
+            VLOG(REPORT,
+                 "[FYSGAP][width] object=%p objectSize=%llu region=%p liveBefore=%llu limit=%llu "
+                 "env=MRT_GCV2_FYSGAP_PROBE=1",
+                 obj, static_cast<unsigned long long>(objectBytes), region,
+                 static_cast<unsigned long long>(liveBefore), static_cast<unsigned long long>(fysGapWidthLimit));
+        }
     }
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
