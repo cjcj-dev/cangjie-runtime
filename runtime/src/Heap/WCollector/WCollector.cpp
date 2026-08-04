@@ -250,6 +250,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
                      targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
+            LogInteriorPush(targetObj, "TraceRefField_current", obj, &field);
             workStack.push_back(targetObj);
         }
         return;
@@ -278,6 +279,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject(latest)) {
+        LogInteriorPush(latest, "TraceRefField_latest", obj, &field);
         workStack.push_back(latest);
     }
 }
@@ -811,11 +813,57 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     VisitMinorValueRoots(visitor);
 }
 
+namespace {
+// s3inject: log first N times a work-stack push carries a non-object header
+// (interior / corrupt). IsValidObject only checks TypeInfo!=null, so Node*+8
+// (id as tip) and Array*+8 (length as tip) pass it. Call before every push.
+void LogInteriorPush(BaseObject* object, const char* origin, BaseObject* holder = nullptr,
+                     const void* slot = nullptr)
+{
+    if (object == nullptr) {
+        return;
+    }
+    TypeInfo* tip = object->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    bool tipOk = tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 && tip->IsVaildType();
+    if (tipOk) {
+        return;
+    }
+    static std::atomic<size_t> g_interiorPushLogged{ 0 };
+    size_t n = g_interiorPushLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n >= 32) {
+        return;
+    }
+    // true header candidate: object - TYPEINFO_PTR_SIZE (first payload word as "header")
+    auto* trueHdr = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(object) - TYPEINFO_PTR_SIZE);
+    TypeInfo* trueTip = nullptr;
+    const char* trueName = "?";
+    uintptr_t trueTipAddr = 0;
+    if (Heap::IsHeapAddress(trueHdr)) {
+        trueTip = trueHdr->GetTypeInfo();
+        trueTipAddr = reinterpret_cast<uintptr_t>(trueTip);
+        if (trueTip != nullptr && (trueTipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 && trueTip->IsVaildType()) {
+            trueName = trueTip->GetName();
+        }
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    VLOG(REPORT,
+         "[GCV2][S3_INJECT] n=%zu origin=%s obj=%p tip=%p tipAlignBad=%u holder=%p slot=%p "
+         "trueHdr=%p trueTip=%p trueName=%s young=%u "
+         "(interior=obj-TYPEINFO_PTR_SIZE if trueName valid)",
+         n, origin == nullptr ? "null" : origin, object, tip,
+         static_cast<unsigned>((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0), holder, slot, trueHdr, trueTip,
+         trueName, region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
+}
+} // namespace
+
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    // s3inject: interior Node*+8 passes IsValidObject (id!=0 as tip). Log before gate.
+    LogInteriorPush(object, origin != nullptr ? origin : "PushYoungObject");
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
@@ -907,6 +955,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         BaseObject* target = ResolveMinorReference(field);
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(target)) {
+                LogInteriorPush(target, "closure_edge_full", nullptr, &field);
                 workStack.push_back(target);
             }
         } else {
@@ -1776,6 +1825,7 @@ void WCollector::DoYoungGarbageCollection()
         }
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(object)) {
+                LogInteriorPush(object, "alloc_buffer_full");
                 workStack.push_back(object);
             }
         } else {
@@ -1785,6 +1835,7 @@ void WCollector::DoYoungGarbageCollection()
     VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(object)) {
+                LogInteriorPush(object, gMinorRootOrigin != nullptr ? gMinorRootOrigin : "minor_root_full");
                 workStack.push_back(object);
             }
         } else {
