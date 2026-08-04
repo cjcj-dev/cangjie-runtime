@@ -1708,6 +1708,12 @@ void WCollector::DoYoungGarbageCollection()
     RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                         &remsetStats);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    static const bool verifyRemsetEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
+    // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
     {
         size_t runIndex = minorTotalRuns + 1;
         auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
@@ -1717,12 +1723,17 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                             &minorCandidateRegions, remsetStats);
+        if (verifyRemsetEnabled) {
+            std::unordered_set<BaseObject*> rootReachableForRemsetVerify;
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, &rootReachableForRemsetVerify);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, &rootReachableForRemsetVerify);
+        } else {
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, nullptr);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+        }
     }
-    // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
-    // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
-    VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots);
     // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
     // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing

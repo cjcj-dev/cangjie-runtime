@@ -392,23 +392,28 @@ void RunDiffPathExplainer(size_t minorRunIndex,
                           const std::unordered_set<MAddress>& remsetSlots,
                           const std::unordered_set<MAddress>& consumedSlots,
                           const std::unordered_set<RegionInfo*>* candidateRegions,
-                          const DiffPathRemsetStats& remsetStats)
+                          const DiffPathRemsetStats& remsetStats,
+                          std::unordered_set<BaseObject*>* rootReachableOut)
 {
     ReportRemsetConsumeStats(minorRunIndex, remsetStats);
 
-    if (!EnvEnabled("MRT_GCV2_DIFF_PATH")) {
-        return;
-    }
-    if (!ShouldRunAt(minorRunIndex)) {
+    bool runDiffPath = EnvEnabled("MRT_GCV2_DIFF_PATH") && ShouldRunAt(minorRunIndex);
+    if (!runDiffPath && rootReachableOut == nullptr) {
         return;
     }
 
     uint64_t t0 = TimeUtil::NanoSeconds();
 
-    ObjectSet fullReachable;
+    ObjectSet localFullReachable;
+    ObjectSet& fullReachable = rootReachableOut == nullptr ? localFullReachable : *rootReachableOut;
+    fullReachable.clear();
     ObjectSet fullYoung;
     ParentMap fullParent;
     RunFullClosure(visitRoots, resolveField, fullReachable, fullYoung, fullParent);
+
+    if (!runDiffPath) {
+        return;
+    }
 
     ObjectSet youngOnly;
     ParentMap youngParent;
