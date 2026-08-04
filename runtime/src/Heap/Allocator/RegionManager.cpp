@@ -1446,13 +1446,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // ClearLiveInfo arms LIVE_AUTHORITY with live=0 before mark. MarkObject is the only
         // path that allocates the mark bitmap. If the region still has allocated payload but
         // never got a mark bitmap, mark never examined it — bare IsKnownEmpty is not proof of
-        // emptiness (B2: survivors reclaimed via CollectRegion → TakeRegion ClearUnits).
+        // emptiness on a young-only (minor) GC (B2: survivors reclaimed via CollectRegion →
+        // TakeRegion ClearUnits). Full GC marks from global roots; knownEmpty with no bitmap
+        // means nobody marked the region ⇒ reclaim (non-generational / A-arm behaviour).
+        // Keeping those regions across full GC leaves ~5MB pseudo-live from-space, forces
+        // immediate OOM full GC, and Enum static root aborts on invalid targets (fullgcfix).
         bool neverExamined = region->GetMarkBitmap() == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
-        if (neverExamined) {
+        bool youngOnlyGC =
+            Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+        if (neverExamined && youngOnlyGC) {
             VLOG(REPORT,
                  "[GCRECLAIM][fwd-empty-keep] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%u neverExamined=1 — skip CollectRegion",
+                 "live=%u neverExamined=1 youngOnlyGC=1 — skip CollectRegion",
                  region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                  static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
             if (youngRegion) {
@@ -1465,6 +1471,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetRouteState(RegionInfo::RouteState::NORMAL);
             unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
             return;
+        }
+        if (neverExamined && !youngOnlyGC) {
+            VLOG(REPORT,
+                 "[GCRECLAIM][fwd-empty-collect] region=%p start=%#zx alloc=%#zx young=%u "
+                 "live=%u neverExamined=1 fullGC=1 — CollectRegion",
+                 region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
         }
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.
