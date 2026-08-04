@@ -248,7 +248,8 @@ public:
                 // Skip marking the weakRef itself, but trace its children node
                 if (UNLIKELY(obj->IsWeakRef())) {
                     RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent = collector.GetAndTryTagObj(obj, *referentField);
+                    BaseObject* referent =
+                        collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, *referentField);
                     if (referent != nullptr) {
                         DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
                         collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(referent), workStack);

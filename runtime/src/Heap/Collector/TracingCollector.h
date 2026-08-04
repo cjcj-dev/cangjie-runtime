@@ -168,6 +168,11 @@ class TracingCollector : public Collector {
     friend ConcurrentMarkingWork;
     friend ExportRootsTracingWork;
 public:
+    enum class RefSlotKind : U8 {
+        STRONG,
+        WEAK_REFERENT,
+    };
+
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
         : Collector(), theAllocator(allocator), collectorResources(resources)
     {}
@@ -277,7 +282,7 @@ public:
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
     virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(BaseObject* obj, RefField<>& field) { std::abort(); }
+    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) { std::abort(); }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)

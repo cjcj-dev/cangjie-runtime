@@ -17,6 +17,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
+#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "LoaderManager.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -135,6 +136,7 @@ void PrintSignalHandlerStack(int sig, const siginfo_t* info, void* context)
     // AS-safe path: key fields (tid/si_addr/pc/fa) via stack buffer + write(2).
     // Full unwind / symbolize / FLOG / pthread_getname_np are deferred out of the
     // signal-context critical path (REPORT-gchang11 §5 D).
+    PrintUntagRefFieldBreadcrumb();
     // Emit once per OS signal delivery (HandlerImpl entry) so a user-registered
     // crash handler on an _exit path cannot suppress the pc line.
     uintptr_t sigPc = 0;

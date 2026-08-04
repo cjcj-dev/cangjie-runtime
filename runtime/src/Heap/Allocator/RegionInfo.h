@@ -1007,13 +1007,13 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    // liveByteCount: bit31 = LIVE_AUTHORITY (mark-period established), bits0-30 = live bytes.
+    // liveByteCount: bit63 = LIVE_AUTHORITY (mark-period established), bits0-62 = live bytes.
     // InitRegionInfo zeros without authority; minor never marks non-young, so bare live==0 there is not
     // a reclaim predicate. Readers that decide "empty ⇒ reclaim/skip" must use IsKnownEmpty().
-    static constexpr uint32_t LIVE_AUTHORITY_BIT = 1u << 31;
-    static constexpr uint32_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1u;
+    static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
+    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1ull;
 
-    uint32_t GetLiveByteCount() const
+    uint64_t GetLiveByteCount() const
     {
         return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
     }
@@ -1025,7 +1025,7 @@ public:
 
     bool IsKnownEmpty() const
     {
-        uint32_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         return (raw & LIVE_AUTHORITY_BIT) != 0 && (raw & LIVE_BYTES_MASK) == 0;
     }
 
@@ -1035,9 +1035,9 @@ public:
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
 
-    void AddLiveByteCount(uint32_t count)
+    void AddLiveByteCount(uint64_t count)
     {
-        uint32_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
         if ((prev & LIVE_AUTHORITY_BIT) == 0) {
             (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
         }
@@ -1085,7 +1085,7 @@ private:
             uint32_t nextRegionIdx;
             uint32_t prevRegionIdx; // support fast deletion for region list.
 
-            uint32_t liveByteCount;
+            uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
         };
 

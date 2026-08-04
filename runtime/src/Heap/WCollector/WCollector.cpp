@@ -9,12 +9,16 @@
 
 #include <array>
 #include <atomic>
+#include <csignal>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <unistd.h>
 
+#include "Base/SysCall.h"
 #include "Concurrency/Concurrency.h"
+#include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
@@ -26,8 +30,39 @@
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Verify/VerifyRegions.h"
+#include "securec.h"
 
 namespace MapleRuntime {
+namespace {
+struct UntagRefFieldBreadcrumb {
+    const void* holder = nullptr;
+    const void* field = nullptr;
+    const void* target = nullptr;
+    const void* caller = nullptr;
+    size_t fieldOffset = 0;
+    volatile sig_atomic_t active = 0;
+};
+
+thread_local UntagRefFieldBreadcrumb untagRefFieldBreadcrumb;
+} // namespace
+
+void PrintUntagRefFieldBreadcrumb() noexcept
+{
+    if (untagRefFieldBreadcrumb.active == 0) {
+        return;
+    }
+    std::atomic_signal_fence(std::memory_order_seq_cst);
+    char buf[320];
+    int n = sprintf_s(buf, sizeof(buf),
+                      "%d E GC untag breadcrumb: holder=%p field=%p field_offset=%zu target=%p caller_pc=%p\n",
+                      static_cast<int>(GetTid()), untagRefFieldBreadcrumb.holder, untagRefFieldBreadcrumb.field,
+                      untagRefFieldBreadcrumb.fieldOffset, untagRefFieldBreadcrumb.target,
+                      untagRefFieldBreadcrumb.caller);
+    if (n > 0) {
+        (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
+    }
+}
+
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 {
     // filter const string object.
@@ -52,7 +87,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
+        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
     return marked;
@@ -63,7 +98,7 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
             region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
+            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
                  obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
         }
         return resurrected;
@@ -131,9 +166,24 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = oldRef.GetTargetObject();
+        untagRefFieldBreadcrumb.active = 0;
+        untagRefFieldBreadcrumb.holder = obj;
+        untagRefFieldBreadcrumb.field = &field;
+        untagRefFieldBreadcrumb.target = target;
+        untagRefFieldBreadcrumb.caller = __builtin_return_address(0);
+        untagRefFieldBreadcrumb.fieldOffset =
+            obj == nullptr ? static_cast<size_t>(-1) : BaseObject::FieldOffset(obj, &field);
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        untagRefFieldBreadcrumb.active = 1;
+        std::atomic_signal_fence(std::memory_order_seq_cst);
+        const bool isValidTarget = target->IsValidObject();
+        if (LIKELY(isValidTarget)) {
+            std::atomic_signal_fence(std::memory_order_seq_cst);
+            untagRefFieldBreadcrumb.active = 0;
+        }
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
-        CHECK_DETAIL(target->IsValidObject(), "TryUntagRefField encounters invalid tagged target %p at field %p",
-                     target, &field);
+        CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
+                     &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
@@ -237,8 +287,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
-        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
-                     targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+        CHECK_DETAIL(targetObj->IsValidObject(),
+                     "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
+                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
             workStack.push_back(targetObj);
         }
@@ -257,8 +308,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd", latest,
-                 obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
+                 latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
@@ -308,16 +359,16 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
     obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
 }
 
-BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
+BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
 {
     RefField<> oldField(field);
+    const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
-        CHECK_DETAIL(targetObj->IsValidObject(),
-                     "Invalid object %p is referenced by weak object %p: %s and offset %zd", targetObj, obj,
-                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                     targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
     if (IsOldPointer(oldField)) {
@@ -330,8 +381,8 @@ BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
     }
-    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by weak object %p: %s and offset %zd",
-                 latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+    CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
+                 latest, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
