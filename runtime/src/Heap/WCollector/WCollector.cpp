@@ -13,9 +13,12 @@
 #include <csignal>
 #endif
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <mutex>
+#include <unordered_set>
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
 #endif
@@ -24,10 +27,12 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Collector/GcStats.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
 #include "Heap/Verify/VerifyHeap.h"
+#include "ObjectModel/MClass.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
@@ -546,9 +551,113 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         return;
     }
     BaseObject* fromObj = oldField.GetTargetObject();
-    BaseObject* latest = FindToVersion(fromObj);
-    if (latest == nullptr) {
-        latest = fromObj;
+    BaseObject* routed = FindToVersion(fromObj);
+    BaseObject* latest = routed != nullptr ? routed : fromObj;
+    // deadtip2: classify dead/clear tip at F3 entry (probe-only; no control-flow change).
+    // Env MRT_GCV2_S3_ORIGIN=1 enables stderr lines (default off).
+    auto tipWord = [](BaseObject* o) -> void* {
+        if (o == nullptr || !Heap::IsHeapAddress(o)) {
+            return nullptr;
+        }
+        return *reinterpret_cast<void* const*>(o);
+    };
+    auto isClearInterior = [](void* tip) -> bool {
+        uintptr_t a = reinterpret_cast<uintptr_t>(tip);
+        return tip == nullptr || (a & 7) != 0 || a < 0x10000;
+    };
+    void* fromTip = tipWord(fromObj);
+    void* latestTip = tipWord(latest);
+    bool fromBad = isClearInterior(fromTip);
+    bool latestBad = isClearInterior(latestTip);
+    if (fromBad || latestBad) {
+        static std::atomic<size_t> g_s3origin{ 0 };
+        size_t n = g_s3origin.fetch_add(1, std::memory_order_relaxed);
+        const char* s3env = std::getenv("MRT_GCV2_S3_ORIGIN");
+        bool s3on = s3env != nullptr && std::strcmp(s3env, "1") == 0;
+        if (s3on && n < 256) {
+            size_t fieldOff = 0;
+            const char* holderName = "?";
+            if (holder != nullptr) {
+                fieldOff = static_cast<size_t>(reinterpret_cast<uintptr_t>(&field) -
+                                               reinterpret_cast<uintptr_t>(holder));
+                void* hTip = tipWord(holder);
+                uintptr_t ha = reinterpret_cast<uintptr_t>(hTip);
+                if (hTip != nullptr && (ha & 7) == 0 && ha >= 0x10000) {
+                    auto* hti = reinterpret_cast<TypeInfo*>(hTip);
+                    if (hti->IsVaildType()) {
+                        holderName = hti->GetName();
+                    }
+                }
+            }
+            auto* trueHdr = latest == nullptr
+                ? nullptr
+                : reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(latest) - TYPEINFO_PTR_SIZE);
+            void* trueTip = tipWord(trueHdr);
+            const char* trueName = "?";
+            uintptr_t tta = reinterpret_cast<uintptr_t>(trueTip);
+            if (trueTip != nullptr && (tta & 7) == 0 && tta >= 0x10000) {
+                auto* tti = reinterpret_cast<TypeInfo*>(trueTip);
+                if (tti->IsVaildType()) {
+                    trueName = tti->GetName();
+                }
+            }
+            ptrdiff_t delta = 0;
+            if (fromObj != nullptr && latest != nullptr) {
+                delta = static_cast<ptrdiff_t>(reinterpret_cast<uintptr_t>(latest) -
+                                               reinterpret_cast<uintptr_t>(fromObj));
+            }
+            const char* kind = "other";
+            if (fromBad && latestBad && fromObj == latest) {
+                kind = "slot_already_interior";
+            } else if (!fromBad && latestBad && routed != nullptr) {
+                kind = "route_produced_interior";
+            } else if (fromBad && !latestBad) {
+                kind = "route_healed_interior";
+            } else if (fromBad && latestBad && fromObj != latest) {
+                kind = "route_moved_interior";
+            } else if (!fromBad && latestBad && routed == nullptr) {
+                kind = "from_as_latest_but_bad";
+            }
+            MAddress slotAddr = reinterpret_cast<MAddress>(&field);
+            bool inRemset = Heap::GetHeap().GetRememberedSet().Contains(slotAddr);
+            unsigned holderYoung = 0;
+            unsigned targetYoung = 0;
+            if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+                RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                holderYoung = (hr != nullptr && hr->IsYoungRegion()) ? 1u : 0u;
+            }
+            if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+                RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
+                targetYoung = (tr != nullptr && tr->IsYoungRegion()) ? 1u : 0u;
+            }
+            // NEW_VS_CARRYOVER: same slot addr seen across F3 invocations?
+            static std::mutex s3mu;
+            static std::unordered_set<MAddress> s3SeenSlots;
+            static size_t s3New = 0;
+            static size_t s3Carry = 0;
+            bool isCarry = false;
+            {
+                std::lock_guard<std::mutex> lk(s3mu);
+                isCarry = !s3SeenSlots.insert(slotAddr).second;
+                if (isCarry) {
+                    ++s3Carry;
+                } else {
+                    ++s3New;
+                }
+            }
+            std::fprintf(stderr,
+                         "[GCV2][S3_ORIGIN] n=%zu kind=%s holder=%p holderName=%s fieldOff=%zu "
+                         "from=%p fromTip=%p routed=%p latest=%p latestTip=%p delta=%td "
+                         "trueHdr8=%p trueTip8=%p trueName8=%s rawOld=%#zx "
+                         "slot=%p inRemset=%u holderYoung=%u targetYoung=%u "
+                         "gcCount=%zu carry=%u newTot=%zu carryTot=%zu\n",
+                         n, kind, holder, holderName, fieldOff, fromObj, fromTip, routed, latest,
+                         latestTip, delta, trueHdr, trueTip, trueName,
+                         static_cast<size_t>(oldField.GetFieldValue()),
+                         reinterpret_cast<void*>(slotAddr), inRemset ? 1u : 0u, holderYoung,
+                         targetYoung, g_gcCount, isCarry ? 1u : 0u, s3New, s3Carry);
+            std::fflush(stderr);
+        }
     }
     bool latestLive = false;
     if (Heap::IsHeapAddress(latest)) {
