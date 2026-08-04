@@ -95,43 +95,43 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
             ++stats.holdersScanned;
             holder->ForEachRefField(
                 [&fieldSlots, &stats, &remsetSnapshot, rootReachableHolders, holder](RefField<>& field) {
-                MAddress slot = reinterpret_cast<MAddress>(&field);
-                fieldSlots.insert(slot);
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    fieldSlots.insert(slot);
 
-                BaseObject* target = field.GetTargetObject();
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    if (remsetSnapshot.count(slot) != 0) {
-                        ++stats.stale;
-                        PushSample(stats.staleSamples, stats.staleSampleCount, slot);
+                    BaseObject* target = field.GetTargetObject();
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        if (remsetSnapshot.count(slot) != 0) {
+                            ++stats.stale;
+                            PushSample(stats.staleSamples, stats.staleSampleCount, slot);
+                        }
+                        return;
                     }
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion == nullptr || !targetRegion->IsYoungRegion()) {
-                    if (remsetSnapshot.count(slot) != 0) {
-                        ++stats.stale;
-                        PushSample(stats.staleSamples, stats.staleSampleCount, slot);
+                    RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion == nullptr || !targetRegion->IsYoungRegion()) {
+                        if (remsetSnapshot.count(slot) != 0) {
+                            ++stats.stale;
+                            PushSample(stats.staleSamples, stats.staleSampleCount, slot);
+                        }
+                        return;
                     }
-                    return;
-                }
 
-                // Direct old→young edge (field-level; no cascade).
-                ++stats.oldToYoungEdges;
-                if (remsetSnapshot.count(slot) == 0) {
-                    ++stats.missing;
-                    if (rootReachableHolders != nullptr && rootReachableHolders->count(holder) != 0) {
-                        ++stats.missingRootReachable;
-                        PushSample(stats.missingRootReachableSamples, stats.missingRootReachableSampleCount, slot);
+                    // Direct old→young edge (field-level; no cascade).
+                    ++stats.oldToYoungEdges;
+                    if (remsetSnapshot.count(slot) == 0) {
+                        ++stats.missing;
+                        if (rootReachableHolders != nullptr && rootReachableHolders->count(holder) != 0) {
+                            ++stats.missingRootReachable;
+                            PushSample(stats.missingRootReachableSamples, stats.missingRootReachableSampleCount, slot);
+                        }
+                        TypeInfo* typeInfo = holder->GetTypeInfo();
+                        if (typeInfo != nullptr && typeInfo->IsArrayType()) {
+                            ++stats.missingArrayHolder;
+                        } else {
+                            ++stats.missingNonArray;
+                        }
+                        PushSample(stats.missingSamples, stats.missingSampleCount, slot);
+                        RemsetPhaseProbe::NoteMissing(slot);
                     }
-                    TypeInfo* typeInfo = holder->GetTypeInfo();
-                    if (typeInfo != nullptr && typeInfo->IsArrayType()) {
-                        ++stats.missingArrayHolder;
-                    } else {
-                        ++stats.missingNonArray;
-                    }
-                    PushSample(stats.missingSamples, stats.missingSampleCount, slot);
-                    RemsetPhaseProbe::NoteMissing(slot);
-                }
                 });
         },
         false);
