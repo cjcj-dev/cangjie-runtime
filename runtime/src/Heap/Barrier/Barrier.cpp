@@ -70,14 +70,14 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
 #if defined(MRT_BARRIER_WRITE_MIX_PROBE)
-    if (obj != nullptr) {
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         RemsetPhaseProbe::BeginOrdinaryHeapWrite(reinterpret_cast<MAddress>(&field));
     }
 #endif
     WriteReferenceImpl(obj, field, ref);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 #if defined(MRT_BARRIER_WRITE_MIX_PROBE)
-    if (obj != nullptr) {
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         RemsetPhaseProbe::EndOrdinaryHeapWrite();
     }
 #endif

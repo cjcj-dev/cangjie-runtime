@@ -360,11 +360,6 @@ size_t RememberedSet::ClearBuffer(size_t buffer)
 uint8_t RememberedSet::BeginFullClear()
 {
     CheckInitialized();
-#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
-    // ADAPTATION: full collection also rotates the Cangjie remembered bitmap,
-    // so it closes the measured write epoch before the active buffer changes.
-    RemsetPhaseProbe::FinishWriteEpoch("full");
-#endif
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
     size_t nextBuffer = scanBuffer ^ 1U;
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0, "remembered-set next full buffer is not empty");
