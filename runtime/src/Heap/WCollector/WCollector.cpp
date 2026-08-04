@@ -1114,7 +1114,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             holder->ForEachRefField([holder, &rememberedSlots, &rememberedOrigins](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
                 if (rememberedSlots.count(slot) != 0) {
-                    rememberedOrigins.insert_or_assign(slot, holder);
+                    rememberedOrigins[slot] = holder;
                 }
             });
         });
