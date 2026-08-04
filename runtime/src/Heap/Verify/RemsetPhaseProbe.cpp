@@ -58,6 +58,7 @@ uint64_t gRepeatedHeapWrites = 0;
 uint64_t gWriteEpoch = 0;
 std::atomic<uint64_t> gRemsetRecordAttempts{0};
 std::atomic<uint64_t> gDuplicateRemsetRecords{0};
+thread_local uint32_t gOrdinaryHeapWriteDepth = 0;
 #endif
 
 bool EnvOn(const char* name)
@@ -111,11 +112,12 @@ bool WriteMixEnabled()
     return on;
 }
 
-void NoteHeapWrite(MAddress fieldAddress)
+void BeginOrdinaryHeapWrite(MAddress fieldAddress)
 {
     if (!WriteMixEnabled()) {
         return;
     }
+    ++gOrdinaryHeapWriteDepth;
     std::lock_guard<std::mutex> guard(gWriteMixLock);
     ++gHeapWrites;
     if (gHeapWriteSlots.insert(fieldAddress).second) {
@@ -125,9 +127,18 @@ void NoteHeapWrite(MAddress fieldAddress)
     }
 }
 
-void NoteRemsetRecord(bool duplicate)
+void EndOrdinaryHeapWrite()
 {
     if (!WriteMixEnabled()) {
+        return;
+    }
+    CHECK_DETAIL(gOrdinaryHeapWriteDepth > 0, "ordinary heap write probe scope underflow");
+    --gOrdinaryHeapWriteDepth;
+}
+
+void NoteRemsetRecord(bool duplicate)
+{
+    if (!WriteMixEnabled() || gOrdinaryHeapWriteDepth == 0) {
         return;
     }
     gRemsetRecordAttempts.fetch_add(1, std::memory_order_relaxed);
@@ -136,7 +147,7 @@ void NoteRemsetRecord(bool duplicate)
     }
 }
 
-void FinishWriteEpoch()
+void FinishWriteEpoch(const char* boundary)
 {
     if (!WriteMixEnabled()) {
         return;
@@ -146,9 +157,9 @@ void FinishWriteEpoch()
     std::lock_guard<std::mutex> guard(gWriteMixLock);
     ++gWriteEpoch;
     VLOG(REPORT,
-         "[GCV2][barrier-write-mix] epoch=%llu heapWrites=%llu first=%llu repeated=%llu uniqueSlots=%zu "
+         "[GCV2][barrier-write-mix] epoch=%llu boundary=%s heapWrites=%llu first=%llu repeated=%llu uniqueSlots=%zu "
          "remsetAttempts=%llu remsetUnique=%llu remsetDuplicates=%llu env=MRT_GCV2_BARRIER_WRITE_MIX=1",
-         static_cast<unsigned long long>(gWriteEpoch), static_cast<unsigned long long>(gHeapWrites),
+         static_cast<unsigned long long>(gWriteEpoch), boundary, static_cast<unsigned long long>(gHeapWrites),
          static_cast<unsigned long long>(gFirstHeapWrites), static_cast<unsigned long long>(gRepeatedHeapWrites),
          gHeapWriteSlots.size(), static_cast<unsigned long long>(attempts),
          static_cast<unsigned long long>(attempts - duplicates), static_cast<unsigned long long>(duplicates));

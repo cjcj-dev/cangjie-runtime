@@ -65,11 +65,12 @@ bool ForceRecordEnabled();
 #if defined(MRT_BARRIER_WRITE_MIX_PROBE)
 // Validation-build-only counters for MRT_GCV2_BARRIER_WRITE_MIX=1.
 // SOURCE: OpenJDK zBarrier.inline.hpp:695-706 and zAddress.cpp:132-136:
-// act-once distinguishes the first store to a field in a young-mark epoch
-// from later stores to the same field in that epoch.
-void NoteHeapWrite(MAddress fieldAddress);
+// act-once distinguishes the first ordinary heap-reference store to a field in
+// a young-mark epoch from later ordinary stores to the same field.
+void BeginOrdinaryHeapWrite(MAddress fieldAddress);
+void EndOrdinaryHeapWrite();
 void NoteRemsetRecord(bool duplicate);
-void FinishWriteEpoch();
+void FinishWriteEpoch(const char* boundary);
 #endif
 
 } // namespace RemsetPhaseProbe

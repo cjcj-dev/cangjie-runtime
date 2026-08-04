@@ -119,8 +119,8 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 #if defined(MRT_BARRIER_WRITE_MIX_PROBE)
     // SOURCE: OpenJDK zGeneration.cpp:855-880 and zAddress.cpp:132-136:
     // the remembered color changes at a young-mark epoch boundary. This runtime
-    // drains under STW, so the pre-flip boundary is exact for all mutator writes.
-    RemsetPhaseProbe::FinishWriteEpoch();
+    // drains under STW, so the pre-flip boundary is exact for scoped ordinary writes.
+    RemsetPhaseProbe::FinishWriteEpoch("minor");
 #endif
 
     // DoYoungGarbageCollection owns a ScopedStopTheWorld across this operation.
@@ -360,6 +360,11 @@ size_t RememberedSet::ClearBuffer(size_t buffer)
 uint8_t RememberedSet::BeginFullClear()
 {
     CheckInitialized();
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+    // ADAPTATION: full collection also rotates the Cangjie remembered bitmap,
+    // so it closes the measured write epoch before the active buffer changes.
+    RemsetPhaseProbe::FinishWriteEpoch("full");
+#endif
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
     size_t nextBuffer = scanBuffer ^ 1U;
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0, "remembered-set next full buffer is not empty");
