@@ -357,6 +357,22 @@ public:
             }
         }
 
+        // Causal block companion (default off): refuse CollectRegion while still FORWARDED.
+        {
+            static const bool blockFwd = []() {
+                const char* v = std::getenv("MRT_GCV2_BLOCK_FORWARDED_RESIDUAL");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (blockFwd && region != nullptr &&
+                region->GetRouteState() == RegionInfo::RouteState::FORWARDED) {
+                VLOG(REPORT,
+                     "[GCV2][block] CollectRegion skip FORWARDED region=%p start=%#zx "
+                     "env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                     region, region->GetRegionStart());
+                return 0;
+            }
+        }
+
         // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
         // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
         // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim

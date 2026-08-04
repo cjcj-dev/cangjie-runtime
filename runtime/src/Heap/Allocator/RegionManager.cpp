@@ -1610,6 +1610,24 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
+        // Causal block (default off): skip CollectRegion after FORWARDED so residualUnmarked
+        // from-space is not ClearUnits'd. MUST keep RouteState::FORWARDED — RouteRegion only
+        // accepts FORWARDABLE|ROUTING|ROUTED|FORWARDED|COMPACTED; NORMAL here aborts on the
+        // next cycle when unmovable merges back into fromRegionList (fwdresid2 15/15).
+        {
+            static const bool blockFwd = []() {
+                const char* v = std::getenv("MRT_GCV2_BLOCK_FORWARDED_RESIDUAL");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (blockFwd) {
+                VLOG(REPORT,
+                     "[GCV2][block] ForwardRegion skip CollectRegion after FORWARDED region=%p "
+                     "start=%#zx route=FORWARDED env=MRT_GCV2_BLOCK_FORWARDED_RESIDUAL=1",
+                     region, region->GetRegionStart());
+                unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+                return;
+            }
+        }
         CollectRegion(region);
     }
 }
