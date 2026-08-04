@@ -48,7 +48,7 @@ size_t InvalidSizeFor(const std::string& testCase)
         return 10;
     }
     if (testCase == "oversize") {
-        return 128;
+        return RegionInfo::UNIT_SIZE;
     }
     std::cerr << "unknown case: " << testCase << '\n';
     std::exit(2);
