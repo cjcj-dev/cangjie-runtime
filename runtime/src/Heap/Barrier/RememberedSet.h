@@ -14,6 +14,7 @@
 #include <unordered_set>
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
 #include <mutex>
+#include <unordered_map>
 #endif
 
 #include "Common/TypeDef.h"
@@ -56,7 +57,7 @@ public:
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     // Validation-only oracle for static/global slots. Product remset storage contains
     // heap slots only; minor GC visits static roots independently every round.
-    void RecordStaticForCrossCheck(MAddress fieldAddress);
+    void RecordStaticForCrossCheck(MAddress fieldAddress, MAddress callsite);
     void VisitStaticForCrossCheck(MAddress fieldAddress);
     void CheckStaticCoverageForMinor();
 #endif
@@ -103,6 +104,7 @@ private:
     mutable std::mutex oracleLock;
     std::unordered_set<MAddress> oracleRecords[kBufferCount];
     std::unordered_set<MAddress> staticRecords;
+    std::unordered_map<MAddress, MAddress> staticRecordSites;
     std::unordered_set<MAddress> visitedStaticRoots;
     size_t bitmapCrossCheckCount = 0;
     size_t staticCrossCheckRounds = 0;
