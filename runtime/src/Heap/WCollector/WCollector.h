@@ -157,14 +157,7 @@ protected:
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
 
-    RefField<> GetAndTryTagRefField(BaseObject* target) const override
-    {
-        if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID);
-        } else {
-            return RefField<>(target);
-        }
-    }
+    RefField<> GetAndTryTagRefField(BaseObject* target) const override;
 
     void CollectLargeGarbage()
     {

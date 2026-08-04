@@ -113,6 +113,40 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
     return regionInfo->IsUnmovableFromRegion();
 }
 
+// s3origin: log when tagging an already-clear-interior pointer (first production candidate).
+RefField<> WCollector::GetAndTryTagRefField(BaseObject* target) const
+{
+    if (target != nullptr && Heap::IsHeapAddress(target)) {
+        void* tip = *reinterpret_cast<void* const*>(target);
+        uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+        bool clearInterior = tip == nullptr || (tipAddr & 7) != 0 || tipAddr < 0x10000;
+        if (clearInterior) {
+            static std::atomic<size_t> g_s3tag{ 0 };
+            size_t n = g_s3tag.fetch_add(1, std::memory_order_relaxed);
+            if (n < 64) {
+                auto* trueHdr =
+                    reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(target) - TYPEINFO_PTR_SIZE);
+                void* trueTip = nullptr;
+                if (Heap::IsHeapAddress(trueHdr)) {
+                    trueTip = *reinterpret_cast<void* const*>(trueHdr);
+                }
+                std::fprintf(stderr,
+                             "[GCV2][S3_TAG] n=%zu target=%p tip=%p trueHdr8=%p trueTip8=%p "
+                             "fromObj=%u ra0=%p ra1=%p ra2=%p\n",
+                             n, target, tip, trueHdr, trueTip,
+                             static_cast<unsigned>(IsFromObject(target)),
+                             __builtin_return_address(0), __builtin_return_address(1),
+                             __builtin_return_address(2));
+                std::fflush(stderr);
+            }
+        }
+    }
+    if (IsFromObject(target)) {
+        return RefField<>(target, 1, currentTagID);
+    }
+    return RefField<>(target);
+}
+
 bool WCollector::MarkObject(BaseObject* obj) const
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
