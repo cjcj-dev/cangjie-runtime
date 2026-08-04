@@ -20,12 +20,24 @@
 namespace MapleRuntime {
 BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    do {
+    // Same progress guarantee as ForwardBarrier::ReadReference — see that file.
+    // Preforward is the prior phase; residual tagged + failed forward also livelocks.
+    for (;;) {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
             return tmpField.GetTargetObject();
         }
-        CHECK(!theCollector.IsOldPointer(tmpField));
+        if (theCollector.IsOldPointer(tmpField)) {
+            BaseObject* toVersion = nullptr;
+            if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
+                return toVersion;
+            }
+            BaseObject* target = nullptr;
+            if (theCollector.TryUntagRefField(obj, field, target)) {
+                return target;
+            }
+            return tmpField.GetTargetObject();
+        }
         if (theCollector.IsCurrentPointer(tmpField)) {
             BaseObject* target = tmpField.GetTargetObject();
             if (theCollector.IsUnmovableFromObject(target)) {
@@ -37,10 +49,20 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
                 if (theCollector.TryForwardRefField(obj, field, toObj)) {
                     return toObj;
                 }
+                BaseObject* soft = nullptr;
+                if (theCollector.TryUntagRefField(obj, field, soft)) {
+                    return soft;
+                }
+                return target;
             }
+        } else {
+            BaseObject* target = nullptr;
+            if (theCollector.TryUntagRefField(obj, field, target)) {
+                return target;
+            }
+            return tmpField.GetTargetObject();
         }
-    } while (true);
-    return nullptr;
+    }
 }
 
 BaseObject* PreforwardBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
