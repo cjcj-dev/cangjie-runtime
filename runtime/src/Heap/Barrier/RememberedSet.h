@@ -71,7 +71,8 @@ private:
 
     void Record(MAddress fieldAddress);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
-    size_t ClearAll();
+    uint8_t BeginFullClear();
+    size_t FinishFullClear(uint8_t scanBuffer);
 
     size_t AddressToBit(MAddress fieldAddress) const;
     size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
@@ -91,7 +92,7 @@ private:
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     mutable std::mutex oracleLock;
-    std::unordered_set<MAddress> oracleRecords;
+    std::unordered_set<MAddress> oracleRecords[kBufferCount];
     std::unordered_set<MAddress> staticRecords;
     std::unordered_set<MAddress> visitedStaticRoots;
     size_t bitmapCrossCheckCount = 0;
