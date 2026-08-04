@@ -250,6 +250,11 @@ bool WalkAlignProbe::CheckBeforeSize(RegionInfo* region, uintptr_t position, uin
 {
     size_t steps = g_totalSteps.fetch_add(1, std::memory_order_relaxed) + 1;
     totalStepsOut = steps;
+    // Heartbeat once so "probe armed but no FIRST_BAD" is distinguishable from "probe never ran".
+    if (steps == 1) {
+        VLOG(REPORT, "[GCV2][walkalign] ARMED first_step regionStart=%#zx cursor=%#zx env=MRT_GCV2_WALK_ALIGN=1",
+             region != nullptr ? region->GetRegionStart() : 0, position);
+    }
 
     if ((position & (Allocator::ALLOC_ALIGN - 1)) != 0) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);

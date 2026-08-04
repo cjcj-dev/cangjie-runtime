@@ -339,13 +339,24 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         uintptr_t position = GetRegionStart();
         size_t offset = 0;
         uintptr_t allocPtr = GetRegionAllocPtr();
+        BaseObject* prev = nullptr;
+        size_t prevSize = 0;
+        size_t stepInRegion = 0;
 
         while (position < allocPtr) {
             BaseObject* obj = reinterpret_cast<BaseObject*>(position);
+            // holeexp E2: same first-bad probe as VisitAllObjects (evac/live walk also size-steps).
+            if (WalkAlignProbe::Enabled()) {
+                size_t total = 0;
+                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total);
+            }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             position += allocSize;
             if (IsSurvivedObject(offset) && !func(obj)) { return false; }
             offset += allocSize;
+            prev = obj;
+            prevSize = allocSize;
+            ++stepInRegion;
         }
     }
     return true;
