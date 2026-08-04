@@ -299,7 +299,7 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
         if (WalkAlignProbe::Enabled()) {
             size_t total = 0;
             (void)WalkAlignProbe::CheckBeforeSize(this, GetRegionStart(), GetRegionStart() + GetRegionAllocatedSize(),
-                                                  0, nullptr, 0, total);
+                                                  0, nullptr, 0, total, WalkAlignProbe::TAG_VISIT_ALL);
         }
         func(reinterpret_cast<BaseObject*>(GetRegionStart()));
     } else if (IsSmallRegion()) {
@@ -313,7 +313,8 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
             if (WalkAlignProbe::Enabled()) {
                 size_t total = 0;
                 // Read-only: dump first bad step then fall through so original crash shape is preserved.
-                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total);
+                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total,
+                                                      WalkAlignProbe::TAG_VISIT_ALL);
             }
             size_t size = RegionSpace::GetAllocSize(*reinterpret_cast<BaseObject*>(position));
             func(reinterpret_cast<BaseObject*>(position));
@@ -333,6 +334,11 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         return true;
     }
     if (IsLargeRegion()) {
+        if (WalkAlignProbe::Enabled()) {
+            size_t total = 0;
+            (void)WalkAlignProbe::CheckBeforeSize(this, GetRegionStart(), GetRegionStart() + GetRegionAllocatedSize(),
+                                                  0, nullptr, 0, total, WalkAlignProbe::TAG_VISIT_LIVE);
+        }
         return func(reinterpret_cast<BaseObject*>(GetRegionStart()));
     }
     if (IsSmallRegion()) {
@@ -345,10 +351,11 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 
         while (position < allocPtr) {
             BaseObject* obj = reinterpret_cast<BaseObject*>(position);
-            // holeexp E2: same first-bad probe as VisitAllObjects (evac/live walk also size-steps).
+            // holeexp/holewide: live walk also size-steps; independent ARMED tag.
             if (WalkAlignProbe::Enabled()) {
                 size_t total = 0;
-                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total);
+                (void)WalkAlignProbe::CheckBeforeSize(this, position, allocPtr, stepInRegion, prev, prevSize, total,
+                                                      WalkAlignProbe::TAG_VISIT_LIVE);
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             position += allocSize;
@@ -1519,8 +1526,16 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress regionLimit = region->GetRegionAllocPtr();
     region->SetRegionAllocPtr(regionStart);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    BaseObject* prev = nullptr;
+    size_t prevSize = 0;
+    size_t stepInRegion = 0;
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        if (WalkAlignProbe::Enabled()) {
+            size_t total = 0;
+            (void)WalkAlignProbe::CheckBeforeSize(region, currentPtr, regionLimit, stepInRegion, prev, prevSize, total,
+                                                  WalkAlignProbe::TAG_COMPACT);
+        }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
         if (region->IsSurvivedObject(offset)) {
@@ -1530,7 +1545,10 @@ void RegionManager::CompactRegion(RegionInfo* region)
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
         }
+        prev = currentObj;
+        prevSize = size;
         currentPtr += size;
+        ++stepInRegion;
     }
     std::atomic_thread_fence(std::memory_order_release);
 
@@ -1566,9 +1584,18 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     MAddress currentPtr = regionStart;
     BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    BaseObject* prev = nullptr;
+    size_t prevSize = 0;
+    size_t stepInRegion = 0;
+    MAddress regionLimitForProbe = region->GetRegionAllocPtr();
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
+        if (WalkAlignProbe::Enabled()) {
+            size_t total = 0;
+            (void)WalkAlignProbe::CheckBeforeSize(region, currentPtr, regionLimitForProbe, stepInRegion, prev, prevSize,
+                                                  total, WalkAlignProbe::TAG_COMPACT_PARTIAL);
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
@@ -1581,8 +1608,11 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
         }
+        prev = currentObj;
+        prevSize = size;
         currentPtr += size;
         currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        ++stepInRegion;
     };
 
     MAddress regionLimit = region->GetRegionAllocPtr();
@@ -1591,6 +1621,11 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         CHECK(currentPtr >= regionStart);
         size_t offset = currentPtr - regionStart;
         BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        if (WalkAlignProbe::Enabled()) {
+            size_t total = 0;
+            (void)WalkAlignProbe::CheckBeforeSize(region, currentPtr, regionLimit, stepInRegion, prev, prevSize, total,
+                                                  WalkAlignProbe::TAG_COMPACT_PARTIAL_TAIL);
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
@@ -1600,7 +1635,10 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
         }
+        prev = currentObj;
+        prevSize = size;
         currentPtr += size;
+        ++stepInRegion;
     }
 
     // clear unused space which is free after compaction.

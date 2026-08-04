@@ -32,6 +32,38 @@ std::atomic<size_t> g_totalSteps{ 0 };
 std::atomic<size_t> g_badSteps{ 0 };
 std::atomic<size_t> g_dumpsEmitted{ 0 };
 
+// Per-entry first-step counters (ARMED once per tag). Fixed slots for known tags.
+constexpr size_t kMaxEntryTags = 8;
+std::atomic<const char*> g_entryTagSlots[kMaxEntryTags]{};
+std::atomic<size_t> g_entrySteps[kMaxEntryTags]{};
+std::atomic<size_t> g_entryArmed[kMaxEntryTags]{}; // 0/1
+
+size_t EntrySlot(const char* tag)
+{
+    if (tag == nullptr) {
+        tag = WalkAlignProbe::TAG_VISIT_ALL;
+    }
+    for (size_t i = 0; i < kMaxEntryTags; ++i) {
+        const char* cur = g_entryTagSlots[i].load(std::memory_order_acquire);
+        if (cur == tag) {
+            return i;
+        }
+        if (cur == nullptr) {
+            const char* expected = nullptr;
+            if (g_entryTagSlots[i].compare_exchange_strong(expected, tag, std::memory_order_acq_rel)) {
+                return i;
+            }
+            if (expected == tag) {
+                return i;
+            }
+            // Lost race to another tag in this slot — rescan from start.
+            i = static_cast<size_t>(-1);
+            continue;
+        }
+    }
+    return 0; // overflow: fold into slot 0
+}
+
 bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
@@ -144,7 +176,7 @@ void DumpWords(uintptr_t addr, size_t nWords)
 }
 
 void DumpFirstBad(RegionInfo* region, uintptr_t position, uintptr_t allocPtr, size_t stepInRegion, BaseObject* prev,
-                  size_t prevSize, const char* reason, size_t probeSize)
+                  size_t prevSize, const char* reason, size_t probeSize, const char* entryTag)
 {
     size_t maxDumps = EnvSizeT("MRT_GCV2_WALK_ALIGN_MAX_DUMPS", 1);
     size_t n = g_dumpsEmitted.fetch_add(1, std::memory_order_acq_rel);
@@ -154,7 +186,7 @@ void DumpFirstBad(RegionInfo* region, uintptr_t position, uintptr_t allocPtr, si
 
     GCPhase phase = GCPhase::GC_PHASE_UNDEF;
     const char* phaseName = "undef";
-    // Heap is live whenever VisitAllObjects runs; phase read is best-effort.
+    // Heap is live whenever size-walk runs; phase read is best-effort.
     phase = Heap::GetHeap().GetGCPhase();
     phaseName = Collector::GetGCPhaseName(phase);
 
@@ -162,13 +194,14 @@ void DumpFirstBad(RegionInfo* region, uintptr_t position, uintptr_t allocPtr, si
     RegionInfo::RegionType rtype =
         region != nullptr ? region->GetRegionType() : RegionInfo::RegionType::FREE_REGION;
     bool young = region != nullptr && region->IsYoungRegion();
+    const char* tag = entryTag != nullptr ? entryTag : WalkAlignProbe::TAG_VISIT_ALL;
 
     VLOG(REPORT,
-         "[GCV2][walkalign] FIRST_BAD_STEP reason=%s dump=%zu totalSteps=%zu "
+         "[GCV2][walkalign] FIRST_BAD_STEP entry=%s reason=%s dump=%zu totalSteps=%zu "
          "regionStart=%#zx regionType=%s young=%u regionAllocPtr=%#zx "
          "cursor=%#zx stepInRegion=%zu probeSize=%zu "
          "gcPhase=%u(%s) env=MRT_GCV2_WALK_ALIGN=1",
-         reason, n + 1, g_totalSteps.load(std::memory_order_relaxed), regionStart, RegionTypeName(rtype),
+         tag, reason, n + 1, g_totalSteps.load(std::memory_order_relaxed), regionStart, RegionTypeName(rtype),
          young ? 1u : 0u, allocPtr, position, stepInRegion, probeSize, static_cast<unsigned>(phase), phaseName);
 
     if (prev != nullptr) {
@@ -246,24 +279,32 @@ bool WalkAlignProbe::Enabled()
 }
 
 bool WalkAlignProbe::CheckBeforeSize(RegionInfo* region, uintptr_t position, uintptr_t allocPtr, size_t stepInRegion,
-                                     BaseObject* prev, size_t prevSize, size_t& totalStepsOut)
+                                     BaseObject* prev, size_t prevSize, size_t& totalStepsOut, const char* entryTag)
 {
+    const char* tag = entryTag != nullptr ? entryTag : TAG_VISIT_ALL;
+    size_t slot = EntrySlot(tag);
+    size_t entrySteps = g_entrySteps[slot].fetch_add(1, std::memory_order_relaxed) + 1;
     size_t steps = g_totalSteps.fetch_add(1, std::memory_order_relaxed) + 1;
     totalStepsOut = steps;
-    // Heartbeat once so "probe armed but no FIRST_BAD" is distinguishable from "probe never ran".
-    if (steps == 1) {
-        VLOG(REPORT, "[GCV2][walkalign] ARMED first_step regionStart=%#zx cursor=%#zx env=MRT_GCV2_WALK_ALIGN=1",
-             region != nullptr ? region->GetRegionStart() : 0, position);
+    // Per-entry ARMED: distinguish "this entry never called" vs "called, no FIRST_BAD".
+    if (entrySteps == 1) {
+        size_t expected = 0;
+        if (g_entryArmed[slot].compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
+            VLOG(REPORT,
+                 "[GCV2][walkalign] ARMED entry=%s first_step regionStart=%#zx cursor=%#zx "
+                 "env=MRT_GCV2_WALK_ALIGN=1",
+                 tag, region != nullptr ? region->GetRegionStart() : 0, position);
+        }
     }
 
     if ((position & (Allocator::ALLOC_ALIGN - 1)) != 0) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);
-        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "cursor-misaligned", 0);
+        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "cursor-misaligned", 0, tag);
         return false;
     }
     if (position >= allocPtr) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);
-        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "cursor-past-allocPtr", 0);
+        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "cursor-past-allocPtr", 0, tag);
         return false;
     }
 
@@ -272,17 +313,17 @@ bool WalkAlignProbe::CheckBeforeSize(RegionInfo* region, uintptr_t position, uin
     size_t size = ProbeAllocSize(obj, refuse);
     if (size == 0) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);
-        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, refuse, 0);
+        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, refuse, 0, tag);
         return false;
     }
     if (position + size > allocPtr) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);
-        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "size-overruns-region", size);
+        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "size-overruns-region", size, tag);
         return false;
     }
     if ((size & (Allocator::ALLOC_ALIGN - 1)) != 0) {
         g_badSteps.fetch_add(1, std::memory_order_relaxed);
-        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "size-not-aligned", size);
+        DumpFirstBad(region, position, allocPtr, stepInRegion, prev, prevSize, "size-not-aligned", size, tag);
         return false;
     }
     return true;
