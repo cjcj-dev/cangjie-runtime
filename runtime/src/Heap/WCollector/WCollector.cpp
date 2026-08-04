@@ -1041,7 +1041,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-        // FYS=0 known-empty handling (dconflict REDO c253681f): skip only when
+        // FYS=0 known-empty handling (dconflict REDO c253681f; not general holder-liveness): skip only when
         // IsKnownEmpty is proven (alloc empty OR mark examined the region). Bare IsKnownEmpty
         // would treat neverExamined (ClearLiveInfo AUTHORITY|0 pre-mark) as reclaimable.
         if (holderRegion->IsSafeKnownEmpty()) {
