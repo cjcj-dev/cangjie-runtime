@@ -714,6 +714,15 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
 YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
 {
     YoungCollectionStats stats;
+    const uint8_t promoteAge = RegionInfo::GetYoungPromoteAge();
+    auto retainYoungRegion = [promoteAge](RegionInfo* region) {
+        uint8_t age = region->GetYoungAge();
+        if (region->GetRawPointerObjectCount() != 0 || age + 1 >= promoteAge) {
+            return false;
+        }
+        region->SetYoungAge(static_cast<uint8_t>(age + 1));
+        return true;
+    };
     RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
     while (oldRegion != nullptr) {
         RegionInfo* next = oldRegion->GetNextRegion();
@@ -726,6 +735,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
         if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        if (retainYoungRegion(region)) {
             region = next;
             continue;
         }
@@ -744,6 +757,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
         if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        if (retainYoungRegion(region)) {
             region = next;
             continue;
         }
