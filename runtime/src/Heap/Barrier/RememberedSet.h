@@ -8,6 +8,7 @@
 #define MRT_REMEMBERED_SET_H
 
 #include <mutex>
+#include <set>
 #include <unordered_set>
 
 #include "Common/TypeDef.h"
@@ -21,7 +22,7 @@ class RememberedSet final {
 public:
     class Records final {
     public:
-        using const_iterator = std::unordered_set<MAddress>::const_iterator;
+        using const_iterator = std::set<MAddress>::const_iterator;
 
         Records(const Records&) = delete;
         Records& operator=(const Records&) = delete;
@@ -57,7 +58,7 @@ public:
     std::unordered_set<MAddress> Snapshot() const
     {
         std::lock_guard<std::mutex> guard(lock);
-        return records;
+        return std::unordered_set<MAddress>(records.cbegin(), records.cend());
     }
 
     bool Contains(MAddress fieldAddress) const
@@ -86,7 +87,7 @@ private:
     // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
     // falls inside a region that is about to be reclaimed/reused. Without this, the
     // next minor RescanRememberedSet reads freed payload as if it were still a holder.
-    // COST: global unordered_set has no range index ⇒ O(N) full scan under lock.
+    // The address-ordered index limits work to entries in the reclaimed range.
     // outScanned receives N at call time when non-null.
     size_t EraseRange(MAddress start, MAddress end, size_t* outScanned = nullptr)
     {
@@ -100,21 +101,15 @@ private:
         if (outScanned != nullptr) {
             *outScanned = records.size();
         }
-        size_t erased = 0;
-        for (auto it = records.begin(); it != records.end();) {
-            MAddress slot = *it;
-            if (slot >= start && slot < end) {
-                it = records.erase(it);
-                ++erased;
-            } else {
-                ++it;
-            }
-        }
+        auto first = records.lower_bound(start);
+        auto last = records.lower_bound(end);
+        size_t erased = static_cast<size_t>(std::distance(first, last));
+        records.erase(first, last);
         return erased;
     }
 
     mutable std::mutex lock;
-    std::unordered_set<MAddress> records;
+    std::set<MAddress> records;
 };
 } // namespace MapleRuntime
 #endif // MRT_REMEMBERED_SET_H
