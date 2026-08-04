@@ -30,6 +30,7 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Verify/RouteAccountProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
@@ -419,6 +420,7 @@ public:
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        (void)RouteAccountProbe::NoteMarkBitmapCheck(this, offset, "MarkObject_size");
         CHECK(IsMarkedObject(offset));
         return marked;
     }
@@ -435,6 +437,7 @@ public:
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        (void)RouteAccountProbe::NoteMarkBitmapCheck(this, offset, "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
         return marked;
     }

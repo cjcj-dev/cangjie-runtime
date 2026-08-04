@@ -22,6 +22,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/RouteAccountProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -1426,6 +1427,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         buffer->SetRegion(toRegion1);
         size_t toRegion1Start = toRegion1->GetRegionStart();
         region->SetRouteInfo(toRegion1Start, fromBytes);
+        RouteAccountProbe::NoteRouteReserve(region, fromBytes, fromBytes, 0, false);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1Start, toRegion1Start + fromBytes, toRegion1->GetRegionEnd());
@@ -1437,6 +1439,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (fromBytes <= toRegion1Capacity) {
         toRegion1->Alloc(fromBytes);
         region->SetRouteInfo(toRegion1Addr, fromBytes);
+        RouteAccountProbe::NoteRouteReserve(region, fromBytes, fromBytes, 0, false);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx)",
             region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
             toRegion1->GetRegionStart(), toRegion1Addr, toRegion1Addr + fromBytes, toRegion1->GetRegionEnd());
@@ -1476,6 +1479,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     buffer->SetRegion(toRegion2);
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
     region->SetRouteInfo(toRegion1Addr, usedBytes1, toRegion2Idx);
+    RouteAccountProbe::NoteRouteReserve(region, fromBytes, usedBytes1, usedBytes2, true);
     DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
         region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1, toRegion1->GetRegionStart(),
         toRegion1Addr, toRegion1Addr + usedBytes1, toRegion1->GetRegionEnd(), toRegion2,

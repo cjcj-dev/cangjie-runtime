@@ -8,6 +8,7 @@
 #include "Base/ImmortalWrapper.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/RouteAccountProbe.h"
 #include "ForwardDataManager.h"
 #include "LiveInfo.h"
 
@@ -17,6 +18,7 @@ uintptr_t RouteInfo::GetRoute(uint64_t preLiveBytes)
     if (preLiveBytes < toRegion1UsedBytes) {
         return toRegion1StartAddress + preLiveBytes;
     } else { // object is routed to to-region2
+        RouteAccountProbe::NoteGetRouteElse(preLiveBytes, toRegion1UsedBytes, nullptr);
         CHECK(toRegion2Idx != INVALID_VALUE);
         RegionInfo* toRegion2 = reinterpret_cast<RegionInfo*>(RegionInfo::GetRegionInfo(toRegion2Idx));
         return toRegion2->GetRegionStart() + (preLiveBytes - toRegion1UsedBytes);
