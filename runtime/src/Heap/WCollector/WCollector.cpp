@@ -483,14 +483,30 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (latest == nullptr) {
         latest = fromObj;
     }
-    if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject()) {
-        CHECK_DETAIL(false,
-                     "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
-                     "(no live to-version before dispel)",
-                     fromObj, holder, latest);
+    bool latestLive = false;
+    if (Heap::IsHeapAddress(latest)) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+        latestLive = region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
+                     latest->IsValidObject();
+    }
+    if (!latestLive) {
+        // Dead one-gen-stale residue (common right after Flip of the just-tagged
+        // generation, or remset residue). Null the slot instead of fail-closed:
+        // F5 still guards major FindLatestVersion consumers.
+        static std::atomic<size_t> g_f3DeadLogged{ 0 };
+        size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
+        if (n < 16) {
+            VLOG(REPORT,
+                 "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
+                 holder, &field, fromObj, latest);
+        }
+        RefField<> nullField(nullptr);
+        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
     }
-    RefField<> newField = GetAndTryTagRefField(latest);
+    // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
+    // survivor as current recreates the next generation of one-gen-stale after Flip.
+    RefField<> newField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
@@ -502,8 +518,14 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
-    MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
-    ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
+    InvalidateOldTaggedRefs(true);
+}
+
+void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
+{
+    MRT_PHASE_TIMER("InvalidateOldTaggedRefs");
+    ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
+                                               : "invalidate old tagged refs after flip");
 
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
     RootVisitor fixRoot = [this](ObjectRef& root) {
@@ -521,13 +543,16 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     Heap::GetHeap().VisitAllExportRoots(fixRoot);
 
     // New-line: BaseObject::ForEachRefField ≡ main TracingCollector::ForEachRefSlot.
+    // Pre-dispel (requireSurvivedMark=true): objects still at markable addresses.
+    // Post-Flip after Forward: live objects sit in to-space without mark bits at the
+    // new address — IsSurvivedObject would skip almost every holder (defect⑤ residual).
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.ForEachObj(
-        [this](BaseObject* obj) {
+        [this, requireSurvivedMark](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
-            if (!IsSurvivedObject(obj)) {
+            if (requireSurvivedMark && !IsSurvivedObject(obj)) {
                 return;
             }
             if (!obj->HasRefField()) {
@@ -681,14 +706,42 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
     BaseObject* object = value.GetTargetObject();
-    if (IsOldPointer(value)) {
-        BaseObject* latest = FindLatestVersion(object);
-        if (latest != nullptr) {
-            field.SetTargetObject(latest);
-            return latest;
+    if (!IsOldPointer(value)) {
+        return object;
+    }
+    // Minor path must not call FindLatestVersion: after a full GC Flip, remset/root
+    // slots can still hold one-gen-stale tags whose from-copy was reclaimed (ghost
+    // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
+    //   routed to-version → plain to
+    //   unmoved valid from → plain from
+    //   dead/stale → null the slot (caller drops the edge)
+    BaseObject* to = FindToVersion(object);
+    if (to != nullptr && Heap::IsHeapAddress(to)) {
+        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+            to->IsValidObject()) {
+            field.SetTargetObject(to);
+            return to;
         }
     }
-    return object;
+    if (Heap::IsHeapAddress(object)) {
+        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
+            object->IsValidObject()) {
+            field.SetTargetObject(object);
+            return object;
+        }
+    }
+    static std::atomic<size_t> g_staleOldTagLogged{ 0 };
+    size_t n = g_staleOldTagLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n < 16) {
+        VLOG(REPORT,
+             "[GCV2][minor-stale-oldtag] field=%p raw=%#zx from=%p to=%p "
+             "(drop; full-GC remset/root residue after Flip)",
+             &field, static_cast<size_t>(value.GetFieldValue()), object, to);
+    }
+    field.SetTargetObject(nullptr);
+    return nullptr;
 }
 
 namespace {
@@ -892,14 +945,18 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
 {
-    // HotSpot G1RemSet scrub / card-refinement filter analogue: never assume a remset
-    // entry is still a live old→young edge. Validate holder region + target object
-    // before treating the slot as a minor root. Does not relax IsValidObject — it
-    // only refuses to feed dead/reclaimed addresses into PushYoungObject.
+    // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
+    //   1) region-level holder_dead (free/garbage region only — not object liveness)
+    //   2) pre-check target safety BEFORE ResolveMinorReference
+    //      (old-tag with no to-version + invalid from must not reach FindLatestVersion/F5)
+    //   3) ResolveMinorReference (soft-resolve; never calls FindLatestVersion)
+    //   4) post-resolve null / bad_target drops
+    // Does not relax IsValidObject / FindLatestVersion CHECK_DETAIL.
     static std::atomic<size_t> g_remsetScrubLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedBadTarget = 0;
+    size_t scrubbedStaleOldTag = 0;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -937,6 +994,32 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
+        RefField<> peek(*field);
+        BaseObject* rawTarget = peek.GetTargetObject();
+        // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
+        // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
+        if (IsOldPointer(peek)) {
+            BaseObject* to = FindToVersion(rawTarget);
+            bool fromLive = false;
+            if (to == nullptr && Heap::IsHeapAddress(rawTarget)) {
+                RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(rawTarget));
+                fromLive = fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
+                           rawTarget->IsValidObject();
+            }
+            if (to == nullptr && !fromLive) {
+                ++scrubbedStaleOldTag;
+                field->SetTargetObject(nullptr);
+                size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
+                if (n < 16) {
+                    VLOG(REPORT,
+                         "[GCV2][remset-filter] drop slot=%#zx raw=%#llx target=%p reason=stale_oldtag "
+                         "(no to-version; from invalid/reclaimed — pre-resolve)",
+                         static_cast<size_t>(slot), static_cast<unsigned long long>(rawSlot), rawTarget);
+                }
+                continue;
+            }
+        }
+
         BaseObject* target = ResolveMinorReference(*field);
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             ++scrubbedStale;
@@ -973,10 +1056,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++statsOut->consumed;
         }
     }
-    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0) {
+    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0 || scrubbedStaleOldTag != 0) {
         VLOG(REPORT,
-             "[GCV2][remset-filter] summary staleTarget=%zu deadHolder=%zu badTarget=%zu recorded=%zu",
-             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, rememberedSlots.size());
+             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu badTarget=%zu "
+             "staleOldTag=%zu recorded=%zu "
+             "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
+             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
     }
 }
 
@@ -1005,6 +1090,11 @@ void WCollector::FixMinorRootSlots()
         (void)FixMinorEvacuatedSlot(field);
     };
     RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+    // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
+    // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
+    // stack slots still holding from-copies become the next full's F5 input.
+    MutatorManager::Instance().VisitAllMutators(
+        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
@@ -1828,9 +1918,28 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
+    // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
+    // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
+    // after Forward, live holders are in to-space without mark bits at the new addr.
+    InvalidateOldTaggedRefs(false);
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    // Full GC promotes/reclaims the previous young set. Remset slots are holder-side
+    // addresses and are not scrubbed when a young *target* dies, so pre-full edges
+    // become residue for the next minor (ResolveMinorReference → F5 on dead from).
+    // Drop the set; mutator post-barriers re-record any new old→young writes.
+    {
+        RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+        size_t dropped = 0;
+        {
+            RememberedSet::Records drain = remset.AcquireRecordsForMinor();
+            dropped = drain.size();
+        }
+        if (dropped != 0) {
+            VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", dropped);
+        }
+    }
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
