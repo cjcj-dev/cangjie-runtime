@@ -20,12 +20,26 @@
 namespace MapleRuntime {
 BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    do {
+    // Soft-resolve every tagged outcome. A bare `do { ... } while (true)` with no
+    // progress path livelocks the mutator (no safepoint) and GC then spins forever in
+    // EnsurePhaseTransition(IDLE) — gate005 t300/t540 stacks, 4/4 TIMEOUT packages.
+    for (;;) {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
             return tmpField.GetTargetObject();
         }
-        CHECK(!theCollector.IsOldPointer(tmpField));
+        // One-gen-stale (IsOldPointer): never CHECK-spin. Match IdleBarrier / F3 soft path.
+        if (theCollector.IsOldPointer(tmpField)) {
+            BaseObject* toVersion = nullptr;
+            if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
+                return toVersion;
+            }
+            BaseObject* target = nullptr;
+            if (theCollector.TryUntagRefField(obj, field, target)) {
+                return target;
+            }
+            return tmpField.GetTargetObject();
+        }
         if (theCollector.IsCurrentPointer(tmpField)) {
             BaseObject* target = tmpField.GetTargetObject();
             BaseObject* toObj = nullptr;
@@ -35,10 +49,23 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                 }
             } else if (theCollector.TryForwardRefField(obj, field, toObj)) {
                 return toObj;
+            } else {
+                // Ghost gone / route missing / reclaim race: untag or return plain so
+                // the mutator can leave the barrier and observe SUSPENSION_FOR_GC_PHASE.
+                BaseObject* soft = nullptr;
+                if (theCollector.TryUntagRefField(obj, field, soft)) {
+                    return soft;
+                }
+                return target;
             }
+        } else {
+            BaseObject* target = nullptr;
+            if (theCollector.TryUntagRefField(obj, field, target)) {
+                return target;
+            }
+            return tmpField.GetTargetObject();
         }
-    } while (true);
-    return nullptr;
+    }
 }
 
 BaseObject* ForwardBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
