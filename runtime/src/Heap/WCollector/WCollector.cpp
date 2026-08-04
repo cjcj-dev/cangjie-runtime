@@ -681,14 +681,34 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
     BaseObject* object = value.GetTargetObject();
-    if (IsOldPointer(value)) {
-        BaseObject* latest = FindLatestVersion(object);
-        if (latest != nullptr) {
-            field.SetTargetObject(latest);
-            return latest;
-        }
+    if (!IsOldPointer(value)) {
+        return object;
     }
-    return object;
+    // Minor path must not call FindLatestVersion: after a full GC Flip, remset/root
+    // slots can still hold one-gen-stale tags whose from-copy was reclaimed (ghost
+    // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
+    //   routed to-version → plain to
+    //   unmoved valid from → plain from
+    //   dead/stale → null the slot (caller drops the edge)
+    BaseObject* to = FindToVersion(object);
+    if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
+        field.SetTargetObject(to);
+        return to;
+    }
+    if (Heap::IsHeapAddress(object) && object->IsValidObject()) {
+        field.SetTargetObject(object);
+        return object;
+    }
+    static std::atomic<size_t> g_staleOldTagLogged{ 0 };
+    size_t n = g_staleOldTagLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n < 16) {
+        VLOG(REPORT,
+             "[GCV2][minor-stale-oldtag] field=%p raw=%#zx from=%p to=%p "
+             "(drop; full-GC remset/root residue after Flip)",
+             &field, static_cast<size_t>(value.GetFieldValue()), object, to);
+    }
+    field.SetTargetObject(nullptr);
+    return nullptr;
 }
 
 namespace {
@@ -1831,6 +1851,21 @@ void WCollector::DoGarbageCollection()
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    // Full GC promotes/reclaims the previous young set. Remset slots are holder-side
+    // addresses and are not scrubbed when a young *target* dies, so pre-full edges
+    // become residue for the next minor (ResolveMinorReference → F5 on dead from).
+    // Drop the set; mutator post-barriers re-record any new old→young writes.
+    {
+        RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+        size_t dropped = 0;
+        {
+            RememberedSet::Records drain = remset.AcquireRecordsForMinor();
+            dropped = drain.size();
+        }
+        if (dropped != 0) {
+            VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", dropped);
+        }
+    }
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
