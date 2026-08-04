@@ -529,7 +529,17 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
 }
 
 namespace {
-// STEER3 scrub-cost + remset-size process counters (observation only).
+// STEER4: metering gated by MRT_GCV2_SCRUB_COST (default off). Product path must not
+// emit per-Collect VLOG floods (calls_per_run ~1161 under ALOT).
+bool ScrubCostMeterEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_SCRUB_COST");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
 std::atomic<uint64_t> g_scrubCalls{ 0 };
 std::atomic<uint64_t> g_scrubNs{ 0 };
 std::atomic<uint64_t> g_scrubScannedSum{ 0 };
@@ -545,6 +555,11 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
+    // Default-off meter: hot path is EraseRange only (no timer, no atomics, no VLOG).
+    if (!ScrubCostMeterEnabled()) {
+        (void)Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, nullptr);
+        return;
+    }
     size_t scanned = 0;
     uint64_t t0 = TimeUtil::NanoSeconds();
     size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, &scanned);
@@ -557,17 +572,16 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     while (scanned > prevMax &&
            !g_scrubScannedMax.compare_exchange_weak(prevMax, scanned, std::memory_order_relaxed)) {
     }
-    // STEER3: always sample cost (reclaim is often via TakeRegion, not ReclaimGarbageRegions).
-    // Log every call for measurement builds — volume ~R_reclaim per GC, acceptable under ALOT.
     VLOG(REPORT,
-         "[GCV2][scrub-cost] call=%llu ns=%llu scannedN=%zu erased=%zu young=%u type=%u",
+         "[GCV2][scrub-cost] call=%llu ns=%llu scannedN=%zu erased=%zu young=%u type=%u "
+         "env=MRT_GCV2_SCRUB_COST=1",
          static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), scanned, scrubbed,
          static_cast<unsigned>(region->IsYoungRegion()), region->GetRegionType());
     if (scrubbed != 0) {
         size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
         VLOG(REPORT,
              "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu scannedN=%zu ns=%llu region=%p "
-             "[%#zx,%#zx) type=%u young=%u sample=%zu",
+             "[%#zx,%#zx) type=%u young=%u sample=%zu env=MRT_GCV2_SCRUB_COST=1",
              scrubbed, scanned, static_cast<unsigned long long>(dt), region,
              static_cast<size_t>(rStart), static_cast<size_t>(rEnd), region->GetRegionType(),
              static_cast<unsigned>(region->IsYoungRegion()), n);
@@ -576,6 +590,9 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
 
 void RegionManager::DumpScrubCostAndReset(const char* point)
 {
+    if (!ScrubCostMeterEnabled()) {
+        return;
+    }
     uint64_t calls = g_scrubCalls.exchange(0, std::memory_order_relaxed);
     uint64_t ns = g_scrubNs.exchange(0, std::memory_order_relaxed);
     uint64_t scannedSum = g_scrubScannedSum.exchange(0, std::memory_order_relaxed);
@@ -586,7 +603,7 @@ void RegionManager::DumpScrubCostAndReset(const char* point)
     }
     VLOG(REPORT,
          "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu scannedSum=%llu "
-         "scannedMax=%zu erasedSum=%llu",
+         "scannedMax=%zu erasedSum=%llu env=MRT_GCV2_SCRUB_COST=1",
          point == nullptr ? "?" : point, static_cast<unsigned long long>(calls),
          static_cast<unsigned long long>(ns), static_cast<unsigned long long>(ns / calls),
          static_cast<unsigned long long>(scannedSum), scannedMax,
