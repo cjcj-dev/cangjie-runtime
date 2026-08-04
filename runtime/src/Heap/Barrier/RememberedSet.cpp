@@ -16,6 +16,13 @@
 #include "Base/Log.h"
 
 namespace MapleRuntime {
+RememberedSet::RememberedSet()
+{
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        recordCounts[buffer].store(0, std::memory_order_relaxed);
+    }
+}
+
 void RememberedSet::Initialize(MAddress start, size_t size)
 {
     CHECK_DETAIL(!initialized, "remembered set initialized twice");
