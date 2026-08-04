@@ -282,16 +282,6 @@ public:
     void AssemblePinnedGarbageCandidates(bool collectAll);
     YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
 
-    // HotSpot g1HeapVerifier.cpp:424 verify_region_sets — independent young-region membership check.
-    // Walks young-bearing lists without using PrepareYoungGarbageCandidates' visitor path.
-    // mustCoverYoung: young on lists PrepareYoung walks (from/unmovable/recentFull) — must ⊆ candidates.
-    // activeYoungExempt: young on tlRegionList (still allocating) — expected not in candidates.
-    // otherYoung: young on pinned/large/trace lists (informational).
-    // unexpectedInCandidates: candidate that is not young.
-    void VerifyYoungRegionSets(const std::unordered_set<RegionInfo*>& candidates, size_t& mustCoverYoung,
-                               size_t& missingFromCandidates, size_t& unexpectedInCandidates,
-                               size_t& activeYoungExempt, size_t& otherYoung);
-
     void MergeRawPointerPinnedRegions()
     {
         oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);

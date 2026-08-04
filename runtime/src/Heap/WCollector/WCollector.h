@@ -216,10 +216,6 @@ private:
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots);
     void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
-    // HotSpot g1HeapVerifier verify_region_sets isomorphic check; gated by MRT_GCV2_VERIFY_REGION_SETS.
-    void VerifyYoungRegionSets(const char* point);
-    // HotSpot card-table verify intent on our RememberedSet; gated by MRT_GCV2_VERIFY_REMSET.
-    void VerifyRememberedSet(const char* point, const MinorSlotSet& rememberedSlots);
     // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
     void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
