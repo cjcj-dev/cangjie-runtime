@@ -7,13 +7,13 @@
 #ifndef MRT_REMEMBERED_SET_H
 #define MRT_REMEMBERED_SET_H
 
-#include <mutex>
-#include <set>
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <unordered_set>
-#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
-#include <cstdio>
-#include <cstdlib>
-#include <cstring>
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+#include <mutex>
 #endif
 
 #include "Common/TypeDef.h"
@@ -23,143 +23,79 @@ class Barrier;
 class WCollector;
 class RegionManager;
 
+// Exact old-region field bitmap. The two heap-wide backing arrays are partitioned
+// by address: every region owns two disjoint slices, one bit per aligned reference
+// field. This keeps region cleanup bounded by the reclaimed region rather than by
+// the number of remembered fields in the heap.
 class RememberedSet final {
 public:
-    class Records final {
-    public:
-        using const_iterator = std::set<MAddress>::const_iterator;
-
-        Records(const Records&) = delete;
-        Records& operator=(const Records&) = delete;
-        Records(Records&& other) noexcept : owner(other.owner), lock(std::move(other.lock)) { other.owner = nullptr; }
-        Records& operator=(Records&&) = delete;
-
-        ~Records()
-        {
-            if (owner != nullptr) {
-                owner->records.clear();
-            }
-        }
-
-        const_iterator begin() const { return owner->records.cbegin(); }
-        const_iterator end() const { return owner->records.cend(); }
-        size_t size() const { return owner->records.size(); }
-
-    private:
-        friend class RememberedSet;
-        explicit Records(RememberedSet& rememberedSet) : owner(&rememberedSet), lock(rememberedSet.lock) {}
-
-        RememberedSet* owner;
-        std::unique_lock<std::mutex> lock;
-    };
-
     RememberedSet() = default;
+    ~RememberedSet() = default;
     RememberedSet(const RememberedSet&) = delete;
     RememberedSet& operator=(const RememberedSet&) = delete;
 
-    Records AcquireRecordsForMinor() { return Records(*this); }
+    void Initialize(MAddress start, size_t size);
 
-    // Non-destructive snapshot for diagnostic verify (does not clear). HotSpot card-table verify analog.
-    std::unordered_set<MAddress> Snapshot() const
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        return std::unordered_set<MAddress>(records.cbegin(), records.cend());
-    }
+    // Called at the beginning of a minor collection while the mutators are stopped.
+    // Atomically makes an empty bitmap active, drains the previous active bitmap into
+    // records, and clears it for the next cycle.
+    size_t DrainForMinor(std::unordered_set<MAddress>& records);
 
-    bool Contains(MAddress fieldAddress) const
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        return records.count(fieldAddress) != 0;
-    }
+    // Non-destructive view of the active (next-cycle) records for verification.
+    std::unordered_set<MAddress> Snapshot() const;
+    bool Contains(MAddress fieldAddress) const;
+    size_t Size() const;
 
-    size_t Size() const
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        return records.size();
-    }
+    // Bytes reserved by both exact bitmap backings.
+    size_t MemoryOverhead() const { return wordCount * sizeof(uint64_t) * kBufferCount; }
+
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    // Validation-only oracle for static/global slots. Product remset storage contains
+    // heap slots only; minor GC visits static roots independently every round.
+    void RecordStaticForCrossCheck(MAddress fieldAddress);
+    void VisitStaticForCrossCheck(MAddress fieldAddress);
+    void CheckStaticCoverageForMinor();
+#endif
 
 private:
     friend class Barrier;
     friend class WCollector;
     friend class RegionManager;
-#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     friend class RememberedSetTest;
 #endif
 
-    void Record(MAddress fieldAddress)
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        records.insert(fieldAddress);
-    }
+    static constexpr size_t kBitsPerWord = sizeof(uint64_t) * 8;
+    static constexpr size_t kFieldBytes = sizeof(MAddress);
+    static constexpr size_t kBufferCount = 2;
 
-    // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
-    // falls inside a region that is about to be reclaimed/reused. Without this, the
-    // next minor RescanRememberedSet reads freed payload as if it were still a holder.
-    // The address-ordered index limits work to entries in the reclaimed range.
-    // outScanned receives N at call time when non-null.
-    size_t EraseRange(MAddress start, MAddress end, size_t* outScanned = nullptr)
-    {
-        if (start >= end) {
-            if (outScanned != nullptr) {
-                *outScanned = 0;
-            }
-            return 0;
-        }
-        std::lock_guard<std::mutex> guard(lock);
-#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
-        const char* crossCheckEnv = std::getenv("MRT_GCV2_VERIFY_REMSET_ERASE_RANGE");
-        bool crossCheck = crossCheckEnv != nullptr && std::strcmp(crossCheckEnv, "1") == 0;
-        std::unordered_set<MAddress> legacyRecords;
-        if (crossCheck) {
-            legacyRecords.insert(records.cbegin(), records.cend());
-        }
-#endif
-        if (outScanned != nullptr) {
-            *outScanned = records.size();
-        }
-        auto first = records.lower_bound(start);
-        auto last = records.lower_bound(end);
-        size_t erased = static_cast<size_t>(std::distance(first, last));
-        records.erase(first, last);
-#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
-        if (crossCheck) {
-            size_t legacyErased = 0;
-            for (auto it = legacyRecords.begin(); it != legacyRecords.end();) {
-                MAddress slot = *it;
-                if (slot >= start && slot < end) {
-                    it = legacyRecords.erase(it);
-                    ++legacyErased;
-                } else {
-                    ++it;
-                }
-            }
-            const char* injectEnv = std::getenv("MRT_GCV2_VERIFY_REMSET_ERASE_RANGE_INJECT_MISMATCH");
-            bool injected = injectEnv != nullptr && std::strcmp(injectEnv, "1") == 0;
-            if (injected) {
-                legacyRecords.insert(start);
-            }
-            bool equivalent = erased == legacyErased && records.size() == legacyRecords.size();
-            for (MAddress slot : records) {
-                equivalent = equivalent && legacyRecords.count(slot) != 0;
-            }
-            if (!equivalent) {
-                std::fprintf(stderr,
-                    "ERASE_RANGE_CROSSCHECK_MISMATCH injected=%u start=%#zx end=%#zx new_erased=%zu "
-                    "legacy_erased=%zu new_size=%zu legacy_size=%zu\n",
-                    static_cast<unsigned>(injected), static_cast<size_t>(start), static_cast<size_t>(end), erased,
-                    legacyErased, records.size(), legacyRecords.size());
-                std::abort();
-            }
-            ++crossCheckCount;
-        }
-#endif
-        return erased;
-    }
+    void Record(MAddress fieldAddress);
+    size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
+    size_t ClearAll();
 
-    mutable std::mutex lock;
-    std::set<MAddress> records;
-#if defined(MRT_REMSET_ERASE_RANGE_CROSSCHECK)
-    size_t crossCheckCount = 0;
+    size_t AddressToBit(MAddress fieldAddress) const;
+    size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
+    void CheckInitialized() const;
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    void CheckActiveAgainstOracle(const char* operation) const;
+#endif
+
+    MAddress heapStart = 0;
+    size_t heapSize = 0;
+    size_t bitCount = 0;
+    size_t wordCount = 0;
+    std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
+    std::atomic<size_t> recordCounts[kBufferCount] = { 0, 0 };
+    std::atomic<uint8_t> activeBuffer{ 0 };
+    bool initialized = false;
+
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    mutable std::mutex oracleLock;
+    std::unordered_set<MAddress> oracleRecords;
+    std::unordered_set<MAddress> staticRecords;
+    std::unordered_set<MAddress> visitedStaticRoots;
+    size_t bitmapCrossCheckCount = 0;
+    size_t staticCrossCheckRounds = 0;
 #endif
 };
 } // namespace MapleRuntime
