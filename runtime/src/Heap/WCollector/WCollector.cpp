@@ -823,7 +823,16 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
     MutatorManager::Instance().VisitAllMutators(
         [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     gMinorRootOrigin = "static";
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
+        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
+        fieldVisitor(field);
+    });
+    remset.CheckStaticCoverageForMinor();
+#else
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+#endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     gMinorRootOrigin = "finalizer";
@@ -1811,10 +1820,7 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     MinorSlotSet rememberedSlots;
-    {
-        RememberedSet::Records records = Heap::GetHeap().GetRememberedSet().AcquireRecordsForMinor();
-        rememberedSlots.insert(records.begin(), records.end());
-    }
+    Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
@@ -1980,7 +1986,16 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
 
+    // Publish a clean full-GC buffer before mutators return to IDLE. The phase
+    // transition is the grace period for writers that had already loaded the old
+    // buffer index; clear that captured buffer only after the transition completes.
+    RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    uint8_t fullRemsetBuffer = remset.BeginFullClear();
     TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+    size_t droppedRemsetRecords = remset.FinishFullClear(fullRemsetBuffer);
+    if (droppedRemsetRecords != 0) {
+        VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", droppedRemsetRecords);
+    }
     MergeResurrectExportObjects();
     PostResolveCycleTask();
     FlipTagID();
@@ -1992,21 +2007,6 @@ void WCollector::DoGarbageCollection()
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
-    // Full GC promotes/reclaims the previous young set. Remset slots are holder-side
-    // addresses and are not scrubbed when a young *target* dies, so pre-full edges
-    // become residue for the next minor (ResolveMinorReference → F5 on dead from).
-    // Drop the set; mutator post-barriers re-record any new old→young writes.
-    {
-        RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
-        size_t dropped = 0;
-        {
-            RememberedSet::Records drain = remset.AcquireRecordsForMinor();
-            dropped = drain.size();
-        }
-        if (dropped != 0) {
-            VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", dropped);
-        }
-    }
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
