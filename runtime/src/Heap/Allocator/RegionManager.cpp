@@ -157,6 +157,26 @@ bool RegionInfo::HasYoungRegions()
     return GetYoungRegionCount() != 0;
 }
 
+uint8_t RegionInfo::GetYoungPromoteAge()
+{
+    static const uint8_t promoteAge = []() {
+        const char* value = std::getenv("MRT_GC_PROMOTE_AGE");
+        if (value == nullptr || value[0] == '\0' || value[0] == '-') {
+            return static_cast<uint8_t>(1);
+        }
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(value, &end, 10);
+        if (end == value || *end != '\0' || parsed == 0) {
+            return static_cast<uint8_t>(1);
+        }
+        if (parsed > RegionInfo::MAX_YOUNG_AGE) {
+            return RegionInfo::MAX_YOUNG_AGE;
+        }
+        return static_cast<uint8_t>(parsed);
+    }();
+    return promoteAge;
+}
+
 static size_t GetPageSize() noexcept
 {
     size_t pageSize = 0;

@@ -834,6 +834,8 @@ public:
 
     static bool HasYoungRegions();
 
+    static uint8_t GetYoungPromoteAge();
+
     void SetYoungAge(uint8_t age)
     {
         CHECK(age <= MAX_YOUNG_AGE);
