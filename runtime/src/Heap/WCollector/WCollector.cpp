@@ -483,11 +483,25 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (latest == nullptr) {
         latest = fromObj;
     }
-    if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject()) {
-        CHECK_DETAIL(false,
-                     "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
-                     "(no live to-version before dispel)",
-                     fromObj, holder, latest);
+    bool latestLive = false;
+    if (Heap::IsHeapAddress(latest)) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+        latestLive = region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
+                     latest->IsValidObject();
+    }
+    if (!latestLive) {
+        // Dead one-gen-stale residue (common right after Flip of the just-tagged
+        // generation, or remset residue). Null the slot instead of fail-closed:
+        // F5 still guards major FindLatestVersion consumers.
+        static std::atomic<size_t> g_f3DeadLogged{ 0 };
+        size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
+        if (n < 16) {
+            VLOG(REPORT,
+                 "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
+                 holder, &field, fromObj, latest);
+        }
+        RefField<> nullField(nullptr);
+        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
     }
     RefField<> newField = GetAndTryTagRefField(latest);
@@ -691,13 +705,21 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     //   unmoved valid from → plain from
     //   dead/stale → null the slot (caller drops the edge)
     BaseObject* to = FindToVersion(object);
-    if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
-        field.SetTargetObject(to);
-        return to;
+    if (to != nullptr && Heap::IsHeapAddress(to)) {
+        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+            to->IsValidObject()) {
+            field.SetTargetObject(to);
+            return to;
+        }
     }
-    if (Heap::IsHeapAddress(object) && object->IsValidObject()) {
-        field.SetTargetObject(object);
-        return object;
+    if (Heap::IsHeapAddress(object)) {
+        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
+            object->IsValidObject()) {
+            field.SetTargetObject(object);
+            return object;
+        }
     }
     static std::atomic<size_t> g_staleOldTagLogged{ 0 };
     size_t n = g_staleOldTagLogged.fetch_add(1, std::memory_order_relaxed);
@@ -1848,6 +1870,12 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
+    // Flip just turned this cycle's current-tags into IsOldPointer. F3 ran pre-Flip
+    // and only saw the *previous* generation. Without a post-Flip pass, the next
+    // minor/full Enum hits FindLatestVersion on dead from-copies (defect⑤ family).
+    // Ghosts are still installed until the next PrepareForwardTable, so survivors
+    // still route; dead slots soft-null via FixOldTaggedRefField.
+    InvalidateOldTaggedRefsBeforeDispel();
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
