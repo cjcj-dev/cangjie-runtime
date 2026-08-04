@@ -32,6 +32,7 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
+class TagReuseProbe;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -87,6 +88,7 @@ public:
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
     friend class VerifyRegions;
+    friend class TagReuseProbe;
 
 public:
     /* region memory layout:
@@ -626,6 +628,57 @@ public:
         ClearLiveInfo(oldLargeRegionList);
         ClearLiveInfo(recentLargeRegionList);
         ClearLiveInfo(largeTraceRegions);
+    }
+
+    // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
+    template <typename F>
+    void VisitAllManagedRegionsForProbe(F&& visitor)
+    {
+        auto walk = [&visitor](const char* name, RegionList& list) {
+            list.VisitAllRegions([&visitor, name](RegionInfo* region) { visitor(region, name); });
+        };
+        walk("tlRegionList", tlRegionList);
+        walk("recentFullRegionList", recentFullRegionList);
+        walk("fromRegionList", fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(
+            [&visitor](RegionInfo* region) { visitor(region, "ghostFromRegionList"); });
+        walk("unmovableFromRegionList", unmovableFromRegionList);
+        walk("garbageRegionList", garbageRegionList);
+        walk("recentPinnedRegionList", recentPinnedRegionList);
+        walk("oldPinnedRegionList", oldPinnedRegionList);
+        walk("rawPointerPinnedRegionList", rawPointerPinnedRegionList);
+        walk("oldLargeRegionList", oldLargeRegionList);
+        walk("recentLargeRegionList", recentLargeRegionList);
+        walk("fullTraceRegions", fullTraceRegions);
+        walk("largeTraceRegions", largeTraceRegions);
+    }
+
+    // Production: before ReleaseMemory(previous tag), null liveInfo/liveInfo0/retained that
+    // still point into the dying range. Same region set as the probe walk (incl. garbage).
+    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {
+            if (region != nullptr) {
+                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
+            }
+        };
+        auto walk = [&nullOne](RegionList& list) {
+            list.VisitAllRegions([&nullOne](RegionInfo* region) { nullOne(region); });
+        };
+        walk(tlRegionList);
+        walk(recentFullRegionList);
+        walk(fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(nullOne);
+        walk(unmovableFromRegionList);
+        walk(garbageRegionList);
+        walk(recentPinnedRegionList);
+        walk(oldPinnedRegionList);
+        walk(rawPointerPinnedRegionList);
+        walk(oldLargeRegionList);
+        walk(recentLargeRegionList);
+        walk(fullTraceRegions);
+        walk(largeTraceRegions);
     }
 
 private:

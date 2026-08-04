@@ -117,6 +117,11 @@ class ForwardDataManager {
 
         void UnbindPreviousLiveInfo();
 
+        uintptr_t GetStartAddress() const { return startAddress; }
+        size_t GetSize() const { return size; }
+        uintptr_t GetZoneStart(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
+        uintptr_t GetZonePos(Zone::ZoneType type) const { return allocZone[type].zonePosition.load(); }
+
     private:
         Zone allocZone[Zone::TOTAL_NUM];
         uintptr_t startAddress = 0;
@@ -146,7 +151,7 @@ public:
 
     void InitializeForwardData();
 
-    void ClearPreviousForwardData() { liveInfoData[GetPreviousTagID()].ReleaseMemory(); }
+    void ClearPreviousForwardData();
 
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {

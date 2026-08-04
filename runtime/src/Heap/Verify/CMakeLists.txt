@@ -15,6 +15,7 @@ set(SRC_LIST
     "RemsetPhaseProbe.cpp"
     "DiffPathExplainer.cpp"
     "TraceClear.cpp"
+    "TagReuseProbe.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
