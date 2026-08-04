@@ -797,7 +797,9 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         // role is published. Following a bogus end lands GetUnitIdxAt(0) → named fatal+abort
         // (S1: SIGABRT under InvalidateOldTaggedRefs). Step one unit instead —
         // such units are never visitable.
-        // Anchor: a1f81854 (fix/gcfix; not yet on integrate/0.0.2-gc).
+        // Anchor: a1f81854 (fix/gcfix), landed here as e2293c2b; the guard below is
+        // character-identical to it. Its other hunk targeted PromoteAllRegions, which
+        // no longer exists on this line.
         uintptr_t nextAddr = region->GetRegionEnd();
         if (nextAddr <= regionAddr || nextAddr > inactiveZone) {
             regionAddr += RegionInfo::UNIT_SIZE;
