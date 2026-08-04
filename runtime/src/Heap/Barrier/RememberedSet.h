@@ -55,8 +55,8 @@ public:
     }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    // Validation-only oracle for static/global slots. Product remset storage contains
-    // heap slots only; minor GC visits static roots independently every round.
+    // Validation-only correlation between non-heap records and roots visited in the
+    // same minor round. Product storage retains these records independently.
     void RecordStaticForCrossCheck(MAddress fieldAddress, MAddress callsite);
     void VisitStaticForCrossCheck(MAddress fieldAddress);
     void CheckStaticCoverageForMinor();
@@ -86,10 +86,6 @@ private:
     void MarkWordDirty(size_t buffer, size_t word);
     void ClearWordDirty(size_t buffer, size_t word);
     void CheckInitialized() const;
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    void CheckActiveAgainstOracle(const char* operation) const;
-#endif
-
     MAddress heapStart = 0;
     size_t heapSize = 0;
     size_t bitCount = 0;

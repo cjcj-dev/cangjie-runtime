@@ -84,8 +84,8 @@ int main()
              rememberedSet.Size() == 2 && rememberedSet.Contains(start + 256 * fieldSize) &&
              rememberedSet.Contains(externalSlot + fieldSize) && passed;
 
-    // Product removes static slots from the heap bitmap; validation proves that the
-    // independently scanned static-root channel visits every former set element.
+    // Validation correlates non-heap records with roots visited in the same round;
+    // the product retains these records in an independent exact buffer.
     constexpr MAddress staticSlot = 0x70000;
     rememberedSet.RecordStaticForCrossCheck(staticSlot, 0);
     rememberedSet.VisitStaticForCrossCheck(staticSlot);
