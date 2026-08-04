@@ -52,7 +52,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
         const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    static const uint64_t fysGapWidthLimit = []() {
+    static const uint64_t fysGapWidthLimit = []() -> uint64_t {
         const char* value = std::getenv("MRT_GCV2_FYSGAP_WIDTH_LIMIT");
         if (value == nullptr) {
             return RegionInfo::LIVE_BYTES_MASK;
