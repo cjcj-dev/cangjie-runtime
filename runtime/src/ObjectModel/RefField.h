@@ -9,6 +9,7 @@
 #define MRT_REF_FIELD_H
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <functional>
 #include <limits>
@@ -80,6 +81,27 @@ public:
                          std::memory_order failOrder = std::memory_order_relaxed)
     {
         CHECK(std::numeric_limits<MAddress>::max() > newValue);
+        // s3writer: CAS is another store sink (Fix/Trace update paths).
+        {
+            BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newValue).GetAddress());
+            if (asObj != nullptr) {
+                TypeInfo* tip = *reinterpret_cast<TypeInfo* const*>(asObj);
+                uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                if (tip == nullptr || (tipAddr & 7) != 0 || tipAddr < 0x10000) {
+                    static std::atomic<size_t> g_cas{ 0 };
+                    size_t n = g_cas.fetch_add(1, std::memory_order_relaxed);
+                    if (n < 64) {
+                        std::fprintf(stderr,
+                                     "[GCV2][S3_SET] n=%zu kind=CompareExchange slot=%p ref=%p raw=%#zx tip=%p "
+                                     "ra0=%p ra1=%p ra2=%p\n",
+                                     n, this, asObj, static_cast<size_t>(newValue), tip,
+                                     __builtin_return_address(0), __builtin_return_address(1),
+                                     __builtin_return_address(2));
+                        std::fflush(stderr);
+                    }
+                }
+            }
+        }
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedValue, newValue, succOrder, failOrder);
