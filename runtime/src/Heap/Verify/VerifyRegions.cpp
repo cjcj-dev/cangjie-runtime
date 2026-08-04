@@ -61,6 +61,17 @@ bool IsActiveYoungExemptList(const char* name)
     return std::strcmp(name, "tlRegionList") == 0;
 }
 
+bool IsRetainedYoungRegion(const char* listName, RegionInfo* region)
+{
+    if (region == nullptr || !region->IsYoungRegion() || region->GetRawPointerObjectCount() != 0) {
+        return false;
+    }
+    bool retainableList = std::strcmp(listName, "recentFullRegionList") == 0 ||
+        std::strcmp(listName, "unmovableFromRegionList") == 0;
+    uint8_t age = region->GetYoungAge();
+    return retainableList && age != 0 && age < RegionInfo::GetYoungPromoteAge();
+}
+
 struct ListWalkStats {
     size_t regionCount = 0;
     size_t youngCount = 0;
@@ -330,6 +341,7 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
     // R2: must-cover young ⊆ candidates; TL young is whitelist exempt; other young is reported.
     // Ghost young is an alias of from-list young — skip to avoid double-counting mustCover.
     size_t mustCoverYoung = 0;
+    size_t retainedYoung = 0;
     size_t missingFromCandidates = 0;
     size_t missingRegionsByList[kListNameCount]{};
     size_t activeYoungExempt = 0;
@@ -348,8 +360,12 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
                 }
                 ++mustCoverYoung;
                 if (candidates.count(region) == 0) {
-                    ++missingFromCandidates;
-                    ++missingRegionsByList[i];
+                    if (IsRetainedYoungRegion(kListNames[i], region)) {
+                        ++retainedYoung;
+                    } else {
+                        ++missingFromCandidates;
+                        ++missingRegionsByList[i];
+                    }
                 }
             } else if (IsActiveYoungExemptList(kListNames[i])) {
                 ++activeYoungExempt;
@@ -382,10 +398,12 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
     uint64_t t1 = TimeUtil::NanoSeconds();
     VLOG(REPORT,
          "[GCV2][verify][regions] point=%s run=%zu phase=after-prepare-young "
-         "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu mustCoverYoung=%zu missing=%zu unexpectedCand=%zu "
+         "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu mustCoverYoung=%zu retained=%zu promoteAge=%u "
+         "missing=%zu unexpectedCand=%zu "
          "activeYoungExempt=%zu otherYoung=%zu youngOnLists=%zu youngCounter=%zu youngCounterMismatch=%zu "
          "multiList=%zu linkBroken=%zu typeMismatch=%zu freeOnList=%zu routeAnom=%zu costNs=%llu",
-         point, youngRunIndex, candidates.size(), mustCoverYoung, missingFromCandidates,
+         point, youngRunIndex, candidates.size(), mustCoverYoung, retainedYoung,
+         static_cast<unsigned>(RegionInfo::GetYoungPromoteAge()), missingFromCandidates,
          unexpectedNonYoungCandidates, activeYoungExempt, otherYoung, youngOnLists, youngCounter,
          youngCounterMismatch, multiList, linkBrokenTotal, typeMismatchTotal, freeOnListTotal, routeStateAnomalies,
          static_cast<unsigned long long>(t1 - t0));
@@ -455,6 +473,9 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
     size_t offCandidateYoungRegions = 0;
     size_t offCandidateMarkedObjects = 0;
     size_t offCandidateLiveBytes = 0;
+    size_t retainedYoungRegions = 0;
+    size_t retainedMarkedObjects = 0;
+    size_t retainedMarkedBytes = 0;
     size_t invalidObjects = 0;
     size_t liveByteInconsistent = 0;
     std::unordered_map<std::string, size_t> markedByList;
@@ -472,7 +493,6 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
         if (candidates.count(region) != 0) {
             continue;
         }
-        ++offCandidateYoungRegions;
         const char* listName = "not_on_managed_list";
         auto it = regionToList.find(region);
         if (it != regionToList.end()) {
@@ -503,8 +523,15 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
                 ++liveByteInconsistent;
             }
         }
-        offCandidateMarkedObjects += markedInRegion;
-        offCandidateLiveBytes += markedBytes;
+        if (IsRetainedYoungRegion(listName, region)) {
+            ++retainedYoungRegions;
+            retainedMarkedObjects += markedInRegion;
+            retainedMarkedBytes += markedBytes;
+        } else {
+            ++offCandidateYoungRegions;
+            offCandidateMarkedObjects += markedInRegion;
+            offCandidateLiveBytes += markedBytes;
+        }
         markedByList[listName] += markedInRegion;
     }
 
@@ -512,9 +539,11 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
     VLOG(REPORT,
          "[GCV2][verify][regions] point=%s run=%zu phase=after-young-mark "
          "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu offCandYoungRegions=%zu offCandMarkedObjects=%zu "
-         "offCandMarkedBytes=%zu invalidObjects=%zu liveByteInconsistent=%zu costNs=%llu",
+         "offCandMarkedBytes=%zu retainedYoungRegions=%zu retainedMarkedObjects=%zu retainedMarkedBytes=%zu "
+         "invalidObjects=%zu liveByteInconsistent=%zu costNs=%llu",
          point, youngRunIndex, candidates.size(), offCandidateYoungRegions, offCandidateMarkedObjects,
-         offCandidateLiveBytes, invalidObjects, liveByteInconsistent,
+         offCandidateLiveBytes, retainedYoungRegions, retainedMarkedObjects, retainedMarkedBytes,
+         invalidObjects, liveByteInconsistent,
          static_cast<unsigned long long>(t1 - t0));
 
     for (const auto& entry : regionsByList) {
