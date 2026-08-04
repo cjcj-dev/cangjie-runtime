@@ -30,6 +30,7 @@
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
+#include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -2000,11 +2001,21 @@ void WCollector::DoGarbageCollection()
         RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
         size_t dropped = 0;
         {
-            RememberedSet::Records drain = remset.AcquireRecordsForMinor();
+            RememberedSet::Records drain = remset.AcquireRecordsForDrain();
             dropped = drain.size();
         }
         if (dropped != 0) {
             VLOG(REPORT, "[GCV2][remset] cleared after full GC dropped=%zu", dropped);
+        }
+        // Lifecycle: start a new stamp generation after full GC so MISSING
+        // classification can separate major-FORWARD stamps from this epoch's records.
+        RemsetPhaseProbe::BumpStampGeneration("after-full-gc");
+        // Block experiment (default off): clear diagnostic stamps so next minor cannot
+        // attribute MISSING to pre-full recorded events.
+        if (std::getenv("MRT_GCV2_CLEAR_STAMPS_AFTER_FULL") != nullptr &&
+            std::strcmp(std::getenv("MRT_GCV2_CLEAR_STAMPS_AFTER_FULL"), "1") == 0) {
+            RemsetPhaseProbe::ClearSlotStamps();
+            VLOG(REPORT, "[GCV2][remset][lifecycle] ClearSlotStamps after full GC env=MRT_GCV2_CLEAR_STAMPS_AFTER_FULL=1");
         }
     }
 }

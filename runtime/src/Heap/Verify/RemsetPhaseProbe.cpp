@@ -28,6 +28,7 @@ struct SlotStamp {
     uint8_t barClass = 0;
     uint8_t reason = REASON_UNKNOWN;
     uint8_t recorded = 0;
+    uint32_t generation = 0;
 };
 
 std::mutex gLock;
@@ -45,6 +46,21 @@ std::atomic<uint64_t> gMissingNoStamp{0};
 std::atomic<uint64_t> gMissingTotal{0};
 std::atomic<uint64_t> gWriteTotal{0};
 std::atomic<uint64_t> gRecordTotal{0};
+
+// Lifecycle counters (MRT_GCV2_REMSET_LIFECYCLE).
+std::atomic<uint32_t> gStampGeneration{1};
+std::atomic<uint64_t> gInsertTotal{0};
+std::atomic<uint64_t> gEraseCalls{0};
+std::atomic<uint64_t> gEraseSlots{0};
+std::atomic<uint64_t> gAcquireCalls{0};
+std::atomic<uint64_t> gAcquireSlotsSum{0};
+std::atomic<uint64_t> gDrainCalls{0};
+std::atomic<uint64_t> gDrainSlotsSum{0};
+std::atomic<uint64_t> gMissingFreshRecorded{0};
+std::atomic<uint64_t> gMissingStaleRecorded{0};
+std::atomic<uint64_t> gMissingOtherStamp{0};
+std::atomic<size_t> gLastRemsetSize{0};
+std::atomic<uint64_t> gGenBumpCalls{0};
 
 bool EnvOn(const char* name)
 {
@@ -80,7 +96,14 @@ void IncReason(std::array<std::atomic<uint64_t>, kReasonBuckets>& arr, size_t id
 
 bool Enabled()
 {
-    static const bool on = EnvOn("MRT_GCV2_RECORD_REMSET_EVENTS") || EnvOn("MRT_GCPHASE_PROBE");
+    static const bool on = EnvOn("MRT_GCV2_RECORD_REMSET_EVENTS") || EnvOn("MRT_GCPHASE_PROBE") ||
+                           EnvOn("MRT_GCV2_REMSET_LIFECYCLE");
+    return on;
+}
+
+bool LifecycleEnabled()
+{
+    static const bool on = EnvOn("MRT_GCV2_REMSET_LIFECYCLE");
     return on;
 }
 
@@ -210,6 +233,7 @@ void NoteWrite(MAddress fieldAddress, GCPhase phase, SkipReason reason, bool rec
     st.barClass = static_cast<uint8_t>(bc);
     st.reason = static_cast<uint8_t>(reason);
     st.recorded = recorded ? 1 : 0;
+    st.generation = gStampGeneration.load(std::memory_order_relaxed);
     std::lock_guard<std::mutex> guard(gLock);
     gStamps[fieldAddress] = st;
 }
@@ -222,6 +246,7 @@ void NoteMissing(MAddress fieldAddress)
     gMissingTotal.fetch_add(1, std::memory_order_relaxed);
     SlotStamp st;
     bool found = false;
+    uint32_t curGen = gStampGeneration.load(std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> guard(gLock);
         auto it = gStamps.find(fieldAddress);
@@ -245,12 +270,26 @@ void NoteMissing(MAddress fieldAddress)
     Inc(gMissingByPhase, st.phase);
     IncBar(gMissingByBar, st.barClass);
     IncReason(gMissingByReason, st.reason);
+    const char* freshness = "n/a";
+    if (LifecycleEnabled() && st.recorded != 0) {
+        if (st.generation == curGen) {
+            gMissingFreshRecorded.fetch_add(1, std::memory_order_relaxed);
+            freshness = "fresh";
+        } else {
+            gMissingStaleRecorded.fetch_add(1, std::memory_order_relaxed);
+            freshness = "stale";
+        }
+    } else if (LifecycleEnabled()) {
+        gMissingOtherStamp.fetch_add(1, std::memory_order_relaxed);
+        freshness = "other";
+    }
     VLOG(REPORT,
          "[GCV2][remset][recorded][MISSING_EVENT] slot=%p phase=%s(%u) barrier=%s reason=%s recorded=%u "
-         "env=MRT_GCV2_RECORD_REMSET_EVENTS=1",
+         "stampGen=%u curGen=%u freshness=%s env=MRT_GCV2_RECORD_REMSET_EVENTS=1",
          reinterpret_cast<void*>(fieldAddress), PhaseName(static_cast<GCPhase>(st.phase)),
          static_cast<unsigned int>(st.phase), BarrierClassName(static_cast<BarrierClass>(st.barClass)),
-         SkipReasonName(static_cast<SkipReason>(st.reason)), static_cast<unsigned int>(st.recorded));
+         SkipReasonName(static_cast<SkipReason>(st.reason)), static_cast<unsigned int>(st.recorded),
+         static_cast<unsigned int>(st.generation), static_cast<unsigned int>(curGen), freshness);
 }
 
 void ClearSlotStamps()
@@ -260,6 +299,106 @@ void ClearSlotStamps()
     }
     std::lock_guard<std::mutex> guard(gLock);
     gStamps.clear();
+}
+
+void NoteRemsetInsert(MAddress fieldAddress, size_t sizeAfter)
+{
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    (void)fieldAddress;
+    gInsertTotal.fetch_add(1, std::memory_order_relaxed);
+    gLastRemsetSize.store(sizeAfter, std::memory_order_relaxed);
+}
+
+void NoteRemsetEraseRange(MAddress start, MAddress end, size_t erased, size_t scanned, const char* site)
+{
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    gEraseCalls.fetch_add(1, std::memory_order_relaxed);
+    gEraseSlots.fetch_add(erased, std::memory_order_relaxed);
+    if (erased != 0) {
+        VLOG(REPORT,
+             "[GCV2][remset][lifecycle][ERASE] site=%s start=%p end=%p erased=%zu scanned=%zu gen=%u "
+             "env=MRT_GCV2_REMSET_LIFECYCLE=1",
+             site == nullptr ? "?" : site, reinterpret_cast<void*>(start), reinterpret_cast<void*>(end), erased,
+             scanned, static_cast<unsigned int>(gStampGeneration.load(std::memory_order_relaxed)));
+    }
+}
+
+void NoteRemsetAcquire(size_t sizeBeforeClear, const char* site)
+{
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    gAcquireCalls.fetch_add(1, std::memory_order_relaxed);
+    gAcquireSlotsSum.fetch_add(sizeBeforeClear, std::memory_order_relaxed);
+    gLastRemsetSize.store(0, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][remset][lifecycle][ACQUIRE] site=%s size=%zu gen=%u inserts=%llu erases=%llu erasedSlots=%llu "
+         "env=MRT_GCV2_REMSET_LIFECYCLE=1",
+         site == nullptr ? "?" : site, sizeBeforeClear,
+         static_cast<unsigned int>(gStampGeneration.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gInsertTotal.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gEraseCalls.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gEraseSlots.load(std::memory_order_relaxed)));
+}
+
+void NoteRemsetDrain(size_t dropped, const char* site)
+{
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    gDrainCalls.fetch_add(1, std::memory_order_relaxed);
+    gDrainSlotsSum.fetch_add(dropped, std::memory_order_relaxed);
+    gLastRemsetSize.store(0, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][remset][lifecycle][DRAIN] site=%s dropped=%zu gen=%u env=MRT_GCV2_REMSET_LIFECYCLE=1",
+         site == nullptr ? "?" : site, dropped,
+         static_cast<unsigned int>(gStampGeneration.load(std::memory_order_relaxed)));
+}
+
+void BumpStampGeneration(const char* site)
+{
+    if (!LifecycleEnabled() && !Enabled()) {
+        return;
+    }
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    uint32_t next = gStampGeneration.fetch_add(1, std::memory_order_relaxed) + 1;
+    gGenBumpCalls.fetch_add(1, std::memory_order_relaxed);
+    VLOG(REPORT, "[GCV2][remset][lifecycle][GEN_BUMP] site=%s gen=%u env=MRT_GCV2_REMSET_LIFECYCLE=1",
+         site == nullptr ? "?" : site, static_cast<unsigned int>(next));
+}
+
+void DumpLifecycle(const char* tag)
+{
+    if (!LifecycleEnabled()) {
+        return;
+    }
+    VLOG(REPORT,
+         "[GCV2][remset][lifecycle][SUMMARY] tag=%s gen=%u inserts=%llu eraseCalls=%llu erasedSlots=%llu "
+         "acquireCalls=%llu acquireSlotsSum=%llu drainCalls=%llu drainSlotsSum=%llu "
+         "missingFreshRecorded=%llu missingStaleRecorded=%llu missingOtherStamp=%llu "
+         "missingNoStamp=%llu missingTotal=%llu recordTotal=%llu lastSize=%zu "
+         "env=MRT_GCV2_REMSET_LIFECYCLE=1",
+         tag == nullptr ? "?" : tag, static_cast<unsigned int>(gStampGeneration.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gInsertTotal.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gEraseCalls.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gEraseSlots.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gAcquireCalls.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gAcquireSlotsSum.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gDrainCalls.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gDrainSlotsSum.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gMissingFreshRecorded.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gMissingStaleRecorded.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gMissingOtherStamp.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gMissingNoStamp.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gMissingTotal.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(gRecordTotal.load(std::memory_order_relaxed)),
+         gLastRemsetSize.load(std::memory_order_relaxed));
 }
 
 void DumpSummary(const char* tag)
@@ -319,6 +458,8 @@ void DumpSummary(const char* tag)
              SkipReasonName(static_cast<SkipReason>(i)), static_cast<unsigned long long>(m), pct,
              static_cast<unsigned long long>(w));
     }
+
+    DumpLifecycle(tag);
 }
 
 } // namespace RemsetPhaseProbe

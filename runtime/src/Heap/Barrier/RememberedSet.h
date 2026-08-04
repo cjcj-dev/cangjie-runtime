@@ -11,6 +11,7 @@
 #include <unordered_set>
 
 #include "Common/TypeDef.h"
+#include "Heap/Verify/RemsetPhaseProbe.h"
 
 namespace MapleRuntime {
 class Barrier;
@@ -25,13 +26,24 @@ public:
 
         Records(const Records&) = delete;
         Records& operator=(const Records&) = delete;
-        Records(Records&& other) noexcept : owner(other.owner), lock(std::move(other.lock)) { other.owner = nullptr; }
+        Records(Records&& other) noexcept : owner(other.owner), lock(std::move(other.lock)), site(other.site)
+        {
+            other.owner = nullptr;
+            other.site = nullptr;
+        }
         Records& operator=(Records&&) = delete;
 
         ~Records()
         {
             if (owner != nullptr) {
+                size_t before = owner->records.size();
                 owner->records.clear();
+                if (site != nullptr && site[0] == 'd') {
+                    // drain* sites: full-GC intentional drop
+                    RemsetPhaseProbe::NoteRemsetDrain(before, site);
+                } else {
+                    RemsetPhaseProbe::NoteRemsetAcquire(before, site == nullptr ? "acquire" : site);
+                }
             }
         }
 
@@ -41,17 +53,22 @@ public:
 
     private:
         friend class RememberedSet;
-        explicit Records(RememberedSet& rememberedSet) : owner(&rememberedSet), lock(rememberedSet.lock) {}
+        explicit Records(RememberedSet& rememberedSet, const char* acquireSite)
+            : owner(&rememberedSet), lock(rememberedSet.lock), site(acquireSite)
+        {
+        }
 
         RememberedSet* owner;
         std::unique_lock<std::mutex> lock;
+        const char* site;
     };
 
     RememberedSet() = default;
     RememberedSet(const RememberedSet&) = delete;
     RememberedSet& operator=(const RememberedSet&) = delete;
 
-    Records AcquireRecordsForMinor() { return Records(*this); }
+    Records AcquireRecordsForMinor() { return Records(*this, "minor-acquire"); }
+    Records AcquireRecordsForDrain() { return Records(*this, "drain-full-gc"); }
 
     // Non-destructive snapshot for diagnostic verify (does not clear). HotSpot card-table verify analog.
     std::unordered_set<MAddress> Snapshot() const
@@ -81,6 +98,7 @@ private:
     {
         std::lock_guard<std::mutex> guard(lock);
         records.insert(fieldAddress);
+        RemsetPhaseProbe::NoteRemsetInsert(fieldAddress, records.size());
     }
 
     // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
@@ -100,6 +118,7 @@ private:
         if (outScanned != nullptr) {
             *outScanned = records.size();
         }
+        size_t scanned = records.size();
         size_t erased = 0;
         for (auto it = records.begin(); it != records.end();) {
             MAddress slot = *it;
@@ -110,6 +129,7 @@ private:
                 ++it;
             }
         }
+        RemsetPhaseProbe::NoteRemsetEraseRange(start, end, erased, scanned, "scrub-region");
         return erased;
     }
 

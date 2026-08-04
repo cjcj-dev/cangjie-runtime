@@ -62,6 +62,17 @@ void ClearSlotStamps();
 // MRT_GCPHASE_FORCE_RECORD=1 ⇒ treat as always-record when edge is old→young.
 bool ForceRecordEnabled();
 
+// Lifecycle probe (default off): MRT_GCV2_REMSET_LIFECYCLE=1.
+// Tracks remset size / erase / drain / acquire against stamp generations so MISSING
+// "reason=recorded" can be classified fresh-vs-stale across GC epochs.
+bool LifecycleEnabled();
+void NoteRemsetInsert(MAddress fieldAddress, size_t sizeAfter);
+void NoteRemsetEraseRange(MAddress start, MAddress end, size_t erased, size_t scanned, const char* site);
+void NoteRemsetAcquire(size_t sizeBeforeClear, const char* site);
+void NoteRemsetDrain(size_t dropped, const char* site);
+void BumpStampGeneration(const char* site);
+void DumpLifecycle(const char* tag);
+
 } // namespace RemsetPhaseProbe
 } // namespace MapleRuntime
 
