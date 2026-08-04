@@ -1241,16 +1241,14 @@ private:
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
-        MAddress allocatedEnd = std::min(GetRegionAllocPtr(), regionEnd);
         // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
-        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objAddr < regionStart ||
-                     objAddr >= allocatedEnd || objSize > allocatedEnd - objAddr)) {
-            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd, allocatedEnd);
+        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
+            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd);
         }
     }
 
     NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
-        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd, MAddress allocatedEnd) const
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
         size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
@@ -1260,7 +1258,7 @@ private:
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
             "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
-            obj, objSize, this, regionStart, regionEnd, allocatedEnd, static_cast<unsigned>(GetRegionType()),
+            obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(), static_cast<unsigned>(GetRegionType()),
             static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
             kMarkedBytesPerBit);
         std::abort();
