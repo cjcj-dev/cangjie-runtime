@@ -476,6 +476,7 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
     size_t retainedYoungRegions = 0;
     size_t retainedMarkedObjects = 0;
     size_t retainedMarkedBytes = 0;
+    size_t retainedAllocatedBytes = 0;
     size_t invalidObjects = 0;
     size_t liveByteInconsistent = 0;
     std::unordered_map<std::string, size_t> markedByList;
@@ -527,6 +528,7 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
             ++retainedYoungRegions;
             retainedMarkedObjects += markedInRegion;
             retainedMarkedBytes += markedBytes;
+            retainedAllocatedBytes += region->GetRegionAllocatedSize();
         } else {
             ++offCandidateYoungRegions;
             offCandidateMarkedObjects += markedInRegion;
@@ -540,9 +542,12 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
          "[GCV2][verify][regions] point=%s run=%zu phase=after-young-mark "
          "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu offCandYoungRegions=%zu offCandMarkedObjects=%zu "
          "offCandMarkedBytes=%zu retainedYoungRegions=%zu retainedMarkedObjects=%zu retainedMarkedBytes=%zu "
-         "invalidObjects=%zu liveByteInconsistent=%zu costNs=%llu",
+         "retainedAllocatedBytes=%zu retainedUnreclaimedBytes=%zu invalidObjects=%zu "
+         "liveByteInconsistent=%zu costNs=%llu",
          point, youngRunIndex, candidates.size(), offCandidateYoungRegions, offCandidateMarkedObjects,
          offCandidateLiveBytes, retainedYoungRegions, retainedMarkedObjects, retainedMarkedBytes,
+         retainedAllocatedBytes, retainedAllocatedBytes >= retainedMarkedBytes ?
+             retainedAllocatedBytes - retainedMarkedBytes : 0,
          invalidObjects, liveByteInconsistent,
          static_cast<unsigned long long>(t1 - t0));
 
