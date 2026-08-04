@@ -44,13 +44,53 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (region == nullptr || !region->IsYoungRegion()) {
         return 0;
     }
+    static const bool fysGapProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (region->IsSafeKnownEmpty()) {
+        if (fysGapProbe) {
+            VLOG(REPORT,
+                 "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
+                 "knownEmpty=1 hasBitmap=%u mode=safe-empty",
+                 region,
+                 static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                                       region->GetResurrectBitmap() != nullptr));
+        }
+        return 0;
+    }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    auto recordFromObject = [&rememberedSet, &recorded](BaseObject* object) {
+    size_t liveEdges = 0;
+    size_t deadEdges = 0;
+    size_t unknownEdges = 0;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
+    bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
+    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
+                             &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
-        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+        bool survived = hasObjectLiveness &&
+            region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        if (useLiveOnly && !survived) {
+            if (fysGapProbe) {
+                object->ForEachRefField([&deadEdges](RefField<>& field) {
+                    BaseObject* target = field.GetTargetObject();
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                        ++deadEdges;
+                    }
+                });
+            }
+            return;
+        }
+        object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
+                                hasObjectLiveness, survived](RefField<>& field) {
             BaseObject* target = field.GetTargetObject();
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
@@ -59,16 +99,28 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(reinterpret_cast<MAddress>(&field));
                 ++recorded;
+                if (fysGapProbe) {
+                    if (!hasObjectLiveness) {
+                        ++unknownEdges;
+                    } else if (survived) {
+                        ++liveEdges;
+                    } else {
+                        ++deadEdges;
+                    }
+                }
             }
         });
     };
-    // Never VisitLiveObjects here: IsSurvived is false when markBitmap is null, and is also false
-    // for unmarked-but-still-live holders (B2 residual / neverExamined). Those are exactly the
-    // demoted holders whose young→young edges must become remset entries. VisitAllObjects walks
-    // the allocated range (RegionManager.cpp:184-197) without consulting the mark bitmap.
     region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
+    }
+    if (fysGapProbe) {
+        VLOG(REPORT,
+             "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
+             "knownEmpty=%u hasBitmap=%u mode=%s",
+             region, recorded, liveEdges, deadEdges, unknownEdges, static_cast<unsigned>(region->IsKnownEmpty()),
+             static_cast<unsigned>(hasObjectLiveness), useLiveOnly ? "live-only" : "scan-all");
     }
     return recorded;
 }
@@ -754,6 +806,12 @@ size_t RegionManager::ExemptFromRegions()
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     double exempt = exemptedRegionThreshold;
+    rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
+        if (region->GetLiveByteCount() > 0) {
+            region->PreserveRetainedLiveInfoUpTo(
+                std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        }
+    });
     auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
         size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
         size_t liveBytes = fromRegion->GetLiveByteCount();
@@ -765,6 +823,7 @@ size_t RegionManager::ExemptFromRegions()
                 del->GetUnitCount(), del->GetLiveByteCount());
 
             CHECK(del->IsFromRegion());
+            del->PreserveRetainedLiveInfo();
             RemoveRegionLocked(&fromRegionList, del);
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
@@ -774,6 +833,9 @@ size_t RegionManager::ExemptFromRegions()
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
+            if (liveBytes > 0) {
+                del->PreserveRetainedLiveInfo();
+            }
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
@@ -816,6 +878,36 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
     ScopedEnterSaferegion enterSaferegion(false);
     ScopedStopTheWorld stw("visit all objects");
     ForEachObjUnsafe(visitor);
+}
+
+void RegionManager::StampCensusBoundaries()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            region->StampCensusBoundary();
+        }
+    }
+}
+
+void RegionManager::PromoteAllRegions()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            size_t liveBytes = region->GetLiveByteCount();
+            if (liveBytes > 0) {
+                region->PreserveRetainedLiveInfoUpTo(
+                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+            } else if (region->GetRawPointerObjectCount() == 0) {
+                region->PreserveRetainedLiveInfo(region->GetRegionStart());
+            }
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+    }
 }
 
 RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem)
@@ -1398,6 +1490,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
     }
 
+    region->ResetCensusBoundary();
+
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -1465,6 +1559,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         }
     }
 
+    region->ResetCensusBoundary();
+
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -1502,6 +1598,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                  region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                  static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
             if (youngRegion) {
+                region->PreserveRetainedLiveInfo();
                 (void)RecordPromotedCrossGenEdges(region);
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
@@ -1531,6 +1628,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     if (!RouteRegion(region)) {
         if (youngRegion) {
             // In-place promote (compacted / unrouted): scan before clearing young flag.
+            region->PreserveRetainedLiveInfo();
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -1625,11 +1723,19 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    if (allocPtr != 0) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
+        region->ResetCensusBoundary();
+        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
+    }
     // For making bitmap comform with live object count, do not mark object repeated.
-    if (allocPtr == 0 ||
-        (mutatorPhase != GCPhase::GC_PHASE_ENUM &&
-        mutatorPhase != GCPhase::GC_PHASE_TRACE &&
-        mutatorPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
+    bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||
+        mutatorPhase == GCPhase::GC_PHASE_TRACE ||
+        mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+    bool censusSafeMarking = mutatorPhase == GCPhase::GC_PHASE_PREFORWARD ||
+        mutatorPhase == GCPhase::GC_PHASE_FORWARD ||
+        (mutatorPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted());
+    if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
         return allocPtr;
     }
 

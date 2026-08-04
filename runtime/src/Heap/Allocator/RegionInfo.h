@@ -7,7 +7,9 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <algorithm>
 #include <atomic>
+#include <limits>
 #include <list>
 #include <map>
 #include <mutex>
@@ -78,6 +80,12 @@ private:
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
 public:
+    enum class RetainedLiveInfoState : uint8_t {
+        NEVER_EXAMINED,
+        SNAPSHOT_VALID,
+        SNAPSHOT_EMPTY,
+    };
+
     enum RouteState : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
@@ -116,6 +124,16 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
+    uint64_t GetSnapshotEpoch() const
+    {
+        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
+    }
+
+    void BumpSnapshotEpoch()
+    {
+        __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
+    }
+
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
@@ -153,6 +171,92 @@ public:
             return nullptr;
         }
         return liveInfo;
+    }
+
+    LiveInfo* GetRetainedLiveInfo() const { return metadata.retainedLiveInfo; }
+
+    RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
+
+    uint64_t GetRetainedLiveInfoEpoch() const { return metadata.retainedLiveInfoEpoch; }
+
+    MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
+
+    void PreserveRetainedLiveInfo()
+    {
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
+        if (IsLargeRegion()) {
+            if (GetLiveByteCount() == 0) {
+                metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+                    ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+                    : RetainedLiveInfoState::NEVER_EXAMINED;
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        if (metadata.retainedLiveInfo != nullptr) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        CHECK(GetLiveByteCount() == 0);
+        metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::NEVER_EXAMINED;
+    }
+
+    MAddress GetCensusBoundary() const
+    {
+        return GetRegionStart() + metadata.censusBoundaryOffset;
+    }
+
+    void StampCensusBoundary()
+    {
+        uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
+        metadata.censusBoundaryOffset =
+            static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
+    }
+
+    void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
+
+    void PreserveRetainedLiveInfoUpTo(MAddress boundary)
+    {
+        CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
+        if (IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+            return;
+        }
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = boundary;
+        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            return;
+        }
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+    }
+
+    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
+    {
+        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfo = GetLiveInfo();
+            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            return;
+        }
+        CHECK(coveredUpToOverride == GetRegionAllocPtr());
+        PreserveRetainedLiveInfo();
+    }
+
+    bool IsRetainedSnapshotValid() const
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return false;
+        }
+        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
 
     LiveInfo* GetOrAllocLiveInfo()
@@ -757,12 +861,17 @@ public:
     }
     void ClearLiveInfo()
     {
+        BumpSnapshotEpoch();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
@@ -1029,6 +1138,17 @@ public:
         return (raw & LIVE_AUTHORITY_BIT) != 0 && (raw & LIVE_BYTES_MASK) == 0;
     }
 
+    bool IsSafeKnownEmpty() const
+    {
+        if (!IsKnownEmpty()) {
+            return false;
+        }
+        if (GetRegionAllocPtr() <= GetRegionStart()) {
+            return true;
+        }
+        return GetMarkBitmap() != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion();
+    }
+
     void ResetLiveByteCount()
     {
         // Young region fully forwarded: known empty.
@@ -1087,6 +1207,7 @@ private:
 
             uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
+            uint32_t censusBoundaryOffset;
         };
 
         union {
@@ -1099,8 +1220,14 @@ private:
             RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
         };
 
+        LiveInfo* retainedLiveInfo = nullptr;
+        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        uint64_t retainedLiveInfoEpoch = 0;
+        MAddress retainedLiveInfoCoveredUpTo = 0;
+
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
+        uint64_t snapshotEpoch = 0;
 
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -1307,8 +1434,14 @@ private:
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
+        metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
+        BumpSnapshotEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
