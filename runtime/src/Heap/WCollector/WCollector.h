@@ -61,9 +61,9 @@ public:
     bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo) override;
 
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
-    void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
+    void TraceRefField(RefSlotKind kind, BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
-    BaseObject* GetAndTryTagObj(BaseObject* obj, RefField<>& field) override;
+    BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
