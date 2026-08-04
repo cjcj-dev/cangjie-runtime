@@ -413,7 +413,8 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     // VisitStaticRoots every minor, so it must not consume a heap-region bitmap bit.
     (void)obj;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    theRememberedSet.RecordStaticForCrossCheck(fieldAddress);
+    theRememberedSet.RecordStaticForCrossCheck(
+        fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
 #endif
     if (probeOn) {
         NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
