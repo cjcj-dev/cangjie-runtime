@@ -76,6 +76,7 @@ private:
 
     // the collector thread handle.
     pthread_t gcMainThread = 0;
+    int32_t concurrentGcThreadCount = 1;
     std::atomic<pid_t> gcTid{ 0 };
     std::atomic<bool> gcThreadRunning = { false };
     // finishedGcIndex records the currently finished gcIndex

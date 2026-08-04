@@ -840,7 +840,9 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 #if defined(__linux__) || defined(hongmeng)
     threadPool->SetPriority(GCPoolThread::GC_THREAD_STW_PRIORITY);
 #endif
-    threadPool->SetMaxActiveThreadNum(threadCount);
+    threadPool->SetMaxActiveThreadNum(threadCount - 1);
+    VLOG(REPORT, "GC active thread count: concurrent=%d total=%d helpers=%d pool-active=%d", isConcurrent,
+         threadCount, threadCount - 1, threadPool->GetMaxActiveThreadNum());
 
     GetGCStats().reason = gcReason;
     GetGCStats().async = !g_gcRequests[gcReason].IsSyncGC();

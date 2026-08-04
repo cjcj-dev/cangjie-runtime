@@ -185,7 +185,7 @@ void GCThreadPool::SetMaxActiveThreadNum(int32_t num)
     int32_t oldNum = maxActiveThreadNum;
     if (num >= maxThreadNum) {
         maxActiveThreadNum = maxThreadNum;
-    } else if (num > 0) {
+    } else if (num >= 0) {
         maxActiveThreadNum = num;
     } else {
         LOG(RTLOG_ERROR, "SetMaxActiveThreadNum invalid input val");
