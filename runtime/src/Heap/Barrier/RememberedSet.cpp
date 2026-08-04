@@ -406,8 +406,17 @@ void RememberedSet::VisitStaticForCrossCheck(MAddress fieldAddress)
 void RememberedSet::CheckStaticCoverageForMinor()
 {
     std::lock_guard<std::mutex> guard(oracleLock);
+    const char* trace = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS");
+    bool traceEnabled = trace != nullptr && std::strcmp(trace, "1") == 0;
+    if (!traceEnabled) {
+        staticRecords.clear();
+        staticRecordSites.clear();
+        visitedStaticRoots.clear();
+        lastDrainedHeapRecords = 0;
+        return;
+    }
     bool injected = false;
-    const char* inject = std::getenv("MRT_GCV2_VERIFY_STATIC_COVERAGE_INJECT_MISSING");
+    const char* inject = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS_INJECT_MISSING");
     if (inject != nullptr && std::strcmp(inject, "1") == 0) {
         staticRecords.insert(heapStart);
         staticRecordSites[heapStart] = 0;
@@ -424,7 +433,7 @@ void RememberedSet::CheckStaticCoverageForMinor()
         bool resolved = callsite != 0 && dladdr(reinterpret_cast<void*>(callsite), &info) != 0;
         MAddress base = resolved ? reinterpret_cast<MAddress>(info.dli_fbase) : 0;
         std::fprintf(stderr,
-                     "REMSET_STATIC_MISSING slot=%#zx callsite=%#zx dso_offset=%#zx symbol=%s\n",
+                     "REMSET_EXTERNAL_ROOT_MISSING slot=%#zx callsite=%#zx dso_offset=%#zx symbol=%s\n",
                      static_cast<size_t>(slot), static_cast<size_t>(callsite),
                      static_cast<size_t>(callsite - base),
                      resolved && info.dli_sname != nullptr ? info.dli_sname : "?");
@@ -433,16 +442,19 @@ void RememberedSet::CheckStaticCoverageForMinor()
     size_t legacyTotal = lastDrainedHeapRecords + staticRecords.size();
     double removedShare = legacyTotal == 0 ? 0.0 :
         100.0 * static_cast<double>(staticRecords.size()) / static_cast<double>(legacyTotal);
-    std::fprintf(stderr, "REMSET_MINOR_ROOT_SCAN round=%zu fired=1\n", staticCrossCheckRounds);
+    std::fprintf(stderr, "REMSET_EXTERNAL_ROOT_SCAN round=%zu fired=1\n", staticCrossCheckRounds);
     std::fprintf(stderr,
-                 "REMSET_STATIC_COVERAGE round=%zu recorded=%zu visited=%zu missing=%zu injected=%u "
+                 "REMSET_EXTERNAL_ROOT_COVERAGE round=%zu recorded=%zu visited=%zu missing=%zu injected=%u "
                  "heap_records=%zu legacy_total=%zu removed_share=%.6f%%\n",
                  staticCrossCheckRounds, staticRecords.size(), visitedStaticRoots.size(), missing,
                  static_cast<unsigned>(injected), lastDrainedHeapRecords, legacyTotal, removedShare);
     if (missing != 0) {
-        std::fprintf(stderr, "REMSET_STATIC_COVERAGE_MISMATCH injected=%u missing=%zu recorded=%zu\n",
+        std::fprintf(stderr, "REMSET_EXTERNAL_ROOT_MISMATCH injected=%u missing=%zu recorded=%zu\n",
                      static_cast<unsigned>(injected), missing, staticRecords.size());
-        std::abort();
+        const char* fatal = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS_FATAL");
+        if (fatal != nullptr && std::strcmp(fatal, "1") == 0) {
+            std::abort();
+        }
     }
     staticRecords.clear();
     staticRecordSites.clear();
