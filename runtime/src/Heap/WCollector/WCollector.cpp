@@ -377,6 +377,13 @@ void WCollector::PreforwardAllExportFromRoots()
     RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
     Heap::GetHeap().VisitAllExportRoots(visitor);
 }
+void WCollector::PreforwardStaticRoots()
+{
+    RefFieldVisitor visitor = [this](RefField<>& field) {
+        ForwardUpdateRawRef(reinterpret_cast<ObjectRef&>(field));
+    };
+    Heap::GetHeap().VisitStaticRoots(visitor);
+}
 void WCollector::PreforwardFinalizerProcessorRoots()
 {
     RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
@@ -569,6 +576,7 @@ void WCollector::Preforward()
     // forward and fix finalizer roots.
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardFinalizerProcessorRoots(); }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllExportFromRoots(); }));
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardStaticRoots(); }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
     threadPool->Start();
