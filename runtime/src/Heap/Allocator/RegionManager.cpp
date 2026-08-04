@@ -794,8 +794,8 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
         // Finalizer reclaims concurrently (not a mutator ⇒ STW does not stop it). A unit
         // mid-InitRegionInfo can expose a transient extent (0/garbage) before the final
-        // role is published. Following a bogus end lands GetUnitIdxAt(0) → bare std::abort
-        // (S1: CHECK-less SIGABRT under InvalidateOldTaggedRefs). Step one unit instead —
+        // role is published. Following a bogus end lands GetUnitIdxAt(0) → named fatal+abort
+        // (S1: SIGABRT under InvalidateOldTaggedRefs). Step one unit instead —
         // such units are never visitable.
         // Anchor: a1f81854 (fix/gcfix; not yet on integrate/0.0.2-gc).
         uintptr_t nextAddr = region->GetRegionEnd();
