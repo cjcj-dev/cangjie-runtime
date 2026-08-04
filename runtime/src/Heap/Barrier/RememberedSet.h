@@ -17,6 +17,7 @@
 #endif
 
 #include "Common/TypeDef.h"
+#include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
 class Barrier;
@@ -47,7 +48,10 @@ public:
     size_t Size() const;
 
     // Bytes reserved by both exact bitmap backings.
-    size_t MemoryOverhead() const { return wordCount * sizeof(uint64_t) * kBufferCount; }
+    size_t MemoryOverhead() const
+    {
+        return (wordCount + dirtyWordCount) * sizeof(uint64_t) * kBufferCount;
+    }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     // Validation-only oracle for static/global slots. Product remset storage contains
@@ -66,7 +70,7 @@ private:
 #endif
 
     static constexpr size_t kBitsPerWord = sizeof(uint64_t) * 8;
-    static constexpr size_t kFieldBytes = sizeof(MAddress);
+    static constexpr size_t kFieldBytes = sizeof(RefField<>);
     static constexpr size_t kBufferCount = 2;
 
     void Record(MAddress fieldAddress);
@@ -76,6 +80,9 @@ private:
 
     size_t AddressToBit(MAddress fieldAddress) const;
     size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
+    size_t ClearBuffer(size_t buffer);
+    void MarkWordDirty(size_t buffer, size_t word);
+    void ClearWordDirty(size_t buffer, size_t word);
     void CheckInitialized() const;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     void CheckActiveAgainstOracle(const char* operation) const;
@@ -85,7 +92,9 @@ private:
     size_t heapSize = 0;
     size_t bitCount = 0;
     size_t wordCount = 0;
+    size_t dirtyWordCount = 0;
     std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
+    std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
     std::atomic<size_t> recordCounts[kBufferCount] = { 0, 0 };
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;
