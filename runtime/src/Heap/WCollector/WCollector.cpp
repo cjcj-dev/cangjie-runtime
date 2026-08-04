@@ -48,6 +48,18 @@ bool WCollector::MarkObject(BaseObject* obj) const
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
+    static const bool fysGapProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (fysGapProbe &&
+        (objectSize > RegionInfo::LIVE_BYTES_MASK ||
+         region->GetLiveByteCount() > RegionInfo::LIVE_BYTES_MASK - objectSize)) {
+        VLOG(REPORT,
+             "[FYSGAP][width] object=%p objectSize=%zu region=%p liveBefore=%u mask=%u "
+             "env=MRT_GCV2_FYSGAP_PROBE=1",
+             obj, objectSize, region, region->GetLiveByteCount(), RegionInfo::LIVE_BYTES_MASK);
+    }
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
         region->AddLiveByteCount(objectSize);
@@ -957,6 +969,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
+    static const bool fysGapProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    size_t knownEmptyConsumed = 0;
+    size_t knownEmptyWithBitmap = 0;
+    size_t knownEmptyNeverExamined = 0;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -976,7 +995,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
         if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
             ++scrubbedDeadHolder;
@@ -990,7 +1008,28 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-
+        if (fysGapProbe) {
+            if (holderRegion != nullptr && holderRegion->IsKnownEmpty()) {
+                ++knownEmptyConsumed;
+                bool hasBitmap = holderRegion->GetMarkBitmap() != nullptr ||
+                    holderRegion->GetResurrectBitmap() != nullptr;
+                if (hasBitmap) {
+                    ++knownEmptyWithBitmap;
+                } else if (holderRegion->GetRegionAllocPtr() > holderRegion->GetRegionStart()) {
+                    ++knownEmptyNeverExamined;
+                }
+                if ((knownEmptyConsumed & (knownEmptyConsumed - 1)) == 0) {
+                    VLOG(REPORT,
+                         "[FYSGAP][known-empty-sample] slot=%p region=%p start=%#zx alloc=%#zx "
+                         "hasBitmap=%u neverExamined=%u n=%zu",
+                         reinterpret_cast<void*>(slot), holderRegion, holderRegion->GetRegionStart(),
+                         holderRegion->GetRegionAllocPtr(), static_cast<unsigned>(hasBitmap),
+                         static_cast<unsigned>(!hasBitmap &&
+                             holderRegion->GetRegionAllocPtr() > holderRegion->GetRegionStart()),
+                         knownEmptyConsumed);
+                }
+            }
+        }
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
@@ -1062,6 +1101,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              "staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
              scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+    }
+    if (fysGapProbe) {
+        VLOG(REPORT,
+             "[FYSGAP][known-empty-summary] run=%zu consumed=%zu withBitmap=%zu neverExamined=%zu "
+             "fullYoungScan=%u",
+             minorTotalRuns + 1, knownEmptyConsumed, knownEmptyWithBitmap, knownEmptyNeverExamined,
+             static_cast<unsigned>(fullYoungScan));
     }
 }
 
@@ -1388,14 +1434,18 @@ void WCollector::VerifyRegionSets(const char* point)
     }
 }
 
-void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots)
+void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots,
+                                   const MinorSlotSet& consumedSlots)
 {
     // Default off. When on: independent full-heap retrace from roots (no remset filter),
     // collect young objs reachable that way, compare to region mark bitmap after young-only mark.
     // For each unmarked-but-full-reachable young object, scan non-young holders for incoming
     // old→young edges and report whether that field is in the minor-acquired remset.
     const char* enabled = std::getenv("MRT_GCMARKGAP_PROBE");
-    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+    const char* fysGap = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+    bool markGapEnabled = enabled != nullptr && std::strcmp(enabled, "1") == 0;
+    bool fysGapEnabled = fysGap != nullptr && std::strcmp(fysGap, "1") == 0;
+    if (!markGapEnabled && !fysGapEnabled) {
         return;
     }
 
@@ -1445,6 +1495,71 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
             continue;
         }
         object->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
+    }
+
+    if (fysGapEnabled) {
+        size_t deadRecordedSlots = 0;
+        size_t deadConsumedSlots = 0;
+        size_t deadKnownEmptySlots = 0;
+        MinorObjectSet floatingSeeds;
+        Heap::GetHeap().ForEachObj(
+            [&](BaseObject* holder) {
+                if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField() ||
+                    fullReachable.count(holder) != 0) {
+                    return;
+                }
+                RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                holder->ForEachRefField([&](RefField<>& field) {
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    if (rememberedSlots.count(slot) == 0) {
+                        return;
+                    }
+                    ++deadRecordedSlots;
+                    if (consumedSlots.count(slot) == 0) {
+                        return;
+                    }
+                    ++deadConsumedSlots;
+                    if (holderRegion != nullptr && holderRegion->IsKnownEmpty()) {
+                        ++deadKnownEmptySlots;
+                    }
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (Heap::IsHeapAddress(target)) {
+                        floatingSeeds.insert(target);
+                    }
+                    if ((deadConsumedSlots & (deadConsumedSlots - 1)) == 0) {
+                        VLOG(REPORT,
+                             "[FYSGAP][dead-holder-sample] holder=%p slot=%p target=%p region=%p "
+                             "knownEmpty=%u n=%zu",
+                             holder, reinterpret_cast<void*>(slot), target, holderRegion,
+                             static_cast<unsigned>(holderRegion != nullptr && holderRegion->IsKnownEmpty()),
+                             deadConsumedSlots);
+                    }
+                });
+            },
+            false);
+
+        MinorObjectSet floatingClosure;
+        WorkStack floatingPending = NewWorkStack();
+        floatingPending.insert(floatingPending.end(), floatingSeeds.begin(), floatingSeeds.end());
+        while (!floatingPending.empty()) {
+            BaseObject* object = floatingPending.back();
+            floatingPending.pop_back();
+            if (!Heap::IsHeapAddress(object) || fullReachable.count(object) != 0 ||
+                !floatingClosure.insert(object).second || !object->IsValidObject() || !object->HasRefField()) {
+                continue;
+            }
+            object->ForEachRefField([this, &floatingPending](RefField<>& field) {
+                BaseObject* target = ResolveMinorReference(field);
+                if (Heap::IsHeapAddress(target)) {
+                    floatingPending.push_back(target);
+                }
+            });
+        }
+        VLOG(REPORT,
+             "[FYSGAP][holder-summary] run=%zu recordedDeadSlots=%zu consumedDeadSlots=%zu "
+             "deadKnownEmptySlots=%zu cascadeObjects=%zu fullReachable=%zu remset=%zu consumed=%zu",
+             minorTotalRuns + 1, deadRecordedSlots, deadConsumedSlots, deadKnownEmptySlots,
+             floatingClosure.size(), fullReachable.size(), rememberedSlots.size(), consumedSlots.size());
     }
 
     size_t unmarkedLive = 0;
@@ -1856,7 +1971,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     // Always-available (gated) probe: full-heap independent reachability vs young-only bitmap.
     // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
-    ProbeUnmarkedLive(allocationRoots, rememberedSlots);
+    ProbeUnmarkedLive(allocationRoots, rememberedSlots, consumedSlots);
 
     TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
     WeakRefBuffer::Instance().ClearWeakRefBuffer();

@@ -46,11 +46,24 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    auto recordFromObject = [&rememberedSet, &recorded](BaseObject* object) {
+    static const bool fysGapProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    size_t liveEdges = 0;
+    size_t deadEdges = 0;
+    size_t unknownEdges = 0;
+    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
+                             fysGapProbe](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
-        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+            region->GetResurrectBitmap() != nullptr;
+        bool survived = hasObjectLiveness &&
+            region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
+                                fysGapProbe, hasObjectLiveness, survived, object, region](RefField<>& field) {
             BaseObject* target = field.GetTargetObject();
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
@@ -59,6 +72,20 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(reinterpret_cast<MAddress>(&field));
                 ++recorded;
+                if (fysGapProbe) {
+                    if (!hasObjectLiveness) {
+                        ++unknownEdges;
+                    } else if (survived) {
+                        ++liveEdges;
+                    } else {
+                        ++deadEdges;
+                        if ((deadEdges & (deadEdges - 1)) == 0) {
+                            VLOG(REPORT,
+                                 "[FYSGAP][promotion-dead-sample] region=%p holder=%p slot=%p target=%p n=%zu",
+                                 region, object, &field, target, deadEdges);
+                        }
+                    }
+                }
             }
         });
     };
@@ -69,6 +96,13 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
+    }
+    if (fysGapProbe) {
+        VLOG(REPORT,
+             "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
+             "knownEmpty=%u hasBitmap=%u",
+             region, recorded, liveEdges, deadEdges, unknownEdges, static_cast<unsigned>(region->IsKnownEmpty()),
+             static_cast<unsigned>(region->GetMarkBitmap() != nullptr || region->GetResurrectBitmap() != nullptr));
     }
     return recorded;
 }
