@@ -10,6 +10,7 @@
 #include <string>
 #include <sys/mman.h>
 
+#include "Cangjie.h"
 #include "Heap/Allocator/RegionInfo.h"
 
 namespace MapleRuntime {
@@ -59,6 +60,13 @@ int main(int argc, char** argv)
 {
     if (argc != 2) {
         std::cerr << "usage: object_size_guard_harness zero|unaligned|oversize\n";
+        return 2;
+    }
+    RuntimeParam runtimeParam {};
+    runtimeParam.heapParam.heapSize = 4 * 1024;
+    runtimeParam.coParam.processorNum = 1;
+    if (InitCJRuntime(&runtimeParam) != E_OK) {
+        std::cerr << "failed to initialize runtime\n";
         return 2;
     }
     MapleRuntime::RegionFixture fixture;
