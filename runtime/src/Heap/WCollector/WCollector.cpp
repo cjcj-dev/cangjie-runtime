@@ -614,8 +614,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // Post-Flip after Forward: live objects sit in to-space without mark bits at the
     // new address — IsSurvivedObject would skip almost every holder (defect⑤ residual).
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
+    size_t rebuilt = 0;
     space.ForEachObj(
-        [this, requireSurvivedMark](BaseObject* obj) {
+        [this, requireSurvivedMark, rebuildRemset, &rebuilt](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
@@ -625,9 +627,32 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             if (!obj->HasRefField()) {
                 return;
             }
-            obj->ForEachRefField([this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
+            bool recordCrossGen = false;
+            if (rebuildRemset != nullptr) {
+                RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
+                                 !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
+            }
+            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, &rebuilt](RefField<>& field) {
+                FixOldTaggedRefField(obj, field);
+                if (!recordCrossGen) {
+                    return;
+                }
+                BaseObject* target = field.GetTargetObject();
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
+                    ++rebuilt;
+                }
+            });
         },
         false);
+    if (rebuilt != 0) {
+        VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
+    }
 }
 
 void WCollector::PostTrace()
