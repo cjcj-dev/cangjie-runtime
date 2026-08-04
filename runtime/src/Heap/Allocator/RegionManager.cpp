@@ -44,6 +44,26 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (region == nullptr || !region->IsYoungRegion()) {
         return 0;
     }
+    // Four-state promotion filter (dconflict REDO c80504f7):
+    // 1) safe known-empty → record 0
+    // 2) authority + bitmap complete → only live holders
+    // 3) neverExamined / authority incomplete → VisitAll (correctness fallback; 2f937d70)
+    // 4) routed path records from to-space live objects separately
+    if (region->IsSafeKnownEmpty()) {
+        static const bool fysGapProbe = []() {
+            const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        if (fysGapProbe) {
+            VLOG(REPORT,
+                 "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
+                 "knownEmpty=1 hasBitmap=%u mode=safe-empty",
+                 region,
+                 static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                                       region->GetResurrectBitmap() != nullptr));
+        }
+        return 0;
+    }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
     static const bool fysGapProbe = []() {
@@ -53,17 +73,38 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     size_t liveEdges = 0;
     size_t deadEdges = 0;
     size_t unknownEdges = 0;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
+    bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
     auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
-                             &unknownEdges](BaseObject* object) {
+                             &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
-        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
-            region->GetResurrectBitmap() != nullptr;
         bool survived = hasObjectLiveness &&
             region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        if (useLiveOnly && !survived) {
+            if (fysGapProbe) {
+                object->ForEachRefField([&deadEdges, object, region](RefField<>& field) {
+                    BaseObject* target = field.GetTargetObject();
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                        ++deadEdges;
+                        if ((deadEdges & (deadEdges - 1)) == 0) {
+                            VLOG(REPORT,
+                                 "[FYSGAP][promotion-dead-sample] region=%p holder=%p slot=%p target=%p n=%zu",
+                                 region, object, &field, target, deadEdges);
+                        }
+                    }
+                });
+            }
+            return;
+        }
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
-                                hasObjectLiveness, survived, object, region](RefField<>& field) {
+                                hasObjectLiveness, survived, object, region, useLiveOnly](RefField<>& field) {
             BaseObject* target = field.GetTargetObject();
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
@@ -75,7 +116,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 if (fysGapProbe) {
                     if (!hasObjectLiveness) {
                         ++unknownEdges;
-                    } else if (survived) {
+                    } else if (survived || useLiveOnly) {
                         ++liveEdges;
                     } else {
                         ++deadEdges;
@@ -89,10 +130,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             }
         });
     };
-    // Never VisitLiveObjects here: IsSurvived is false when markBitmap is null, and is also false
-    // for unmarked-but-still-live holders (B2 residual / neverExamined). Those are exactly the
-    // demoted holders whose young→young edges must become remset entries. VisitAllObjects walks
-    // the allocated range (RegionManager.cpp:184-197) without consulting the mark bitmap.
+    // useLiveOnly: VisitAll + filter dead. neverExamined: VisitAll without filter (2f937d70).
+    // Do not switch to VisitLiveObjects alone — IsSurvived is false when markBitmap is null.
     region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
@@ -100,9 +139,9 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (fysGapProbe) {
         VLOG(REPORT,
              "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
-             "knownEmpty=%u hasBitmap=%u",
+             "knownEmpty=%u hasBitmap=%u mode=%s",
              region, recorded, liveEdges, deadEdges, unknownEdges, static_cast<unsigned>(region->IsKnownEmpty()),
-             static_cast<unsigned>(region->GetMarkBitmap() != nullptr || region->GetResurrectBitmap() != nullptr));
+             static_cast<unsigned>(hasObjectLiveness), useLiveOnly ? "live-only" : "scan-all");
     }
     return recorded;
 }
