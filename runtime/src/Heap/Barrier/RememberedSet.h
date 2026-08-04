@@ -106,6 +106,7 @@ private:
     std::unordered_set<MAddress> visitedStaticRoots;
     size_t bitmapCrossCheckCount = 0;
     size_t staticCrossCheckRounds = 0;
+    size_t lastDrainedHeapRecords = 0;
 #endif
 };
 } // namespace MapleRuntime
