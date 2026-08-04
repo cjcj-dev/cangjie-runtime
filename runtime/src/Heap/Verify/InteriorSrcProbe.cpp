@@ -7,9 +7,12 @@
 #include "InteriorSrcProbe.h"
 
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <sys/mman.h>
+#include <unistd.h>
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
@@ -21,6 +24,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/MClass.inline.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace {
@@ -51,6 +55,26 @@ size_t EnvSizeT(const char* name, size_t def)
     return static_cast<size_t>(n);
 }
 
+// True if the page containing addr is mapped (mincore). Never dereferences unmapped memory.
+bool PageMapped(uintptr_t addr)
+{
+    if (addr == 0) {
+        return false;
+    }
+    long pageSize = sysconf(_SC_PAGESIZE);
+    if (pageSize <= 0) {
+        pageSize = 4096;
+    }
+    uintptr_t page = addr & ~(static_cast<uintptr_t>(pageSize) - 1);
+    unsigned char vec = 0;
+    // mincore returns 0 if the range is mapped (resident bit in vec is separate).
+    if (mincore(reinterpret_cast<void*>(page), static_cast<size_t>(pageSize), &vec) == 0) {
+        return true;
+    }
+    // ENOMEM/EINVAL ⇒ not mapped in this process.
+    return false;
+}
+
 // Read TypeInfo pointer the same way StateWord does, without requiring a live BaseObject.
 TypeInfo* PeekTypeInfoAt(uintptr_t addr)
 {
@@ -74,8 +98,7 @@ TypeInfo* PeekTypeInfoAt(uintptr_t addr)
 #endif
 }
 
-// Conservative "looks like a real TypeInfo pointer" — mirrors VerifyHeap H2 online checks
-// without calling into fail-closed product CHECKs.
+// Crash-safe TypeInfo probe: never touch unmapped tip pages; reject code-as-TI via size cap.
 bool TipLooksValid(TypeInfo* tip)
 {
     if (tip == nullptr) {
@@ -85,14 +108,41 @@ bool TipLooksValid(TypeInfo* tip)
     if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
         return false;
     }
-    // TypeInfo must not live in the managed heap (defect D / code-as-TI both fail this).
+    // TypeInfo must not live in the managed heap (defect D).
     if (Heap::IsHeapAddress(tipAddr)) {
         return false;
     }
-    // IsVaildType only reads the type-kind byte; safe on any mapped TypeInfo / .cjmetadata.
-    // On FILE_RX code it may spuriously pass or fail — combined with !IsHeapAddress this is
-    // still useful for AutoEnv B (metadata) vs B+16 (code entry) discrimination.
-    return tip->IsVaildType();
+    // Generic TI mmap range is authoritative when it hits.
+    bool inTim = TypeInfoManager::GetTypeInfoManager().ContainsAddress(tipAddr);
+    if (!inTim && !PageMapped(tipAddr)) {
+        return false;
+    }
+    // Safe to read type-kind / instanceSize only after page check (static .cjmetadata or TIM).
+    if (!tip->IsVaildType()) {
+        return false;
+    }
+    // Code-as-TI yields huge garbage instanceSize (magicaddr: ~1.2e9). Cap at 1MiB payload.
+    MSize isz = tip->GetInstanceSize();
+    if (isz == 0 || isz > (1u << 20)) {
+        return false;
+    }
+    return true;
+}
+
+// Non-array object size from tip only (no BaseObject::GetSize — that path can be heavy/unsafe).
+size_t SaneObjectSize(TypeInfo* tip, RegionInfo* region)
+{
+    if (tip == nullptr || region == nullptr) {
+        return 0;
+    }
+    MSize isz = tip->GetInstanceSize();
+    // AlignUp(instanceSize + TYPEINFO_PTR_SIZE, 8) for non-array path (BaseObject::GetSize).
+    size_t size = (static_cast<size_t>(isz) + 8u + 7u) & ~static_cast<size_t>(7u);
+    size_t regionBytes = region->GetRegionEnd() - region->GetRegionStart();
+    if (size < 16 || size > regionBytes || size > (1u << 20)) {
+        return 0;
+    }
+    return size;
 }
 
 enum class Kind : uint8_t { Base = 0, Interior = 1, Unknown = 2, NotHeap = 3 };
@@ -221,24 +271,22 @@ void Classify(uintptr_t value, Kind& kind, uintptr_t& baseOut, size_t& offsetOut
         if (!TipLooksValid(tip)) {
             continue;
         }
-        // Bounds: if GetSize is sane, require value ∈ [cand, cand+size).
-        // Cap size to region to avoid following garbage instanceSize.
-        size_t size = 0;
+        size_t size = SaneObjectSize(tip, region);
         bool sizeOk = false;
-        {
-            auto* baseObj = reinterpret_cast<BaseObject*>(cand);
-            // Only call GetSize when tip looks valid (not code-as-TI).
-            size = baseObj->GetSize();
-            MAddress rStart = region->GetRegionStart();
-            MAddress rEnd = region->GetRegionEnd();
-            if (size >= 8 && size <= (rEnd - rStart) && cand + size <= rEnd && value >= cand && value < cand + size) {
+        if (size != 0 && value >= cand && value < cand + size && cand + size <= region->GetRegionEnd()) {
+            sizeOk = true;
+        }
+        if (!sizeOk && !valueBaseLike && size != 0) {
+            // tip at value invalid, tip at cand valid with sane size but value outside
+            // declared size — still not interior of that object.
+            sizeOk = false;
+        }
+        if (!sizeOk && !valueBaseLike && size == 0) {
+            // Sane size unavailable (array path etc.): accept only classic AutoEnv slots
+            // when cand tip is valid and value tip is not.
+            if (off == 8 || off == 16 || off == 24) {
                 sizeOk = true;
             }
-        }
-        if (!sizeOk && !valueBaseLike) {
-            // Still accept when value itself is NOT base-like (classic B+16 code-as-TI case):
-            // tip at value is code/invalid; tip at cand is metadata.
-            sizeOk = true;
         }
         if (!sizeOk) {
             continue;
