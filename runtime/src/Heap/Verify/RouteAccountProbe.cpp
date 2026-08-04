@@ -233,11 +233,8 @@ bool RouteAccountProbe::NoteMarkBitmapCheck(RegionInfo* region, size_t offset, c
         VLOG(REPORT, "[GCV2][mark-bitmap-null] ARMED env=MRT_GCV2_MARK_BITMAP_NULL=1 site=%s", site);
     }
 
-    LiveInfo* liveInfo = __atomic_load_n(&region->GetLiveInfoForProbe(), std::memory_order_acquire);
-    // Fallback: use public GetLiveInfo (treats TEMPORARY as null).
     LiveInfo* pub = region->GetLiveInfo();
     if (pub == nullptr) {
-        // Distinguish TEMPORARY vs true null via raw load helper if available.
         gMarkNullLiveInfo.fetch_add(1, std::memory_order_relaxed);
         static std::atomic<uint64_t> dumpLeft{32};
         uint64_t left = dumpLeft.load(std::memory_order_relaxed);
@@ -249,7 +246,6 @@ bool RouteAccountProbe::NoteMarkBitmapCheck(RegionInfo* region, size_t offset, c
         }
         return false;
     }
-    (void)liveInfo;
     RegionBitmap* bitmap = __atomic_load_n(&pub->markBitmap, std::memory_order_acquire);
     if (reinterpret_cast<MAddress>(bitmap) == LiveInfo::TEMPORARY_PTR) {
         gMarkTempBitmap.fetch_add(1, std::memory_order_relaxed);
