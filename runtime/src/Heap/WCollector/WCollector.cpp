@@ -131,6 +131,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = oldRef.GetTargetObject();
+        // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
+        CHECK_DETAIL(target->IsValidObject(), "TryUntagRefField encounters invalid tagged target %p at field %p",
+                     target, &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
@@ -152,7 +155,10 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     RefField<> oldField(field);
     // if field is already tagged currently, it is also already enumerated.
     if (IsCurrentPointer(oldField)) {
-        rootSet.push_back(oldField.GetTargetObject());
+        // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
+        BaseObject* target = oldField.GetTargetObject();
+        CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
+        rootSet.push_back(target);
         return;
     }
 
@@ -195,7 +201,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<> oldField(refField);
     CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
-        rootSet.push_back(oldField.GetTargetObject());
+        // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
+        BaseObject* root = oldField.GetTargetObject();
+        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+        rootSet.push_back(root);
         return;
     }
     BaseObject* root = oldField.GetTargetObject();
@@ -227,6 +236,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> oldField(field);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
+        // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
+                     targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
             workStack.push_back(targetObj);
         }
@@ -302,6 +314,10 @@ BaseObject* WCollector::GetAndTryTagObj(BaseObject* obj, RefField<>& field)
     BaseObject* latest = nullptr;
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
+        // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
+        CHECK_DETAIL(targetObj->IsValidObject(),
+                     "Invalid object %p is referenced by weak object %p: %s and offset %zd", targetObj, obj,
+                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
     if (IsOldPointer(oldField)) {
@@ -449,6 +465,72 @@ void WCollector::TraceHeap()
     }
 }
 
+void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
+{
+    RefField<> oldField(field);
+    if (!IsOldPointer(oldField)) {
+        return;
+    }
+    BaseObject* fromObj = oldField.GetTargetObject();
+    BaseObject* latest = FindToVersion(fromObj);
+    if (latest == nullptr) {
+        latest = fromObj;
+    }
+    if (!Heap::IsHeapAddress(latest) || !latest->IsValidObject()) {
+        CHECK_DETAIL(false,
+                     "InvalidateOldTaggedRefs: old-tag %p from holder %p resolves to invalid %p "
+                     "(no live to-version before dispel)",
+                     fromObj, holder, latest);
+        return;
+    }
+    RefField<> newField = GetAndTryTagRefField(latest);
+    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+        return;
+    }
+    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
+             oldField.GetFieldValue(), newField.GetFieldValue(), latest);
+    }
+}
+
+void WCollector::InvalidateOldTaggedRefsBeforeDispel()
+{
+    MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
+    ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
+
+    // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
+    RootVisitor fixRoot = [this](ObjectRef& root) {
+        RefField<>& field = reinterpret_cast<RefField<>&>(root);
+        FixOldTaggedRefField(nullptr, field);
+    };
+    RefFieldVisitor fixRootField = [this](RefField<>& field) { FixOldTaggedRefField(nullptr, field); };
+
+    MutatorManager::Instance().VisitAllMutators(
+        [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+    Heap::GetHeap().VisitStaticRoots(fixRootField);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+    collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+    Heap::GetHeap().VisitAllExportRoots(fixRoot);
+
+    // New-line: BaseObject::ForEachRefField ≡ main TracingCollector::ForEachRefSlot.
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    space.ForEachObj(
+        [this](BaseObject* obj) {
+            if (obj == nullptr || !obj->IsValidObject()) {
+                return;
+            }
+            if (!IsSurvivedObject(obj)) {
+                return;
+            }
+            if (!obj->HasRefField()) {
+                return;
+            }
+            obj->ForEachRefField([this, obj](RefField<>& field) { FixOldTaggedRefField(obj, field); });
+        },
+        false);
+}
+
 void WCollector::PostTrace()
 {
     MRT_PHASE_TIMER("PostTrace");
@@ -464,6 +546,10 @@ void WCollector::PostTrace()
     CollectLargeGarbage();
     CollectPinnedGarbage();
     RefineFromSpace();
+    // F3: dispel previous ghost from-regions next; kill one-gen-stale tags first so
+    // IsOldPointer cannot outlive FindToVersion's ghost gate (D phase).
+    // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
+    InvalidateOldTaggedRefsBeforeDispel();
     fwdTable.PrepareForwardTable();
 }
 
