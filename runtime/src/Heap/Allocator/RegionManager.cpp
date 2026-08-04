@@ -153,7 +153,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
             if (object == nullptr || !object->HasRefField()) {
                 return;
             }
-            object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+            object->ForEachRefField([&rememberedSet, &recorded, object](RefField<>& field) {
                 BaseObject* target = field.GetTargetObject();
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
