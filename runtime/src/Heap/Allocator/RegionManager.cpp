@@ -53,8 +53,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     size_t liveEdges = 0;
     size_t deadEdges = 0;
     size_t unknownEdges = 0;
-    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
-                             fysGapProbe](BaseObject* object) {
+    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
+                             &unknownEdges](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
@@ -63,7 +63,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         bool survived = hasObjectLiveness &&
             region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
-                                fysGapProbe, hasObjectLiveness, survived, object, region](RefField<>& field) {
+                                hasObjectLiveness, survived, object, region](RefField<>& field) {
             BaseObject* target = field.GetTargetObject();
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
