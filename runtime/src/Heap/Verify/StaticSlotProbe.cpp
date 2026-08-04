@@ -504,9 +504,8 @@ void StaticSlotProbe::NoteStaticField(RefField<>& field)
     }
 
     uintptr_t slot = reinterpret_cast<uintptr_t>(&field);
-    uintptr_t value = 0;
-    // Read raw pointer bits without barrier side effects (diagnostic only).
-    std::memcpy(&value, reinterpret_cast<const void*>(&field), sizeof(value));
+    // Untag via RefField layout (address:48); no barrier write side effects.
+    uintptr_t value = field.GetAddress();
 
     Kind kind = Kind::Unknown;
     uintptr_t base = 0;
