@@ -27,6 +27,7 @@
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
+#include "Heap/Allocator/Allocator.h"
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
@@ -420,8 +421,12 @@ public:
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
         CHECK(IsMarkedObject(offset));
@@ -437,8 +442,12 @@ public:
             }
             return true;
         }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
@@ -1229,6 +1238,33 @@ public:
     }
 
 private:
+    ALWAYS_INLINE void CheckObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
+    {
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress allocatedEnd = std::min(GetRegionAllocPtr(), regionEnd);
+        if (UNLIKELY(objSize == 0 || (objSize % Allocator::ALLOC_ALIGN) != 0 || objAddr < regionStart ||
+                     objAddr >= allocatedEnd || objSize > allocatedEnd - objAddr)) {
+            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd, allocatedEnd);
+        }
+    }
+
+    NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd, MAddress allocatedEnd) const
+    {
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
+        size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
+                                                   std::numeric_limits<size_t>::max();
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        LOG(RTLOG_FATAL,
+            "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
+            "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
+            obj, objSize, this, regionStart, regionEnd, allocatedEnd, static_cast<unsigned>(GetRegionType()),
+            static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
+            Allocator::ALLOC_ALIGN);
+    }
+
     static std::atomic<size_t> youngRegionCount;
     static std::mutex youngRegionFlagMutex;
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
