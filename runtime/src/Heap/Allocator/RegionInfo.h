@@ -1154,7 +1154,11 @@ private:
                 return (allocAddr - heapStartAddress) / UNIT_SIZE;
             }
 
-            std::abort();
+            // Named fatal before abort so OOB addresses leave a greppable trail
+            // (was bare std::abort; o2fail R3 = 7/17 UNMAPPED SIGABRT with zero text).
+            LOG(RTLOG_FATAL, "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx)",
+                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE);
+            return 0;
         }
 
         static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr) { return GetUnitInfo(GetUnitIdxAt(allocAddr)); }
