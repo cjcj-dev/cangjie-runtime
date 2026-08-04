@@ -561,9 +561,81 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         return;
     }
     BaseObject* fromObj = oldField.GetTargetObject();
-    BaseObject* latest = FindToVersion(fromObj);
-    if (latest == nullptr) {
-        latest = fromObj;
+    BaseObject* routed = FindToVersion(fromObj);
+    BaseObject* latest = routed != nullptr ? routed : fromObj;
+    // s3origin: classify first production of clear-interior values at F3.
+    // Does NOT change control flow. Safe tip probe only (no TypeInfo methods).
+    auto tipWord = [](BaseObject* o) -> void* {
+        if (o == nullptr || !Heap::IsHeapAddress(o)) {
+            return nullptr;
+        }
+        return *reinterpret_cast<void* const*>(o);
+    };
+    auto isClearInterior = [](void* tip) -> bool {
+        uintptr_t a = reinterpret_cast<uintptr_t>(tip);
+        return tip == nullptr || (a & 7) != 0 || a < 0x10000;
+    };
+    void* fromTip = tipWord(fromObj);
+    void* latestTip = tipWord(latest);
+    bool fromBad = isClearInterior(fromTip);
+    bool latestBad = isClearInterior(latestTip);
+    if (fromBad || latestBad) {
+        static std::atomic<size_t> g_s3origin{ 0 };
+        size_t n = g_s3origin.fetch_add(1, std::memory_order_relaxed);
+        if (n < 96) {
+            size_t fieldOff = 0;
+            const char* holderName = "?";
+            if (holder != nullptr) {
+                fieldOff = static_cast<size_t>(reinterpret_cast<uintptr_t>(&field) -
+                                               reinterpret_cast<uintptr_t>(holder));
+                void* hTip = tipWord(holder);
+                uintptr_t ha = reinterpret_cast<uintptr_t>(hTip);
+                if (hTip != nullptr && (ha & 7) == 0 && ha >= 0x10000) {
+                    // tip looks like TypeInfo*; name only if aligned high enough.
+                    auto* hti = reinterpret_cast<TypeInfo*>(hTip);
+                    if (hti->IsVaildType()) {
+                        holderName = hti->GetName();
+                    }
+                }
+            }
+            // true header candidate for latest (Node*+8 / Array*+8 shape)
+            auto* trueHdr = latest == nullptr
+                ? nullptr
+                : reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(latest) - TYPEINFO_PTR_SIZE);
+            void* trueTip = tipWord(trueHdr);
+            const char* trueName = "?";
+            uintptr_t tta = reinterpret_cast<uintptr_t>(trueTip);
+            if (trueTip != nullptr && (tta & 7) == 0 && tta >= 0x10000) {
+                auto* tti = reinterpret_cast<TypeInfo*>(trueTip);
+                if (tti->IsVaildType()) {
+                    trueName = tti->GetName();
+                }
+            }
+            ptrdiff_t delta = 0;
+            if (fromObj != nullptr && latest != nullptr) {
+                delta = reinterpret_cast<uintptr_t>(latest) - reinterpret_cast<uintptr_t>(fromObj);
+            }
+            const char* kind = "other";
+            if (fromBad && latestBad && fromObj == latest) {
+                kind = "slot_already_interior"; // F3 re-stores; no +8 invented here
+            } else if (!fromBad && latestBad && routed != nullptr) {
+                kind = "route_produced_interior"; // FindToVersion invented bad ptr
+            } else if (fromBad && !latestBad) {
+                kind = "route_healed_interior";
+            } else if (fromBad && latestBad && fromObj != latest) {
+                kind = "route_moved_interior";
+            } else if (!fromBad && latestBad && routed == nullptr) {
+                kind = "from_as_latest_but_bad"; // shouldn't: fromBad false
+            }
+            std::fprintf(stderr,
+                         "[GCV2][S3_ORIGIN] n=%zu kind=%s holder=%p holderName=%s fieldOff=%zu "
+                         "from=%p fromTip=%p routed=%p latest=%p latestTip=%p delta=%td "
+                         "trueHdr8=%p trueTip8=%p trueName8=%s rawOld=%#zx\n",
+                         n, kind, holder, holderName, fieldOff, fromObj, fromTip, routed, latest,
+                         latestTip, delta, trueHdr, trueTip, trueName,
+                         static_cast<size_t>(oldField.GetFieldValue()));
+            std::fflush(stderr);
+        }
     }
     bool latestLive = false;
     if (Heap::IsHeapAddress(latest)) {
