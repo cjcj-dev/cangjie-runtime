@@ -349,7 +349,7 @@ public:
                 if (validObjs > 0) {
                     VLOG(REPORT,
                          "[GCRECLAIM][collect-empty] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
-                         "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
+                         "live=%u residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
                          region, start, alloc, end, region->GetRegionType(),
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
                          validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));

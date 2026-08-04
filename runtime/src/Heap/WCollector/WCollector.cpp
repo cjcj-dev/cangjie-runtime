@@ -97,9 +97,8 @@ bool WCollector::MarkObject(BaseObject* obj) const
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(),
-             static_cast<size_t>(region->GetLiveByteCount()));
+        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
+             region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
     return marked;
 }
@@ -109,8 +108,8 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
             region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), static_cast<size_t>(region->GetLiveByteCount()));
+            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
+                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
         }
         return resurrected;
 }

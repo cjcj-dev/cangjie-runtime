@@ -831,7 +831,7 @@ size_t RegionManager::ExemptFromRegions()
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         if (liveBytes > threshold) { // ignore this region
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %zu live bytes", del,
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %u live bytes", del,
                 del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount());
 
@@ -841,7 +841,7 @@ size_t RegionManager::ExemptFromRegions()
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         } else if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %u live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
@@ -1537,7 +1537,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
-    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
+    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %u",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
         region->GetRegionType(), region->GetLiveByteCount());
 
@@ -1558,7 +1558,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         if (neverExamined && youngOnlyGC) {
             VLOG(REPORT,
                  "[GCRECLAIM][fwd-empty-keep] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%zu neverExamined=1 youngOnlyGC=1 — skip CollectRegion",
+                 "live=%u neverExamined=1 youngOnlyGC=1 — skip CollectRegion",
                  region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                  static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
             if (youngRegion) {
@@ -1575,7 +1575,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         if (neverExamined && !youngOnlyGC) {
             VLOG(REPORT,
                  "[GCRECLAIM][fwd-empty-collect] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%zu neverExamined=1 fullGC=1 — CollectRegion",
+                 "live=%u neverExamined=1 fullGC=1 — CollectRegion",
                  region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                  static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
         }
@@ -1657,7 +1657,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             }
             if (residualValid > 0) {
                 VLOG(REPORT,
-                     "[GCRECLAIM][fwd-residual] region=%p start=%#zx alloc=%#zx live=%zu totalObjs=%zu "
+                     "[GCRECLAIM][fwd-residual] region=%p start=%#zx alloc=%#zx live=%u totalObjs=%zu "
                      "survived=%zu residualUnmarked=%zu young=%u BYPASS=1",
                      region, start, alloc, region->GetLiveByteCount(), totalObjs, survivedObjs, residualValid,
                      static_cast<unsigned>(youngRegion));
