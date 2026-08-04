@@ -850,7 +850,8 @@ size_t RegionManager::ExemptFromRegions()
     return newFromBytes - forwardBytes;
 }
 
-void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor) const
+void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
+                                     bool skipKnownEmptyRegions) const
 {
     for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
@@ -869,6 +870,9 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         }
         regionAddr = nextAddr;
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
             continue;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
