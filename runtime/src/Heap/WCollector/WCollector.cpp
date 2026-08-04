@@ -32,6 +32,8 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/InteriorSrcProbe.h"
+#include "Heap/Verify/StaticSlotProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -1012,10 +1014,14 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
+        StaticSlotProbe::NoteStaticField(field);
         fieldVisitor(field);
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Heap::GetHeap().VisitStaticRoots([&fieldVisitor](RefField<>& field) {
+        StaticSlotProbe::NoteStaticField(field);
+        fieldVisitor(field);
+    });
 #endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
@@ -1068,6 +1074,19 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 {
     if (!Heap::IsHeapAddress(object)) {
         return;
+    }
+    // interiorsrc: classify every young push (base vs interior) before validity CHECK.
+    // Gate MRT_GCV2_INTERIOR_SRC=1 (default off). Does not relax IsValidObject.
+    {
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            } else if (src == nullptr) {
+                src = "unknown";
+            }
+        }
+        InteriorSrcProbe::NotePush(src, object);
     }
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
@@ -2202,6 +2221,8 @@ void WCollector::DoYoungGarbageCollection()
     RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                         &remsetStats);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    InteriorSrcProbe::FlushSummary("post-minor-trace");
+    StaticSlotProbe::FlushSummary("post-minor-trace");
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
