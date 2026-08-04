@@ -67,6 +67,10 @@ endif()
 include(${CMAKE_CURRENT_SOURCE_DIR}/config.cmake)
 include(${CMAKE_CURRENT_SOURCE_DIR}/SetupAr.cmake)
 
+if (MRT_GCV2_UNTAG_BREADCRUMB)
+    add_compile_definitions(MRT_GCV2_UNTAG_BREADCRUMB)
+endif()
+
 message("-- BUILD_CJTHREAD: " ${BUILD_CJTHREAD})
 message("-- BUILD_RUNTIME: "   ${BUILD_RUNTIME})
 

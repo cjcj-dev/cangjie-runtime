@@ -9,16 +9,24 @@
 
 #include <array>
 #include <atomic>
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <csignal>
+#endif
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
+#endif
 
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Base/SysCall.h"
+#endif
 #include "Concurrency/Concurrency.h"
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
+#endif
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
@@ -30,9 +38,12 @@
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "Verify/VerifyRegions.h"
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
+#endif
 
 namespace MapleRuntime {
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 namespace {
 struct UntagRefFieldBreadcrumb {
     const void* holder = nullptr;
@@ -62,6 +73,7 @@ void PrintUntagRefFieldBreadcrumb() noexcept
         (void)write(STDERR_FILENO, buf, static_cast<size_t>(n));
     }
 }
+#endif
 
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 {
@@ -166,6 +178,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             return false;
         }
         target = oldRef.GetTargetObject();
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
         untagRefFieldBreadcrumb.active = 0;
         untagRefFieldBreadcrumb.holder = obj;
         untagRefFieldBreadcrumb.field = &field;
@@ -176,11 +189,14 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         std::atomic_signal_fence(std::memory_order_seq_cst);
         untagRefFieldBreadcrumb.active = 1;
         std::atomic_signal_fence(std::memory_order_seq_cst);
+#endif
         const bool isValidTarget = target->IsValidObject();
+#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
         if (LIKELY(isValidTarget)) {
             std::atomic_signal_fence(std::memory_order_seq_cst);
             untagRefFieldBreadcrumb.active = 0;
         }
+#endif
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
