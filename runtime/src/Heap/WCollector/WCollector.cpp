@@ -53,19 +53,21 @@ bool WCollector::MarkObject(BaseObject* obj) const
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     if (fysGapProbe &&
-        (objectSize > RegionInfo::LIVE_BYTES_MASK ||
-         region->GetLiveByteCount() > RegionInfo::LIVE_BYTES_MASK - objectSize)) {
+        (static_cast<uint64_t>(objectSize) > RegionInfo::LIVE_BYTES_MASK ||
+         region->GetLiveByteCount() > RegionInfo::LIVE_BYTES_MASK - static_cast<uint64_t>(objectSize))) {
         VLOG(REPORT,
-             "[FYSGAP][width] object=%p objectSize=%zu region=%p liveBefore=%u mask=%u "
+             "[FYSGAP][width] object=%p objectSize=%zu region=%p liveBefore=%zu mask=%llu "
              "env=MRT_GCV2_FYSGAP_PROBE=1",
-             obj, objectSize, region, region->GetLiveByteCount(), RegionInfo::LIVE_BYTES_MASK);
+             obj, objectSize, region, static_cast<size_t>(region->GetLiveByteCount()),
+             static_cast<unsigned long long>(RegionInfo::LIVE_BYTES_MASK));
     }
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;
-        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %u", obj, obj->GetTypeInfo(), objectSize,
-             region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
+        DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
+             region, region->GetRegionType(), region->GetRegionStart(),
+             static_cast<size_t>(region->GetLiveByteCount()));
     }
     return marked;
 }
@@ -75,8 +77,8 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
             region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %u", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
+                 obj, obj->GetTypeInfo(), obj->GetSize(), static_cast<size_t>(region->GetLiveByteCount()));
         }
         return resurrected;
 }
@@ -943,25 +945,78 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-        if (fysGapProbe) {
-            if (holderRegion != nullptr && holderRegion->IsKnownEmpty()) {
+        // FYS=0 holder-liveness (dconflict REDO a51445f0 / c253681f): skip only when
+        // IsKnownEmpty is proven (alloc empty OR mark examined the region). Bare IsKnownEmpty
+        // would treat neverExamined (ClearLiveInfo AUTHORITY|0 pre-mark) as reclaimable.
+        if (holderRegion->IsSafeKnownEmpty()) {
+            ++scrubbedDeadHolder;
+            if (fysGapProbe) {
                 ++knownEmptyConsumed;
                 bool hasBitmap = holderRegion->GetMarkBitmap() != nullptr ||
                     holderRegion->GetResurrectBitmap() != nullptr;
                 if (hasBitmap) {
                     ++knownEmptyWithBitmap;
-                } else if (holderRegion->GetRegionAllocPtr() > holderRegion->GetRegionStart()) {
-                    ++knownEmptyNeverExamined;
                 }
                 if ((knownEmptyConsumed & (knownEmptyConsumed - 1)) == 0) {
                     VLOG(REPORT,
                          "[FYSGAP][known-empty-sample] slot=%p region=%p start=%#zx alloc=%#zx "
-                         "hasBitmap=%u neverExamined=%u n=%zu",
+                         "hasBitmap=%u neverExamined=0 skipped=1 n=%zu",
                          reinterpret_cast<void*>(slot), holderRegion, holderRegion->GetRegionStart(),
                          holderRegion->GetRegionAllocPtr(), static_cast<unsigned>(hasBitmap),
-                         static_cast<unsigned>(!hasBitmap &&
-                             holderRegion->GetRegionAllocPtr() > holderRegion->GetRegionStart()),
                          knownEmptyConsumed);
+                }
+            }
+            continue;
+        }
+        if (fysGapProbe && holderRegion->IsKnownEmpty()) {
+            // known-empty but NOT safe → neverExamined path; must still consume (conservative).
+            ++knownEmptyConsumed;
+            ++knownEmptyNeverExamined;
+            if ((knownEmptyConsumed & (knownEmptyConsumed - 1)) == 0) {
+                VLOG(REPORT,
+                     "[FYSGAP][known-empty-sample] slot=%p region=%p start=%#zx alloc=%#zx "
+                     "hasBitmap=0 neverExamined=1 skipped=0 n=%zu",
+                     reinterpret_cast<void*>(slot), holderRegion, holderRegion->GetRegionStart(),
+                     holderRegion->GetRegionAllocPtr(), knownEmptyConsumed);
+            }
+        }
+        // FYS=0: when holder region has object-level liveness, drop slots whose holder object
+        // did not survive. FYS=1 keeps reachableSlots filter above; this is the independent path.
+        if (!fullYoungScan) {
+            bool hasObjectLiveness = holderRegion->IsLargeRegion() ||
+                holderRegion->GetMarkBitmap() != nullptr || holderRegion->GetResurrectBitmap() != nullptr;
+            if (hasObjectLiveness && holderRegion->IsLiveCountAuthoritative()) {
+                size_t holderOffset =
+                    holderRegion->GetAddressOffset(static_cast<MAddress>(slot));
+                // Slot address is inside the holder object; IsSurvivedObject needs object start.
+                // Walk back from slot to find containing object via allocated-range scan only when
+                // the slot offset itself is not a survived object start — use region mark at the
+                // object that owns this field by scanning from region start to slot.
+                bool holderSurvived = false;
+                if (holderRegion->IsLargeRegion()) {
+                    holderSurvived = holderRegion->IsSurvivedObject(0);
+                } else {
+                    uintptr_t position = holderRegion->GetRegionStart();
+                    uintptr_t allocPtr = holderRegion->GetRegionAllocPtr();
+                    uintptr_t slotAddr = static_cast<uintptr_t>(slot);
+                    while (position < allocPtr && position <= slotAddr) {
+                        BaseObject* obj = reinterpret_cast<BaseObject*>(position);
+                        size_t size = obj->GetSize();
+                        if (size == 0) {
+                            break;
+                        }
+                        if (slotAddr >= position && slotAddr < position + size) {
+                            holderSurvived = holderRegion->IsSurvivedObject(
+                                holderRegion->GetAddressOffset(static_cast<MAddress>(position)));
+                            break;
+                        }
+                        position += size;
+                    }
+                }
+                (void)holderOffset;
+                if (!holderSurvived) {
+                    ++scrubbedDeadHolder;
+                    continue;
                 }
             }
         }
