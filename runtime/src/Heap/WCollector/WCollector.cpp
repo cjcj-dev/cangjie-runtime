@@ -1948,15 +1948,9 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
 
-    size_t liveObjects = 0;
     size_t liveBytes = 0;
     for (RegionInfo* region : minorCandidateRegions) {
         liveBytes += region->GetLiveByteCount();
-        region->VisitAllObjects([&](BaseObject* object) {
-            if (region->IsMarkedObject(object)) {
-                ++liveObjects;
-            }
-        });
     }
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
@@ -2001,10 +1995,10 @@ void WCollector::DoYoungGarbageCollection()
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
     VLOG(REPORT,
-         "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu live=%zu liveBytes=%zu "
+         "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
 }
