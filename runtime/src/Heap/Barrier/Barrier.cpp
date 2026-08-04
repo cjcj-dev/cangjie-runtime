@@ -6,12 +6,17 @@
 
 
 #include "Barrier.inline.h"
+#include "Common/BaseObject.h"
+#include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "ObjectModel/Field.inline.h"
+#include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.inline.h"
+#include <atomic>
+#include <cstdio>
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -67,8 +72,60 @@ void Barrier::WriteF32(BaseObject* obj, Field<float>& field, float val) const { 
 
 void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const { field.SetFieldValue(obj, val); }
 
+namespace {
+// s3writer: catch mutator/runtime path that stores an interior pointer into a ref field.
+// Interior = tip not a valid TypeInfo; common shapes Node*+8 (id-as-tip) / RawArray*+8 (length-as-tip).
+void LogInteriorStore(BaseObject* obj, RefField<false>& field, BaseObject* ref, const char* origin)
+{
+    if (ref == nullptr) {
+        return;
+    }
+    TypeInfo* tip = ref->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    bool tipOk = tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 && tip->IsVaildType();
+    if (tipOk) {
+        return;
+    }
+    static std::atomic<size_t> g_interiorStoreLogged{ 0 };
+    size_t n = g_interiorStoreLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n >= 64) {
+        return;
+    }
+    size_t fieldOff = 0;
+    const char* holderName = "?";
+    if (obj != nullptr) {
+        fieldOff = static_cast<size_t>(reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(obj));
+        TypeInfo* hti = obj->GetTypeInfo();
+        uintptr_t ha = reinterpret_cast<uintptr_t>(hti);
+        if (hti != nullptr && (ha & StateWord::ADDRESS_ALIGN_MASK) == 0 && hti->IsVaildType()) {
+            holderName = hti->GetName();
+        }
+    }
+    auto* trueHdr = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(ref) - TYPEINFO_PTR_SIZE);
+    TypeInfo* trueTip = nullptr;
+    const char* trueName = "?";
+    if (Heap::IsHeapAddress(trueHdr)) {
+        trueTip = trueHdr->GetTypeInfo();
+        uintptr_t tta = reinterpret_cast<uintptr_t>(trueTip);
+        if (trueTip != nullptr && (tta & StateWord::ADDRESS_ALIGN_MASK) == 0 && trueTip->IsVaildType()) {
+            trueName = trueTip->GetName();
+        }
+    }
+    void* ra = __builtin_return_address(0);
+    void* ra1 = __builtin_return_address(1);
+    void* ra2 = __builtin_return_address(2);
+    std::fprintf(stderr,
+                 "[GCV2][S3_WRITE] n=%zu origin=%s holder=%p holderName=%s fieldOff=%zu slot=%p "
+                 "ref=%p tip=%p trueHdr8=%p trueName8=%s ra0=%p ra1=%p ra2=%p\n",
+                 n, origin == nullptr ? "null" : origin, obj, holderName, fieldOff, &field, ref, tip, trueHdr,
+                 trueName, ra, ra1, ra2);
+    std::fflush(stderr);
+}
+} // namespace
+
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    LogInteriorStore(obj, field, ref, "WriteReference");
     WriteReferenceImpl(obj, field, ref);
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
