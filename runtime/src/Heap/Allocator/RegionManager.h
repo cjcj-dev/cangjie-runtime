@@ -46,6 +46,8 @@ struct FreePinnedSlotLists {
     SlotList freeAtomicSlotList;
     SlotList freeSyncSlotList;
 
+private:
+    friend class RegionManager;
     uintptr_t PopFront(size_t size)
     {
         switch (size) {
@@ -58,6 +60,7 @@ struct FreePinnedSlotLists {
         }
     }
 
+public:
     void PushFront(BaseObject* slot)
     {
         size_t size = slot->GetSize();
@@ -144,6 +147,8 @@ public:
     // edges never enter RecordCrossGenEdge. Stamp remset before each minor.
     // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
     size_t RecordPinnedCrossGenEdges();
+    void StampCensusBoundaries();
+    void PromoteAllRegions();
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
