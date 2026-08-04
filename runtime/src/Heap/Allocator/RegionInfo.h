@@ -32,6 +32,7 @@
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
+#include "Heap/Verify/MarkWhyProbe.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -317,6 +318,7 @@ public:
                 RegionBitmap* allocated =
                     ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
                 __atomic_store_n(&liveInfo->markBitmap, allocated, std::memory_order_release);
+                MarkWhyProbe::NoteMarkBitmapAlloc(this, allocated);
                 DLOG(REGION, "region %p@%#zx markbitmap %p", this, GetRegionStart(), metadata.liveInfo->markBitmap);
                 return allocated;
             }
@@ -422,8 +424,11 @@ public:
         U32 objSize = obj->GetSize();
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        bool marked = writeBm->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
+                                              "MarkObject_sized0");
         CHECK(IsMarkedObject(offset));
         return marked;
     }
@@ -439,8 +444,11 @@ public:
         }
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        bool marked = writeBm->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
+                                              "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
         return marked;
     }
