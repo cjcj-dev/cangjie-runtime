@@ -30,7 +30,7 @@ class RegionManager;
 // the number of remembered fields in the heap.
 class RememberedSet final {
 public:
-    RememberedSet() = default;
+    RememberedSet();
     ~RememberedSet() = default;
     RememberedSet(const RememberedSet&) = delete;
     RememberedSet& operator=(const RememberedSet&) = delete;
@@ -95,7 +95,7 @@ private:
     size_t dirtyWordCount = 0;
     std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
     std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
-    std::atomic<size_t> recordCounts[kBufferCount] = { 0, 0 };
+    std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;
 
