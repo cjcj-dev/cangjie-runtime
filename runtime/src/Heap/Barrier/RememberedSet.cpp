@@ -373,18 +373,20 @@ uint8_t RememberedSet::BeginFullClear()
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
     size_t nextBuffer = scanBuffer ^ 1U;
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0, "remembered-set next full buffer is not empty");
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    {
+        // Keep the validation oracle on the same publish-before-use ordering as
+        // the product bitmap: clear the inactive plane before it becomes active.
+        std::lock_guard<std::mutex> guard(oracleLock);
+        oracleRecords[nextBuffer].clear();
+    }
+#endif
     {
         std::lock_guard<std::mutex> guard(externalLock);
         externalRecords[nextBuffer].clear();
         size_t previous = activeBuffer.exchange(static_cast<uint8_t>(nextBuffer), std::memory_order_acq_rel);
         CHECK_DETAIL(previous == scanBuffer, "concurrent remembered-set full rotation");
     }
-#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    {
-        std::lock_guard<std::mutex> guard(oracleLock);
-        oracleRecords[nextBuffer].clear();
-    }
-#endif
     return static_cast<uint8_t>(scanBuffer);
 }
 
