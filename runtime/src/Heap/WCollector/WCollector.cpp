@@ -10,6 +10,7 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -62,13 +63,15 @@ void LogInteriorPush(BaseObject* object, const char* origin, BaseObject* holder 
         }
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-    VLOG(REPORT,
-         "[GCV2][S3_INJECT] n=%zu origin=%s obj=%p tip=%p tipAlignBad=%u holder=%p slot=%p "
-         "trueHdr=%p trueTip=%p trueName=%s young=%u "
-         "(interior=obj-TYPEINFO_PTR_SIZE if trueName valid)",
-         n, origin == nullptr ? "null" : origin, object, tip,
-         static_cast<unsigned>((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0), holder, slot, trueHdr, trueTip,
-         trueName, region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
+    // fprintf always visible (VLOG(REPORT) is often off under env -i).
+    std::fprintf(stderr,
+                 "[GCV2][S3_INJECT] n=%zu origin=%s obj=%p tip=%p tipAlignBad=%u holder=%p slot=%p "
+                 "trueHdr=%p trueTip=%p trueName=%s young=%u\n",
+                 n, origin == nullptr ? "null" : origin, object, tip,
+                 static_cast<unsigned>((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0), holder, slot, trueHdr,
+                 trueTip, trueName, region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
+    std::fflush(stderr);
+    (void)region;
 }
 } // namespace
 
@@ -290,11 +293,12 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> oldField(field);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
+        // s3inject: log before IsValidObject — S3 interiors pass it (id!=0 as tip).
+        LogInteriorPush(targetObj, "TraceRefField_current", obj, &field);
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd",
                      targetObj, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
-            LogInteriorPush(targetObj, "TraceRefField_current", obj, &field);
             workStack.push_back(targetObj);
         }
         return;
@@ -312,6 +316,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    LogInteriorPush(latest, "TraceRefField_latest", obj, &field);
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by object %p: %s and offset %zd", latest,
                  obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
@@ -323,7 +328,6 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject(latest)) {
-        LogInteriorPush(latest, "TraceRefField_latest", obj, &field);
         workStack.push_back(latest);
     }
 }
