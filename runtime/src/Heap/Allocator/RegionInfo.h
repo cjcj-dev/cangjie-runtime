@@ -31,6 +31,7 @@
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/TagReuseProbe.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -172,6 +173,9 @@ public:
         }
         return liveInfo;
     }
+
+    // Probe-only: raw ghost liveInfo0 (no TEMPORARY filter; ghost never uses TEMPORARY).
+    LiveInfo* GetLiveInfo0ForProbe() const { return metadata.liveInfo0; }
 
     LiveInfo* GetRetainedLiveInfo() const { return metadata.retainedLiveInfo; }
 
@@ -419,6 +423,7 @@ public:
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
         CHECK(IsMarkedObject(offset));
         return marked;
     }
@@ -435,6 +440,7 @@ public:
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
         bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
         return marked;
     }

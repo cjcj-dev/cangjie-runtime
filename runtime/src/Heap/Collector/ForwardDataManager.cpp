@@ -13,6 +13,7 @@
 
 #include "Base/ImmortalWrapper.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Verify/TagReuseProbe.h"
 #include "LiveInfo.h"
 #include "ForwardDataManager.h"
 
@@ -20,6 +21,20 @@ namespace MapleRuntime {
 
 static ImmortalWrapper<ForwardDataManager> forwardDataManager;
 ForwardDataManager& ForwardDataManager::GetForwardDataManager() { return *forwardDataManager; }
+
+void ForwardDataManager::ClearPreviousForwardData()
+{
+    uint16_t prev = GetPreviousTagID();
+    ForwardDataSpace& space = liveInfoData[prev];
+    uintptr_t rangeStart = space.GetStartAddress();
+    size_t rangeSize = space.GetSize();
+    uintptr_t liveStart = space.GetZoneStart(ForwardDataSpace::Zone::ZoneType::LIVE_INFO);
+    uintptr_t livePos = space.GetZonePos(ForwardDataSpace::Zone::ZoneType::LIVE_INFO);
+    uintptr_t bmStart = space.GetZoneStart(ForwardDataSpace::Zone::ZoneType::BIT_MAP);
+    uintptr_t bmPos = space.GetZonePos(ForwardDataSpace::Zone::ZoneType::BIT_MAP);
+    TagReuseProbe::ScanBeforeRelease(rangeStart, rangeSize, prev, liveStart, livePos, bmStart, bmPos);
+    space.ReleaseMemory();
+}
 
 void ForwardDataManager::InitializeForwardData()
 {

@@ -32,6 +32,7 @@ namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
+class TagReuseProbe;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -87,6 +88,7 @@ public:
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
     friend class VerifyRegions;
+    friend class TagReuseProbe;
 
 public:
     /* region memory layout:
@@ -626,6 +628,29 @@ public:
         ClearLiveInfo(oldLargeRegionList);
         ClearLiveInfo(recentLargeRegionList);
         ClearLiveInfo(largeTraceRegions);
+    }
+
+    // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
+    template <typename F>
+    void VisitAllManagedRegionsForProbe(F&& visitor)
+    {
+        auto walk = [&visitor](const char* name, RegionList& list) {
+            list.VisitAllRegions([&visitor, name](RegionInfo* region) { visitor(region, name); });
+        };
+        walk("tlRegionList", tlRegionList);
+        walk("recentFullRegionList", recentFullRegionList);
+        walk("fromRegionList", fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(
+            [&visitor](RegionInfo* region) { visitor(region, "ghostFromRegionList"); });
+        walk("unmovableFromRegionList", unmovableFromRegionList);
+        walk("garbageRegionList", garbageRegionList);
+        walk("recentPinnedRegionList", recentPinnedRegionList);
+        walk("oldPinnedRegionList", oldPinnedRegionList);
+        walk("rawPointerPinnedRegionList", rawPointerPinnedRegionList);
+        walk("oldLargeRegionList", oldLargeRegionList);
+        walk("recentLargeRegionList", recentLargeRegionList);
+        walk("fullTraceRegions", fullTraceRegions);
+        walk("largeTraceRegions", largeTraceRegions);
     }
 
 private:
