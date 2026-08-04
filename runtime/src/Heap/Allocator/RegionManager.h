@@ -441,7 +441,8 @@ public:
     size_t ExemptFromRegions();
     void ReassembleFromSpace();
 
-    void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor) const;
+    void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
+                          bool skipKnownEmptyRegions = false) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
 
     size_t GetUsedRegionSize() const { return GetUsedUnitCount() * RegionInfo::UNIT_SIZE; }

@@ -698,7 +698,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             },
             false);
     }
-    space.ForEachObj(
+    space.GetRegionManager().ForEachObjUnsafe(
         [this, requireSurvivedMark, rebuildRemset, &lastProcessedRegion, &processedRegions, &processedObjects,
          &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &fixedSlots, &youngTargetSlots,
          &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
@@ -779,7 +779,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             });
         },
-        false);
+        requireSurvivedMark);
     if (rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
     }
