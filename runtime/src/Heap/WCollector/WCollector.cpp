@@ -504,7 +504,9 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
     }
-    RefField<> newField = GetAndTryTagRefField(latest);
+    // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
+    // survivor as current recreates the next generation of one-gen-stale after Flip.
+    RefField<> newField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
