@@ -851,6 +851,9 @@ public:
     }
 
     // the interface can only be used to clear live info after gc.
+    // Same rule for liveInfo / liveInfo0 / retained: if the slot still holds this LiveInfo*, drop it.
+    // Garbage is skipped here (may be mid-reuse); NullLiveInfoFieldsInRange covers garbage before
+    // ReleaseMemory so dangling into a dying tag cannot survive.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
     {
         // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
@@ -864,6 +867,15 @@ public:
             // Tracking phase ended: live counter is no longer a mark-period truth.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         }
+        if (metadata.liveInfo0 == liveInfo) {
+            metadata.liveInfo0 = nullptr;
+        }
+        if (metadata.retainedLiveInfo == liveInfo) {
+            metadata.retainedLiveInfo = nullptr;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+        }
     }
     void ClearLiveInfo()
     {
@@ -871,6 +883,10 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
+        // Same carrier rule as liveInfo/retained: mark-cycle start drops ghost too.
+        // PrepareForwardableRegion copies liveInfo→liveInfo0; without this, liveInfo0
+        // can outlive ReleaseMemory(previous tag) (tagreuse T2).
+        metadata.liveInfo0 = nullptr;
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
@@ -880,6 +896,35 @@ public:
         metadata.retainedLiveInfoCoveredUpTo = 0;
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+    }
+
+    // Structural: drop any liveInfo/liveInfo0/retained that land in [rangeStart, rangeStart+rangeSize).
+    // Called under STW immediately before ForwardDataSpace::ReleaseMemory so pointer validity
+    // is a structure guarantee (not a "do not read after phase X" convention). Covers garbage.
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto inRange = [rangeStart, rangeSize](LiveInfo* p) -> bool {
+            if (p == nullptr || rangeSize == 0) {
+                return false;
+            }
+            uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+            return addr >= rangeStart && addr < (rangeStart + rangeSize);
+        };
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(liveInfo) != LiveInfo::TEMPORARY_PTR && inRange(liveInfo)) {
+            __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
+            // Tracking phase for this LiveInfo ended with its backing store about to vanish.
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        }
+        if (inRange(metadata.liveInfo0)) {
+            metadata.liveInfo0 = nullptr;
+        }
+        if (inRange(metadata.retainedLiveInfo)) {
+            metadata.retainedLiveInfo = nullptr;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+        }
     }
 
     // only from-region should be locked.
@@ -1447,6 +1492,7 @@ private:
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        metadata.liveInfo0 = nullptr;
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;

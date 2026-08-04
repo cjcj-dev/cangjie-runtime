@@ -653,6 +653,34 @@ public:
         walk("largeTraceRegions", largeTraceRegions);
     }
 
+    // Production: before ReleaseMemory(previous tag), null liveInfo/liveInfo0/retained that
+    // still point into the dying range. Same region set as the probe walk (incl. garbage).
+    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {
+            if (region != nullptr) {
+                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
+            }
+        };
+        auto walk = [&nullOne](RegionList& list) {
+            list.VisitAllRegions([&nullOne](RegionInfo* region) { nullOne(region); });
+        };
+        walk(tlRegionList);
+        walk(recentFullRegionList);
+        walk(fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(nullOne);
+        walk(unmovableFromRegionList);
+        walk(garbageRegionList);
+        walk(recentPinnedRegionList);
+        walk(oldPinnedRegionList);
+        walk(rawPointerPinnedRegionList);
+        walk(oldLargeRegionList);
+        walk(recentLargeRegionList);
+        walk(fullTraceRegions);
+        walk(largeTraceRegions);
+    }
+
 private:
     // Acquire a region list mutex which the collector also takes while the world is stopped.
     // Waiting for it in a saferegion is required so that a contended mutator cannot stall
