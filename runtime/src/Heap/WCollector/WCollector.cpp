@@ -617,7 +617,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     size_t fromLiveFields = 0;
 
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
-    RootVisitor fixRoot = [this, account, &rootSlots, &oldTaggedRootSlots](ObjectRef& root) {
+    RootVisitor fixRoot = [this, &rootSlots, &oldTaggedRootSlots](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         if (account) {
             ++rootSlots;
@@ -627,7 +627,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
         FixOldTaggedRefField(nullptr, field);
     };
-    RefFieldVisitor fixRootField = [this, account, &rootSlots, &oldTaggedRootSlots](RefField<>& field) {
+    RefFieldVisitor fixRootField = [this, &rootSlots, &oldTaggedRootSlots](RefField<>& field) {
         if (account) {
             ++rootSlots;
             if (IsOldPointer(field)) {
@@ -653,7 +653,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
     size_t rebuilt = 0;
     space.ForEachObj(
-        [this, requireSurvivedMark, rebuildRemset, account, &regionTypes, &lastRegion, &regions, &objects,
+        [this, requireSurvivedMark, rebuildRemset, &regionTypes, &lastRegion, &regions, &objects,
          &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &youngTargetSlots, &fromRegions,
          &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
             RegionInfo* accountRegion = nullptr;
@@ -702,7 +702,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                                  accountRegion->IsFromRegion();
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, account, forwardHolder, &fields,
+            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, &fields,
                                   &oldTaggedSlots, &youngTargetSlots, &fromLiveFields, &rebuilt](RefField<>& field) {
                 if (account) {
                     ++fields;
