@@ -1045,47 +1045,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                      holderRegion->GetRegionAllocPtr(), knownEmptyConsumed);
             }
         }
-        // FYS=0: when holder region has object-level liveness, drop slots whose holder object
-        // did not survive. FYS=1 keeps reachableSlots filter above; this is the independent path.
-        if (!fullYoungScan) {
-            bool hasObjectLiveness = holderRegion->IsLargeRegion() ||
-                holderRegion->GetMarkBitmap() != nullptr || holderRegion->GetResurrectBitmap() != nullptr;
-            if (hasObjectLiveness && holderRegion->IsLiveCountAuthoritative()) {
-                size_t holderOffset =
-                    holderRegion->GetAddressOffset(static_cast<MAddress>(slot));
-                // Slot address is inside the holder object; IsSurvivedObject needs object start.
-                // Walk back from slot to find containing object via allocated-range scan only when
-                // the slot offset itself is not a survived object start — use region mark at the
-                // object that owns this field by scanning from region start to slot.
-                bool holderSurvived = false;
-                if (holderRegion->IsLargeRegion()) {
-                    holderSurvived = holderRegion->IsSurvivedObject(0);
-                } else {
-                    // Use GetAllocSize (same as VisitAllObjects) — GetSize can abort on bad headers.
-                    uintptr_t position = holderRegion->GetRegionStart();
-                    uintptr_t allocPtr = holderRegion->GetRegionAllocPtr();
-                    uintptr_t slotAddr = static_cast<uintptr_t>(slot);
-                    while (position < allocPtr && position <= slotAddr) {
-                        BaseObject* obj = reinterpret_cast<BaseObject*>(position);
-                        size_t size = RegionSpace::GetAllocSize(*obj);
-                        if (size == 0) {
-                            break;
-                        }
-                        if (slotAddr >= position && slotAddr < position + size) {
-                            holderSurvived = holderRegion->IsSurvivedObject(
-                                holderRegion->GetAddressOffset(static_cast<MAddress>(position)));
-                            break;
-                        }
-                        position += size;
-                    }
-                }
-                (void)holderOffset;
-                if (!holderSurvived) {
-                    ++scrubbedDeadHolder;
-                    continue;
-                }
-            }
-        }
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
