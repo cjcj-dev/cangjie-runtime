@@ -56,13 +56,16 @@ struct DiffPathRemsetStats {
 // consumedSlots: slots Rescan actually walked (may equal live under FYS=0).
 // minorRunIndex: 1-based young GC index (for START_AT / EVERY).
 // candidateRegions: optional; if non-null, region "isCandidate" uses membership.
+// rootReachableOut: optional; if non-null, receives the independent full-root closure
+// even when MRT_GCV2_DIFF_PATH is disabled.
 void RunDiffPathExplainer(size_t minorRunIndex,
                           const std::function<void(const std::function<void(BaseObject*)>&)>& visitRoots,
                           const std::function<BaseObject*(RefField<>&)>& resolveField,
                           const std::unordered_set<MAddress>& remsetSlots,
                           const std::unordered_set<MAddress>& consumedSlots,
                           const std::unordered_set<RegionInfo*>* candidateRegions,
-                          const DiffPathRemsetStats& remsetStats);
+                          const DiffPathRemsetStats& remsetStats,
+                          std::unordered_set<BaseObject*>* rootReachableOut);
 
 // Cheap remset consume-vs-recorded line (no dual closure). Default off unless
 // MRT_GCV2_REMSET_STATS=1. Always safe to call; gate is inside.
