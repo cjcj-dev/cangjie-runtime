@@ -63,7 +63,7 @@ void RememberedSet::Record(MAddress fieldAddress)
     }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
-    oracleRecords.insert(fieldAddress);
+    oracleRecords[buffer].insert(fieldAddress);
 #endif
 }
 
@@ -102,24 +102,24 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     if (inject != nullptr && std::strcmp(inject, "1") == 0) {
         for (size_t bit = 0; bit < bitCount; ++bit) {
             MAddress candidate = heapStart + bit * kFieldBytes;
-            if (oracleRecords.count(candidate) == 0) {
-                oracleRecords.insert(candidate);
+            if (oracleRecords[scanBuffer].count(candidate) == 0) {
+                oracleRecords[scanBuffer].insert(candidate);
                 injected = true;
                 break;
             }
         }
     }
-    bool equivalent = records.size() == oracleRecords.size();
+    bool equivalent = records.size() == oracleRecords[scanBuffer].size();
     for (MAddress slot : records) {
-        equivalent = equivalent && oracleRecords.count(slot) != 0;
+        equivalent = equivalent && oracleRecords[scanBuffer].count(slot) != 0;
     }
     if (!equivalent) {
         std::fprintf(stderr,
                      "REMSET_BITMAP_CROSSCHECK_MISMATCH operation=drain injected=%u bitmap=%zu oracle=%zu\n",
-                     static_cast<unsigned>(injected), records.size(), oracleRecords.size());
+                     static_cast<unsigned>(injected), records.size(), oracleRecords[scanBuffer].size());
         std::abort();
     }
-    oracleRecords.clear();
+    oracleRecords[scanBuffer].clear();
     ++bitmapCrossCheckCount;
 #endif
     return recorded;
@@ -144,13 +144,13 @@ std::unordered_set<MAddress> RememberedSet::Snapshot() const
     }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
-    bool equivalent = records.size() == oracleRecords.size();
+    bool equivalent = records.size() == oracleRecords[buffer].size();
     for (MAddress slot : records) {
-        equivalent = equivalent && oracleRecords.count(slot) != 0;
+        equivalent = equivalent && oracleRecords[buffer].count(slot) != 0;
     }
     if (!equivalent) {
         std::fprintf(stderr, "REMSET_BITMAP_CROSSCHECK_MISMATCH operation=snapshot bitmap=%zu oracle=%zu\n",
-                     records.size(), oracleRecords.size());
+                     records.size(), oracleRecords[buffer].size());
         std::abort();
     }
 #endif
@@ -222,11 +222,13 @@ size_t RememberedSet::ClearRegion(MAddress start, MAddress end, size_t* outWords
     }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
-    for (auto it = oracleRecords.begin(); it != oracleRecords.end();) {
-        if (*it >= start && *it < end) {
-            it = oracleRecords.erase(it);
-        } else {
-            ++it;
+    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
+        for (auto it = oracleRecords[buffer].begin(); it != oracleRecords[buffer].end();) {
+            if (*it >= start && *it < end) {
+                it = oracleRecords[buffer].erase(it);
+            } else {
+                ++it;
+            }
         }
     }
     ++bitmapCrossCheckCount;
@@ -234,20 +236,44 @@ size_t RememberedSet::ClearRegion(MAddress start, MAddress end, size_t* outWords
     return removed;
 }
 
-size_t RememberedSet::ClearAll()
+uint8_t RememberedSet::BeginFullClear()
 {
     CheckInitialized();
-    size_t removed = 0;
-    for (size_t buffer = 0; buffer < kBufferCount; ++buffer) {
-        for (size_t word = 0; word < wordCount; ++word) {
-            removed += static_cast<size_t>(
-                __builtin_popcountll(bitmaps[buffer][word].exchange(0, std::memory_order_relaxed)));
-        }
-        recordCounts[buffer].store(0, std::memory_order_relaxed);
+    size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
+    size_t nextBuffer = scanBuffer ^ 1U;
+    for (size_t word = 0; word < wordCount; ++word) {
+        bitmaps[nextBuffer][word].store(0, std::memory_order_relaxed);
     }
+    recordCounts[nextBuffer].store(0, std::memory_order_relaxed);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    {
+        std::lock_guard<std::mutex> guard(oracleLock);
+        oracleRecords[nextBuffer].clear();
+    }
+#endif
+    size_t previous = activeBuffer.exchange(static_cast<uint8_t>(nextBuffer), std::memory_order_acq_rel);
+    CHECK_DETAIL(previous == scanBuffer, "concurrent remembered-set full rotation");
+    return static_cast<uint8_t>(scanBuffer);
+}
+
+size_t RememberedSet::FinishFullClear(uint8_t scanBuffer)
+{
+    CheckInitialized();
+    CHECK_DETAIL(scanBuffer < kBufferCount, "invalid remembered-set scan buffer %u", scanBuffer);
+    CHECK_DETAIL(scanBuffer != activeBuffer.load(std::memory_order_acquire),
+                 "cannot clear active remembered-set buffer");
+    size_t removed = 0;
+    for (size_t word = 0; word < wordCount; ++word) {
+        removed += static_cast<size_t>(
+            __builtin_popcountll(bitmaps[scanBuffer][word].exchange(0, std::memory_order_relaxed)));
+    }
+    recordCounts[scanBuffer].store(0, std::memory_order_relaxed);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
-    oracleRecords.clear();
+    CHECK_DETAIL(removed == oracleRecords[scanBuffer].size(),
+                 "full remembered-set cross-check mismatch: bitmap=%zu oracle=%zu", removed,
+                 oracleRecords[scanBuffer].size());
+    oracleRecords[scanBuffer].clear();
     ++bitmapCrossCheckCount;
 #endif
     return removed;
