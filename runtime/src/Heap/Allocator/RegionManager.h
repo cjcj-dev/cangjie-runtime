@@ -141,10 +141,9 @@ public:
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
     static size_t ConsumePromotedCrossGenEdgeCount();
     // Non-young holders (pinned/large at birth, or post-promote old) + IDLE bare store:
-    // edges never enter RecordCrossGenEdge. Stamp remset before each minor; a full
-    // heap scan rebuilds all surviving old-to-young edges after a full collection.
+    // edges never enter RecordCrossGenEdge. Stamp remset before each minor.
     // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
-    size_t RecordPinnedCrossGenEdges(bool fullHeapScan = false);
+    size_t RecordPinnedCrossGenEdges();
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
