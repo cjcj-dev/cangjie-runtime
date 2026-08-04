@@ -7,6 +7,7 @@
 #include "TagReuseProbe.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 
@@ -19,6 +20,18 @@
 
 namespace MapleRuntime {
 namespace {
+
+// Always-on stderr so evidence survives when VLOG(REPORT) is gated off (DEFAULT_MRT_REPORT=0).
+#define TAGREUSE_LOG(fmt, ...)                                                                                         \
+    do {                                                                                                               \
+        std::fprintf(stderr, "[GCV2][tag-reuse] " fmt "\n", ##__VA_ARGS__);                                            \
+        std::fflush(stderr);                                                                                           \
+    } while (0)
+#define STICKY_LOG(fmt, ...)                                                                                           \
+    do {                                                                                                               \
+        std::fprintf(stderr, "[GCV2][mark-bits-sticky] " fmt "\n", ##__VA_ARGS__);                                      \
+        std::fflush(stderr);                                                                                           \
+    } while (0)
 
 bool EnvIsOne(const char* name)
 {
@@ -63,11 +76,10 @@ void NoteDangling(const char* kind, RegionInfo* region, const char* listName, ui
         return;
     }
     ptrdiff_t off = static_cast<ptrdiff_t>(ptr - rangeStart);
-    VLOG(REPORT,
-         "[GCV2][tag-reuse] DANGLING kind=%s region=%p list=%s type=%u young=%u candGuess=%u "
-         "livePtr=%#zx range=[%#zx,+%zu) offset=%td regionStart=%#zx",
-         kind, static_cast<void*>(region), listName, type, young ? 1u : 0u, inCandidateGuess ? 1u : 0u, ptr,
-         rangeStart, rangeSize, off, region->GetRegionStart());
+    TAGREUSE_LOG("DANGLING kind=%s region=%p list=%s type=%u young=%u candGuess=%u "
+                 "livePtr=%#zx range=[%#zx,+%zu) offset=%td regionStart=%#zx",
+                 kind, static_cast<void*>(region), listName, type, young ? 1u : 0u, inCandidateGuess ? 1u : 0u, ptr,
+                 rangeStart, rangeSize, off, region->GetRegionStart());
 }
 
 } // namespace
@@ -97,11 +109,10 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
 
     static std::atomic<bool> armedLogged{false};
     if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] ARMED env=MRT_GCV2_TAG_REUSE=1 range=[%#zx,+%zu) prevTag=%u "
-             "liveZone=[%#zx,%#zx) bitmapZone=[%#zx,%#zx)",
-             rangeStart, rangeSize, static_cast<unsigned>(previousTagId), liveInfoZoneStart, liveInfoZonePos,
-             bitmapZoneStart, bitmapZonePos);
+        TAGREUSE_LOG("ARMED env=MRT_GCV2_TAG_REUSE=1 range=[%#zx,+%zu) prevTag=%u "
+                     "liveZone=[%#zx,%#zx) bitmapZone=[%#zx,%#zx)",
+                     rangeStart, rangeSize, static_cast<unsigned>(previousTagId), liveInfoZoneStart, liveInfoZonePos,
+                     bitmapZoneStart, bitmapZonePos);
     }
 
     size_t zoneSlots = 0;
@@ -127,12 +138,10 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
                 static std::atomic<uint64_t> posDump{32};
                 uint64_t left = posDump.load(std::memory_order_relaxed);
                 if (left > 0 && posDump.compare_exchange_strong(left, left - 1, std::memory_order_relaxed)) {
-                    VLOG(REPORT,
-                         "[GCV2][tag-reuse] POSITIVE_BOUND liveInfo=%#zx binded=%p pub=%p li0=%p ret=%p "
-                         "type=%u young=%u",
-                         cur, static_cast<void*>(binded), static_cast<void*>(pub), static_cast<void*>(li0),
-                         static_cast<void*>(ret), static_cast<unsigned>(binded->GetRegionType()),
-                         binded->IsYoungRegion() ? 1u : 0u);
+                    TAGREUSE_LOG("POSITIVE_BOUND liveInfo=%#zx binded=%p pub=%p li0=%p ret=%p type=%u young=%u", cur,
+                                 static_cast<void*>(binded), static_cast<void*>(pub), static_cast<void*>(li0),
+                                 static_cast<void*>(ret), static_cast<unsigned>(binded->GetRegionType()),
+                                 binded->IsYoungRegion() ? 1u : 0u);
                 }
             }
         }
@@ -142,21 +151,17 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
     gPositiveInRangeHits.fetch_add(inRangeHits, std::memory_order_relaxed);
 
     if (zoneSlots > 0 && inRangeHits != zoneSlots) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] RANGE_MISMATCH zoneSlots=%zu inRangeHits=%zu range=[%#zx,+%zu) "
-             "liveZone=[%#zx,%#zx)",
-             zoneSlots, inRangeHits, rangeStart, rangeSize, liveInfoZoneStart, liveInfoZonePos);
+        TAGREUSE_LOG("RANGE_MISMATCH zoneSlots=%zu inRangeHits=%zu range=[%#zx,+%zu) liveZone=[%#zx,%#zx)", zoneSlots,
+                     inRangeHits, rangeStart, rangeSize, liveInfoZoneStart, liveInfoZonePos);
     } else if (zoneSlots > 0 && n <= 3) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] POSITIVE_RANGE ok zoneSlots=%zu inRangeHits=%zu stillBound=%zu "
-             "range=[%#zx,+%zu) prevTag=%u scanN=%llu",
-             zoneSlots, inRangeHits, stillBound, rangeStart, rangeSize, static_cast<unsigned>(previousTagId),
-             static_cast<unsigned long long>(n));
+        TAGREUSE_LOG("POSITIVE_RANGE ok zoneSlots=%zu inRangeHits=%zu stillBound=%zu range=[%#zx,+%zu) prevTag=%u "
+                     "scanN=%llu",
+                     zoneSlots, inRangeHits, stillBound, rangeStart, rangeSize, static_cast<unsigned>(previousTagId),
+                     static_cast<unsigned long long>(n));
     } else if (zoneSlots == 0 && n <= 3) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] POSITIVE_RANGE empty_zone range=[%#zx,+%zu) prevTag=%u scanN=%llu "
-             "(release of unused previous tag is expected before first major flip)",
-             rangeStart, rangeSize, static_cast<unsigned>(previousTagId), static_cast<unsigned long long>(n));
+        TAGREUSE_LOG("POSITIVE_RANGE empty_zone range=[%#zx,+%zu) prevTag=%u scanN=%llu "
+                     "(release of unused previous tag is expected before first major flip)",
+                     rangeStart, rangeSize, static_cast<unsigned>(previousTagId), static_cast<unsigned long long>(n));
     }
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
@@ -190,20 +195,18 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
 
     uint64_t dangling = gDanglingTotal.load(std::memory_order_relaxed);
     if (dangling > 0) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] DANGLING_LIVEINFO_CONFIRMED_%llu scanN=%llu li=%llu li0=%llu ret=%llu "
-             "stillBound=%zu zoneSlots=%zu range=[%#zx,+%zu) prevTag=%u",
-             static_cast<unsigned long long>(dangling), static_cast<unsigned long long>(n),
-             static_cast<unsigned long long>(gDanglingLiveInfo.load(std::memory_order_relaxed)),
-             static_cast<unsigned long long>(gDanglingLiveInfo0.load(std::memory_order_relaxed)),
-             static_cast<unsigned long long>(gDanglingRetained.load(std::memory_order_relaxed)), stillBound,
-             zoneSlots, rangeStart, rangeSize, static_cast<unsigned>(previousTagId));
+        TAGREUSE_LOG("DANGLING_LIVEINFO_CONFIRMED_%llu scanN=%llu li=%llu li0=%llu ret=%llu stillBound=%zu "
+                     "zoneSlots=%zu range=[%#zx,+%zu) prevTag=%u",
+                     static_cast<unsigned long long>(dangling), static_cast<unsigned long long>(n),
+                     static_cast<unsigned long long>(gDanglingLiveInfo.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(gDanglingLiveInfo0.load(std::memory_order_relaxed)),
+                     static_cast<unsigned long long>(gDanglingRetained.load(std::memory_order_relaxed)), stillBound,
+                     zoneSlots, rangeStart, rangeSize, static_cast<unsigned>(previousTagId));
     } else if ((n & 0xff) == 0 || n <= 4) {
-        VLOG(REPORT,
-             "[GCV2][tag-reuse] SUMMARY scanN=%llu dangling=0 stillBound=%zu zoneSlots=%zu inRangeHits=%zu "
-             "range=[%#zx,+%zu) prevTag=%u",
-             static_cast<unsigned long long>(n), stillBound, zoneSlots, inRangeHits, rangeStart, rangeSize,
-             static_cast<unsigned>(previousTagId));
+        TAGREUSE_LOG("SUMMARY scanN=%llu dangling=0 stillBound=%zu zoneSlots=%zu inRangeHits=%zu range=[%#zx,+%zu) "
+                     "prevTag=%u",
+                     static_cast<unsigned long long>(n), stillBound, zoneSlots, inRangeHits, rangeStart, rangeSize,
+                     static_cast<unsigned>(previousTagId));
     }
 }
 
@@ -214,7 +217,7 @@ bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /
     }
     static std::atomic<bool> armedLogged{false};
     if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
-        VLOG(REPORT, "[GCV2][mark-bits-sticky] ARMED env=MRT_GCV2_MARK_BITS_STICKY=1 site=%s", site);
+        STICKY_LOG("ARMED env=MRT_GCV2_MARK_BITS_STICKY=1 site=%s", site);
     }
     gMarkStickyN.fetch_add(1, std::memory_order_relaxed);
     bool nowMarked = region->IsMarkedObject(offset);
@@ -223,21 +226,18 @@ bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /
         static std::atomic<uint64_t> dumpLeft{64};
         uint64_t left = dumpLeft.load(std::memory_order_relaxed);
         if (left > 0 && dumpLeft.compare_exchange_strong(left, left - 1, std::memory_order_relaxed)) {
-            VLOG(REPORT,
-                 "[GCV2][mark-bits-sticky] NOT_STICKY site=%s offset=%zu region=%p type=%u liveInfo=%p "
-                 "bitmap=%p",
-                 site, offset, static_cast<void*>(region), static_cast<unsigned>(region->GetRegionType()),
-                 static_cast<void*>(region->GetLiveInfo()), static_cast<void*>(region->GetMarkBitmap()));
+            STICKY_LOG("NOT_STICKY site=%s offset=%zu region=%p type=%u liveInfo=%p bitmap=%p", site, offset,
+                       static_cast<void*>(region), static_cast<unsigned>(region->GetRegionType()),
+                       static_cast<void*>(region->GetLiveInfo()), static_cast<void*>(region->GetMarkBitmap()));
         }
         return false;
     }
     gMarkStickyOk.fetch_add(1, std::memory_order_relaxed);
     uint64_t n = gMarkStickyN.load(std::memory_order_relaxed);
     if ((n & 0x3ffff) == 0) {
-        VLOG(REPORT, "[GCV2][mark-bits-sticky] SUMMARY n=%llu ok=%llu fail=%llu",
-             static_cast<unsigned long long>(n),
-             static_cast<unsigned long long>(gMarkStickyOk.load(std::memory_order_relaxed)),
-             static_cast<unsigned long long>(gMarkStickyFail.load(std::memory_order_relaxed)));
+        STICKY_LOG("SUMMARY n=%llu ok=%llu fail=%llu", static_cast<unsigned long long>(n),
+                   static_cast<unsigned long long>(gMarkStickyOk.load(std::memory_order_relaxed)),
+                   static_cast<unsigned long long>(gMarkStickyFail.load(std::memory_order_relaxed)));
     }
     return true;
 }
