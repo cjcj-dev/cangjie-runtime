@@ -63,13 +63,35 @@ void LogInteriorPush(BaseObject* object, const char* origin, BaseObject* holder 
         }
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    // Also test obj-16 (Node.next-as-header: tip=next ptr, trueHdr@-8 reads id).
+    auto* hdr16 = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(object) - 2 * TYPEINFO_PTR_SIZE);
+    TypeInfo* tip16 = nullptr;
+    const char* name16 = "?";
+    if (Heap::IsHeapAddress(hdr16)) {
+        tip16 = hdr16->GetTypeInfo();
+        uintptr_t t16 = reinterpret_cast<uintptr_t>(tip16);
+        if (tip16 != nullptr && (t16 & StateWord::ADDRESS_ALIGN_MASK) == 0 && tip16->IsVaildType()) {
+            name16 = tip16->GetName();
+        }
+    }
+    size_t fieldOff = 0;
+    const char* holderName = "?";
+    if (holder != nullptr && slot != nullptr) {
+        fieldOff = static_cast<size_t>(reinterpret_cast<uintptr_t>(slot) - reinterpret_cast<uintptr_t>(holder));
+        TypeInfo* hti = holder->GetTypeInfo();
+        uintptr_t ha = reinterpret_cast<uintptr_t>(hti);
+        if (hti != nullptr && (ha & StateWord::ADDRESS_ALIGN_MASK) == 0 && hti->IsVaildType()) {
+            holderName = hti->GetName();
+        }
+    }
     // fprintf always visible (VLOG(REPORT) is often off under env -i).
     std::fprintf(stderr,
-                 "[GCV2][S3_INJECT] n=%zu origin=%s obj=%p tip=%p tipAlignBad=%u holder=%p slot=%p "
-                 "trueHdr=%p trueTip=%p trueName=%s young=%u\n",
+                 "[GCV2][S3_INJECT] n=%zu origin=%s obj=%p tip=%p tipAlignBad=%u holder=%p holderName=%s "
+                 "slot=%p fieldOff=%zu trueHdr8=%p trueTip8=%p trueName8=%s hdr16=%p name16=%s young=%u\n",
                  n, origin == nullptr ? "null" : origin, object, tip,
-                 static_cast<unsigned>((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0), holder, slot, trueHdr,
-                 trueTip, trueName, region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
+                 static_cast<unsigned>((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0), holder, holderName, slot,
+                 fieldOff, trueHdr, trueTip, trueName, hdr16, name16,
+                 region == nullptr ? 0u : static_cast<unsigned>(region->IsYoungRegion()));
     std::fflush(stderr);
     (void)region;
 }
@@ -955,14 +977,18 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots)
 {
-    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
+    // s3inject: capture holder so LogInteriorPush attributes the slot writer side.
+    BaseObject* scanHolder = nullptr;
+    auto pushTarget = [this, fullYoungScan, &workStack, &scanHolder](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(target)) {
-                LogInteriorPush(target, "closure_edge_full", nullptr, &field);
+                LogInteriorPush(target, "closure_edge_full", scanHolder, &field);
                 workStack.push_back(target);
             }
         } else {
+            // Log with holder/slot before PushYoungObject (its origin string is generic).
+            LogInteriorPush(target, "closure_edge", scanHolder, &field);
             PushYoungObject(target, workStack, "closure_edge");
         }
     };
@@ -982,6 +1008,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!object->HasRefField()) {
             continue;
         }
+        scanHolder = object;
         if (UNLIKELY(object->IsWeakRef())) {
             RefField<>* referentField = reinterpret_cast<RefField<>*>(
                 reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
