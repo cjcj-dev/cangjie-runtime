@@ -542,9 +542,9 @@ bool ScrubCostMeterEnabled()
 
 std::atomic<uint64_t> g_scrubCalls{ 0 };
 std::atomic<uint64_t> g_scrubNs{ 0 };
-std::atomic<uint64_t> g_scrubScannedSum{ 0 };
+std::atomic<uint64_t> g_scrubWordsSum{ 0 };
 std::atomic<uint64_t> g_scrubErasedSum{ 0 };
-std::atomic<size_t> g_scrubScannedMax{ 0 };
+std::atomic<size_t> g_scrubWordsMax{ 0 };
 std::atomic<size_t> g_staleAtCollect{ 0 };
 } // namespace
 
@@ -555,34 +555,33 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    // Default-off meter: hot path is EraseRange only (no timer, no atomics, no VLOG).
+    // Product path clears only the two bitmap slices owned by this region.
     if (!ScrubCostMeterEnabled()) {
-        (void)Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, nullptr);
+        (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
         return;
     }
-    size_t scanned = 0;
+    size_t words = 0;
     uint64_t t0 = TimeUtil::NanoSeconds();
-    size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, &scanned);
+    size_t scrubbed = Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, &words);
     uint64_t dt = TimeUtil::NanoSeconds() - t0;
     uint64_t callNo = g_scrubCalls.fetch_add(1, std::memory_order_relaxed) + 1;
     g_scrubNs.fetch_add(dt, std::memory_order_relaxed);
-    g_scrubScannedSum.fetch_add(scanned, std::memory_order_relaxed);
+    g_scrubWordsSum.fetch_add(words, std::memory_order_relaxed);
     g_scrubErasedSum.fetch_add(scrubbed, std::memory_order_relaxed);
-    size_t prevMax = g_scrubScannedMax.load(std::memory_order_relaxed);
-    while (scanned > prevMax &&
-           !g_scrubScannedMax.compare_exchange_weak(prevMax, scanned, std::memory_order_relaxed)) {
+    size_t prevMax = g_scrubWordsMax.load(std::memory_order_relaxed);
+    while (words > prevMax && !g_scrubWordsMax.compare_exchange_weak(prevMax, words, std::memory_order_relaxed)) {
     }
     VLOG(REPORT,
-         "[GCV2][scrub-cost] call=%llu ns=%llu scannedN=%zu erased=%zu young=%u type=%u "
+         "[GCV2][scrub-cost] call=%llu ns=%llu bitmapWords=%zu erased=%zu young=%u type=%u "
          "env=MRT_GCV2_SCRUB_COST=1",
-         static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), scanned, scrubbed,
+         static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), words, scrubbed,
          static_cast<unsigned>(region->IsYoungRegion()), region->GetRegionType());
     if (scrubbed != 0) {
         size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
         VLOG(REPORT,
-             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu scannedN=%zu ns=%llu region=%p "
+             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu bitmapWords=%zu ns=%llu region=%p "
              "[%#zx,%#zx) type=%u young=%u sample=%zu env=MRT_GCV2_SCRUB_COST=1",
-             scrubbed, scanned, static_cast<unsigned long long>(dt), region,
+             scrubbed, words, static_cast<unsigned long long>(dt), region,
              static_cast<size_t>(rStart), static_cast<size_t>(rEnd), region->GetRegionType(),
              static_cast<unsigned>(region->IsYoungRegion()), n);
     }
@@ -595,18 +594,18 @@ void RegionManager::DumpScrubCostAndReset(const char* point)
     }
     uint64_t calls = g_scrubCalls.exchange(0, std::memory_order_relaxed);
     uint64_t ns = g_scrubNs.exchange(0, std::memory_order_relaxed);
-    uint64_t scannedSum = g_scrubScannedSum.exchange(0, std::memory_order_relaxed);
+    uint64_t wordsSum = g_scrubWordsSum.exchange(0, std::memory_order_relaxed);
     uint64_t erasedSum = g_scrubErasedSum.exchange(0, std::memory_order_relaxed);
-    size_t scannedMax = g_scrubScannedMax.exchange(0, std::memory_order_relaxed);
+    size_t wordsMax = g_scrubWordsMax.exchange(0, std::memory_order_relaxed);
     if (calls == 0) {
         return;
     }
     VLOG(REPORT,
-         "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu scannedSum=%llu "
-         "scannedMax=%zu erasedSum=%llu env=MRT_GCV2_SCRUB_COST=1",
+         "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu bitmapWordsSum=%llu "
+         "bitmapWordsMax=%zu erasedSum=%llu env=MRT_GCV2_SCRUB_COST=1",
          point == nullptr ? "?" : point, static_cast<unsigned long long>(calls),
          static_cast<unsigned long long>(ns), static_cast<unsigned long long>(ns / calls),
-         static_cast<unsigned long long>(scannedSum), scannedMax,
+         static_cast<unsigned long long>(wordsSum), wordsMax,
          static_cast<unsigned long long>(erasedSum));
 }
 
@@ -634,6 +633,9 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
+    // Large regions above the release threshold bypass CollectRegion. Invalidate
+    // their two owned bitmap slices before the address range can be unmapped/reused.
+    ScrubRememberedSetForRegion(region);
     if (num >= HUGE_PAGE) {
         UntagHugePage(region, num);
     }

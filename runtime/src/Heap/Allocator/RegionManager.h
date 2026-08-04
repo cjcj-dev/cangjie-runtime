@@ -404,8 +404,8 @@ public:
 
     void ReclaimRegion(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
-    // Drop remset entries whose field address lies in [regionStart, regionEnd).
-    // HotSpot: HeapRegionRemSet::clear() when a region is freed. Called from CollectRegion only.
+    // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
+    // Called on both CollectRegion and the direct large-region release path.
     static void ScrubRememberedSetForRegion(RegionInfo* region);
     // Emit + reset process-local scrub cost counters (STEER3).
     static void DumpScrubCostAndReset(const char* point);

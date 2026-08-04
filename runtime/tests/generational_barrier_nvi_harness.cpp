@@ -11,6 +11,7 @@
 #include <new>
 #include <string>
 #include <sys/mman.h>
+#include <unordered_set>
 #include <vector>
 
 #include "Heap/Allocator/RegionInfo.h"
@@ -97,7 +98,8 @@ struct RegionFixture {
 
 bool ExpectOneRecord(const std::string& label, RememberedSet& rememberedSet, MAddress expected)
 {
-    auto records = rememberedSet.AcquireRecordsForMinor();
+    std::unordered_set<MAddress> records;
+    rememberedSet.DrainForMinor(records);
     bool found = std::find(records.begin(), records.end(), expected) != records.end();
     std::cout << "RECORD_CHECK label=" << label << " count=" << records.size() << " found=" << found << '\n';
     return records.size() == 1 && found;
@@ -205,6 +207,7 @@ int main()
     TestCollector collector;
     bool passed = representationPassed && counterPassed;
     RememberedSet testSet;
+    testSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     TestBarrier testBarrier(collector, testSet);
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
     fixture.youngRegion->SetYoungRegionFlag(0);
@@ -223,18 +226,23 @@ int main()
     passed = ExerciseNineEntries(testBarrier, fixture, testSet) && passed;
 
     RememberedSet baseSet;
+    baseSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     Barrier baseBarrier(collector, baseSet);
     passed = ExerciseBarrier("Barrier", baseBarrier, fixture, baseSet) && passed;
     RememberedSet idleSet;
+    idleSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     IdleBarrier idleBarrier(collector, idleSet);
     passed = ExerciseBarrier("IdleBarrier", idleBarrier, fixture, idleSet) && passed;
     RememberedSet postTraceSet;
+    postTraceSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     PostTraceBarrier postTraceBarrier(collector, postTraceSet);
     passed = ExerciseBarrier("PostTraceBarrier", postTraceBarrier, fixture, postTraceSet) && passed;
     RememberedSet preforwardSet;
+    preforwardSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     PreforwardBarrier preforwardBarrier(collector, preforwardSet);
     passed = ExerciseBarrier("PreforwardBarrier", preforwardBarrier, fixture, preforwardSet) && passed;
     RememberedSet forwardSet;
+    forwardSet.Initialize(fixture.heapStart, 2 * RegionInfo::UNIT_SIZE);
     ForwardBarrier forwardBarrier(collector, forwardSet);
     passed = ExerciseBarrier("ForwardBarrier", forwardBarrier, fixture, forwardSet) && passed;
     std::cout << "BARRIER_RECORDS name=EnumBarrier count=0 reason=requires-active-enum-mutator\n";
@@ -242,7 +250,8 @@ int main()
 
     size_t afterScope = 1;
     {
-        auto records = testSet.AcquireRecordsForMinor();
+        std::unordered_set<MAddress> records;
+        testSet.DrainForMinor(records);
         afterScope = records.size();
     }
     std::cout << "MINOR_SCOPE_CLEAR count=" << afterScope << '\n';

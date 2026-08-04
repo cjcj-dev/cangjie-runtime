@@ -6,8 +6,8 @@
 
 set(SRC_LIST
     "Barrier.cpp"
+    "RememberedSet.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
 add_library(Barrier STATIC ${SRC_LIST})
-

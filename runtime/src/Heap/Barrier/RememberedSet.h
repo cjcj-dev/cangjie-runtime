@@ -7,114 +7,108 @@
 #ifndef MRT_REMEMBERED_SET_H
 #define MRT_REMEMBERED_SET_H
 
+#include <atomic>
+#include <cstddef>
+#include <cstdint>
+#include <memory>
 #include <mutex>
 #include <unordered_set>
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+#include <unordered_map>
+#endif
 
 #include "Common/TypeDef.h"
+#include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
 class Barrier;
 class WCollector;
 class RegionManager;
 
+// Exact old-region field bitmap. The two heap-wide backing arrays are partitioned
+// by address: every region owns two disjoint slices, one bit per aligned reference
+// field. This keeps region cleanup bounded by the reclaimed region rather than by
+// the number of remembered fields in the heap.
 class RememberedSet final {
 public:
-    class Records final {
-    public:
-        using const_iterator = std::unordered_set<MAddress>::const_iterator;
-
-        Records(const Records&) = delete;
-        Records& operator=(const Records&) = delete;
-        Records(Records&& other) noexcept : owner(other.owner), lock(std::move(other.lock)) { other.owner = nullptr; }
-        Records& operator=(Records&&) = delete;
-
-        ~Records()
-        {
-            if (owner != nullptr) {
-                owner->records.clear();
-            }
-        }
-
-        const_iterator begin() const { return owner->records.cbegin(); }
-        const_iterator end() const { return owner->records.cend(); }
-        size_t size() const { return owner->records.size(); }
-
-    private:
-        friend class RememberedSet;
-        explicit Records(RememberedSet& rememberedSet) : owner(&rememberedSet), lock(rememberedSet.lock) {}
-
-        RememberedSet* owner;
-        std::unique_lock<std::mutex> lock;
-    };
-
-    RememberedSet() = default;
+    RememberedSet();
+    ~RememberedSet() = default;
     RememberedSet(const RememberedSet&) = delete;
     RememberedSet& operator=(const RememberedSet&) = delete;
 
-    Records AcquireRecordsForMinor() { return Records(*this); }
+    void Initialize(MAddress start, size_t size);
 
-    // Non-destructive snapshot for diagnostic verify (does not clear). HotSpot card-table verify analog.
-    std::unordered_set<MAddress> Snapshot() const
+    // Called at the beginning of a minor collection while the mutators are stopped.
+    // Atomically makes an empty bitmap active, drains the previous active bitmap into
+    // records, and clears it for the next cycle.
+    size_t DrainForMinor(std::unordered_set<MAddress>& records);
+
+    // Non-destructive view of the active (next-cycle) records for verification.
+    std::unordered_set<MAddress> Snapshot() const;
+    bool Contains(MAddress fieldAddress) const;
+    size_t Size() const;
+
+    // Bytes reserved by both exact bitmap backings.
+    size_t MemoryOverhead() const
     {
-        std::lock_guard<std::mutex> guard(lock);
-        return records;
+        return (wordCount + dirtyWordCount) * sizeof(uint64_t) * kBufferCount;
     }
 
-    bool Contains(MAddress fieldAddress) const
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        return records.count(fieldAddress) != 0;
-    }
-
-    size_t Size() const
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        return records.size();
-    }
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    // Validation-only correlation between non-heap records and roots visited in the
+    // same minor round. Product storage retains these records independently.
+    void RecordStaticForCrossCheck(MAddress fieldAddress, MAddress callsite);
+    void VisitStaticForCrossCheck(MAddress fieldAddress);
+    void CheckStaticCoverageForMinor();
+#endif
 
 private:
     friend class Barrier;
     friend class WCollector;
     friend class RegionManager;
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    friend class RememberedSetTest;
+#endif
 
-    void Record(MAddress fieldAddress)
-    {
-        std::lock_guard<std::mutex> guard(lock);
-        records.insert(fieldAddress);
-    }
+    static constexpr size_t kBitsPerWord = sizeof(uint64_t) * 8;
+    static constexpr size_t kFieldBytes = sizeof(RefField<>);
+    static constexpr size_t kBufferCount = 2;
 
-    // HotSpot HeapRegionRemSet::clear() analogue: drop every field-slot whose address
-    // falls inside a region that is about to be reclaimed/reused. Without this, the
-    // next minor RescanRememberedSet reads freed payload as if it were still a holder.
-    // COST: global unordered_set has no range index ⇒ O(N) full scan under lock.
-    // outScanned receives N at call time when non-null.
-    size_t EraseRange(MAddress start, MAddress end, size_t* outScanned = nullptr)
-    {
-        if (start >= end) {
-            if (outScanned != nullptr) {
-                *outScanned = 0;
-            }
-            return 0;
-        }
-        std::lock_guard<std::mutex> guard(lock);
-        if (outScanned != nullptr) {
-            *outScanned = records.size();
-        }
-        size_t erased = 0;
-        for (auto it = records.begin(); it != records.end();) {
-            MAddress slot = *it;
-            if (slot >= start && slot < end) {
-                it = records.erase(it);
-                ++erased;
-            } else {
-                ++it;
-            }
-        }
-        return erased;
-    }
+    void Record(MAddress fieldAddress);
+    void RecordExternal(MAddress fieldAddress);
+    size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
+    uint8_t BeginFullClear();
+    size_t FinishFullClear(uint8_t scanBuffer);
 
-    mutable std::mutex lock;
-    std::unordered_set<MAddress> records;
+    size_t AddressToBit(MAddress fieldAddress) const;
+    size_t ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords);
+    size_t ClearBuffer(size_t buffer);
+    void MarkWordDirty(size_t buffer, size_t word);
+    void ClearWordDirty(size_t buffer, size_t word);
+    void CheckInitialized() const;
+    MAddress heapStart = 0;
+    size_t heapSize = 0;
+    size_t bitCount = 0;
+    size_t wordCount = 0;
+    size_t dirtyWordCount = 0;
+    std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
+    std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
+    std::atomic<size_t> recordCounts[kBufferCount];
+    std::atomic<uint8_t> activeBuffer{ 0 };
+    bool initialized = false;
+    mutable std::mutex externalLock;
+    std::unordered_set<MAddress> externalRecords[kBufferCount];
+
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    mutable std::mutex oracleLock;
+    std::unordered_set<MAddress> oracleRecords[kBufferCount];
+    std::unordered_set<MAddress> staticRecords;
+    std::unordered_map<MAddress, MAddress> staticRecordSites;
+    std::unordered_set<MAddress> visitedStaticRoots;
+    size_t bitmapCrossCheckCount = 0;
+    size_t staticCrossCheckRounds = 0;
+    size_t lastDrainedHeapRecords = 0;
+#endif
 };
 } // namespace MapleRuntime
 #endif // MRT_REMEMBERED_SET_H

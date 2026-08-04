@@ -100,9 +100,8 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     field.SetTargetObject(ref);
-    // Static/global slots are non-heap sources: treat as old→young when ref is young.
-    // VisitStaticRoots keeps the *target* live for the current minor, but does not
-    // register the slot for FixMinorRootSlots/evac; remset must track the edge.
+    // Static/global slots are visited and fixed as roots in every minor collection.
+    // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
@@ -410,11 +409,17 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return;
     }
-    // Non-heap field (static root / global struct): source is outside the heap ⇒ old.
+    // Non-heap field (static/global/value temporary): it cannot consume a
+    // heap-region bitmap bit. Retain exact slot identity in the separately locked
+    // external double buffer.
     (void)obj;
-    theRememberedSet.Record(fieldAddress);
+    theRememberedSet.RecordExternal(fieldAddress);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    theRememberedSet.RecordStaticForCrossCheck(
+        fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
+#endif
     if (probeOn) {
-        NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
+        NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
     }
 }
 
