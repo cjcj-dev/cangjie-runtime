@@ -945,14 +945,18 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
 {
-    // HotSpot G1RemSet scrub / card-refinement filter analogue: never assume a remset
-    // entry is still a live old→young edge. Validate holder region + target object
-    // before treating the slot as a minor root. Does not relax IsValidObject — it
-    // only refuses to feed dead/reclaimed addresses into PushYoungObject.
+    // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
+    //   1) region-level holder_dead (free/garbage region only — not object liveness)
+    //   2) pre-check target safety BEFORE ResolveMinorReference
+    //      (old-tag with no to-version + invalid from must not reach FindLatestVersion/F5)
+    //   3) ResolveMinorReference (soft-resolve; never calls FindLatestVersion)
+    //   4) post-resolve null / bad_target drops
+    // Does not relax IsValidObject / FindLatestVersion CHECK_DETAIL.
     static std::atomic<size_t> g_remsetScrubLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedBadTarget = 0;
+    size_t scrubbedStaleOldTag = 0;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -990,6 +994,32 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
+        RefField<> peek(*field);
+        BaseObject* rawTarget = peek.GetTargetObject();
+        // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
+        // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
+        if (IsOldPointer(peek)) {
+            BaseObject* to = FindToVersion(rawTarget);
+            bool fromLive = false;
+            if (to == nullptr && Heap::IsHeapAddress(rawTarget)) {
+                RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(rawTarget));
+                fromLive = fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
+                           rawTarget->IsValidObject();
+            }
+            if (to == nullptr && !fromLive) {
+                ++scrubbedStaleOldTag;
+                field->SetTargetObject(nullptr);
+                size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
+                if (n < 16) {
+                    VLOG(REPORT,
+                         "[GCV2][remset-filter] drop slot=%#zx raw=%#llx target=%p reason=stale_oldtag "
+                         "(no to-version; from invalid/reclaimed — pre-resolve)",
+                         static_cast<size_t>(slot), static_cast<unsigned long long>(rawSlot), rawTarget);
+                }
+                continue;
+            }
+        }
+
         BaseObject* target = ResolveMinorReference(*field);
         if (target == nullptr || !Heap::IsHeapAddress(target)) {
             ++scrubbedStale;
@@ -1026,10 +1056,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++statsOut->consumed;
         }
     }
-    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0) {
+    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0 || scrubbedStaleOldTag != 0) {
         VLOG(REPORT,
-             "[GCV2][remset-filter] summary staleTarget=%zu deadHolder=%zu badTarget=%zu recorded=%zu",
-             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, rememberedSlots.size());
+             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu badTarget=%zu "
+             "staleOldTag=%zu recorded=%zu "
+             "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
+             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
     }
 }
 
