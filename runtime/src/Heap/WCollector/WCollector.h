@@ -223,10 +223,13 @@ private:
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;
     void TraceHeap();
-    // F3: before DispelGhostFromRegion, rewrite IsOldPointer slots to plain/to so
-    // one-gen-stale tags cannot outlive the route table (REPORT-tagaba F3).
+    // F3: rewrite IsOldPointer slots to plain/to so one-gen-stale tags cannot
+    // outlive the route table (REPORT-tagaba F3).
+    // requireSurvivedMark=true  → pre-dispel (PostTrace; marks still on from).
+    // requireSurvivedMark=false → post-Flip after Forward (to-space has no marks).
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94 + bfb5e8b24fa7c462321709c0c5af8290dccb38a6.
     void InvalidateOldTaggedRefsBeforeDispel();
+    void InvalidateOldTaggedRefs(bool requireSurvivedMark);
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();

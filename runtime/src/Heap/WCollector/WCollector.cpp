@@ -518,8 +518,14 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
-    MRT_PHASE_TIMER("InvalidateOldTaggedRefsBeforeDispel");
-    ScopedStopTheWorld stw("invalidate old tagged refs before dispel");
+    InvalidateOldTaggedRefs(true);
+}
+
+void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
+{
+    MRT_PHASE_TIMER("InvalidateOldTaggedRefs");
+    ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
+                                               : "invalidate old tagged refs after flip");
 
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
     RootVisitor fixRoot = [this](ObjectRef& root) {
@@ -537,13 +543,16 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     Heap::GetHeap().VisitAllExportRoots(fixRoot);
 
     // New-line: BaseObject::ForEachRefField ≡ main TracingCollector::ForEachRefSlot.
+    // Pre-dispel (requireSurvivedMark=true): objects still at markable addresses.
+    // Post-Flip after Forward: live objects sit in to-space without mark bits at the
+    // new address — IsSurvivedObject would skip almost every holder (defect⑤ residual).
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     space.ForEachObj(
-        [this](BaseObject* obj) {
+        [this, requireSurvivedMark](BaseObject* obj) {
             if (obj == nullptr || !obj->IsValidObject()) {
                 return;
             }
-            if (!IsSurvivedObject(obj)) {
+            if (requireSurvivedMark && !IsSurvivedObject(obj)) {
                 return;
             }
             if (!obj->HasRefField()) {
@@ -1049,6 +1058,11 @@ void WCollector::FixMinorRootSlots()
         (void)FixMinorEvacuatedSlot(field);
     };
     RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+    // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
+    // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
+    // stack slots still holding from-copies become the next full's F5 input.
+    MutatorManager::Instance().VisitAllMutators(
+        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
@@ -1872,12 +1886,10 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // Flip just turned this cycle's current-tags into IsOldPointer. F3 ran pre-Flip
-    // and only saw the *previous* generation. Without a post-Flip pass, the next
-    // minor/full Enum hits FindLatestVersion on dead from-copies (defect⑤ family).
-    // Ghosts are still installed until the next PrepareForwardTable, so survivors
-    // still route; dead slots soft-null via FixOldTaggedRefField.
-    InvalidateOldTaggedRefsBeforeDispel();
+    // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
+    // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
+    // after Forward, live holders are in to-space without mark bits at the new addr.
+    InvalidateOldTaggedRefs(false);
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
