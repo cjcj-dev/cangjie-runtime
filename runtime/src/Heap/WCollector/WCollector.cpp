@@ -798,6 +798,14 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
 {
+    // HotSpot G1RemSet scrub / card-refinement filter analogue: never assume a remset
+    // entry is still a live old→young edge. Validate holder region + target object
+    // before treating the slot as a minor root. Does not relax IsValidObject — it
+    // only refuses to feed dead/reclaimed addresses into PushYoungObject.
+    static std::atomic<size_t> g_remsetScrubLogged{ 0 };
+    size_t scrubbedStale = 0;
+    size_t scrubbedDeadHolder = 0;
+    size_t scrubbedBadTarget = 0;
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -817,14 +825,64 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
+
+        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
+        if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
+            ++scrubbedDeadHolder;
+            size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
+            if (n < 16) {
+                VLOG(REPORT,
+                     "[GCV2][remset-filter] drop slot=%#zx reason=holder_dead region=%p free=%u garbage=%u",
+                     static_cast<size_t>(slot), holderRegion,
+                     holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsFreeRegion()),
+                     holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsGarbageRegion()));
+            }
+            continue;
+        }
+
         RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-        PushYoungObject(ResolveMinorReference(*field), workStack, "remset");
+        uint64_t rawSlot = 0;
+        std::memcpy(&rawSlot, field, sizeof(rawSlot));
+        BaseObject* target = ResolveMinorReference(*field);
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            ++scrubbedStale;
+            continue;
+        }
+        if (!target->IsValidObject()) {
+            ++scrubbedBadTarget;
+            size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
+            if (n < 16) {
+                RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                VLOG(REPORT,
+                     "[GCV2][remset-filter] drop slot=%#zx raw=%#llx target=%p reason=bad_target "
+                     "holderYoung=%u holderFree=%u targetYoung=%u targetFree=%u targetGarbage=%u "
+                     "targetNeverExamined=%u (H1: stale remset after reclaim)",
+                     static_cast<size_t>(slot), static_cast<unsigned long long>(rawSlot), target,
+                     static_cast<unsigned>(holderRegion->IsYoungRegion()),
+                     static_cast<unsigned>(holderRegion->IsFreeRegion()),
+                     targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->IsYoungRegion()),
+                     targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->IsFreeRegion()),
+                     targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->IsGarbageRegion()),
+                     targetRegion == nullptr
+                         ? 0u
+                         : static_cast<unsigned>(targetRegion->GetMarkBitmap() == nullptr &&
+                                                 targetRegion->GetRegionAllocPtr() > targetRegion->GetRegionStart()));
+            }
+            continue;
+        }
+
+        PushYoungObject(target, workStack, "remset");
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
         if (statsOut != nullptr) {
             ++statsOut->consumed;
         }
+    }
+    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0) {
+        VLOG(REPORT,
+             "[GCV2][remset-filter] summary staleTarget=%zu deadHolder=%zu badTarget=%zu recorded=%zu",
+             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, rememberedSlots.size());
     }
 }
 
@@ -1736,6 +1794,8 @@ void WCollector::DoYoungGarbageCollection()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
          liveObjects, liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+    // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
+    RegionManager::DumpScrubCostAndReset("post-minor");
 }
 
 void WCollector::DoGarbageCollection()
