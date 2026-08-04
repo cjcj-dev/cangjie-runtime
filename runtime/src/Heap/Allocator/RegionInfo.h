@@ -760,6 +760,9 @@ public:
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(0);
+        }
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
