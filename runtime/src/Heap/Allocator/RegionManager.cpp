@@ -549,7 +549,7 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     uint64_t t0 = TimeUtil::NanoSeconds();
     size_t scrubbed = Heap::GetHeap().GetRememberedSet().EraseRange(rStart, rEnd, &scanned);
     uint64_t dt = TimeUtil::NanoSeconds() - t0;
-    g_scrubCalls.fetch_add(1, std::memory_order_relaxed);
+    uint64_t callNo = g_scrubCalls.fetch_add(1, std::memory_order_relaxed) + 1;
     g_scrubNs.fetch_add(dt, std::memory_order_relaxed);
     g_scrubScannedSum.fetch_add(scanned, std::memory_order_relaxed);
     g_scrubErasedSum.fetch_add(scrubbed, std::memory_order_relaxed);
@@ -557,6 +557,12 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     while (scanned > prevMax &&
            !g_scrubScannedMax.compare_exchange_weak(prevMax, scanned, std::memory_order_relaxed)) {
     }
+    // STEER3: always sample cost (reclaim is often via TakeRegion, not ReclaimGarbageRegions).
+    // Log every call for measurement builds — volume ~R_reclaim per GC, acceptable under ALOT.
+    VLOG(REPORT,
+         "[GCV2][scrub-cost] call=%llu ns=%llu scannedN=%zu erased=%zu young=%u type=%u",
+         static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), scanned, scrubbed,
+         static_cast<unsigned>(region->IsYoungRegion()), region->GetRegionType());
     if (scrubbed != 0) {
         size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
         VLOG(REPORT,
