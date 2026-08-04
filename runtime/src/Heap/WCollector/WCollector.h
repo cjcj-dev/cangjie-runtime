@@ -232,6 +232,7 @@ private:
     void PostTrace();
     void Preforward();
     void PreforwardAllExportFromRoots();
+    void PreforwardStaticRoots();
     void PreforwardFinalizerProcessorRoots();
     void PreforwardDiscoveredExternObjects();
     void PreforwardAllResurrectExportFromObjects();
