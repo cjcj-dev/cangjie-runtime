@@ -31,6 +31,7 @@ struct RemsetVerifyStats {
     size_t holdersScanned = 0;
     size_t oldToYoungEdges = 0;
     size_t missing = 0;
+    size_t missingRootReachable = 0;
     size_t missingArrayHolder = 0;
     size_t missingNonArray = 0;
     size_t stale = 0;
@@ -39,9 +40,11 @@ struct RemsetVerifyStats {
     size_t remsetSize = 0;
     uint64_t costNs = 0;
     std::array<MAddress, kSampleLimit> missingSamples{};
+    std::array<MAddress, kSampleLimit> missingRootReachableSamples{};
     std::array<MAddress, kSampleLimit> staleSamples{};
     std::array<MAddress, kSampleLimit> danglingSamples{};
     size_t missingSampleCount = 0;
+    size_t missingRootReachableSampleCount = 0;
     size_t staleSampleCount = 0;
     size_t danglingSampleCount = 0;
 };
@@ -73,14 +76,15 @@ void PushSample(std::array<MAddress, kSampleLimit>& samples, size_t& count, MAdd
     }
 }
 
-// Build field-address index of every ref slot on non-young live holders.
+// Build field-address index of every ref slot on valid allocated non-young holders.
 // Independence: enumeration is full-heap VisitAllObjects, not minor closure / remset.
 void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetVerifyStats& stats,
-                               const std::unordered_set<MAddress>& remsetSnapshot, const char* point, size_t invoke,
-                               size_t maxFailures)
+                               const std::unordered_set<MAddress>& remsetSnapshot,
+                               const std::unordered_set<BaseObject*>* rootReachableHolders, const char* point,
+                               size_t invoke, size_t maxFailures)
 {
     Heap::GetHeap().ForEachObj(
-        [&fieldSlots, &stats, &remsetSnapshot, point, invoke, maxFailures](BaseObject* holder) {
+        [&fieldSlots, &stats, &remsetSnapshot, rootReachableHolders, point, invoke, maxFailures](BaseObject* holder) {
             if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
                 return;
             }
@@ -90,8 +94,8 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                 return;
             }
             ++stats.holdersScanned;
-            holder->ForEachRefField([&fieldSlots, &stats, &remsetSnapshot, holder, holderRegion, point, invoke,
-                                     maxFailures](RefField<>& field) {
+            holder->ForEachRefField([&fieldSlots, &stats, &remsetSnapshot, rootReachableHolders, holder, holderRegion,
+                                     point, invoke, maxFailures](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
                 fieldSlots.insert(slot);
 
@@ -116,6 +120,12 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                 ++stats.oldToYoungEdges;
                 if (remsetSnapshot.count(slot) == 0) {
                     ++stats.missing;
+                    bool rootReachabilityKnown = rootReachableHolders != nullptr;
+                    bool correctnessRelevant = !rootReachabilityKnown || rootReachableHolders->count(holder) != 0;
+                    if (rootReachabilityKnown && correctnessRelevant) {
+                        ++stats.missingRootReachable;
+                        PushSample(stats.missingRootReachableSamples, stats.missingRootReachableSampleCount, slot);
+                    }
                     TypeInfo* typeInfo = holder->GetTypeInfo();
                     if (typeInfo != nullptr && typeInfo->IsArrayType()) {
                         ++stats.missingArrayHolder;
@@ -124,7 +134,8 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                     }
                     PushSample(stats.missingSamples, stats.missingSampleCount, slot);
                     RemsetPhaseProbe::NoteMissing(slot);
-                    if (stats.missing <= maxFailures) {
+                    size_t correctnessFailure = rootReachabilityKnown ? stats.missingRootReachable : stats.missing;
+                    if (correctnessRelevant && correctnessFailure <= maxFailures) {
                         bool targetValid = target->IsValidObject();
                         TypeInfo* targetTypeInfo = targetValid ? target->GetTypeInfo() : nullptr;
                         VLOG(REPORT,
@@ -135,7 +146,7 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                              "slot=%p fieldOffset=0x%zx slotRegionOffset=0x%zx "
                              "target=%p targetValid=%u targetType=%s targetRegion=%p targetRegionType=%u "
                              "targetYoungAge=%u targetRouteState=%u targetRegionStart=%p targetRegionOffset=0x%zx",
-                             point == nullptr ? "?" : point, invoke, stats.missing, maxFailures, holder,
+                             point == nullptr ? "?" : point, invoke, correctnessFailure, maxFailures, holder,
                              typeInfo == nullptr || typeInfo->GetName() == nullptr ? "?" : typeInfo->GetName(),
                              holderRegion,
                              static_cast<unsigned int>(holderRegion->GetRegionType()),
@@ -178,7 +189,8 @@ void ClassifyRemsetOnlySlots(const std::unordered_set<MAddress>& remsetSnapshot,
 }
 } // namespace
 
-void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot, bool force)
+void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MAddress>& remsetSnapshot, bool force,
+                                  const std::unordered_set<BaseObject*>* rootReachableHolders)
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC pattern (gc_globals DIAGNOSTIC false).
     // force=true lets post-evac run without enabling the global pre-evacuate gate.
@@ -210,21 +222,28 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     size_t maxFailures = EnvSizeT("MRT_GCV2_VERIFY_REMSET_MAX_FAILURES", 20);
 
     std::unordered_set<MAddress> fieldSlots;
-    CollectNonYoungFieldSlots(fieldSlots, stats, remsetSnapshot, point, invoke, maxFailures);
+    CollectNonYoungFieldSlots(fieldSlots, stats, remsetSnapshot, rootReachableHolders, point, invoke, maxFailures);
     ClassifyRemsetOnlySlots(remsetSnapshot, fieldSlots, stats);
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
 
     VLOG(REPORT,
          "[GCV2][verify][remset] point=%s invoke=%zu env=MRT_GCV2_VERIFY_REMSET=1 "
          "remsetSize=%zu holdersScanned=%zu oldToYoungEdges=%zu "
-         "MISSING=%zu (arrayHolder=%zu nonArray=%zu) STALE=%zu DANGLING=%zu "
+         "MISSING=%zu MISSING_TOTAL=%zu MISSING_ROOT_REACHABLE=%zu rootReachabilityKnown=%d "
+         "(totalArrayHolder=%zu totalNonArray=%zu) STALE=%zu DANGLING=%zu "
          "remsetCovered=%zu costNs=%llu directOnly=1 "
-         "missingSamples=[%p,%p,%p,%p] staleSamples=[%p,%p,%p,%p] danglingSamples=[%p,%p,%p,%p]",
+         "totalMissingSamples=[%p,%p,%p,%p] rootReachableMissingSamples=[%p,%p,%p,%p] "
+         "staleSamples=[%p,%p,%p,%p] danglingSamples=[%p,%p,%p,%p]",
          point == nullptr ? "?" : point, invoke, stats.remsetSize, stats.holdersScanned, stats.oldToYoungEdges,
-         stats.missing, stats.missingArrayHolder, stats.missingNonArray, stats.stale, stats.dangling,
-         stats.remsetCovered, static_cast<unsigned long long>(stats.costNs),
+         stats.missingRootReachable, stats.missing, stats.missingRootReachable,
+         rootReachableHolders == nullptr ? 0 : 1, stats.missingArrayHolder, stats.missingNonArray, stats.stale,
+         stats.dangling, stats.remsetCovered, static_cast<unsigned long long>(stats.costNs),
          reinterpret_cast<void*>(stats.missingSamples[0]), reinterpret_cast<void*>(stats.missingSamples[1]),
          reinterpret_cast<void*>(stats.missingSamples[2]), reinterpret_cast<void*>(stats.missingSamples[3]),
+         reinterpret_cast<void*>(stats.missingRootReachableSamples[0]),
+         reinterpret_cast<void*>(stats.missingRootReachableSamples[1]),
+         reinterpret_cast<void*>(stats.missingRootReachableSamples[2]),
+         reinterpret_cast<void*>(stats.missingRootReachableSamples[3]),
          reinterpret_cast<void*>(stats.staleSamples[0]), reinterpret_cast<void*>(stats.staleSamples[1]),
          reinterpret_cast<void*>(stats.staleSamples[2]), reinterpret_cast<void*>(stats.staleSamples[3]),
          reinterpret_cast<void*>(stats.danglingSamples[0]), reinterpret_cast<void*>(stats.danglingSamples[1]),
@@ -233,12 +252,14 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     RemsetPhaseProbe::DumpSummary(point == nullptr ? "?" : point);
 
     // Report-only by default. Separate stricter switch aborts (never default).
+    size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
     if (EnvEnabled("MRT_GCV2_VERIFY_REMSET_FATAL") &&
-        (stats.missing != 0 || stats.stale != 0 || stats.dangling != 0)) {
+        (correctnessMissing != 0 || stats.stale != 0 || stats.dangling != 0)) {
         CHECK_DETAIL(false,
-                     "remset invariant R broken: point=%s MISSING=%zu STALE=%zu DANGLING=%zu oldToYoung=%zu remset=%zu",
-                     point == nullptr ? "?" : point, stats.missing, stats.stale, stats.dangling, stats.oldToYoungEdges,
-                     stats.remsetSize);
+                     "remset invariant R broken: point=%s MISSING=%zu MISSING_TOTAL=%zu STALE=%zu DANGLING=%zu "
+                     "oldToYoung=%zu remset=%zu",
+                     point == nullptr ? "?" : point, correctnessMissing, stats.missing, stats.stale, stats.dangling,
+                     stats.oldToYoungEdges, stats.remsetSize);
     }
 }
 } // namespace MapleRuntime
