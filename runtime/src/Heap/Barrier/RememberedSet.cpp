@@ -15,6 +15,7 @@
 #endif
 
 #include "Base/Log.h"
+#include "Base/LogFile.h"
 
 namespace MapleRuntime {
 RememberedSet::RememberedSet()
