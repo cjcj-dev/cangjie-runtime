@@ -13,6 +13,8 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/BitmapIntersectProbe.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -725,6 +727,11 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     }
     markedObjectCount.fetch_add(resurrectdObjects, std::memory_order_relaxed);
     VLOG(REPORT, "resurrected objects %zu", resurrectdObjects);
+    // E4 holeexp: mark ∧ resurrect intersect while both bitmaps still live (before clear).
+    if (BitmapIntersectProbe::Enabled()) {
+        auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        (void)BitmapIntersectProbe::ScanAfterResurrection(space.GetRegionManager(), resurrectdObjects);
+    }
 }
 
 void TracingCollector::Init() {}
