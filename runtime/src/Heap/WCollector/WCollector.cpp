@@ -602,8 +602,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
     std::array<size_t, regionTypeCount> regionTypes{};
     RegionInfo* lastRegion = nullptr;
+    bool lastRegionKnownEmpty = false;
     size_t regions = 0;
+    size_t knownEmptyRegions = 0;
     size_t objects = 0;
+    size_t knownEmptyObjects = 0;
     size_t invalidObjects = 0;
     size_t filteredObjects = 0;
     size_t refHolders = 0;
@@ -653,9 +656,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
     size_t rebuilt = 0;
     space.ForEachObj(
-        [this, requireSurvivedMark, rebuildRemset, &regionTypes, &lastRegion, &regions, &objects,
-         &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &youngTargetSlots, &fromRegions,
-         &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
+        [this, requireSurvivedMark, rebuildRemset, &regionTypes, &lastRegion, &lastRegionKnownEmpty, &regions,
+         &knownEmptyRegions, &objects, &knownEmptyObjects, &invalidObjects, &filteredObjects, &refHolders, &fields,
+         &oldTaggedSlots, &youngTargetSlots, &fromRegions, &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
             RegionInfo* accountRegion = nullptr;
             if (account) {
                 ++objects;
@@ -664,11 +667,18 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
                 if (accountRegion != nullptr && accountRegion != lastRegion) {
                     lastRegion = accountRegion;
+                    lastRegionKnownEmpty = requireSurvivedMark && accountRegion->IsKnownEmpty();
                     ++regions;
+                    if (lastRegionKnownEmpty) {
+                        ++knownEmptyRegions;
+                    }
                     ++regionTypes[static_cast<size_t>(accountRegion->GetRegionType())];
                     if (requireSurvivedMark && accountRegion->IsFromRegion()) {
                         ++fromRegions;
                     }
+                }
+                if (lastRegionKnownEmpty) {
+                    ++knownEmptyObjects;
                 }
             }
             if (obj == nullptr || !obj->IsValidObject()) {
@@ -737,13 +747,15 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     }
     if (account) {
         VLOG(REPORT,
-             "[GCV2][preflip-account] phase=%s regions=%zu objects=%zu invalid=%zu filtered=%zu survived=%zu "
+             "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
+             "knownEmptyObjects=%zu invalid=%zu filtered=%zu survived=%zu "
              "refHolders=%zu fields=%zu oldTagged=%zu rootSlots=%zu oldTaggedRoots=%zu youngTargets=%zu "
              "rebuilt=%zu fromRegions=%zu fromLiveObjects=%zu fromLiveFields=%zu "
              "env=MRT_GCV2_PREFLIP_ACCOUNT=1",
-             requireSurvivedMark ? "preflip" : "postflip", regions, objects, invalidObjects, filteredObjects,
-             objects - invalidObjects - filteredObjects, refHolders, fields, oldTaggedSlots, rootSlots,
-             oldTaggedRootSlots, youngTargetSlots, rebuilt, fromRegions, fromLiveObjects, fromLiveFields);
+             requireSurvivedMark ? "preflip" : "postflip", regions, knownEmptyRegions, objects, knownEmptyObjects,
+             invalidObjects, filteredObjects, objects - invalidObjects - filteredObjects, refHolders, fields,
+             oldTaggedSlots, rootSlots, oldTaggedRootSlots, youngTargetSlots, rebuilt, fromRegions, fromLiveObjects,
+             fromLiveFields);
         VLOG(REPORT,
              "[GCV2][preflip-region-types] phase=%s type0=%zu type1=%zu type2=%zu type3=%zu type4=%zu "
              "type5=%zu type6=%zu type7=%zu type8=%zu type9=%zu type10=%zu type11=%zu type12=%zu type13=%zu "
