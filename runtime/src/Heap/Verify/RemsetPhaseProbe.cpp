@@ -58,6 +58,8 @@ uint64_t gRepeatedHeapWrites = 0;
 uint64_t gWriteEpoch = 0;
 std::atomic<uint64_t> gRemsetRecordAttempts{0};
 std::atomic<uint64_t> gDuplicateRemsetRecords{0};
+std::atomic<uint64_t> gRemsetAtomicAttempts{0};
+std::atomic<uint64_t> gRemsetAtomicElided{0};
 thread_local uint32_t gOrdinaryHeapWriteDepth = 0;
 #endif
 
@@ -147,6 +149,17 @@ void NoteRemsetRecord(bool duplicate)
     }
 }
 
+void NoteRemsetAtomicDecision(bool elided)
+{
+    if (!WriteMixEnabled()) {
+        return;
+    }
+    gRemsetAtomicAttempts.fetch_add(1, std::memory_order_relaxed);
+    if (elided) {
+        gRemsetAtomicElided.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void FinishWriteEpoch(const char* boundary)
 {
     if (!WriteMixEnabled()) {
@@ -154,15 +167,20 @@ void FinishWriteEpoch(const char* boundary)
     }
     uint64_t attempts = gRemsetRecordAttempts.exchange(0, std::memory_order_relaxed);
     uint64_t duplicates = gDuplicateRemsetRecords.exchange(0, std::memory_order_relaxed);
+    uint64_t atomicAttempts = gRemsetAtomicAttempts.exchange(0, std::memory_order_relaxed);
+    uint64_t atomicElided = gRemsetAtomicElided.exchange(0, std::memory_order_relaxed);
     std::lock_guard<std::mutex> guard(gWriteMixLock);
     ++gWriteEpoch;
     VLOG(REPORT,
          "[GCV2][barrier-write-mix] epoch=%llu boundary=%s heapWrites=%llu first=%llu repeated=%llu uniqueSlots=%zu "
-         "remsetAttempts=%llu remsetUnique=%llu remsetDuplicates=%llu env=MRT_GCV2_BARRIER_WRITE_MIX=1",
+         "remsetAttempts=%llu remsetUnique=%llu remsetDuplicates=%llu remsetAtomicAttempts=%llu "
+         "remsetAtomicElided=%llu remsetAtomicExecuted=%llu env=MRT_GCV2_BARRIER_WRITE_MIX=1",
          static_cast<unsigned long long>(gWriteEpoch), boundary, static_cast<unsigned long long>(gHeapWrites),
          static_cast<unsigned long long>(gFirstHeapWrites), static_cast<unsigned long long>(gRepeatedHeapWrites),
          gHeapWriteSlots.size(), static_cast<unsigned long long>(attempts),
-         static_cast<unsigned long long>(attempts - duplicates), static_cast<unsigned long long>(duplicates));
+         static_cast<unsigned long long>(attempts - duplicates), static_cast<unsigned long long>(duplicates),
+         static_cast<unsigned long long>(atomicAttempts), static_cast<unsigned long long>(atomicElided),
+         static_cast<unsigned long long>(atomicAttempts - atomicElided));
     gHeapWriteSlots.clear();
     gHeapWrites = 0;
     gFirstHeapWrites = 0;

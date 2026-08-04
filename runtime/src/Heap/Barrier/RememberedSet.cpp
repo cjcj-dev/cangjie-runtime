@@ -89,9 +89,19 @@ void RememberedSet::Record(MAddress fieldAddress)
     size_t word = bit / kBitsPerWord;
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
-    uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
+    std::atomic<uint64_t>& bitmapWord = bitmaps[buffer][word];
+    uint64_t observed = bitmapWord.load(std::memory_order_relaxed);
+    if ((observed & mask) != 0) {
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+        RemsetPhaseProbe::NoteRemsetRecord(true);
+        RemsetPhaseProbe::NoteRemsetAtomicDecision(true);
+#endif
+        return;
+    }
+    uint64_t old = bitmapWord.fetch_or(mask, std::memory_order_relaxed);
 #if defined(MRT_BARRIER_WRITE_MIX_PROBE)
     RemsetPhaseProbe::NoteRemsetRecord((old & mask) != 0);
+    RemsetPhaseProbe::NoteRemsetAtomicDecision(false);
 #endif
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {

@@ -70,6 +70,7 @@ bool ForceRecordEnabled();
 void BeginOrdinaryHeapWrite(MAddress fieldAddress);
 void EndOrdinaryHeapWrite();
 void NoteRemsetRecord(bool duplicate);
+void NoteRemsetAtomicDecision(bool elided);
 void FinishWriteEpoch(const char* boundary);
 #endif
 
