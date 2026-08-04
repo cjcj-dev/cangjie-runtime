@@ -2160,11 +2160,6 @@ void WCollector::DoGarbageCollection()
         DoYoungGarbageCollection();
         return;
     }
-    {
-        ScopedStopTheWorld stw("major allocation rollover");
-        FlushAllocationRegions();
-        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().StampCensusBoundaries();
-    }
     TraceHeap();
     PostTrace();
 
@@ -2192,11 +2187,11 @@ void WCollector::DoGarbageCollection()
     InvalidateOldTaggedRefs(false);
 
     CollectSmallSpace();
-    {
-        ScopedStopTheWorld stw("major region promotion");
-        FlushAllocationRegions();
-        reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().PromoteAllRegions();
-    }
+    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
+    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
+    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
+    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
+    // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
 }
 
