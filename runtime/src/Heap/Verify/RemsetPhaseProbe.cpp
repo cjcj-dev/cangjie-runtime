@@ -12,6 +12,9 @@
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+#include <unordered_set>
+#endif
 
 #include "Base/LogFile.h"
 
@@ -45,6 +48,17 @@ std::atomic<uint64_t> gMissingNoStamp{0};
 std::atomic<uint64_t> gMissingTotal{0};
 std::atomic<uint64_t> gWriteTotal{0};
 std::atomic<uint64_t> gRecordTotal{0};
+
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+std::mutex gWriteMixLock;
+std::unordered_set<MAddress> gHeapWriteSlots;
+uint64_t gHeapWrites = 0;
+uint64_t gFirstHeapWrites = 0;
+uint64_t gRepeatedHeapWrites = 0;
+uint64_t gWriteEpoch = 0;
+std::atomic<uint64_t> gRemsetRecordAttempts{0};
+std::atomic<uint64_t> gDuplicateRemsetRecords{0};
+#endif
 
 bool EnvOn(const char* name)
 {
@@ -89,6 +103,61 @@ bool ForceRecordEnabled()
     static const bool on = EnvOn("MRT_GCPHASE_FORCE_RECORD");
     return on;
 }
+
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+bool WriteMixEnabled()
+{
+    static const bool on = EnvOn("MRT_GCV2_BARRIER_WRITE_MIX");
+    return on;
+}
+
+void NoteHeapWrite(MAddress fieldAddress)
+{
+    if (!WriteMixEnabled()) {
+        return;
+    }
+    std::lock_guard<std::mutex> guard(gWriteMixLock);
+    ++gHeapWrites;
+    if (gHeapWriteSlots.insert(fieldAddress).second) {
+        ++gFirstHeapWrites;
+    } else {
+        ++gRepeatedHeapWrites;
+    }
+}
+
+void NoteRemsetRecord(bool duplicate)
+{
+    if (!WriteMixEnabled()) {
+        return;
+    }
+    gRemsetRecordAttempts.fetch_add(1, std::memory_order_relaxed);
+    if (duplicate) {
+        gDuplicateRemsetRecords.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void FinishWriteEpoch()
+{
+    if (!WriteMixEnabled()) {
+        return;
+    }
+    uint64_t attempts = gRemsetRecordAttempts.exchange(0, std::memory_order_relaxed);
+    uint64_t duplicates = gDuplicateRemsetRecords.exchange(0, std::memory_order_relaxed);
+    std::lock_guard<std::mutex> guard(gWriteMixLock);
+    ++gWriteEpoch;
+    VLOG(REPORT,
+         "[GCV2][barrier-write-mix] epoch=%llu heapWrites=%llu first=%llu repeated=%llu uniqueSlots=%zu "
+         "remsetAttempts=%llu remsetUnique=%llu remsetDuplicates=%llu env=MRT_GCV2_BARRIER_WRITE_MIX=1",
+         static_cast<unsigned long long>(gWriteEpoch), static_cast<unsigned long long>(gHeapWrites),
+         static_cast<unsigned long long>(gFirstHeapWrites), static_cast<unsigned long long>(gRepeatedHeapWrites),
+         gHeapWriteSlots.size(), static_cast<unsigned long long>(attempts),
+         static_cast<unsigned long long>(attempts - duplicates), static_cast<unsigned long long>(duplicates));
+    gHeapWriteSlots.clear();
+    gHeapWrites = 0;
+    gFirstHeapWrites = 0;
+    gRepeatedHeapWrites = 0;
+}
+#endif
 
 BarrierClass PhaseToBarrierClass(GCPhase phase)
 {

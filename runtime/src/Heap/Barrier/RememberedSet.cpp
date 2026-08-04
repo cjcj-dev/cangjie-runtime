@@ -16,6 +16,9 @@
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+#include "Heap/Verify/RemsetPhaseProbe.h"
+#endif
 
 namespace MapleRuntime {
 RememberedSet::RememberedSet()
@@ -87,6 +90,9 @@ void RememberedSet::Record(MAddress fieldAddress)
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
     uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+    RemsetPhaseProbe::NoteRemsetRecord((old & mask) != 0);
+#endif
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
@@ -109,6 +115,13 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 {
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
+
+#if defined(MRT_BARRIER_WRITE_MIX_PROBE)
+    // SOURCE: OpenJDK zGeneration.cpp:855-880 and zAddress.cpp:132-136:
+    // the remembered color changes at a young-mark epoch boundary. This runtime
+    // drains under STW, so the pre-flip boundary is exact for all mutator writes.
+    RemsetPhaseProbe::FinishWriteEpoch();
+#endif
 
     // DoYoungGarbageCollection owns a ScopedStopTheWorld across this operation.
     // GC workers start rebuilding records only after this synchronous drain returns.
