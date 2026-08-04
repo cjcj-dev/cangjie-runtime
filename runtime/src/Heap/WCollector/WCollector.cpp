@@ -819,26 +819,37 @@ thread_local const char* gMinorRootOrigin = "unknown";
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
 {
-    gMinorRootOrigin = "mutator_stack";
-    MutatorManager::Instance().VisitAllMutators(
-        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
-    gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
+    RootVisitor checkedRawRootVisitor = [&remset, &rawRootVisitor](ObjectRef& root) {
+        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
+        rawRootVisitor(root);
+    };
+    RootVisitor& visitedRawRootVisitor = checkedRawRootVisitor;
+#else
+    RootVisitor& visitedRawRootVisitor = rawRootVisitor;
+#endif
+    gMinorRootOrigin = "mutator_stack";
+    MutatorManager::Instance().VisitAllMutators(
+        [&visitedRawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(visitedRawRootVisitor); });
+    gMinorRootOrigin = "static";
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
         fieldVisitor(field);
     });
-    remset.CheckStaticCoverageForMinor();
 #else
     Heap::GetHeap().VisitStaticRoots(fieldVisitor);
 #endif
     gMinorRootOrigin = "concurrency";
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
     gMinorRootOrigin = "finalizer";
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitedRawRootVisitor);
     gMinorRootOrigin = "export";
-    Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(visitedRawRootVisitor);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    remset.CheckStaticCoverageForMinor();
+#endif
     gMinorRootOrigin = "unknown";
 }
 
