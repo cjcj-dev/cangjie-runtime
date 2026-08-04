@@ -1316,6 +1316,26 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
             }
         });
     }
+    for (MAddress slot : rememberedSlots) {
+        if (!Heap::IsHeapAddress(slot)) {
+            continue;
+        }
+        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
+        if (holderRegion == nullptr || holderRegion->IsYoungRegion() || holderRegion->IsGarbageRegion() ||
+            holderRegion->IsFreeRegion()) {
+            continue;
+        }
+        RefField<>& field = *reinterpret_cast<RefField<>*>(slot);
+        BaseObject* target = ResolveMinorReference(field);
+        if (!Heap::IsHeapAddress(target)) {
+            continue;
+        }
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+            rememberedSet.Record(slot);
+            ++rebuiltRecords;
+        }
+    }
     VLOG(REPORT,
          "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu",
          rebuiltRecords, promotedPathRecords, residualPromoteRecords);
