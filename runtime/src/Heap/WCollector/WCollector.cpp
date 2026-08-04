@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <unordered_map>
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
 #endif
@@ -1069,6 +1070,55 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
+    static const bool retainedProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_RETLIVE_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    size_t originFound = 0;
+    size_t originBoundsValid = 0;
+    size_t retainedNever = 0;
+    size_t retainedValid = 0;
+    size_t retainedEmpty = 0;
+    size_t retainedStale = 0;
+    size_t retainedKeep = 0;
+    size_t retainedDrop = 0;
+    size_t safeEmptyDrop = 0;
+    size_t directDeadDrop = 0;
+    size_t filterCorrect = 0;
+    size_t filterIncorrect = 0;
+    // The precise bitmap intentionally stores only field-slot identity. Recover an
+    // object origin only for regions whose retained snapshot is consumable (or when
+    // the default-off probe requests visibility), and keep that adapter local to this
+    // minor collection rather than adding a second persistent remset index.
+    std::unordered_map<MAddress, BaseObject*> rememberedOrigins;
+    std::unordered_set<RegionInfo*> originRegions;
+    for (MAddress slot : rememberedSlots) {
+        if (!Heap::IsHeapAddress(slot)) {
+            continue;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(slot);
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
+        if (retainedProbe || (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
+                             region->IsRetainedSnapshotValid())) {
+            originRegions.insert(region);
+        }
+    }
+    for (RegionInfo* region : originRegions) {
+        region->VisitAllObjects([&rememberedSlots, &rememberedOrigins](BaseObject* holder) {
+            if (holder == nullptr || !holder->HasRefField()) {
+                return;
+            }
+            holder->ForEachRefField([holder, &rememberedSlots, &rememberedOrigins](RefField<>& field) {
+                MAddress slot = reinterpret_cast<MAddress>(&field);
+                if (rememberedSlots.count(slot) != 0) {
+                    rememberedOrigins[slot] = holder;
+                }
+            });
+        });
+    }
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -1082,13 +1132,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-        if (fullYoungScan && reachableSlots.count(slot) == 0) {
-            if (statsOut != nullptr) {
-                ++statsOut->skippedFysFilter;
-            }
-            continue;
-        }
-
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
         if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
             ++scrubbedDeadHolder;
@@ -1100,6 +1143,98 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                      holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsFreeRegion()),
                      holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsGarbageRegion()));
             }
+            continue;
+        }
+
+        bool keepByRetainedSnapshot = true;
+        auto originIt = rememberedOrigins.find(slot);
+        if (originIt != rememberedOrigins.end() && originIt->second != nullptr &&
+            Heap::IsHeapAddress(originIt->second)) {
+            BaseObject* holder = originIt->second;
+            RegionInfo* originRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            if (originRegion == holderRegion) {
+                if (retainedProbe) {
+                    ++originFound;
+                    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
+                    size_t holderSize = RegionSpace::GetAllocSize(*holder);
+                    if (slot >= holderAddress && slot < holderAddress + holderSize) {
+                        ++originBoundsValid;
+                    }
+                }
+                RegionInfo::RetainedLiveInfoState retainedState = holderRegion->GetRetainedLiveInfoState();
+                if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
+                    if (retainedProbe) {
+                        ++retainedNever;
+                    }
+                } else if (!holderRegion->IsRetainedSnapshotValid()) {
+                    if (retainedProbe) {
+                        ++retainedStale;
+                    }
+                } else {
+                    MAddress coveredUpTo = holderRegion->GetRetainedLiveInfoCoveredUpTo();
+                    CHECK(coveredUpTo >= holderRegion->GetRegionStart() &&
+                          coveredUpTo <= holderRegion->GetRegionAllocPtr());
+                    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
+                    if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                        if (retainedProbe) {
+                            ++retainedEmpty;
+                        }
+                    } else {
+                        if (retainedProbe) {
+                            ++retainedValid;
+                        }
+                    }
+                    if (holderAddress < coveredUpTo) {
+                        if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
+                            keepByRetainedSnapshot = false;
+                            if (retainedProbe) {
+                                ++safeEmptyDrop;
+                            }
+                        } else if (holderRegion->IsLargeRegion()) {
+                            LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
+                            keepByRetainedSnapshot = retainedLiveInfo != nullptr
+                                ? retainedLiveInfo->IsSurvivedObject(0)
+                                : holderRegion->IsSurvivedObject(0);
+                            if (retainedProbe && !keepByRetainedSnapshot) {
+                                ++directDeadDrop;
+                            }
+                        } else {
+                            LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
+                            CHECK(retainedLiveInfo != nullptr);
+                            size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
+                            keepByRetainedSnapshot = retainedLiveInfo->IsSurvivedObject(holderOffset);
+                            if (retainedProbe && !keepByRetainedSnapshot) {
+                                ++directDeadDrop;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (retainedProbe) {
+            if (keepByRetainedSnapshot) {
+                ++retainedKeep;
+            } else {
+                ++retainedDrop;
+            }
+        }
+        if (fullYoungScan) {
+            bool oracleKeep = reachableSlots.count(slot) != 0;
+            if (retainedProbe) {
+                if (keepByRetainedSnapshot == oracleKeep) {
+                    ++filterCorrect;
+                } else {
+                    ++filterIncorrect;
+                }
+            }
+            if (!oracleKeep) {
+                if (statsOut != nullptr) {
+                    ++statsOut->skippedFysFilter;
+                }
+                continue;
+            }
+        } else if (!keepByRetainedSnapshot) {
+            ++scrubbedDeadHolder;
             continue;
         }
 
@@ -1174,6 +1309,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              "staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
              scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+    }
+    if (retainedProbe) {
+        VLOG(REPORT,
+             "[RETLIVE][summary] slots=%zu originFound=%zu originBoundsValid=%zu never=%zu valid=%zu empty=%zu "
+             "stale=%zu keep=%zu drop=%zu safeEmpty=%zu directDead=%zu oracleCorrect=%zu oracleIncorrect=%zu "
+             "fullYoungScan=%u",
+             rememberedSlots.size(), originFound, originBoundsValid, retainedNever, retainedValid, retainedEmpty,
+             retainedStale, retainedKeep, retainedDrop, safeEmptyDrop, directDeadDrop, filterCorrect,
+             filterIncorrect, static_cast<unsigned>(fullYoungScan));
     }
 }
 
@@ -1289,6 +1433,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         if (region->IsYoungRegion()) {
             // Residual candidates not forwarded above (e.g. raw-pointer pinned):
             // still demote to old; must replay young→young edges that become old→young.
+            region->PreserveRetainedLiveInfo();
             residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -1904,7 +2049,7 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedSlots.size();
     MinorSlotSet consumedSlots;
-    RescanRememberedSet(workStack, liveRememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
+    RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                         &remsetStats);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
     static const bool verifyRemsetEnabled = []() {
@@ -2042,6 +2187,11 @@ void WCollector::DoGarbageCollection()
     InvalidateOldTaggedRefs(false);
 
     CollectSmallSpace();
+    // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
+    // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
+    // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under
+    // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
+    // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
 }
 
