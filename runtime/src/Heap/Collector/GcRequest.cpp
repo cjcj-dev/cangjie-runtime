@@ -43,7 +43,8 @@ bool GCRequest::ShouldBeIgnored() const
         case GC_REASON_NATIVE:
             return IsFrequentAsyncGC();
         case GC_REASON_YOUNG:
-            return IsFrequentAsyncGC();
+            // Young allocation volume is its throttle; do not add time-based request suppression.
+            return false;
         case GC_REASON_OOM:
         case GC_REASON_FORCE:
             return IsFrequentGC();
@@ -61,6 +62,6 @@ GCRequest g_gcRequests[] = {
     { GC_REASON_HEU_SYNC, "heuristic_sync", true, true, 0, 0 },
     { GC_REASON_NATIVE_SYNC, "native_alloc_sync", true, true, 0, 0 },
     { GC_REASON_FORCE, "force", true, false, 0, 0 },
-    { GC_REASON_YOUNG, "young", false, false, LONG_MIN_HEU_GC_INTERVAL_NS, g_initHeuTriggerTimestamp }
+    { GC_REASON_YOUNG, "young", false, false, 0, 0 }
 };
 } // namespace MapleRuntime
