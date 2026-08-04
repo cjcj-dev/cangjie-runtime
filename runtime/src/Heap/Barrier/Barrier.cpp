@@ -409,9 +409,11 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return;
     }
-    // Non-heap field (static root / global struct): it is independently visited by
-    // VisitStaticRoots every minor, so it must not consume a heap-region bitmap bit.
+    // Non-heap field (static/global/value temporary): it cannot consume a
+    // heap-region bitmap bit. Retain exact slot identity in the separately locked
+    // external double buffer.
     (void)obj;
+    theRememberedSet.RecordExternal(fieldAddress);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     theRememberedSet.RecordStaticForCrossCheck(
         fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
