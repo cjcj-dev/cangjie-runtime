@@ -2018,6 +2018,15 @@ void WCollector::DoGarbageCollection()
 
     CollectSmallSpace();
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
+    size_t rebuilt = 0;
+    {
+        ScopedStopTheWorld stw("rebuild remembered set after full");
+        rebuilt = manager.RecordPinnedCrossGenEdges(true);
+    }
+    if (rebuilt != 0) {
+        VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
+    }
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)

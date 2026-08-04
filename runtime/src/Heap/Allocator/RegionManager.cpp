@@ -78,10 +78,10 @@ size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
     return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
 }
 
-size_t RegionManager::RecordPinnedCrossGenEdges()
+size_t RegionManager::RecordPinnedCrossGenEdges(bool fullHeapScan)
 {
     // gcscanoff blocking test: skip whole conservative pinned/old scan (default off).
-    {
+    if (!fullHeapScan) {
         static const bool skip = []() {
             const char* v = std::getenv("MRT_GCV2_SKIP_PINNED_SCAN");
             return v != nullptr && std::strcmp(v, "1") == 0;
@@ -93,26 +93,41 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
+    auto recordFromObject = [&rememberedSet, &recorded](BaseObject* object) {
+        if (object == nullptr || !object->HasRefField()) {
+            return;
+        }
+        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+            BaseObject* target = field.GetTargetObject();
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                ++recorded;
+            }
+        });
+    };
+    if (fullHeapScan) {
+        ForEachObjUnsafe([&recordFromObject](BaseObject* object) {
+            if (object == nullptr || !object->IsValidObject()) {
+                return;
+            }
+            RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            if (holderRegion == nullptr || holderRegion->IsYoungRegion() || holderRegion->IsGarbageRegion() ||
+                holderRegion->IsFreeRegion()) {
+                return;
+            }
+            recordFromObject(object);
+        });
+        return recorded;
+    }
+    auto scanRegion = [&recordFromObject](RegionInfo* region) {
         if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
             return;
         }
-        region->VisitAllObjects([&rememberedSet, &recorded](BaseObject* object) {
-            if (object == nullptr || !object->HasRefField()) {
-                return;
-            }
-            object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
-                BaseObject* target = field.GetTargetObject();
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                    ++recorded;
-                }
-            });
-        });
+        region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     };
     // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
     // scanRegion already skips IsYoungRegion, so candidate young lists are free.
