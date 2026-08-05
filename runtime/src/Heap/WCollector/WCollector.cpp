@@ -2579,8 +2579,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }
 
     {
-        // minortime: ⑥ copy / forward
-        MRT_MINOR_PHASE_TIMER("young.copy");
+        // minorstw coarse phase: copy/forward plus evacuation metadata completion.
+        MRT_MINOR_PHASE_TIMER("young.copy_and_finish");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
@@ -2589,13 +2589,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
             }
         }
-    }
 
     size_t residualPromoteRecords = 0;
     size_t promotedPathRecords = 0;
     {
         // minorstw: residual young-region promotion and its cross-generation edge replay.
-        MRT_MINOR_PHASE_TIMER("young.promote_residual");
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
@@ -2641,7 +2639,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     size_t liveYoungRegions = 0;
     {
         // minorstw: rebuild old-to-young edges only while a live young region remains.
-        MRT_MINOR_PHASE_TIMER("young.remset_rebuild");
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
         // live young region count is the product-path authority
         // (RegionInfo::youngRegionCount / GetYoungRegionCount —
@@ -2688,14 +2685,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minorstw: retire the prior forwarding generation before rebuilding region lists.
-        MRT_MINOR_PHASE_TIMER("young.forward_table_reset");
         fwdTable.PrepareForwardTable();
         ValidateMinorReferences("after-dispel", nullptr);
     }
     {
         // minorstw: publish the surviving from-space regions back to the region manager.
-        MRT_MINOR_PHASE_TIMER("young.reassemble_space");
         manager.ReassembleFromSpace();
+    }
     }
 }
 
@@ -3203,7 +3199,6 @@ void WCollector::DoYoungGarbageCollection()
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     {
         // minortime: ① FlushAllocationRegions
-        MRT_MINOR_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
     }
     if (minorTotalRuns != 0) {
@@ -3216,7 +3211,6 @@ void WCollector::DoYoungGarbageCollection()
     YoungCollectionStats stats;
     {
         // minortime: ② PrepareYoungGarbageCandidates
-        MRT_MINOR_PHASE_TIMER("young.prepare_candidates");
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
@@ -3247,7 +3241,6 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
-        MRT_MINOR_PHASE_TIMER("young.remset_drain");
         size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
         if (pinnedRemsetRecords != 0) {
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
@@ -3302,14 +3295,15 @@ void WCollector::DoYoungGarbageCollection()
             }
         });
     }
-    g_minorLedgerCost.Reset();
-    {
-        // minortime: ⑤ mark closure pass-1 (from roots)
-        MRT_MINOR_PHASE_TIMER("young.mark_closure");
-        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                          useBitmapLedger);
-    }
     MinorSlotSet liveRememberedSlots;
+    {
+        // minorstw coarse phase: closure fixpoint, remembered-set rescan, and mark termination.
+        MRT_MINOR_PHASE_TIMER("young.mark_and_remset");
+        g_minorLedgerCost.Reset();
+        {
+            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger);
+        }
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
             (!fullYoungScan ||
@@ -3325,12 +3319,10 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet consumedSlots;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
-        MRT_MINOR_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                             &remsetStats);
     }
     {
-        MRT_MINOR_PHASE_TIMER("young.mark_from_remset");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
@@ -3479,10 +3471,10 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
-        MRT_MINOR_PHASE_TIMER("young.pre_evac_clear");
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         WeakRefBuffer::Instance().ClearWeakRefBuffer();
         SatbBuffer::Instance().ClearBuffer();
+    }
     }
 
     size_t allocatedBefore = space.AllocatedBytes();
@@ -3513,7 +3505,6 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ post-evac finish
-        MRT_MINOR_PHASE_TIMER("young.post_evac_finish");
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
         MergeResurrectExportObjects();
     }
