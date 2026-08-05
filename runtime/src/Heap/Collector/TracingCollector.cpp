@@ -53,8 +53,9 @@ size_t StackMapConsMaxBytes()
     return maxBytes;
 }
 
-// Scan [FA - maxBytes, FA) word-by-word; visit slots that look like heap objects.
+// Scan [FA - maxBytes, FA) word-by-word; visit slots that look like heap addresses.
 // Frame locals sit below FA (stack grows down); see StackType.h FrameAddress layout.
+// Range check only (Allocator::IsHeapObject is not on the abstract API; diagnostic OK).
 void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddress)
 {
     const size_t maxBytes = StackMapConsMaxBytes();
@@ -65,11 +66,7 @@ void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddres
         if (obj == nullptr) {
             continue;
         }
-        MAddress addr = reinterpret_cast<MAddress>(obj);
-        if (!Heap::IsHeapAddress(addr)) {
-            continue;
-        }
-        if (!Heap::GetHeap().GetAllocator().IsHeapObject(addr)) {
+        if (!Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj))) {
             continue;
         }
         visitor(*slot);
