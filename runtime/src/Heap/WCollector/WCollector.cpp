@@ -1093,12 +1093,12 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         size_t taggedSlots = 0;
         size_t maxStaleness = 0;
         // stalebound T1: sample slots with staleness ≥ 2 (address identity across majors).
-        static constexpr size_t kMaxStaleSamples = 512;
+        // 512 is a file-scope constexpr (local struct cannot have static members).
         struct StaleSample {
             uintptr_t slot = 0;
             uint16_t stale = 0;
         };
-        StaleSample staleSamples[kMaxStaleSamples] = {};
+        StaleSample staleSamples[512] = {};
         size_t staleSampleCount = 0;
         size_t staleGe2Count = 0;
     };
@@ -1126,7 +1126,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         // T1: record slot address when staleness ≥ 2 (bounded sample for identity tracking).
         if (stale >= 2) {
             ++hAcc->staleGe2Count;
-            if (hAcc->staleSampleCount < HeapAccount::kMaxStaleSamples) {
+            if (hAcc->staleSampleCount < 512) {
                 HeapAccount::StaleSample& s = hAcc->staleSamples[hAcc->staleSampleCount++];
                 s.slot = reinterpret_cast<uintptr_t>(&field);
                 s.stale = static_cast<uint16_t>(stale);
@@ -1526,7 +1526,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 heapTotals.maxStaleness = acc.maxStaleness;
             }
             for (size_t si = 0; si < acc.staleSampleCount &&
-                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                 heapTotals.staleSampleCount < 512; ++si) {
                 heapTotals.staleSamples[heapTotals.staleSampleCount++] = acc.staleSamples[si];
             }
             chunksPerWorker.push_back(acc.chunksTaken);
@@ -1613,7 +1613,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 heapTotals.maxStaleness = a.maxStaleness;
             }
             for (size_t si = 0; si < a.staleSampleCount &&
-                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                 heapTotals.staleSampleCount < 512; ++si) {
                 heapTotals.staleSamples[heapTotals.staleSampleCount++] = a.staleSamples[si];
             }
         }
@@ -1648,7 +1648,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 heapTotals.maxStaleness = a.maxStaleness;
             }
             for (size_t si = 0; si < a.staleSampleCount &&
-                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                 heapTotals.staleSampleCount < 512; ++si) {
                 heapTotals.staleSamples[heapTotals.staleSampleCount++] = a.staleSamples[si];
             }
             chunksPerWorker.push_back(a.chunksTaken);
