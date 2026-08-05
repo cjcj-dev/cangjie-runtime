@@ -39,6 +39,9 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/InteriorSrcProbe.h"
+#include "Heap/Verify/StaticSlotProbe.h"
+#include "Heap/Verify/NextField2Probe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -351,6 +354,8 @@ template<bool forward>
 bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                        BaseObject*& toObj) const
 {
+    NextField2Probe::ScopedInstallPath scopedPath(
+        forward ? "TryForwardRefField" : "TryUpdateRefFieldImpl");
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
@@ -402,6 +407,7 @@ bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObje
 // this api untags current pointer as well as old pointer, caller should take care of this.
 bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
 {
+    NextField2Probe::ScopedInstallPath scopedPath("TryUntagRefField");
     for (;;) {
         RefField<> oldRef(field);
         if (!oldRef.IsTagged()) {
@@ -891,6 +897,7 @@ void WCollector::TraceHeap()
 
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 {
+    NextField2Probe::ScopedInstallPath scopedPath("FixOldTaggedRefField");
     RefField<> oldField(field);
     if (!IsOldPointer(oldField)) {
         return;
@@ -1605,6 +1612,7 @@ std::atomic<size_t> g_minorRefCasOk{ 0 };
 // On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
 bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
 {
+    NextField2Probe::ScopedInstallPath scopedPath("CasInstallPlainTarget");
     RefField<> desired(plainTarget);
     MAddress desiredVal = desired.GetFieldValue();
     if (expected == desiredVal) {
@@ -1667,6 +1675,8 @@ namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
 // can attribute invalid headers without threading origin through every visitor.
 thread_local const char* gMinorRootOrigin = "unknown";
+// nextfield2/interiorsrc: source slot address for NotePush.
+thread_local uintptr_t gMinorRootSlotAddr = 0;
 } // namespace
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
@@ -1682,27 +1692,41 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
 #endif
     gMinorRootOrigin = "mutator_stack";
+    RootVisitor taggedRaw = [&visitedRawRootVisitor](ObjectRef& root) {
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&root);
+        visitedRawRootVisitor(root);
+        gMinorRootSlotAddr = 0;
+    };
     MutatorManager::Instance().VisitAllMutators(
-        [&visitedRawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(visitedRawRootVisitor); });
+        [&taggedRaw](Mutator& mutator) { mutator.VisitMutatorRoots(taggedRaw); });
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
+        StaticSlotProbe::NoteStaticField(field);
         fieldVisitor(field);
+        gMinorRootSlotAddr = 0;
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Heap::GetHeap().VisitStaticRoots([&fieldVisitor](RefField<>& field) {
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
+        StaticSlotProbe::NoteStaticField(field);
+        fieldVisitor(field);
+        gMinorRootSlotAddr = 0;
+    });
 #endif
     gMinorRootOrigin = "concurrency";
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&taggedRaw);
     gMinorRootOrigin = "finalizer";
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitedRawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(taggedRaw);
     gMinorRootOrigin = "export";
-    Heap::GetHeap().VisitAllExportRoots(visitedRawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(taggedRaw);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     remset.CheckStaticCoverageForMinor();
 #endif
     gMinorRootOrigin = "unknown";
+    gMinorRootSlotAddr = 0;
 }
 
 void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
@@ -1745,7 +1769,19 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    {
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            } else if (src == nullptr) {
+                src = "unknown";
+            }
+        }
+        InteriorSrcProbe::NotePush(src, object, gMinorRootSlotAddr, 0);
+    }
     if (!object->IsValidObject()) {
+        InteriorSrcProbe::FlushSummary("invalid-minor-root");
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
         // slot, or stackmap-mislabeled root). Printed once per process by default.
@@ -1844,7 +1880,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                 workStack.push_back(target);
             }
         } else {
+            gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
             PushYoungObject(target, workStack, "closure_edge");
+            gMinorRootSlotAddr = 0;
         }
     };
     while (!workStack.empty()) {
@@ -2161,7 +2199,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+        gMinorRootSlotAddr = static_cast<uintptr_t>(slot);
         PushYoungObject(target, workStack, "remset");
+        gMinorRootSlotAddr = 0;
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
@@ -2189,6 +2229,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
 {
+    NextField2Probe::ScopedInstallPath scopedPath("FixMinorEvacuatedSlot");
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
@@ -3248,6 +3289,9 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    InteriorSrcProbe::FlushSummary("post-minor-trace");
+    StaticSlotProbe::FlushSummary("post-minor-trace");
+    NextField2Probe::FlushSummary("post-minor-trace");
     g_minorLedgerCost.Report();
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),

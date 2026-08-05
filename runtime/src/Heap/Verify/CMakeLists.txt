@@ -16,6 +16,10 @@ set(SRC_LIST
     "DiffPathExplainer.cpp"
     "TraceClear.cpp"
     "TagReuseProbe.cpp"
+    "NextField2Probe.cpp"
+    "SizeGuardForensics.cpp"
+    "StaticSlotProbe.cpp"
+    "InteriorSrcProbe.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
