@@ -815,10 +815,18 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (!IsMarkedObject(targetObj)) {
             if (F3Consumer::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur") ||
                 F3Scan::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur")) {
+                if (SatbGap::Enabled()) {
+                    SatbGap::NoteTraceSlot(obj, &field, targetObj, 0, "TraceRefField_cur_skip");
+                }
                 return;
             }
             workStack.push_back(targetObj);
             F3Consumer::NoteEdgeFollow(obj, &field, targetObj, "TraceRefField_cur");
+            if (SatbGap::Enabled()) {
+                SatbGap::NoteTraceSlot(obj, &field, targetObj, 1, "TraceRefField_cur");
+            }
+        } else if (SatbGap::Enabled()) {
+            SatbGap::NoteTraceSlot(obj, &field, targetObj, 0, "TraceRefField_cur_marked");
         }
         return;
     }
@@ -833,6 +841,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
+        if (SatbGap::Enabled()) {
+            SatbGap::NoteTraceSlot(obj, &field, latest, 0, "TraceRefField_nonheap");
+        }
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
@@ -848,10 +859,18 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!IsMarkedObject(latest)) {
         if (F3Consumer::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest") ||
             F3Scan::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest")) {
+            if (SatbGap::Enabled()) {
+                SatbGap::NoteTraceSlot(obj, &field, latest, 0, "TraceRefField_latest_skip");
+            }
             return;
         }
         workStack.push_back(latest);
         F3Consumer::NoteEdgeFollow(obj, &field, latest, "TraceRefField_latest");
+        if (SatbGap::Enabled()) {
+            SatbGap::NoteTraceSlot(obj, &field, latest, 1, "TraceRefField_latest");
+        }
+    } else if (SatbGap::Enabled()) {
+        SatbGap::NoteTraceSlot(obj, &field, latest, 0, "TraceRefField_latest_marked");
     }
 }
 

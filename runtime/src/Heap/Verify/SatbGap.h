@@ -35,6 +35,10 @@ public:
     static bool NoteWrite(void* holder, void* field, void* oldRef, void* newRef, int satbLoggedNew,
                           const char* site);
 
+    // barestore T2: value observed at TraceRefField when walking a slot (default off via SATB_GAP).
+    // pushed=1 if workStack.push_back ran for this target.
+    static void NoteTraceSlot(void* holder, void* field, void* value, int pushed, const char* site);
+
     // POSCTRL: should suppress SATB for this post-scan write of newRef? (once).
     static bool ShouldSkipSatbNew(void* holder, void* field, void* newRef, const char* site);
 

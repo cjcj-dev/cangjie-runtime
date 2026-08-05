@@ -26,6 +26,8 @@ namespace {
 // Unbounded would thrash; 1<<20 holds major TRACE holders for selfhost pkgs.
 constexpr size_t kScanCap = 1u << 20;
 constexpr size_t kWriteCap = 4096;
+// Circular: major TRACE visits far more slots than any fixed cap; keep recent window.
+constexpr size_t kTraceCap = 1u << 16;
 
 bool EnvIsOne(const char* name)
 {
@@ -53,6 +55,18 @@ size_t gWriteN = 0;
 size_t gWriteTotal = 0;
 size_t gPostScanWriteTotal = 0;
 size_t gPostScanNoSatb = 0;
+
+struct TraceRec {
+    void* holder;
+    void* field;
+    void* value;
+    intptr_t slotOff;
+    int pushed;
+    char site[28];
+};
+TraceRec gTraces[kTraceCap];
+size_t gTraceN = 0;
+size_t gTraceTotal = 0;
 
 std::atomic<int> gPosFired{ 0 };
 void* gPosHolder = nullptr;
@@ -144,6 +158,29 @@ bool SatbGap::ShouldSkipSatbNew(void* holder, void* field, void* newRef, const c
     return true;
 }
 
+void SatbGap::NoteTraceSlot(void* holder, void* field, void* value, int pushed, const char* site)
+{
+    if (!Enabled() || holder == nullptr || field == nullptr) {
+        return;
+    }
+    // Skip null-heavy traffic: edge-absent vs follow-fail both need non-null discrimination.
+    // Still record null when site ends with nonheap/skip for sparse signal.
+    std::lock_guard<std::mutex> lk(gMu);
+    ++gTraceTotal;
+    const size_t idx = gTraceN % kTraceCap;
+    TraceRec& r = gTraces[idx];
+    r.holder = holder;
+    r.field = field;
+    r.value = value;
+    r.slotOff = BaseObject::FieldOffset(reinterpret_cast<BaseObject*>(holder), field);
+    r.pushed = pushed;
+    r.site[0] = '\0';
+    if (site != nullptr) {
+        std::snprintf(r.site, sizeof(r.site), "%s", site);
+    }
+    ++gTraceN;
+}
+
 bool SatbGap::NoteWrite(void* holder, void* field, void* oldRef, void* newRef, int satbLoggedNew, const char* site)
 {
     if (!Enabled()) {
@@ -228,6 +265,12 @@ void SatbGap::DumpAtAbort(void* holder, void* field, void* target, char* verdict
     int matchWrite = 0;
     int matchNoSatb = 0;
     int matchPos = PosCtrlMatch(holder, target) ? 1 : 0;
+    int traceHit = 0;
+    int tracePushed = 0;
+    int traceValueEq = 0;
+    int traceValueNull = 0;
+    int traceValueOther = 0;
+    void* traceValue = nullptr;
     intptr_t slotOff = -1;
     if (holder != nullptr && field != nullptr) {
         slotOff = BaseObject::FieldOffset(reinterpret_cast<BaseObject*>(holder), field);
@@ -248,6 +291,40 @@ void SatbGap::DumpAtAbort(void* holder, void* field, void* target, char* verdict
                 }
             }
         }
+        const size_t tAvail = gTraceN < kTraceCap ? gTraceN : kTraceCap;
+        const size_t tBase = gTraceN < kTraceCap ? 0 : (gTraceN % kTraceCap);
+        for (size_t k = 0; k < tAvail; ++k) {
+            // Walk newest-first so last visit of the slot wins.
+            const size_t i = (tBase + tAvail - 1 - k) % kTraceCap;
+            const TraceRec& r = gTraces[i];
+            if (r.holder != holder) {
+                continue;
+            }
+            if (r.field != field && r.slotOff != slotOff) {
+                continue;
+            }
+            traceHit = 1;
+            traceValue = r.value;
+            if (r.pushed) {
+                tracePushed = 1;
+            }
+            if (r.value == nullptr) {
+                traceValueNull = 1;
+            } else if (r.value == target) {
+                traceValueEq = 1;
+            } else {
+                traceValueOther = 1;
+            }
+            break;
+        }
+    }
+
+    // Live re-read of the slot at abort (edge may have changed since TRACE).
+    void* liveNow = nullptr;
+    int liveEq = 0;
+    if (field != nullptr) {
+        liveNow = reinterpret_cast<RefField<>*>(field)->GetTargetObject();
+        liveEq = (liveNow == target) ? 1 : 0;
     }
 
     const char* sClass = "SATB_NO_POSTSCAN_WRITE_MATCH";
@@ -257,6 +334,12 @@ void SatbGap::DumpAtAbort(void* holder, void* field, void* target, char* verdict
         sClass = "SATBGAP_CONFIRMED_postscan_nosatb";
     } else if (scanned && matchWrite) {
         sClass = "SATB_POSTSCAN_WRITE_LOGGED";
+    } else if (scanned && traceHit && traceValueEq && !tracePushed) {
+        sClass = "FOLLOW_FAIL_value_present_not_pushed";
+    } else if (scanned && traceHit && (traceValueNull || traceValueOther)) {
+        sClass = "FOLLOW_EDGE_ABSENT_at_scan";
+    } else if (scanned && !traceHit) {
+        sClass = "SATB_SCANNED_NO_TRACE_SLOT";
     } else if (scanned) {
         sClass = "SATB_SCANNED_NO_WRITE_RECORD";
     } else if (!scanned) {
@@ -265,13 +348,16 @@ void SatbGap::DumpAtAbort(void* holder, void* field, void* target, char* verdict
 
     VLOG(REPORT,
          "[GCV2][SATB] holder=%p field=%p target=%p slotOff=%zd scanned=%d matchWrite=%d matchNoSatb=%d "
-         "posMatch=%d posFired=%d scanN=%zu writeN=%zu postScanW=%zu postScanNoSatb=%zu class=%s",
+         "posMatch=%d posFired=%d scanN=%zu writeN=%zu postScanW=%zu postScanNoSatb=%zu "
+         "traceHit=%d traceVal=%p push=%d eq=%d null=%d other=%d live=%p liveEq=%d traceN=%zu class=%s",
          holder, field, target, slotOff, scanned, matchWrite, matchNoSatb, matchPos,
-         gPosFired.load(std::memory_order_acquire), gScanN, gWriteN, gPostScanWriteTotal, gPostScanNoSatb, sClass);
+         gPosFired.load(std::memory_order_acquire), gScanN, gWriteN, gPostScanWriteTotal, gPostScanNoSatb,
+         traceHit, traceValue, tracePushed, traceValueEq, traceValueNull, traceValueOther, liveNow, liveEq, gTraceN,
+         sClass);
 
     if (verdictBuf != nullptr && verdictBufSize > 0) {
-        std::snprintf(verdictBuf, verdictBufSize, "%s_sc%d_mw%d_ns%d_pos%d", sClass, scanned, matchWrite, matchNoSatb,
-                      matchPos);
+        std::snprintf(verdictBuf, verdictBufSize, "%s_sc%d_mw%d_ns%d_pos%d_th%d_eq%d_pu%d_lv%d", sClass, scanned,
+                      matchWrite, matchNoSatb, matchPos, traceHit, traceValueEq, tracePushed, liveEq);
     }
 }
 
