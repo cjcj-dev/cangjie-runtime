@@ -52,6 +52,23 @@
 
 namespace MapleRuntime {
 namespace {
+// extermsplit T2: default-off count of objects actually copied in major Forward.
+// MRT_GCV2_POSTFLIP_MOVED_ACCOUNT=1 → count + report after ForwardFromSpace.
+// Does not change product control flow when unset.
+std::atomic<uint64_t> g_majorMovedObjects{ 0 };
+std::atomic<uint64_t> g_majorMovedBytes{ 0 };
+std::atomic<uint64_t> g_majorFwdCalls{ 0 };
+std::atomic<uint64_t> g_majorFwdAlready{ 0 };
+
+int MajorMovedAccountMode()
+{
+    static const int mode = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_MOVED_ACCOUNT");
+        return (value != nullptr && std::strcmp(value, "1") == 0) ? 1 : 0;
+    }();
+    return mode;
+}
+
 // T1 ledger-cost probe (setbitmap O1③): default off.
 // MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
 // MRT_GCV2_LEDGER_COST=2 → count only (no NanoSeconds; for overhead control)
@@ -973,10 +990,47 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_INJECT");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    // extermsplit T1: default-off postflip cost split / ablation.
+    // MRT_GCV2_POSTFLIP_SPLIT_COST:
+    //   unset/0 → off (zero control-flow change on product path)
+    //   1       → fine-grained ns buckets (walk structure / fix / remset) + report
+    //   fix     → ablate 乙 (FixOldTaggedRefField no-op) — timing arm only
+    //   remset  → ablate 丙 (rebuildRemset Record no-op)
+    //   work    → ablate 乙+丙 (only 甲 traversal remains)
+    //   walk    → ablate entire object/field walk (STW+setup residual)
+    // Ablation arms are NEVER product defaults; they change correctness — use only for timing.
+    static const int splitCostMode = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_SPLIT_COST");
+        if (value == nullptr || value[0] == '\0' || std::strcmp(value, "0") == 0) {
+            return 0;
+        }
+        if (std::strcmp(value, "1") == 0) {
+            return 1;
+        }
+        if (std::strcmp(value, "fix") == 0) {
+            return 2;
+        }
+        if (std::strcmp(value, "remset") == 0) {
+            return 3;
+        }
+        if (std::strcmp(value, "work") == 0) {
+            return 4;
+        }
+        if (std::strcmp(value, "walk") == 0) {
+            return 5;
+        }
+        return 0;
+    }();
     // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
     const bool account = accountEnv;
     const bool preflipVerify = preflipVerifyEnv;
     const bool preflipInject = preflipInjectEnv;
+    // Ablation only on postflip (requireSurvivedMark=false); preflip stays untouched.
+    const int splitMode = requireSurvivedMark ? 0 : splitCostMode;
+    const bool splitTime = splitMode == 1;
+    const bool skipFix = splitMode == 2 || splitMode == 4 || splitMode == 5;
+    const bool skipRemset = splitMode == 3 || splitMode == 4 || splitMode == 5;
+    const bool skipWalk = splitMode == 5;
     // VERIFY always needs fixed counts so a non-zero residue can fail loud.
     const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
 
@@ -1004,6 +1058,14 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         size_t fromLiveFields = 0;
         size_t rebuilt = 0;
         size_t chunksTaken = 0;
+        // extermsplit T1 buckets (ns); only filled when splitTime.
+        uint64_t walkStructNs = 0;
+        uint64_t fixNs = 0;
+        uint64_t remsetNs = 0;
+        size_t fixCalls = 0;
+        size_t remsetCalls = 0;
+        size_t fieldVisits = 0;
+        size_t objVisits = 0;
     };
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -1012,8 +1074,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const uintptr_t heapStart = regionManager.GetRegionHeapStart();
     const uintptr_t inactiveZone = regionManager.GetInactiveZone();
 
-    auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
-        return [this, trackFixed, acc](ObjectRef& root) {
+    auto makeRootVisitor = [this, trackFixed, skipFix, skipWalk](RootAccount* acc) -> RootVisitor {
+        return [this, trackFixed, skipFix, skipWalk, acc](ObjectRef& root) {
+            if (skipWalk || skipFix) {
+                return;
+            }
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
@@ -1029,8 +1094,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
         };
     };
-    auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
-        return [this, trackFixed, acc](RefField<>& field) {
+    auto makeRootFieldVisitor = [this, trackFixed, skipFix, skipWalk](RootAccount* acc) -> RefFieldVisitor {
+        return [this, trackFixed, skipFix, skipWalk, acc](RefField<>& field) {
+            if (skipWalk || skipFix) {
+                return;
+            }
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
@@ -1046,8 +1114,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed](BaseObject* obj,
-                                                                                          HeapAccount& acc) {
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed, splitTime, skipFix,
+                          skipRemset, skipWalk](BaseObject* obj, HeapAccount& acc) {
+        if (skipWalk) {
+            return;
+        }
         RegionInfo* accountRegion = nullptr;
         if (account) {
             ++acc.processedObjects;
@@ -1080,8 +1151,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         if (account) {
             ++acc.refHolders;
         }
+        if (splitTime) {
+            ++acc.objVisits;
+        }
         bool recordCrossGen = false;
-        if (rebuildRemset != nullptr) {
+        if (rebuildRemset != nullptr && !skipRemset) {
             RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
             recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
                              !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
@@ -1089,7 +1163,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
-                              &acc](RefField<>& field) {
+                              splitTime, skipFix, skipRemset, &acc](RefField<>& field) {
+            if (splitTime) {
+                ++acc.fieldVisits;
+            }
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed) {
@@ -1101,11 +1178,20 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                     ++acc.oldTaggedSlots;
                 }
             }
-            FixOldTaggedRefField(obj, field);
+            if (!skipFix) {
+                if (splitTime) {
+                    uint64_t t0 = TimeUtil::NanoSeconds();
+                    FixOldTaggedRefField(obj, field);
+                    acc.fixNs += TimeUtil::NanoSeconds() - t0;
+                    ++acc.fixCalls;
+                } else {
+                    FixOldTaggedRefField(obj, field);
+                }
+            }
             if (oldTagged && field.GetFieldValue() != oldValue) {
                 ++acc.fixedSlots;
             }
-            if (!recordCrossGen) {
+            if (!recordCrossGen || skipRemset) {
                 return;
             }
             BaseObject* target = field.GetTargetObject();
@@ -1117,7 +1203,14 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 if (account) {
                     ++acc.youngTargetSlots;
                 }
-                rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
+                if (splitTime) {
+                    uint64_t t0 = TimeUtil::NanoSeconds();
+                    rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
+                    acc.remsetNs += TimeUtil::NanoSeconds() - t0;
+                    ++acc.remsetCalls;
+                } else {
+                    rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
+                }
                 ++acc.rebuilt;
             }
         });
@@ -1373,6 +1466,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             heapTotals.fromLiveFields += a.fromLiveFields;
             heapTotals.rebuilt += a.rebuilt;
             heapTotals.chunksTaken += a.chunksTaken;
+            heapTotals.walkStructNs += a.walkStructNs;
+            heapTotals.fixNs += a.fixNs;
+            heapTotals.remsetNs += a.remsetNs;
+            heapTotals.fixCalls += a.fixCalls;
+            heapTotals.remsetCalls += a.remsetCalls;
+            heapTotals.fieldVisits += a.fieldVisits;
+            heapTotals.objVisits += a.objVisits;
             chunksPerWorker.push_back(a.chunksTaken);
         }
         workersScheduled = static_cast<size_t>(heapWorkers);
@@ -1395,6 +1495,23 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         VLOG(REPORT, "[F3][parallel] phase=%s workers_active=%zu workers_scheduled=%zu chunks=[%s] parallel=%d",
              requireSurvivedMark ? "preflip" : "postflip", active, workersScheduled, chunksStr.c_str(),
              useParallel ? 1 : 0);
+    }
+
+    // extermsplit T1: fine-grained buckets (only when MRT_GCV2_POSTFLIP_SPLIT_COST=1 on postflip).
+    if (splitTime) {
+        const uint64_t timed = heapTotals.fixNs + heapTotals.remsetNs;
+        VLOG(REPORT,
+             "[GCV2][postflip-split] mode=1 fix_ns=%llu remset_ns=%llu timed_ns=%llu "
+             "fix_calls=%zu remset_calls=%zu field_visits=%zu obj_visits=%zu rebuilt=%zu "
+             "env=MRT_GCV2_POSTFLIP_SPLIT_COST=1",
+             static_cast<unsigned long long>(heapTotals.fixNs),
+             static_cast<unsigned long long>(heapTotals.remsetNs),
+             static_cast<unsigned long long>(timed), heapTotals.fixCalls, heapTotals.remsetCalls,
+             heapTotals.fieldVisits, heapTotals.objVisits, heapTotals.rebuilt);
+    } else if (splitMode != 0) {
+        VLOG(REPORT, "[GCV2][postflip-split] mode=%d ablated skipFix=%d skipRemset=%d skipWalk=%d "
+                     "env=MRT_GCV2_POSTFLIP_SPLIT_COST",
+             splitMode, skipFix ? 1 : 0, skipRemset ? 1 : 0, skipWalk ? 1 : 0);
     }
 
     if (heapTotals.rebuilt != 0) {
@@ -3453,7 +3570,42 @@ void WCollector::DoGarbageCollection()
 
     Preforward();
 
+    if (MajorMovedAccountMode() != 0) {
+        g_majorMovedObjects.store(0, std::memory_order_relaxed);
+        g_majorMovedBytes.store(0, std::memory_order_relaxed);
+        g_majorFwdCalls.store(0, std::memory_order_relaxed);
+        g_majorFwdAlready.store(0, std::memory_order_relaxed);
+    }
+
     ForwardFromSpace();
+
+    if (MajorMovedAccountMode() != 0) {
+        // fromSpaceSize is set inside ForwardFromSpace (CopyCollector.cpp:91).
+        GCStats& stats = GetGCStats();
+        const uint64_t movedObjs = g_majorMovedObjects.load(std::memory_order_relaxed);
+        const uint64_t movedBytes = g_majorMovedBytes.load(std::memory_order_relaxed);
+        const uint64_t fwdCalls = g_majorFwdCalls.load(std::memory_order_relaxed);
+        const uint64_t already = g_majorFwdAlready.load(std::memory_order_relaxed);
+        const size_t fromSize = stats.fromSpaceSize;
+        const size_t liveBefore = stats.liveBytesBeforeGC;
+        double movedOfFromPct = 0.0;
+        double movedOfLivePct = 0.0;
+        if (fromSize != 0) {
+            movedOfFromPct = 100.0 * static_cast<double>(movedBytes) / static_cast<double>(fromSize);
+        }
+        if (liveBefore != 0) {
+            movedOfLivePct = 100.0 * static_cast<double>(movedBytes) / static_cast<double>(liveBefore);
+        }
+        // Upper bound on remset slots that may stay valid without rebuild: those whose
+        // holder did not move. Report only ratios — do not implement keep-path.
+        VLOG(REPORT,
+             "[GCV2][postflip-moved] moved_objs=%llu moved_bytes=%llu from_space=%zu live_before=%zu "
+             "moved_of_from_pct=%.3f moved_of_live_pct=%.3f fwd_calls=%llu already_fwd=%llu "
+             "env=MRT_GCV2_POSTFLIP_MOVED_ACCOUNT=1",
+             static_cast<unsigned long long>(movedObjs), static_cast<unsigned long long>(movedBytes), fromSize,
+             liveBefore, movedOfFromPct, movedOfLivePct, static_cast<unsigned long long>(fwdCalls),
+             static_cast<unsigned long long>(already));
+    }
 
     // Publish a clean full-GC buffer before mutators return to IDLE. The phase
     // transition is the grace period for writers that had already loaded the old
@@ -3502,6 +3654,9 @@ void WCollector::ProcessFinalizers()
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
+    if (MajorMovedAccountMode() != 0 && gcReason != GC_REASON_YOUNG) {
+        g_majorFwdCalls.fetch_add(1, std::memory_order_relaxed);
+    }
     BaseObject* to = TryForwardObject(obj);
     return (to != nullptr) ? to : obj;
 }
@@ -3536,6 +3691,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // 1. object has already been forwarded
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
+            if (MajorMovedAccountMode() != 0 && gcReason != GC_REASON_YOUNG) {
+                g_majorFwdAlready.fetch_add(1, std::memory_order_relaxed);
+            }
             DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
             return toObj;
         }
@@ -3562,6 +3720,10 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
+    if (MajorMovedAccountMode() != 0 && gcReason != GC_REASON_YOUNG) {
+        g_majorMovedObjects.fetch_add(1, std::memory_order_relaxed);
+        g_majorMovedBytes.fetch_add(static_cast<uint64_t>(size), std::memory_order_relaxed);
+    }
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
