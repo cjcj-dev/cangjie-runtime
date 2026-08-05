@@ -3257,68 +3257,83 @@ void WCollector::DoYoungGarbageCollection()
     ClosureHashProbe::ReportDump(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
     if (ClosureHashProbe::Dual()) {
         // Independent set claim on the *same* STW root/remset snapshot.
-        // Product path already marked young; PushYoungObject / MarkObject claim skip marked
-        // ⇒ dual walker uses set-only visit and never consults mark bits for worklist.
-        auto dualPush = [fullYoungScan](BaseObject* object, WorkStack& stack) {
-            if (!Heap::IsHeapAddress(object)) {
-                return;
-            }
-            if (fullYoungScan) {
-                stack.push_back(object);
-                return;
-            }
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            if (region->IsYoungRegion()) {
-                stack.push_back(object);
-            }
-        };
-        WorkStack dualStack = NewWorkStack();
-        for (BaseObject* object : allocationRoots) {
-            dualPush(object, dualStack);
-        }
-        VisitMinorRoots([&dualPush, &dualStack](BaseObject* object) { dualPush(object, dualStack); });
-        // remset edges (same rememberedSlots product just drained)
-        for (MAddress slot : rememberedSlots) {
-            RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-            BaseObject* target = ResolveMinorReference(*field);
-            dualPush(target, dualStack);
-        }
-        MinorObjectSet dualSeen;
+        // FYS=1: reuse TraceYoungClosure + RescanRememberedSet (set claim) — mark bits don't
+        // gate set insert. FYS=0: PushYoungObject skips already-marked young, so use a
+        // mark-agnostic set walker (same roots + remset targets).
         std::vector<BaseObject*> dualVec;
         dualVec.reserve(reachableVec.size());
-        while (!dualStack.empty()) {
-            BaseObject* object = dualStack.back();
-            dualStack.pop_back();
-            if (!Heap::IsHeapAddress(object)) {
-                continue;
+        if (fullYoungScan) {
+            WorkStack dualStack = NewWorkStack();
+            for (BaseObject* object : allocationRoots) {
+                if (Heap::IsHeapAddress(object)) {
+                    dualStack.push_back(object);
+                }
             }
-            if (!dualSeen.insert(object).second) {
-                continue;
+            VisitMinorRoots([&dualStack](BaseObject* object) {
+                if (Heap::IsHeapAddress(object)) {
+                    dualStack.push_back(object);
+                }
+            });
+            MinorObjectSet dualObjects;
+            MinorSlotSet dualSlots;
+            MinorSlotSet dualWeaks;
+            TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
+                              /*useBitmapLedger=*/false);
+            RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr);
+            TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
+                              /*useBitmapLedger=*/false);
+        } else {
+            auto dualPush = [](BaseObject* object, WorkStack& stack) {
+                if (!Heap::IsHeapAddress(object)) {
+                    return;
+                }
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                if (region->IsYoungRegion()) {
+                    stack.push_back(object);
+                }
+            };
+            WorkStack dualStack = NewWorkStack();
+            for (BaseObject* object : allocationRoots) {
+                dualPush(object, dualStack);
             }
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            const bool isYoung = region->IsYoungRegion();
-            if (!fullYoungScan && !isYoung) {
-                continue;
+            VisitMinorRoots([&dualPush, &dualStack](BaseObject* object) { dualPush(object, dualStack); });
+            for (MAddress slot : rememberedSlots) {
+                RefField<>* field = reinterpret_cast<RefField<>*>(slot);
+                dualPush(ResolveMinorReference(*field), dualStack);
             }
-            dualVec.push_back(object);
-            if (!object->HasRefField()) {
-                continue;
-            }
-            if (UNLIKELY(object->IsWeakRef())) {
-                RefField<>* referentField = reinterpret_cast<RefField<>*>(
-                    reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                BaseObject* referent = ResolveMinorReference(*referentField);
-                if (Heap::IsHeapAddress(referent)) {
-                    referent->ForEachRefField(
-                        [this, &dualPush, &dualStack](RefField<>& field) {
+            MinorObjectSet dualSeen;
+            while (!dualStack.empty()) {
+                BaseObject* object = dualStack.back();
+                dualStack.pop_back();
+                if (!Heap::IsHeapAddress(object)) {
+                    continue;
+                }
+                if (!dualSeen.insert(object).second) {
+                    continue;
+                }
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                if (!region->IsYoungRegion()) {
+                    continue;
+                }
+                dualVec.push_back(object);
+                if (!object->HasRefField()) {
+                    continue;
+                }
+                if (UNLIKELY(object->IsWeakRef())) {
+                    RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                        reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+                    BaseObject* referent = ResolveMinorReference(*referentField);
+                    if (Heap::IsHeapAddress(referent)) {
+                        referent->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
                             dualPush(ResolveMinorReference(field), dualStack);
                         });
+                    }
+                    continue;
                 }
-                continue;
+                object->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
+                    dualPush(ResolveMinorReference(field), dualStack);
+                });
             }
-            object->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
-                dualPush(ResolveMinorReference(field), dualStack);
-            });
         }
         ClosureHashProbe::ReportEqual(minorTotalRuns + 1, reachableVec, dualVec, useBitmapLedger, fullYoungScan);
     }
