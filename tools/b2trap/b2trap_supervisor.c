@@ -888,6 +888,28 @@ int main(int argc, char **argv) {
                                   "rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rbp=%llx rsp=%llx",
                                   i, r.rip, g_wp[i], slotval, tip_before, r.rax, r.rbx, r.rcx, r.rdx, r.rsi, r.rdi,
                                   r.rbp, r.rsp);
+                            // stack walk for memmove/memcpy callers
+                            unsigned long sp = (unsigned long)r.rsp;
+                            unsigned long bp = (unsigned long)r.rbp;
+                            for (int k = 0; k < 48; k++) {
+                                unsigned long word = 0;
+                                if (peek(w, sp + (unsigned long)k * 8, &word) != 0)
+                                    break;
+                                if (is_exe_ptr(word) || ((word >> 40) == 0x7f))
+                                    logln("WP_INTERIOR_STACK k=%d sp+%d=%#lx word=%#lx", k, k * 8,
+                                          sp + (unsigned long)k * 8, word);
+                            }
+                            for (int f = 0; f < 12 && bp > 0x1000; f++) {
+                                unsigned long saved_bp = 0, ret = 0;
+                                if (peek(w, bp, &saved_bp) != 0)
+                                    break;
+                                if (peek(w, bp + 8, &ret) != 0)
+                                    break;
+                                logln("WP_INTERIOR_FRAME f=%d rbp=%#lx ret=%#lx", f, bp, ret);
+                                if (saved_bp <= bp)
+                                    break;
+                                bp = saved_bp;
+                            }
                         }
                     }
                     if (g_hits[i] == g_hit_cap) {
