@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "Heap/Heap.h"
 
@@ -84,5 +85,11 @@ void GCStats::Dump() const
 
     VLOG(REPORT, "allocated size: %s, heap size: %s, heap utilization: %.2f%%", Pretty(liveSize).Str(),
          Pretty(heapSize).Str(), utilization);
+
+    // Structured counterpart of the two lines above. The phase records emitted by MRT_PHASE_TIMER
+    // during this collection already carry this seq, so they join without relying on line order.
+    GcLog::Cycle(GcLog::CompleteCycle(), reason == GC_REASON_YOUNG ? "minor" : "major", g_gcRequests[reason].name,
+                 gcStartTime, gcEndTime - gcStartTime, liveBytesBeforeGC, liveBytesAfterGC, collectedBytes, heapSize,
+                 heapThreshold);
 }
 } // namespace MapleRuntime

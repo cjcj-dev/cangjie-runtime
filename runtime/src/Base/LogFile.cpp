@@ -7,6 +7,7 @@
 
 #include "LogFile.h"
 
+#include "Base/GcLog.h"
 #include "Base/SysCall.h"
 #include "securec.h"
 
@@ -330,4 +331,6 @@ RTLogLevel InitLogLevel()
     }
     return RTLOG_ERROR;
 }
+
+void EmitPhaseRecord(const char* name, uint64_t us) { GcLog::Phase(name, us); }
 } // namespace MapleRuntime
