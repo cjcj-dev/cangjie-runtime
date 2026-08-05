@@ -1723,8 +1723,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 }
 
 void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
-                                   MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots)
+                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                   MinorSlotSet& weakSlots, bool useBitmapLedger)
 {
+    // setbitmap O1③: useBitmapLedger=true → claim young via MarkObject (region mark bitmap)
+    // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
+    // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
+    const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
     auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
         if (fullYoungScan) {
@@ -1738,18 +1743,44 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
-        if (!Heap::IsHeapAddress(object) ||
-            !LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
-                          g_minorLedgerCost.objInsNs)) {
+        if (!Heap::IsHeapAddress(object)) {
             continue;
         }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (region->IsYoungRegion()) {
-            (void)MarkObject(object);
-        } else if (!fullYoungScan) {
-            continue;
+        const bool isYoung = region->IsYoungRegion();
+
+        if (useBitmapLedger) {
+            if (isYoung) {
+                // MarkObject returns true if already marked → skip re-visit.
+                if (MarkObject(object)) {
+                    continue;
+                }
+                reachableVec.push_back(object);
+            } else {
+                // FYS path may visit non-young holders; claim via set (no mark bitmap on old).
+                if (!fullYoungScan) {
+                    continue;
+                }
+                if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
+                                  g_minorLedgerCost.objInsNs)) {
+                    continue;
+                }
+                reachableVec.push_back(object);
+            }
+        } else {
+            if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
+                              g_minorLedgerCost.objInsNs)) {
+                continue;
+            }
+            if (isYoung) {
+                (void)MarkObject(object);
+            } else if (!fullYoungScan) {
+                continue;
+            }
+            reachableVec.push_back(object);
         }
+
         if (!object->HasRefField()) {
             continue;
         }
@@ -1769,9 +1800,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
             continue;
         }
-        object->ForEachRefField([&reachableSlots, &pushTarget](RefField<>& field) {
-            (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
-                               g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+        object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
+            if (recordSlots) {
+                (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
+                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+            }
             pushTarget(field);
         });
     }
@@ -2151,7 +2184,8 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
     }));
 }
 
-void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
+void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
+                                       const MinorSlotSet& rememberedSlots)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     auto postEvacPoint = [this](const char* point, bool runHeap = true) {
@@ -2173,9 +2207,8 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         return object;
     };
 
-    // Materialize sets once as vectors for index sharding (object disjoint ⇒ slot disjoint
-    // for reachable holders; remset/root overlap covered by N1+N2 idempotent CAS).
-    std::vector<BaseObject*> reachableVec(reachableObjects.begin(), reachableObjects.end());
+    // reachableVec already materialised by TraceYoungClosure (setbitmap O1③) —
+    // no unordered_set → vector copy. remset still from set (slot identity).
     std::vector<MAddress> remsetVec(rememberedSlots.begin(), rememberedSlots.end());
 
     auto fixHeapSlice = [this, &reachableVec, &remsetVec, &currentObject](size_t beginObj, size_t endObj,
@@ -2363,7 +2396,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
             fixForwardedReferencesParallel(threadPool);
         }
 
-        ValidateMinorReferences("before-return", &reachableObjects);
+        ValidateMinorReferences("before-return", &reachableVec);
         // Mid-evac checkpoint: after slot fix, before region reclaim.
         postEvacPoint("post-fix-pre-forward", true);
     }
@@ -2376,7 +2409,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         {
             const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
             if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-                ValidateMinorReferences("post-forward-pre-reclaim", &reachableObjects);
+                ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
             }
         }
     }
@@ -2439,7 +2472,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
             VLOG(REPORT,
                  "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
         } else {
-            for (BaseObject* object : reachableObjects) {
+            for (BaseObject* object : reachableVec) {
                 BaseObject* holder = currentObject(object);
                 RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
                 if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
@@ -2475,7 +2508,7 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     }
 }
 
-void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects)
+void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
 {
     const char* enabled = std::getenv("MRT_GCV2_STALE_REFERENCE_VALIDATOR");
     if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
@@ -2497,7 +2530,7 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
     std::array<std::array<uint16_t, sampleCount>, categoryCount> tags{};
     WorkStack pending = NewWorkStack();
     MinorObjectSet visited;
-    bool buildReachableClosure = reachableObjects == nullptr;
+    bool buildReachableClosure = reachableVec == nullptr;
 
     auto record = [this, &counts, &slots, &holders, &targets, &regionTypes, &objectStates, &tags](
                       size_t category, const void* slot, BaseObject* holder, BaseObject* target, uint16_t tag) {
@@ -2601,8 +2634,8 @@ void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet
         holder->ForEachRefField(
             [category, holder, &recordField](RefField<>& field) { recordField(category, holder, field); });
     };
-    if (reachableObjects != nullptr) {
-        for (BaseObject* object : *reachableObjects) {
+    if (reachableVec != nullptr) {
+        for (BaseObject* object : *reachableVec) {
             visitObject(object);
         }
     } else {
@@ -2819,7 +2852,8 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
          neverExaminedCandidates, rememberedSlots.size());
 }
 
-void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots)
+void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec,
+                                      const MinorObjectSet& allocationRoots)
 {
     // Gate mirrors ValidateMinorReferences. Default OFF — product path must not abort.
     // Env: MRT_GCV2_VERIFY_YOUNG_MARKING=1 to enable (default unset/other = off).
@@ -2842,6 +2876,12 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, co
 
     MinorObjectSet reachable;
     MinorObjectSet expectedYoung;
+    MinorObjectSet reachableSet;
+    if (requireMinorClosure) {
+        for (BaseObject* object : reachableVec) {
+            reachableSet.insert(object);
+        }
+    }
     if (useIndependent) {
         WorkStack pending = NewWorkStack();
         VisitMinorRoots([&pending](BaseObject* object) {
@@ -2898,7 +2938,7 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, co
                 if (useIndependent && expectedYoung.count(object) == 0) {
                     bad = true;
                 }
-                if (requireMinorClosure && reachableObjects.count(object) == 0) {
+                if (requireMinorClosure && reachableSet.count(object) == 0) {
                     bad = true;
                 }
                 if (bad) {
@@ -2916,7 +2956,7 @@ void WCollector::ValidateYoungMarking(const MinorObjectSet& reachableObjects, co
             if (useBitmap && !region->IsMarkedObject(object)) {
                 missing = true;
             }
-            if (requireMinorClosure && reachableObjects.count(object) == 0) {
+            if (requireMinorClosure && reachableSet.count(object) == 0) {
                 missing = true;
             }
             if (missing) {
@@ -3024,8 +3064,18 @@ void WCollector::DoYoungGarbageCollection()
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
+    // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
+    static const bool useBitmapLedger = []() {
+        const char* v = std::getenv("MRT_GCV2_SETBITMAP");
+        if (v != nullptr && std::strcmp(v, "0") == 0) {
+            return false;
+        }
+        return true;
+    }();
     WorkStack workStack = NewWorkStack();
-    MinorObjectSet reachableObjects;
+    MinorObjectSet reachableObjects; // legacy set path + FYS non-young holders under bitmap
+    std::vector<BaseObject*> reachableVec;
+    reachableVec.reserve(1 << 17); // ~128k; real_load ~155k reachable
     MinorObjectSet allocationRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
@@ -3063,7 +3113,8 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         MRT_PHASE_TIMER("young.mark_closure");
-        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                          useBitmapLedger);
     }
     MinorSlotSet liveRememberedSlots;
     for (MAddress slot : rememberedSlots) {
@@ -3087,9 +3138,13 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
-        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                          useBitmapLedger);
     }
     g_minorLedgerCost.Report();
+    VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
+         static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
+         static_cast<int>(fullYoungScan));
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
@@ -3138,7 +3193,7 @@ void WCollector::DoYoungGarbageCollection()
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
-        ValidateYoungMarking(reachableObjects, allocationRoots);
+        ValidateYoungMarking(reachableVec, allocationRoots);
     }
     // Always-available (gated) probe: full-heap independent reachability vs young-only bitmap.
     // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
@@ -3154,7 +3209,7 @@ void WCollector::DoYoungGarbageCollection()
 
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
-    EvacuateYoungRegions(reachableObjects, liveRememberedSlots);
+    EvacuateYoungRegions(reachableVec, liveRememberedSlots);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
