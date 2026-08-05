@@ -1,0 +1,8 @@
+BASE_TREE=main@27d23ffbe2ba3ec28719c30977832816370c8231
+SUBJECT_SO_SHA=8cf557972f2394b6c5da661b4c4dc8c7746b957f9cd0027aab6270afc61a5f6c
+SUBJECT_EXE_natural_wave_sha=2da7e2a701b680cf14e9e518ca0e76767f101801b4d0182977308d9587164663
+SDK=/root/gate006-run/sdk (kkk2, readonly)
+CONFIG=lean FYS=0 SKIP_PINNED=1 cjHeapSize=64MB MRT_GC_LOG=1 setarch_-R no_ALOT
+RUNTIME_TAR_sha=774d7acfda6efe01f65c1142eeeb1cc29418c3f59e40ccb9d6eb82f4bb3fca4d
+REUSED_natural_wave_from=/root/b2ring-run/bin/natural_wave
+MACHINE=kkk2 cores=48-79
