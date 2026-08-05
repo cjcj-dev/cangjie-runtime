@@ -401,6 +401,16 @@ static void finish_step(pid_t tid) {
     unsigned long addr = g_step_replant;
     g_stepping_tid = -1;
     g_step_replant = 0;
+    // Only replant if this site is still supposed to be active (unplant clears active).
+    int bi = -1;
+    for (int i = 0; i < g_nswbp; i++) {
+        if (g_swbp[i].addr == addr) {
+            bi = i;
+            break;
+        }
+    }
+    if (bi < 0 || !g_swbp[bi].active)
+        return;
     unsigned char prev = 0;
     if (poke_byte(tid, addr, 0xcc, &prev) != 0)
         logln("SWBP_REPLANT_FAIL addr=%#lx errno=%d", addr, errno);
