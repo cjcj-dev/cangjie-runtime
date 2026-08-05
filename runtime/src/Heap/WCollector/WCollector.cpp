@@ -41,6 +41,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/F3Consumer.h"
+#include "Heap/Verify/F3Scan.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -687,6 +688,12 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                         F3Consumer::DumpAtAbort(obj, &field, target, f3cVerdict, sizeof(f3cVerdict));
                         VLOG(REPORT, "[GCV2][F3C][verdict] %s holder=%p target=%p", f3cVerdict, obj, target);
                     }
+                    // f3scan: type/gctib/enum set at abort (bucket-2 S1/S2/S3); default off via env
+                    if (F3Scan::Enabled() || f3Death) {
+                        char f3sVerdict[192];
+                        F3Scan::DumpAtAbort(obj, &field, target, f3sVerdict, sizeof(f3sVerdict));
+                        VLOG(REPORT, "[GCV2][F3S][verdict] %s holder=%p target=%p", f3sVerdict, obj, target);
+                    }
                 }
             }
         }
@@ -800,7 +807,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
-            if (F3Consumer::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur")) {
+            if (F3Consumer::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur") ||
+                F3Scan::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur")) {
                 return;
             }
             workStack.push_back(targetObj);
@@ -832,7 +840,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject(latest)) {
-        if (F3Consumer::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest")) {
+        if (F3Consumer::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest") ||
+            F3Scan::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest")) {
             return;
         }
         workStack.push_back(latest);

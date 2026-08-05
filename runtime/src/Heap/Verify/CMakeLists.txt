@@ -17,6 +17,7 @@ set(SRC_LIST
     "TraceClear.cpp"
     "TagReuseProbe.cpp"
     "F3Consumer.cpp"
+    "F3Scan.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
