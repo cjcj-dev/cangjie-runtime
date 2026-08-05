@@ -943,18 +943,46 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         constexpr size_t youngTriggerFloorPercent = 5;
         constexpr size_t youngTriggerTargetPercent = 50;
         constexpr size_t youngTriggerCeilingPercent = 60;
+        // Absolute young-size ceiling (bytes) on top of HEU×k. STW minor cost
+        // scales with young candidate volume; HEU×50% alone grows to multi-GiB
+        // on large heaps (heapscale2: ~5.3 GiB → ~100 s pause).
+        // Default = no absolute cap (HEU-fraction only). Product C is selected
+        // from the youngcap pause-vs-size curve and written as youngAbsCapDefault.
+        // Override: MRT_GCV2_YOUNG_CAP=<N>KB|MB|GB  (T0 sweep / ops tuning)
+        //   · unset / "none" → no absolute cap
+        //   · valid size → that absolute cap
+        size_t youngAbsCapBytes = 0;
+        if (const char* capEnv = std::getenv("MRT_GCV2_YOUNG_CAP")) {
+            if (std::strcmp(capEnv, "none") != 0 && std::strcmp(capEnv, "NONE") != 0) {
+                // ParseSizeFromEnv returns KB; 0 = parse failure → no cap.
+                size_t capKb = CString::ParseSizeFromEnv(capEnv);
+                if (capKb > 0) {
+                    youngAbsCapBytes = capKb * KB;
+                }
+            }
+        }
         size_t youngTriggerFloor = heapThreshold * youngTriggerFloorPercent / 100;
         size_t youngTriggerTarget = heapThreshold * youngTriggerTargetPercent / 100;
         size_t youngTriggerCeiling = heapThreshold * youngTriggerCeilingPercent / 100;
         size_t youngRegionTriggerBytes =
             std::min(std::max(youngTriggerTarget, youngTriggerFloor), youngTriggerCeiling);
+        // Absolute ceiling on top of the HEU-fraction clamp. Always keep young
+        // strictly below HEU so the young-before-major ordering stays intact.
+        if (youngAbsCapBytes > 0 && youngRegionTriggerBytes > youngAbsCapBytes) {
+            youngRegionTriggerBytes = youngAbsCapBytes;
+        }
+        if (youngRegionTriggerBytes >= heapThreshold) {
+            // Only fires if HEU itself is tiny (e.g. explicit cjHeapSize=64MB).
+            youngRegionTriggerBytes = heapThreshold > 1 ? heapThreshold - 1 : 0;
+        }
         CHECK_DETAIL(youngRegionTriggerBytes < heapThreshold,
                      "young GC threshold %zu must stay below HEU threshold %zu",
                      youngRegionTriggerBytes, heapThreshold);
         size_t youngAllocated = GetYoungAllocatedSize();
         if (youngAllocated >= youngRegionTriggerBytes) {
-            VLOG(REPORT, "[GCV2][young-trigger] young=%zu trigger=%zu HEU=%zu floor=%zu ceiling=%zu",
-                 youngAllocated, youngRegionTriggerBytes, heapThreshold, youngTriggerFloor, youngTriggerCeiling);
+            VLOG(REPORT, "[GCV2][young-trigger] young=%zu trigger=%zu HEU=%zu floor=%zu ceiling=%zu abscap=%zu",
+                 youngAllocated, youngRegionTriggerBytes, heapThreshold, youngTriggerFloor, youngTriggerCeiling,
+                 youngAbsCapBytes);
             DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
             collector.RequestGC(GC_REASON_YOUNG, true);
         } else {
