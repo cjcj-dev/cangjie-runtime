@@ -12,8 +12,7 @@
 #include <new>
 
 #include "Base/LogFile.h"
-#include "ObjectModel/BaseObject.h"
-#include "ObjectModel/RefField.h"
+#include "Common/BaseObject.h"
 
 namespace MapleRuntime {
 namespace TraceCoverProbe {
