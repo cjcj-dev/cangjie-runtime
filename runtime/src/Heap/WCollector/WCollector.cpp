@@ -636,6 +636,159 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                          holderYoung, targetYoung, remsetContains, remsetSize, histHits, ringCap, ringTotal,
                          ringWrap, killBuf, sketch, reasonName, g_gcCount, static_cast<unsigned>(phase));
                 }
+
+                // rootskip T0: who holds the F3 holder at abort? (default off)
+                // Four classes: STACK / STATIC / HEAP / NO_HOLDER. Diagnostic only.
+                static const bool rootskip = []() {
+                    const char* value = std::getenv("MRT_GCV2_ROOTSKIP");
+                    return value != nullptr && std::strcmp(value, "1") == 0;
+                }();
+                if (rootskip && holderInHeap && obj != nullptr) {
+                    BaseObject* holderObj = obj;
+                    int holderValid = -1;
+                    int holderMarked = -1;
+                    if (holderObj->IsValidObject()) {
+                        holderValid = 1;
+                        holderMarked = static_cast<int>(IsMarkedObject(holderObj));
+                    } else {
+                        holderValid = 0;
+                    }
+                    int foundStack = 0;
+                    int foundStatic = 0;
+                    int foundHeap = 0;
+                    BaseObject* sampleHeapReferrer = nullptr;
+                    MAddress sampleHeapSlot = 0;
+                    int sampleHeapMarked = -1;
+                    size_t heapScanN = 0;
+                    size_t stackWords = 0;
+                    size_t staticHits = 0;
+
+                    // 1) STACK: precise roots + conservative word scan of each mutator stack
+                    try {
+                        MutatorManager::Instance().VisitAllMutators(
+                            [holderObj, &foundStack, &stackWords](Mutator& mut) {
+                                // Precise stack roots (stackmap-driven; miss frames skipped)
+                                mut.VisitStackRoots([&](ObjectRef& root) {
+                                    BaseObject* o = root.object;
+                                    if (o == nullptr) {
+                                        return;
+                                    }
+                                    if (!Heap::IsHeapAddress(o)) {
+                                        return;
+                                    }
+                                    // GetTargetObject-style: RefField strips tag when constructed
+                                    RefField<> rf(reinterpret_cast<MAddress>(o));
+                                    BaseObject* tgt = rf.GetTargetObject();
+                                    if (tgt == holderObj || o == holderObj) {
+                                        foundStack = 1;
+                                    }
+                                });
+                                // Conservative: word scan [stackTop, stackTop+size)
+                                uintptr_t top = mut.GetStackTopAddr();
+                                uintptr_t sz = mut.GetStackSize();
+                                if (top == 0 || sz == 0 || sz > (1ull << 28)) {
+                                    return;
+                                }
+                                const size_t words = sz / sizeof(void*);
+                                auto* base = reinterpret_cast<void**>(top);
+                                for (size_t i = 0; i < words; ++i) {
+                                    ++stackWords;
+                                    void* w = base[i];
+                                    if (w == nullptr) {
+                                        continue;
+                                    }
+                                    if (!Heap::IsHeapAddress(w)) {
+                                        // try strip tag via RefField
+                                        RefField<> rf(reinterpret_cast<MAddress>(w));
+                                        BaseObject* tgt = rf.GetTargetObject();
+                                        if (tgt == holderObj) {
+                                            foundStack = 1;
+                                            return;
+                                        }
+                                        continue;
+                                    }
+                                    if (w == holderObj) {
+                                        foundStack = 1;
+                                        return;
+                                    }
+                                    RefField<> rf(reinterpret_cast<MAddress>(w));
+                                    if (rf.GetTargetObject() == holderObj) {
+                                        foundStack = 1;
+                                        return;
+                                    }
+                                }
+                            });
+                    } catch (...) {
+                        // diagnostic only; never throw into product path
+                    }
+
+                    // 2) STATIC roots
+                    try {
+                        Heap::GetHeap().VisitStaticRoots(
+                            [holderObj, &foundStatic, &staticHits](RefField<>& rf) {
+                                ++staticHits;
+                                BaseObject* tgt = rf.GetTargetObject();
+                                if (tgt == holderObj) {
+                                    foundStatic = 1;
+                                }
+                            });
+                    } catch (...) {
+                    }
+
+                    // 3) HEAP reverse edges: full ForEachObj + ForEachRefField
+                    try {
+                        Heap::GetHeap().ForEachObj(
+                            [holderObj, &foundHeap, &sampleHeapReferrer, &sampleHeapSlot, &sampleHeapMarked,
+                             &heapScanN](BaseObject* cand) {
+                                if (cand == nullptr || cand == holderObj) {
+                                    return;
+                                }
+                                if (!cand->IsValidObject()) {
+                                    return;
+                                }
+                                ++heapScanN;
+                                if (!cand->HasRefField()) {
+                                    return;
+                                }
+                                cand->ForEachRefField([holderObj, cand, &foundHeap, &sampleHeapReferrer,
+                                                       &sampleHeapSlot, &sampleHeapMarked](RefField<>& rf) {
+                                    BaseObject* tgt = rf.GetTargetObject();
+                                    if (tgt != holderObj) {
+                                        return;
+                                    }
+                                    foundHeap = 1;
+                                    if (sampleHeapReferrer == nullptr) {
+                                        sampleHeapReferrer = cand;
+                                        sampleHeapSlot = reinterpret_cast<MAddress>(&rf);
+                                        sampleHeapMarked =
+                                            static_cast<int>(RegionSpace::IsMarkedObject(cand));
+                                    }
+                                });
+                            },
+                            false);
+                    } catch (...) {
+                    }
+
+                    const char* klass = "NO_HOLDER";
+                    if (foundStack) {
+                        klass = "STACK";
+                    } else if (foundStatic) {
+                        klass = "STATIC";
+                    } else if (foundHeap) {
+                        klass = "HEAP";
+                    }
+
+                    VLOG(REPORT,
+                         "[GCV2][ROOTSKIP] holder=%p holderValid=%d holderMarked=%d class=%s "
+                         "foundStack=%d foundStatic=%d foundHeap=%d "
+                         "heapScanN=%zu stackWords=%zu staticHits=%zu "
+                         "sampleHeapReferrer=%p sampleHeapSlot=%p sampleHeapMarked=%d "
+                         "bucket1=%d",
+                         holderObj, holderValid, holderMarked, klass, foundStack, foundStatic, foundHeap,
+                         heapScanN, stackWords, staticHits, sampleHeapReferrer,
+                         reinterpret_cast<void*>(sampleHeapSlot), sampleHeapMarked,
+                         static_cast<int>(holderValid == 1 && holderMarked == 0));
+                }
             }
         }
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
