@@ -235,49 +235,98 @@ void Classify(uintptr_t value, Kind& kind, uintptr_t& baseOut, size_t& offsetOut
     kind = Kind::Unknown;
 }
 
-// Cheap gate: is slot == holder+16 where holder tip name is "default:Node"?
-// Static TypeInfos live in the binary (PageMapped), often NOT in TypeInfoManager —
-// so use TipLooksValid (TIM|PageMapped), then size+name. isz==40 rejects most
-// mid-object false tips before GetName.
+// Cache of TypeInfo* for default:Node (remsetholder tipVal=0x…74fc20 family).
+// Once resolved by name, subsequent matches are pointer equality only (cheap + safe).
+std::atomic<TypeInfo*> gNodeTip{nullptr};
+std::atomic<uint64_t> gRejAlign{0};
+std::atomic<uint64_t> gRejNotHeap{0};
+std::atomic<uint64_t> gRejRegion{0};
+std::atomic<uint64_t> gRejTip{0};
+std::atomic<uint64_t> gRejSize{0};
+std::atomic<uint64_t> gRejName{0};
+std::atomic<uint64_t> gCandTipValid{0};
+
+bool ResolveAsNodeTip(TypeInfo* tip)
+{
+    if (tip == nullptr) {
+        return false;
+    }
+    TypeInfo* cached = gNodeTip.load(std::memory_order_acquire);
+    if (cached != nullptr) {
+        return tip == cached;
+    }
+    if (!TipLooksValid(tip)) {
+        return false;
+    }
+    // Node: instanceSize 40 ⇒ object size 48 (remsetholder holderSize=48).
+    MSize isz = tip->GetInstanceSize();
+    if (isz != 40 && isz != 48) {
+        return false;
+    }
+    const char* name = tip->GetName();
+    if (name == nullptr) {
+        return false;
+    }
+    if (!PageMapped(reinterpret_cast<uintptr_t>(name))) {
+        return false;
+    }
+    if (std::strcmp(name, "default:Node") != 0) {
+        return false;
+    }
+    TypeInfo* expected = nullptr;
+    gNodeTip.compare_exchange_strong(expected, tip, std::memory_order_acq_rel);
+    return true;
+}
+
+// Cheap gate: slot == holder+16 and holder TypeInfo is default:Node.
 bool IsNodeNextSlot(uintptr_t slotU, uintptr_t& holderOut, TypeInfo*& holderTipOut)
 {
     holderOut = 0;
     holderTipOut = nullptr;
     if ((slotU & 0x7) != 0 || slotU < 16) {
+        gRejAlign.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     if (!Heap::IsHeapAddress(slotU)) {
+        gRejNotHeap.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     uintptr_t holder = slotU - 16;
     if ((holder & 0x7) != 0 || !Heap::IsHeapAddress(holder)) {
+        gRejNotHeap.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(holder);
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
-        return false;
-    }
-    if (holder < region->GetRegionStart() || holder >= region->GetRegionAllocPtr()) {
+        gRejRegion.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
     TypeInfo* tip = PeekTypeInfoAt(holder);
-    if (!TipLooksValid(tip)) {
+    if (tip == nullptr) {
+        gRejTip.fetch_add(1, std::memory_order_relaxed);
         return false;
     }
-    // Node payload instanceSize=40 (remsetholder holderSize=48 = header+payload).
-    if (tip->GetInstanceSize() != 40) {
-        return false;
+    // Fast path: tip pointer already known as Node.
+    TypeInfo* cached = gNodeTip.load(std::memory_order_acquire);
+    if (cached != nullptr && tip == cached) {
+        holderOut = holder;
+        holderTipOut = tip;
+        return true;
     }
-    const char* name = tip->GetName();
-    if (name == nullptr || !PageMapped(reinterpret_cast<uintptr_t>(name))) {
-        return false;
-    }
-    // Name must be exactly default:Node (remsetholder 115/115).
-    if (std::strcmp(name, "default:Node") != 0) {
-        return false;
-    }
-    size_t size = SaneObjectSize(tip, region);
-    if (size != 0 && (slotU < holder || slotU + 8 > holder + size)) {
+    // Slow path: validate tip as Node (once).
+    if (!ResolveAsNodeTip(tip)) {
+        // Count near-misses: tip looks valid but not Node.
+        if (TipLooksValid(tip)) {
+            gCandTipValid.fetch_add(1, std::memory_order_relaxed);
+            MSize isz = tip->GetInstanceSize();
+            if (isz == 40 || isz == 48) {
+                gRejName.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                gRejSize.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            gRejTip.fetch_add(1, std::memory_order_relaxed);
+        }
         return false;
     }
     holderOut = holder;
@@ -610,14 +659,23 @@ void NextField2Probe::FlushSummary(const char* site)
     uint64_t unknown = gUnknown.load(std::memory_order_relaxed);
     uint64_t notHeap = gNotHeap.load(std::memory_order_relaxed);
     uint64_t overflow = gHistOverflow.load(std::memory_order_relaxed);
+    TypeInfo* nodeTip = gNodeTip.load(std::memory_order_relaxed);
     NF2_LOG("SUMMARY site=%s seen_installs=%llu node_hits=%llu base=%llu interior=%llu null=%llu "
-            "unknown=%llu not_heap=%llu hist_overflow=%llu coverage=100_on_Node_next "
-            "posctrl=%s",
+            "unknown=%llu not_heap=%llu hist_overflow=%llu nodeTip=%p "
+            "rej_align=%llu rej_notheap=%llu rej_region=%llu rej_tip=%llu rej_size=%llu "
+            "rej_name=%llu cand_tip_valid=%llu coverage=100_on_Node_next posctrl=%s",
             site != nullptr ? site : "?", static_cast<unsigned long long>(seen),
             static_cast<unsigned long long>(hits), static_cast<unsigned long long>(base),
             static_cast<unsigned long long>(interior), static_cast<unsigned long long>(nulln),
             static_cast<unsigned long long>(unknown), static_cast<unsigned long long>(notHeap),
-            static_cast<unsigned long long>(overflow),
+            static_cast<unsigned long long>(overflow), static_cast<void*>(nodeTip),
+            static_cast<unsigned long long>(gRejAlign.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gRejNotHeap.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gRejRegion.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gRejTip.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gRejSize.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gRejName.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(gCandTipValid.load(std::memory_order_relaxed)),
             (base > 0 && interior == 0)   ? "PASS_all_base"
             : (base > 0 && interior > 0)  ? "PASS_mixed_base_and_interior"
             : (base == 0 && interior > 0) ? "FAIL_no_base"
