@@ -652,7 +652,8 @@ public:
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (unit->GetMetadata().inGhostFromRegion == 0) {
+        if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
+                RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
         }
         if (LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT) {
@@ -844,12 +845,12 @@ public:
                                     static_cast<unsigned int>(IsGhostFromRegion()),
                                     static_cast<unsigned int>(GetRegionType()),
                                     static_cast<unsigned int>(GetRouteState()));
-        metadata.routeState = NORMAL;
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
         }
+        SetRouteState(NORMAL);
     }
 
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
