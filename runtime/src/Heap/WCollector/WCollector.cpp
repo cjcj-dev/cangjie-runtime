@@ -1869,40 +1869,39 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
 
     const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
     const int32_t wantActive = workers > 1 ? (workers - 1) : 0;
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(wantActive);
-    }
-
-    // Seed like TracingCollector::TracingImpl parallel path: Start, main runs primary,
-    // fork/steal balances. Pre-split roots when large enough (AddConcurrentTracingWork).
-    threadPool->Start();
-    const size_t rootSize = workStack.size();
-    if (rootSize > static_cast<size_t>(workers) * kMarkparMinWorkSize && workers > 1) {
-        const size_t chunkSize =
-            std::min(rootSize / static_cast<size_t>(workers) + 1, kMarkparMinWorkSize);
-        size_t slot = 1;
-        while (!workStack.empty() && slot < static_cast<size_t>(workers)) {
-            size_t take = std::min(chunkSize, workStack.size());
-            if (take == 0) {
-                break;
-            }
-            // Keep enough on main for balance; peel chunks for helpers.
-            if (workStack.size() <= chunkSize) {
-                break;
-            }
-            TracingCollector::WorkStackBuf* hSplit = workStack.split(take);
-            threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
-            shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
-            ++slot;
+    if (workers == 1) {
+        // Apparatus: single worker = main only; no pool Start (queued forks would stall).
+        shared.pool = nullptr;
+        YoungMarkingWork mainTask(shared, std::move(workStack), 0);
+        mainTask.Execute(0);
+    } else {
+        if (wantActive != prevActive) {
+            threadPool->SetMaxActiveThreadNum(wantActive);
         }
-    }
-
-    YoungMarkingWork mainTask(shared, std::move(workStack), 0);
-    mainTask.Execute(0);
-    threadPool->WaitFinish();
-
-    if (wantActive != prevActive) {
-        threadPool->SetMaxActiveThreadNum(prevActive);
+        // Seed like TracingCollector::TracingImpl: Start, main primary, fork/steal balances.
+        threadPool->Start();
+        const size_t rootSize = workStack.size();
+        if (rootSize > static_cast<size_t>(workers) * kMarkparMinWorkSize) {
+            const size_t chunkSize =
+                std::min(rootSize / static_cast<size_t>(workers) + 1, kMarkparMinWorkSize);
+            size_t slot = 1;
+            while (!workStack.empty() && slot < static_cast<size_t>(workers)) {
+                if (workStack.size() <= chunkSize) {
+                    break;
+                }
+                size_t take = std::min(chunkSize, workStack.size());
+                TracingCollector::WorkStackBuf* hSplit = workStack.split(take);
+                threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
+                shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
+                ++slot;
+            }
+        }
+        YoungMarkingWork mainTask(shared, std::move(workStack), 0);
+        mainTask.Execute(0);
+        threadPool->WaitFinish();
+        if (wantActive != prevActive) {
+            threadPool->SetMaxActiveThreadNum(prevActive);
+        }
     }
 
     const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
