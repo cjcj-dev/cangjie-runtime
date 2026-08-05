@@ -22,8 +22,10 @@
 namespace MapleRuntime {
 namespace {
 
-constexpr size_t kScanCap = 8192;
-constexpr size_t kWriteCap = 512;
+// barestore T0: 8192 filled mid-package (satbgap B2 not_in_scan_set noise).
+// Unbounded would thrash; 1<<20 holds major TRACE holders for selfhost pkgs.
+constexpr size_t kScanCap = 1u << 20;
+constexpr size_t kWriteCap = 4096;
 
 bool EnvIsOne(const char* name)
 {
