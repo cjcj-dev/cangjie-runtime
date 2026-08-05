@@ -1092,6 +1092,15 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         size_t staleHist[TAG_ID_COUNT] = {};
         size_t taggedSlots = 0;
         size_t maxStaleness = 0;
+        // stalebound T1: sample slots with staleness ≥ 2 (address identity across majors).
+        static constexpr size_t kMaxStaleSamples = 512;
+        struct StaleSample {
+            uintptr_t slot = 0;
+            uint16_t stale = 0;
+        };
+        StaleSample staleSamples[kMaxStaleSamples] = {};
+        size_t staleSampleCount = 0;
+        size_t staleGe2Count = 0;
     };
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -1113,6 +1122,15 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
         if (stale > hAcc->maxStaleness) {
             hAcc->maxStaleness = stale;
+        }
+        // T1: record slot address when staleness ≥ 2 (bounded sample for identity tracking).
+        if (stale >= 2) {
+            ++hAcc->staleGe2Count;
+            if (hAcc->staleSampleCount < HeapAccount::kMaxStaleSamples) {
+                HeapAccount::StaleSample& s = hAcc->staleSamples[hAcc->staleSampleCount++];
+                s.slot = reinterpret_cast<uintptr_t>(&field);
+                s.stale = static_cast<uint16_t>(stale);
+            }
         }
     };
 
@@ -1500,11 +1518,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             heapTotals.fieldVisits += acc.fieldVisits;
             heapTotals.objVisits += acc.objVisits;
             heapTotals.taggedSlots += acc.taggedSlots;
+            heapTotals.staleGe2Count += acc.staleGe2Count;
             for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
                 heapTotals.staleHist[si] += acc.staleHist[si];
             }
             if (acc.maxStaleness > heapTotals.maxStaleness) {
                 heapTotals.maxStaleness = acc.maxStaleness;
+            }
+            for (size_t si = 0; si < acc.staleSampleCount &&
+                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                heapTotals.staleSamples[heapTotals.staleSampleCount++] = acc.staleSamples[si];
             }
             chunksPerWorker.push_back(acc.chunksTaken);
             workersScheduled = 1;
@@ -1582,11 +1605,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
         for (const auto& a : rootStaleAcc) {
             heapTotals.taggedSlots += a.taggedSlots;
+            heapTotals.staleGe2Count += a.staleGe2Count;
             for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
                 heapTotals.staleHist[si] += a.staleHist[si];
             }
             if (a.maxStaleness > heapTotals.maxStaleness) {
                 heapTotals.maxStaleness = a.maxStaleness;
+            }
+            for (size_t si = 0; si < a.staleSampleCount &&
+                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                heapTotals.staleSamples[heapTotals.staleSampleCount++] = a.staleSamples[si];
             }
         }
         chunksPerWorker.reserve(heapAcc.size());
@@ -1612,11 +1640,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             heapTotals.fieldVisits += a.fieldVisits;
             heapTotals.objVisits += a.objVisits;
             heapTotals.taggedSlots += a.taggedSlots;
+            heapTotals.staleGe2Count += a.staleGe2Count;
             for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
                 heapTotals.staleHist[si] += a.staleHist[si];
             }
             if (a.maxStaleness > heapTotals.maxStaleness) {
                 heapTotals.maxStaleness = a.maxStaleness;
+            }
+            for (size_t si = 0; si < a.staleSampleCount &&
+                 heapTotals.staleSampleCount < HeapAccount::kMaxStaleSamples; ++si) {
+                heapTotals.staleSamples[heapTotals.staleSampleCount++] = a.staleSamples[si];
             }
             chunksPerWorker.push_back(a.chunksTaken);
         }
@@ -1676,17 +1709,72 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             histStr += '=';
             histStr += std::to_string(heapTotals.staleHist[si]);
         }
+        // stalebound T1: process-local major ordinal for cross-major slot identity.
+        static std::atomic<size_t> s_staleMajorSeq{0};
+        const size_t majorSeq = s_staleMajorSeq.fetch_add(1, std::memory_order_relaxed) + 1;
         VLOG(REPORT,
              "[GCV2][postflip-staleness] max=%zu tagged=%zu hist=[%s] tag_id_count=%u "
-             "skipFix=%d inject=%d env=MRT_GCV2_POSTFLIP_STALENESS=1",
+             "skipFix=%d inject=%d major=%zu ge2=%zu samples=%zu "
+             "env=MRT_GCV2_POSTFLIP_STALENESS=1",
              heapTotals.maxStaleness, heapTotals.taggedSlots, histStr.c_str(),
-             static_cast<unsigned>(TAG_ID_COUNT), skipFix ? 1 : 0, stalenessInject ? 1 : 0);
+             static_cast<unsigned>(TAG_ID_COUNT), skipFix ? 1 : 0, stalenessInject ? 1 : 0,
+             majorSeq, heapTotals.staleGe2Count, heapTotals.staleSampleCount);
         if (heapTotals.maxStaleness >= 2) {
             LOG(RTLOG_ERROR,
                 "[GCV2][postflip-staleness] STALENESS_GE_2 max=%zu tagged=%zu hist=[%s] "
+                "major=%zu ge2=%zu "
                 "(trace-heal assumption broken if this is not an inject control)",
-                heapTotals.maxStaleness, heapTotals.taggedSlots, histStr.c_str());
+                heapTotals.maxStaleness, heapTotals.taggedSlots, histStr.c_str(),
+                majorSeq, heapTotals.staleGe2Count);
         }
+        // Emit slot samples for T1 identity tracking (same-slot monotonic vs rotating).
+        // Format: slot=0x... stale=K major=M  (one line, up to 64 samples to cap log volume)
+        const size_t emitN = heapTotals.staleSampleCount < 64 ? heapTotals.staleSampleCount : 64;
+        for (size_t si = 0; si < emitN; ++si) {
+            VLOG(REPORT,
+                 "[GCV2][postflip-stale-slot] slot=%#zx stale=%u major=%zu "
+                 "env=MRT_GCV2_POSTFLIP_STALENESS=1",
+                 heapTotals.staleSamples[si].slot,
+                 static_cast<unsigned>(heapTotals.staleSamples[si].stale), majorSeq);
+        }
+        // Cross-major identity summary: how many sample slots reappeared with higher stale.
+        // Process-local map survives across majors in this process (diagnostic only).
+        static std::unordered_map<uintptr_t, std::pair<uint16_t, size_t>> s_slotHist;
+        static size_t s_revisit = 0;
+        static size_t s_monoInc = 0;
+        static size_t s_newSlots = 0;
+        size_t revisit = 0;
+        size_t monoInc = 0;
+        size_t newSlots = 0;
+        for (size_t si = 0; si < heapTotals.staleSampleCount; ++si) {
+            const uintptr_t slot = heapTotals.staleSamples[si].slot;
+            const uint16_t stale = heapTotals.staleSamples[si].stale;
+            auto it = s_slotHist.find(slot);
+            if (it == s_slotHist.end()) {
+                ++newSlots;
+                s_slotHist[slot] = {stale, majorSeq};
+            } else {
+                ++revisit;
+                if (stale > it->second.first) {
+                    ++monoInc;
+                }
+                it->second = {stale, majorSeq};
+            }
+        }
+        s_revisit += revisit;
+        s_monoInc += monoInc;
+        s_newSlots += newSlots;
+        // Cap map growth (diagnostic).
+        if (s_slotHist.size() > 8192) {
+            s_slotHist.clear();
+        }
+        VLOG(REPORT,
+             "[GCV2][postflip-stale-track] major=%zu samples=%zu ge2=%zu "
+             "new=%zu revisit=%zu mono_inc=%zu cum_new=%zu cum_revisit=%zu cum_mono_inc=%zu "
+             "map_size=%zu env=MRT_GCV2_POSTFLIP_STALENESS=1",
+             majorSeq, heapTotals.staleSampleCount, heapTotals.staleGe2Count,
+             newSlots, revisit, monoInc, s_newSlots, s_revisit, s_monoInc,
+             s_slotHist.size());
     }
 
     if (heapTotals.rebuilt != 0) {
