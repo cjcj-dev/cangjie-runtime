@@ -79,12 +79,19 @@ public:
             resurrectedExportObjectesForwardPhase.end());
         resurrectedExportObjectesForwardPhase.clear();
     }
-    void FlipTagID() { currentTagID ^= 1; }
+    void FlipTagID() { currentTagID = static_cast<uint16_t>((currentTagID + 1) % TAG_ID_COUNT); }
     uint16_t GetCurrentTagID() override { return currentTagID; }
-    uint16_t GetPreviousTagID() const { return currentTagID ^ 1; }
+    uint16_t GetPreviousTagID() const
+    {
+        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
+    }
 
     // note this api is not atomic, caller should take care of this.
-    bool IsOldPointer(RefField<>& ref) const override { return ref.IsTagged() && ref.GetTagID() == GetPreviousTagID(); }
+    // N>2: any non-current tagged ref is "old" (not only previous); else older tags are dropped.
+    bool IsOldPointer(RefField<>& ref) const override
+    {
+        return ref.IsTagged() && ref.GetTagID() != currentTagID;
+    }
 
     // note this api is not atomic, caller should take care of this.
     bool IsCurrentPointer(RefField<>& ref) const override { return ref.IsTagged() && ref.GetTagID() == currentTagID; }
