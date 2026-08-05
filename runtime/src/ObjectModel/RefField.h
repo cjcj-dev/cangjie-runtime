@@ -15,6 +15,7 @@
 
 #include "Base/Log.h"
 #include "Common/TypeDef.h"
+#include "Heap/Verify/InteriorWriterProbe.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -80,6 +81,11 @@ public:
                          std::memory_order failOrder = std::memory_order_relaxed)
     {
         CHECK(std::numeric_limits<MAddress>::max() > newValue);
+        // interiorwriter: classify CAS new value before install. Default off via probe gate.
+        {
+            BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newValue).GetAddress());
+            InteriorWriterProbe::NoteInstall(InteriorWriterProbe::CurrentPath(), "CompareExchange", this, asObj);
+        }
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedValue, newValue, succOrder, failOrder);

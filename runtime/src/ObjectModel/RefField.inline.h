@@ -10,6 +10,7 @@
 
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
+#include "Heap/Verify/InteriorWriterProbe.h"
 #include "ObjectModel/RefField.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -23,6 +24,10 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
     uintptr_t newVal = newField.GetFieldValue();
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    // interiorwriter: classify install value (base vs interior). Default off.
+    InteriorWriterProbe::NoteInstall(InteriorWriterProbe::CurrentPath(), "SetTargetObject", this,
+                                     const_cast<BaseObject*>(obj));
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -45,6 +50,10 @@ void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
 {
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    // Decode address bits for classification (ignore tag bits via RefField ctor).
+    BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newVal).GetAddress());
+    InteriorWriterProbe::NoteInstall(InteriorWriterProbe::CurrentPath(), "SetFieldValue", this, asObj);
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
