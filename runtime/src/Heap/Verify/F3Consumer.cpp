@@ -176,9 +176,14 @@ bool F3Consumer::ShouldSkipEdge(void* holder, void* field, void* target, const c
     if (!PosCtrlEnabled() || holder == nullptr || target == nullptr) {
         return false;
     }
-    // Fire once: skip following an edge from a marked holder so target can die.
+    // Fire once, only on major TraceRefField paths (not young scan): skip following
+    // an edge from a marked+scanned holder so target can die while holder stays live.
+    // site must be TraceRefField_* so we do not poison minor closure.
+    if (site == nullptr || std::strncmp(site, "TraceRefField", 13) != 0) {
+        return false;
+    }
     Entry* e = Find(holder);
-    if (e == nullptr || e->marked == 0) {
+    if (e == nullptr || e->marked == 0 || e->scanned == 0 || e->major == 0) {
         return false;
     }
     int expected = 0;
@@ -194,7 +199,7 @@ bool F3Consumer::ShouldSkipEdge(void* holder, void* field, void* target, const c
     gPosTarget = target;
     VLOG(REPORT,
          "[GCV2][F3C][POSCTRL] skip_edge holder=%p field=%p target=%p site=%s "
-         "holderMarked=1 (intentional miss for bucket2 positive control)",
+         "holderMarked=1 scanned=1 major=1 (intentional miss for bucket2 positive control)",
          holder, field, target, site != nullptr ? site : "?");
     return true;
 }
