@@ -209,8 +209,11 @@ private:
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
     // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
+    // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;
+    // FYS=0 skips reachableSlots inserts (slots never looked up). MRT_GCV2_SETBITMAP=0 → legacy set.
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
-                           MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
+                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                           MinorSlotSet& weakSlots, bool useBitmapLedger);
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
@@ -218,12 +221,12 @@ private:
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
-    void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
-    void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
+    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots);
+    void ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec, const MinorObjectSet& allocationRoots);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
     void ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const MinorSlotSet& rememberedSlots);
-    void ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects);
+    void ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec);
     // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
     void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
