@@ -22,6 +22,18 @@ namespace MapleRuntime {
 using MAddress = Uptr; // Managed address
 constexpr Uptr NULL_ADDRESS = 0;
 
+// Tag-ID generation count for WCollector phase tags (RefField tagID field).
+// Default 2 preserves upstream N=2 behaviour; rebuild with -DMRT_TAG_ID_COUNT=N to widen.
+#ifndef MRT_TAG_ID_COUNT
+#define MRT_TAG_ID_COUNT 2
+#endif
+constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
+// Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
+constexpr unsigned TAG_ID_BITS =
+    (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
+// address:48 + isTagged:1 + tagID:TAG_ID_BITS + padding:TAG_ID_PADDING_BITS == 64
+constexpr unsigned TAG_ID_PADDING_BITS = 15u - TAG_ID_BITS;
+
 // object model related types
 class BaseObject;
 

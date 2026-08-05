@@ -47,8 +47,8 @@ void ForwardDataManager::InitializeForwardData()
 {
     size_t maxHeapBytes = Heap::GetHeap().GetMaxCapacity();
     size_t liveInfoSize = RoundUp(GetLiveInfoDataSize(maxHeapBytes), MapleRuntime::MRT_PAGE_SIZE);
-    // 2: forwadData is the twice size of liveInfo
-    forwardDataSize = liveInfoSize * 2;
+    // One liveInfo slot per tag generation (TAG_ID_COUNT).
+    forwardDataSize = liveInfoSize * TAG_ID_COUNT;
 
 #ifdef _WIN64
     void* startAddress = VirtualAlloc(NULL, forwardDataSize, MEM_RESERVE, PAGE_READWRITE);
@@ -68,8 +68,10 @@ void ForwardDataManager::InitializeForwardData()
 #endif
 
     forwardDataStart = reinterpret_cast<uintptr_t>(startAddress);
-    liveInfoData[0].InitializeMemory(forwardDataStart, liveInfoSize, regionUnitCount);
-    liveInfoData[1].InitializeMemory(forwardDataStart + liveInfoSize, liveInfoSize, regionUnitCount);
+    for (uint16_t i = 0; i < TAG_ID_COUNT; ++i) {
+        liveInfoData[i].InitializeMemory(forwardDataStart + static_cast<size_t>(i) * liveInfoSize, liveInfoSize,
+                                         regionUnitCount);
+    }
 }
 void ForwardDataManager::ForwardDataSpace::UnbindPreviousLiveInfo()
 {

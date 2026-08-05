@@ -144,7 +144,11 @@ public:
     }
 #else
     RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid)
-        : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid), padding(0) {}
+        : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid), padding(0)
+    {
+        // Was a silent bitfield truncate when tagID was 1 bit; diagnose out-of-range writes.
+        CHECK(tagid < TAG_ID_COUNT);
+    }
 #endif
 
     RefField(RefField&& ref) : fieldVal(ref.fieldVal) {}
@@ -173,11 +177,13 @@ private:
         struct {
             MAddress address : 48;
             MAddress isTagged : 1;
-            MAddress tagID : 1;
-            MAddress padding : 14;
+            MAddress tagID : TAG_ID_BITS;
+            MAddress padding : TAG_ID_PADDING_BITS;
         };
         RefFieldValue fieldVal;
     };
+    static_assert(48 + 1 + TAG_ID_BITS + TAG_ID_PADDING_BITS == 64, "RefField tag layout must fill 64 bits");
+    static_assert(TAG_ID_COUNT > 1 && TAG_ID_COUNT <= (1u << TAG_ID_BITS), "TAG_ID_COUNT out of bit width");
 #endif
 };
 
