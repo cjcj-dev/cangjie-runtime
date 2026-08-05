@@ -26,6 +26,12 @@ static void* g_tsanRuntimeSync = nullptr;
 static std::atomic<bool> g_initialized{false};
 static CJThreadRecorder<RaceProcHandle> g_procState{};
 
+// TLS race state for native (non-cjthread) threads such as GC pool workers.
+// Cangjie-TSan resolves thr via CJ_MCC_TsanGetThreadState; without a cjthread
+// slot that returns null and all memory/atomic hooks become no-ops.
+static thread_local RaceStateHandle g_nativeRaceState = nullptr;
+static thread_local RaceProcHandle g_nativeRaceProc = nullptr;
+
 void TsanInitialize()
 {
     void* cjthread = CJThreadGetHandle();
@@ -53,6 +59,29 @@ void TsanInitialize()
     g_initialized.store(true, std::memory_order_release);
 }
 
+void TsanAttachNativeThread()
+{
+    if (g_nativeRaceState != nullptr) {
+        return;
+    }
+    // Root ThreadState for this OS thread (same allocator path as cjthread init).
+    g_nativeRaceState = REAL(__tsan_init)();
+    g_nativeRaceProc = REAL(__tsan_proc_create)();
+    g_initialized.store(true, std::memory_order_release);
+}
+
+void TsanDetachNativeThread()
+{
+    if (g_nativeRaceState != nullptr) {
+        REAL(__tsan_state_delete)(g_nativeRaceState);
+        g_nativeRaceState = nullptr;
+    }
+    if (g_nativeRaceProc != nullptr) {
+        REAL(__tsan_proc_destroy)(g_nativeRaceProc);
+        g_nativeRaceProc = nullptr;
+    }
+}
+
 void TsanFinalize()
 {
     REAL(__tsan_fini)();
@@ -73,10 +102,13 @@ void TsanFree(void* addr, size_t size)
 static inline RaceStateHandle CJThreadGetCurRaceState()
 {
     void* cjthread = CJThreadGetHandle();
-    if (cjthread == nullptr) {
-        return nullptr;
+    if (cjthread != nullptr) {
+        RaceStateHandle rs = CJThreadGetSanitizerContext(cjthread);
+        if (rs != nullptr) {
+            return rs;
+        }
     }
-    return CJThreadGetSanitizerContext(cjthread);
+    return g_nativeRaceState;
 }
 
 void TsanAcquire()
@@ -192,21 +224,22 @@ void TsanDeleteRaceProc(void* processor)
 extern "C" {
 MRT_EXPORT void* CJ_MCC_TsanGetRaceProc(void)
 {
-    if (g_initialized.load(std::memory_order_acquire)) {
-        void* processor = ProcessorGetHandle();
-        return g_procState.GetDataFromThread(processor);
-    } else {
+    if (!g_initialized.load(std::memory_order_acquire)) {
         return nullptr;
     }
+    if (g_nativeRaceProc != nullptr) {
+        return g_nativeRaceProc;
+    }
+    void* processor = ProcessorGetHandle();
+    return g_procState.GetDataFromThread(processor);
 }
 
 MRT_EXPORT void* CJ_MCC_TsanGetThreadState(void)
 {
-    if (g_initialized.load(std::memory_order_acquire)) {
-        return CJThreadGetCurRaceState();
-    } else {
+    if (!g_initialized.load(std::memory_order_acquire)) {
         return nullptr;
     }
+    return CJThreadGetCurRaceState();
 }
 
 MRT_EXPORT void CJ_MCC_TsanWriteMemory(const void* addr, size_t size)
