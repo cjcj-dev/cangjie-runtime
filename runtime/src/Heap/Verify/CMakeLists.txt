@@ -19,6 +19,7 @@ set(SRC_LIST
     "InteriorSrcProbe.cpp"
     "StaticSlotProbe.cpp"
     "SizeGuardForensics.cpp"
+    "RemsetHolderProbe.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

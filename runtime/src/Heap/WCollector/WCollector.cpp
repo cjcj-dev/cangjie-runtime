@@ -40,6 +40,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/InteriorSrcProbe.h"
 #include "Heap/Verify/StaticSlotProbe.h"
+#include "Heap/Verify/RemsetHolderProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -1935,6 +1936,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
 
         gMinorRootSlotAddr = static_cast<uintptr_t>(slot);
+        RemsetHolderProbe::NoteRemsetEdge(static_cast<uintptr_t>(slot), target);
         PushYoungObject(target, workStack, "remset");
         gMinorRootSlotAddr = 0;
         if (consumedOut != nullptr) {
@@ -3003,6 +3005,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     InteriorSrcProbe::FlushSummary("post-minor-trace");
     StaticSlotProbe::FlushSummary("post-minor-trace");
+    RemsetHolderProbe::FlushSummary("post-minor-trace");
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
