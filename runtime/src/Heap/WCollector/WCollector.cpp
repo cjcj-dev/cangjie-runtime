@@ -32,6 +32,8 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/InteriorSrcProbe.h"
+#include "Heap/Verify/StaticSlotProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -991,6 +993,8 @@ namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
 // can attribute invalid headers without threading origin through every visitor.
 thread_local const char* gMinorRootOrigin = "unknown";
+// interiorfix: source slot address for NotePush (static/stack root RefField storage).
+thread_local uintptr_t gMinorRootSlotAddr = 0;
 } // namespace
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
@@ -1006,27 +1010,41 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
 #endif
     gMinorRootOrigin = "mutator_stack";
+    RootVisitor taggedRaw = [&visitedRawRootVisitor](ObjectRef& root) {
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&root);
+        visitedRawRootVisitor(root);
+        gMinorRootSlotAddr = 0;
+    };
     MutatorManager::Instance().VisitAllMutators(
-        [&visitedRawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(visitedRawRootVisitor); });
+        [&taggedRaw](Mutator& mutator) { mutator.VisitMutatorRoots(taggedRaw); });
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
+        StaticSlotProbe::NoteStaticField(field);
         fieldVisitor(field);
+        gMinorRootSlotAddr = 0;
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Heap::GetHeap().VisitStaticRoots([&fieldVisitor](RefField<>& field) {
+        gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
+        StaticSlotProbe::NoteStaticField(field);
+        fieldVisitor(field);
+        gMinorRootSlotAddr = 0;
+    });
 #endif
     gMinorRootOrigin = "concurrency";
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&taggedRaw);
     gMinorRootOrigin = "finalizer";
-    collectorResources.GetFinalizerProcessor().VisitRawPointers(visitedRawRootVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(taggedRaw);
     gMinorRootOrigin = "export";
-    Heap::GetHeap().VisitAllExportRoots(visitedRawRootVisitor);
+    Heap::GetHeap().VisitAllExportRoots(taggedRaw);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     remset.CheckStaticCoverageForMinor();
 #endif
     gMinorRootOrigin = "unknown";
+    gMinorRootSlotAddr = 0;
 }
 
 void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor)
@@ -1069,7 +1087,22 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    // interiorsrc: classify every young push (base vs interior) before validity CHECK.
+    // Gate MRT_GCV2_INTERIOR_SRC=1 (default off). Does not relax IsValidObject.
+    {
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            } else if (src == nullptr) {
+                src = "unknown";
+            }
+        }
+        InteriorSrcProbe::NotePush(src, object, gMinorRootSlotAddr, 0);
+    }
     if (!object->IsValidObject()) {
+        // T3: emit last true-interior enqueue before fail-closed abort.
+        InteriorSrcProbe::FlushSummary("invalid-minor-root");
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
         // slot, or stackmap-mislabeled root). Printed once per process by default.
@@ -1163,7 +1196,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                 workStack.push_back(target);
             }
         } else {
+            gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
             PushYoungObject(target, workStack, "closure_edge");
+            gMinorRootSlotAddr = 0;
         }
     };
     while (!workStack.empty()) {
@@ -1445,7 +1480,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+        gMinorRootSlotAddr = static_cast<uintptr_t>(slot);
         PushYoungObject(target, workStack, "remset");
+        gMinorRootSlotAddr = 0;
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
@@ -2202,6 +2239,8 @@ void WCollector::DoYoungGarbageCollection()
     RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                         &remsetStats);
     TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    InteriorSrcProbe::FlushSummary("post-minor-trace");
+    StaticSlotProbe::FlushSummary("post-minor-trace");
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
