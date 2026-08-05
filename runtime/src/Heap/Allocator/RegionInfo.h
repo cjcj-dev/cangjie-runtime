@@ -838,8 +838,24 @@ public:
     // dispel all units of this region.
     // inGhostFromRegion is the unique guard condition.
 
+    // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
+    // Public for reffix parallel window assert + positive-control inject.
+    static std::atomic<size_t> dispelGhostCount;
+
+    static size_t GetDispelGhostCount()
+    {
+        return dispelGhostCount.load(std::memory_order_relaxed);
+    }
+
+    // Positive control only (MRT_GCV2_REFFIX_INJECT_DISPEL=1): bump without real dispel.
+    static void InjectDispelCountForTest()
+    {
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void DispelGhostFromRegion()
     {
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
                                     static_cast<unsigned int>(IsGhostFromRegion()),

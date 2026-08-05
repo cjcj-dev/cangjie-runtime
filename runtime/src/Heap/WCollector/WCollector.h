@@ -209,6 +209,7 @@ private:
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field) const;
     void FixMinorRootSlots();
+    void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
     void EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots);
     void ValidateYoungMarking(const MinorObjectSet& reachableObjects, const MinorObjectSet& allocationRoots);
