@@ -23,3 +23,12 @@ No `-w` ⇒ zero watchpoints, hot path unmodified. First 2 fatals full RW dump; 
 ```bash
 ./b2trap_supervisor -o out -w 0xSLOT -- /path/to/natural_wave
 ```
+
+## Mid-run arm (Node.next @ +16)
+
+```bash
+# plant INT3 on CJ_MCC_NewObjectFast ret; on Node alloc, DR-watch obj+16
+./b2trap_supervisor -o out -A node -S 1 -M 0 -t 120 -F 2 -- /path/to/natural_wave
+# -S N  arm every Nth Node (default 1)
+# -M N  stop after N armed slots (0=unlimited; only 4 DRs, RR replace)
+```
