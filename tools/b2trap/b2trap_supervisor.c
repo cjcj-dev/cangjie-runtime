@@ -537,14 +537,26 @@ int main(int argc, char **argv) {
             maybe_arm(w);
 
         if (event == PTRACE_EVENT_EXEC) {
-            if (!exec_armed) {
-                exec_armed = 1;
-                learn_exe_range(w, base);
-                read_maps(w, "exec");
-                if (g_nwp)
-                    set_watchpoints(w);
-                logln("EXEC_ARMED tid=%d", w);
+            // setarch / wrappers re-exec the real target — always re-learn exe range
+            char newbase[256] = {0};
+            char linkp[64], realp[512];
+            snprintf(linkp, sizeof linkp, "/proc/%d/exe", w);
+            ssize_t rl = readlink(linkp, realp, sizeof realp - 1);
+            if (rl > 0) {
+                realp[rl] = 0;
+                const char *nb = strrchr(realp, '/');
+                nb = nb ? nb + 1 : realp;
+                snprintf(newbase, sizeof newbase, "%s", nb);
+            } else {
+                snprintf(newbase, sizeof newbase, "%s", base);
             }
+            g_exe_lo = g_exe_hi = 0;
+            learn_exe_range(w, newbase);
+            read_maps(w, "exec");
+            if (g_nwp)
+                set_watchpoints(w);
+            exec_armed = 1;
+            logln("EXEC_ARMED tid=%d exe=%s", w, newbase);
             ptrace(PTRACE_CONT, w, 0, 0);
             continue;
         }
@@ -614,5 +626,10 @@ int main(int argc, char **argv) {
     logln("SUPERVISOR_END exit=%d termsig=%d fatal_seen=%d fatal_count=%d", exit_code, termsig, fatal_seen,
           g_fatal_count);
     fclose(g_log);
-    return 0;
+    // surface target fate to parent classifier (128+sig convention)
+    if (termsig > 0)
+        return 128 + termsig;
+    if (exit_code >= 0)
+        return exit_code;
+    return fatal_seen ? 134 : 1;
 }
