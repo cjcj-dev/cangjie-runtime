@@ -255,16 +255,53 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
     }
     auto* holderObj = reinterpret_cast<BaseObject*>(holder);
 
+    // Heartbeat first so SEGV during later scans still leaves a sample trail.
+    VLOG(REPORT, "[GCV2][B3ROOT][BEGIN] holder=%p holderValid=%d holderMarked=%d field=%p loadFromHeapField=%d",
+         holder, holderValid, holderMarked, fieldAddr, loadFromHeapField);
+
     Hit aStack, aStatic, aConc, aFinR, aFinQ, aExport;
     Hit bStack, bStatic, bTls;
 
+    // Wide stack first (most discriminative for ENUM_MISSES_STACK); log partial early.
+    ScanBStackCons(bStack, holderObj);
+    VLOG(REPORT, "[GCV2][B3ROOT][STEP] holder=%p step=B_stack found=%d N=%zu slot=%p", holder, bStack.found,
+         bStack.visitN, bStack.sampleSlot);
+
     ScanAStack(aStack, holderObj);
+    VLOG(REPORT, "[GCV2][B3ROOT][STEP] holder=%p step=A_stack found=%d N=%zu slot=%p", holder, aStack.found,
+         aStack.visitN, aStack.sampleSlot);
+
+    // Early trichotomy on stack alone (covers majority of B-3 samples).
+    if (aStack.found) {
+        VLOG(REPORT,
+             "[GCV2][B3ROOT] holder=%p holderValid=%d holderMarked=%d verdict=B3ROOT_A_FOUND_MARK_FAILED "
+             "A_found=1 A_family=mutator_stack A_slot=%p B_found=%d B_family=%s B_slot=%p "
+             "A_stack=1 A_static=-1 A_conc=-1 A_finR=-1 A_finQ=-1 A_export=-1 "
+             "B_stack=%d B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d partial=1",
+             holder, holderValid, holderMarked, aStack.sampleSlot, bStack.found,
+             bStack.found ? "stack_cons" : "none", bStack.sampleSlot, bStack.found, aStack.visitN, bStack.visitN,
+             fieldAddr, loadFromHeapField);
+        return;
+    }
+    if (bStack.found) {
+        VLOG(REPORT,
+             "[GCV2][B3ROOT] holder=%p holderValid=%d holderMarked=%d verdict=B3ROOT_ENUM_MISSES_STACK "
+             "A_found=0 A_family=none A_slot=(nil) B_found=1 B_family=stack_cons B_slot=%p "
+             "A_stack=0 A_static=-1 A_conc=-1 A_finR=-1 A_finQ=-1 A_export=-1 "
+             "B_stack=1 B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d partial=1",
+             holder, holderValid, holderMarked, bStack.sampleSlot, aStack.visitN, bStack.visitN, fieldAddr,
+             loadFromHeapField);
+        VLOG(REPORT,
+             "[GCV2][B3ROOT][ENUM_MISS_DETAIL] family=STACK reason=precise_VisitMutatorRoots_miss_wide_cons_hit "
+             "consSlot=%p consValue=%p A_stackN=%zu B_stackN=%zu",
+             bStack.sampleSlot, bStack.sampleValue, aStack.visitN, bStack.visitN);
+        // continue remaining families for completeness when possible
+    }
+
     ScanAStatic(aStatic, holderObj);
     ScanAConc(aConc, holderObj);
     ScanAFinalizer(aFinR, aFinQ, holderObj, Heap::GetHeap().GetFinalizerProcessor());
     ScanAExport(aExport, holderObj);
-
-    ScanBStackCons(bStack, holderObj);
     ScanBStatic(bStatic, holderObj);
     ScanBTls(bTls, holderObj);
 
@@ -280,7 +317,6 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
     if (aAny) {
         verdict = "B3ROOT_A_FOUND_MARK_FAILED";
     } else if (bAny) {
-        // ENUM missed a root that wide scan found
         if (bStack.found) {
             verdict = "B3ROOT_ENUM_MISSES_STACK";
         } else if (bStatic.found) {
@@ -292,12 +328,6 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
         verdict = "B3ROOT_NO_HOLDER";
     }
 
-    // If A missed stack but B hit stack → classic stackmap miss (even if A found elsewhere)
-    // Prefer the task's primary trichotomy: A-found vs A-miss-B-hit vs both-miss.
-    // When A found anywhere, keep A_FOUND (mark step failed after enum).
-    // When A none and B hit: ENUM_MISSES.
-    // When both none: NO_HOLDER.
-
     VLOG(REPORT,
          "[GCV2][B3ROOT] holder=%p holderValid=%d holderMarked=%d verdict=%s "
          "A_found=%d A_family=%s A_slot=%p "
@@ -306,13 +336,12 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
          "B_found=%d B_family=%s B_slot=%p "
          "B_stack=%d B_static=%d B_tls=%d "
          "B_stackN=%zu B_staticN=%zu B_tlsN=%zu "
-         "field=%p loadFromHeapField=%d",
+         "field=%p loadFromHeapField=%d partial=0",
          holder, holderValid, holderMarked, verdict, aAny, aFamily, aSlot, aStack.found, aStatic.found, aConc.found,
          aFinR.found, aFinQ.found, aExport.found, aStack.visitN, aStatic.visitN, aConc.visitN, aFinR.visitN,
          aFinQ.visitN, aExport.visitN, bAny, bFamily, bSlot, bStack.found, bStatic.found, bTls.found, bStack.visitN,
          bStatic.visitN, bTls.visitN, fieldAddr, loadFromHeapField);
 
-    // One-line miss detail when ENUM misses stack
     if (!aAny && bStack.found) {
         VLOG(REPORT,
              "[GCV2][B3ROOT][ENUM_MISS_DETAIL] family=STACK reason=precise_VisitMutatorRoots_miss_wide_cons_hit "
