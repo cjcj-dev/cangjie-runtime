@@ -326,6 +326,18 @@ bool WCollector::MarkObject(BaseObject* obj) const
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
+    // F3M_POSCTRL (default off): skip one major MarkObject so holder stays unmarked → bucket-1.
+    // Pretend wasMarked=true so ConcurrentMarkingWork will not TraceObjectRefFields either.
+    if (F3Consumer::MarkPosCtrlEnabled()) {
+        const GCPhase phase = GetGCPhase();
+        const unsigned major = (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_ENUM ||
+                                phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)
+            ? 1u
+            : 0u;
+        if (F3Consumer::ShouldSkipMark(obj, major)) {
+            return true; // wasMarked=true ⇒ no scan, mark bit remains 0
+        }
+    }
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
         region->AddLiveByteCount(objectSize);
@@ -573,6 +585,15 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     } else {
                         std::snprintf(killBuf, sizeof(killBuf), "NOT_AVAILABLE_target_not_in_heap");
                     }
+                    // f3mark H3: full region lifecycle for the holder address (not just Lookup clear).
+                    char holderKillBuf[512];
+                    size_t holderHistHits = 0;
+                    if (holderInHeap && obj != nullptr) {
+                        holderHistHits = TraceClear::DumpHistory(reinterpret_cast<MAddress>(obj), holderKillBuf,
+                                                                 sizeof(holderKillBuf));
+                    } else {
+                        std::snprintf(holderKillBuf, sizeof(holderKillBuf), "NOT_AVAILABLE_holder_not_in_heap");
+                    }
                     size_t ringCap = 0;
                     size_t ringTotal = 0;
                     size_t ringWrap = 0;
@@ -617,8 +638,17 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     // MISSING_EDGE: holder kept AND remsetContains=0 AND holder not young (old→young needs remset)
                     // RESURRECT: holderValid now but not marked/survived (or holder was cleared)
                     // UNCLASSIFIED: insufficient signals
+                    // f3mark H3: holder region recycled (clear/collect in history) + tip still "valid"
+                    const bool holderRecycled =
+                        holderWasCleared || (holderHistHits > 0 &&
+                                             (std::strstr(holderKillBuf, "clear_units") != nullptr ||
+                                              std::strstr(holderKillBuf, "collect_region") != nullptr ||
+                                              std::strstr(holderKillBuf, "garbage_reuse") != nullptr ||
+                                              std::strstr(holderKillBuf, "dirty_take") != nullptr));
                     const char* sketch = "UNCLASSIFIED";
-                    if (holderValid == 1 && (holderMarked == 1 || holderSurvived == 1)) {
+                    if (holderValid == 1 && holderMarked == 0 && holderSurvived == 0 && holderRecycled) {
+                        sketch = "F3M_H3_FALSE_TIP_REUSED";
+                    } else if (holderValid == 1 && (holderMarked == 1 || holderSurvived == 1)) {
                         if (remsetContains == 1) {
                             sketch = "F3_DEATH_CONSUMER_candidate";
                         } else if (holderYoung == 0 && targetYoung == 1 && remsetContains == 0) {
@@ -645,8 +675,14 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                          target, &field, obj, holderValid, holderMarked, holderSurvived, holderResurrected,
                          holderYoung, targetYoung, remsetContains, remsetSize, histHits, ringCap, ringTotal,
                          ringWrap, killBuf, sketch, reasonName, g_gcCount, static_cast<unsigned>(phase));
-                    // f3consumer: mark/scan/edge ledger for bucket-2 (a|b|c)
-                    if (F3Consumer::Enabled()) {
+                    // f3mark H3 ledger: holder region kill history + recycled flag
+                    VLOG(REPORT,
+                         "[GCV2][F3M][holder-hist] holder=%p holderClearedRecent=%u holderRecycled=%u "
+                         "holderHistHits=%zu holderKill={%s} markPosMatch=%d",
+                         obj, static_cast<unsigned>(holderWasCleared), static_cast<unsigned>(holderRecycled),
+                         holderHistHits, holderKillBuf, static_cast<int>(F3Consumer::MarkPosCtrlMatch(obj)));
+                    // f3consumer / f3mark: mark/scan/edge ledger or F3M POSCTRL dump
+                    if (F3Consumer::Enabled() || F3Consumer::MarkPosCtrlEnabled()) {
                         char f3cVerdict[160];
                         F3Consumer::DumpAtAbort(obj, &field, target, f3cVerdict, sizeof(f3cVerdict));
                         VLOG(REPORT, "[GCV2][F3C][verdict] %s holder=%p target=%p", f3cVerdict, obj, target);

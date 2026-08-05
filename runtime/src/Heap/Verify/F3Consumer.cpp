@@ -43,6 +43,10 @@ void* gPosHolder = nullptr;
 void* gPosField = nullptr;
 void* gPosTarget = nullptr;
 
+// Bucket-1 mark skip (F3M_POSCTRL): independent of F3_CONSUMER ledger.
+std::atomic<int> gMarkPosCtrlFired{ 0 };
+void* gMarkPosObj = nullptr;
+
 bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
@@ -111,6 +115,12 @@ bool F3Consumer::Enabled()
 bool F3Consumer::PosCtrlEnabled()
 {
     static const bool on = EnvIsOne("MRT_GCV2_F3C_POSCTRL");
+    return on;
+}
+
+bool F3Consumer::MarkPosCtrlEnabled()
+{
+    static const bool on = EnvIsOne("MRT_GCV2_F3M_POSCTRL");
     return on;
 }
 
@@ -207,6 +217,26 @@ bool F3Consumer::ShouldSkipEdge(void* holder, void* field, void* target, const c
     return true;
 }
 
+bool F3Consumer::ShouldSkipMark(void* obj, unsigned int major)
+{
+    if (!MarkPosCtrlEnabled() || obj == nullptr || major == 0) {
+        return false;
+    }
+    if (gMarkPosCtrlFired.load(std::memory_order_acquire) != 0) {
+        return false;
+    }
+    int expected = 0;
+    if (!gMarkPosCtrlFired.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
+        return false;
+    }
+    gMarkPosObj = obj;
+    VLOG(REPORT,
+         "[GCV2][F3M][POSCTRL] skip_mark obj=%p major=1 "
+         "(intentional unmarked holder for bucket1 positive control; no F3_CONSUMER ledger)",
+         obj);
+    return true;
+}
+
 void F3Consumer::NotePosCtrlFired(void* holder, void* field, void* target)
 {
     gPosHolder = holder;
@@ -214,14 +244,34 @@ void F3Consumer::NotePosCtrlFired(void* holder, void* field, void* target)
     gPosTarget = target;
 }
 
+bool F3Consumer::MarkPosCtrlMatch(void* holder)
+{
+    return gMarkPosCtrlFired.load(std::memory_order_acquire) != 0 && holder == gMarkPosObj;
+}
+
 void F3Consumer::DumpAtAbort(void* holder, void* field, void* target, char* verdictBuf, size_t verdictBufSize)
 {
     if (verdictBuf != nullptr && verdictBufSize > 0) {
         verdictBuf[0] = '\0';
     }
-    if (!Enabled()) {
+    if (!Enabled() && !MarkPosCtrlEnabled()) {
         if (verdictBuf != nullptr && verdictBufSize > 0) {
             std::snprintf(verdictBuf, verdictBufSize, "F3C_OFF");
+        }
+        return;
+    }
+
+    const int markPosMatch = MarkPosCtrlMatch(holder) ? 1 : 0;
+    if (MarkPosCtrlEnabled() && !Enabled()) {
+        // Bucket-1 POSCTRL path: no ledger; classify from mark-skip match alone.
+        VLOG(REPORT,
+             "[GCV2][F3M] holder=%p field=%p target=%p markPosMatch=%d markPosObj=%p "
+             "bucket=%s",
+             holder, field, target, markPosMatch, gMarkPosObj,
+             markPosMatch ? "F3M_BUCKET1_POSCTRL_skip_mark" : "F3M_BUCKET1_natural_or_unrelated");
+        if (verdictBuf != nullptr && verdictBufSize > 0) {
+            std::snprintf(verdictBuf, verdictBufSize, "%s_mp%d",
+                          markPosMatch ? "F3M_BUCKET1_POSCTRL" : "F3M_BUCKET1_NATURAL", markPosMatch);
         }
         return;
     }
@@ -252,7 +302,7 @@ void F3Consumer::DumpAtAbort(void* holder, void* field, void* target, char* verd
     } else if (marked == 1 && scanned == 1 && followed == 1) {
         bucket = "F3C_BUCKET2_c_followed_then_killed";
     } else if (marked == 0) {
-        bucket = "F3C_BUCKET1_holder_never_marked";
+        bucket = markPosMatch ? "F3M_BUCKET1_POSCTRL_skip_mark" : "F3C_BUCKET1_holder_never_marked";
     }
 
     const int posMatch =
@@ -261,13 +311,13 @@ void F3Consumer::DumpAtAbort(void* holder, void* field, void* target, char* verd
     VLOG(REPORT,
          "[GCV2][F3C] holder=%p field=%p target=%p ledgerHit=%u marked=%d scanned=%d edgeFollowed=%d "
          "edgeSkipped=%d young=%u major=%u site=%s posCtrlMatch=%d posFired=%d posHolder=%p posTarget=%p "
-         "bucket=%s",
+         "markPosMatch=%d bucket=%s",
          holder, field, target, static_cast<unsigned>(e != nullptr), marked, scanned, followed, skipped, young, major,
-         site, posMatch, gPosCtrlFired.load(std::memory_order_acquire), gPosHolder, gPosTarget, bucket);
+         site, posMatch, gPosCtrlFired.load(std::memory_order_acquire), gPosHolder, gPosTarget, markPosMatch, bucket);
 
     if (verdictBuf != nullptr && verdictBufSize > 0) {
-        std::snprintf(verdictBuf, verdictBufSize, "%s_m%d_s%d_f%d_skip%d_pos%d", bucket, marked, scanned, followed,
-                      skipped, posMatch);
+        std::snprintf(verdictBuf, verdictBufSize, "%s_m%d_s%d_f%d_skip%d_pos%d_mp%d", bucket, marked, scanned, followed,
+                      skipped, posMatch, markPosMatch);
     }
 }
 
