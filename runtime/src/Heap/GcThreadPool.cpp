@@ -101,7 +101,7 @@ void* GCPoolThread::WorkerFunc(void* param)
 #endif
 
 #if defined(CANGJIE_TSAN_SUPPORT)
-    // Hang TSan race state on this pthread so RefField CAS / memory hooks see a thr.
+    // Eager try: no-op if primary TsanInitialize has not run yet (bootstrap).
     Sanitizer::TsanAttachNativeThread();
     TsanPosCtrlMaybeRace(thread->id);
 #endif
@@ -139,6 +139,12 @@ void* GCPoolThread::WorkerFunc(void* param)
             }
         }
         if (task != nullptr) {
+#if defined(CANGJIE_TSAN_SUPPORT)
+            // Lazy attach: pool threads are created before TsanInitialize; first
+            // real GC work happens after, so re-try here so A2/R2 paths get thr.
+            Sanitizer::TsanAttachNativeThread();
+            TsanPosCtrlMaybeRace(thread->id);
+#endif
             task->Execute(thread->id);
             delete task;
         }
