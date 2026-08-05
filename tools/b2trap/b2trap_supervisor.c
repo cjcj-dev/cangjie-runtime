@@ -309,14 +309,26 @@ static int find_swbp(unsigned long addr) {
     return -1;
 }
 
+static void unplant_all_swbp(pid_t tid) {
+    for (int i = 0; i < g_nswbp; i++) {
+        if (!g_swbp[i].active)
+            continue;
+        poke_byte(tid, g_swbp[i].addr, g_swbp[i].orig, 0);
+        g_swbp[i].active = 0;
+    }
+    logln("SWBP_UNPLANTED remaining_active=0 (DR-only for rest of run)");
+}
+
 static void midrun_arm_slot(pid_t tid, unsigned long slot) {
     if (g_arm_max && g_node_armed_total >= g_arm_max)
         return;
     int idx;
+    int filled = 0;
     if (g_nwp < MAX_WP) {
         idx = g_nwp;
         g_nwp++;
         g_hits[idx] = 0;
+        filled = (g_nwp == MAX_WP);
     } else if (g_rr_replace) {
         idx = g_rr % MAX_WP;
         g_rr++;
@@ -332,6 +344,12 @@ static void midrun_arm_slot(pid_t tid, unsigned long slot) {
     g_narmed_t = 0;
     set_watchpoints(tid);
     rearm_all_threads();
+    // Once we hold 4 DRs and are not RR-replacing, drop INT3 so rest of run is DR-only
+    // (avoids alloc-stop tax that can mask the defect — NEGATIVE #61 family).
+    if (filled && !g_rr_replace)
+        unplant_all_swbp(tid);
+    if (g_arm_max && g_node_armed_total >= g_arm_max && !g_rr_replace)
+        unplant_all_swbp(tid);
 }
 
 static int handle_swbp(pid_t tid) {
