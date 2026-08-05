@@ -50,9 +50,10 @@ public:
         collectorType = CollectorType::SMOOTH_COLLECTOR;
     }
 
-    ~WCollector() override;
+    ~WCollector() override = default;
 
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
+    void Fini() override;
 
     void MarkNewObject(BaseObject* obj) override;
 
