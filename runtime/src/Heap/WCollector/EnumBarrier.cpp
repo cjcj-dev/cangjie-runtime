@@ -7,6 +7,7 @@
 
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/SatbGap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -122,8 +123,17 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
     if (remeberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(remeberedObject);
     }
+    int satbNew = 0;
     if (ref != nullptr) {
-        mutator->RememberObjectInSatbBuffer(ref);
+        if (SatbGap::ShouldSkipSatbNew(obj, &field, ref, "EnumWriteRef")) {
+            satbNew = 0;
+        } else {
+            mutator->RememberObjectInSatbBuffer(ref);
+            satbNew = 1;
+        }
+    }
+    if (SatbGap::Enabled()) {
+        SatbGap::NoteWrite(obj, &field, remeberedObject, ref, satbNew, "EnumWriteRef");
     }
     DLOG(BARRIER, "write obj %p ref@%p: 0x%zx -> %p", obj, &field, remeberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);

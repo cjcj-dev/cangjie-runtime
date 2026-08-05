@@ -18,6 +18,7 @@ set(SRC_LIST
     "TagReuseProbe.cpp"
     "F3Consumer.cpp"
     "F3Scan.cpp"
+    "SatbGap.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

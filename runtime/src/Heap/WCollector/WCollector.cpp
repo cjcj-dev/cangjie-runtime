@@ -42,6 +42,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/F3Consumer.h"
 #include "Heap/Verify/F3Scan.h"
+#include "Heap/Verify/SatbGap.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -694,6 +695,11 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                         F3Scan::DumpAtAbort(obj, &field, target, f3sVerdict, sizeof(f3sVerdict));
                         VLOG(REPORT, "[GCV2][F3S][verdict] %s holder=%p target=%p", f3sVerdict, obj, target);
                     }
+                    if (SatbGap::Enabled() || f3Death) {
+                        char satbVerdict[192];
+                        SatbGap::DumpAtAbort(obj, &field, target, satbVerdict, sizeof(satbVerdict));
+                        VLOG(REPORT, "[GCV2][SATB][verdict] %s holder=%p target=%p", satbVerdict, obj, target);
+                    }
                 }
             }
         }
@@ -859,6 +865,9 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
+        if (SatbGap::Enabled()) {
+            SatbGap::NoteScanDone(obj);
+        }
         return;
     }
 
@@ -883,11 +892,17 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
         } else {
             LOG(RTLOG_FATAL, "array object %p has wrong component type", array);
         }
+        if (SatbGap::Enabled()) {
+            SatbGap::NoteScanDone(obj);
+        }
         return;
     }
 
     MAddress contentAddr = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
     obj->GetGCTib().ForEachBitmapWord(contentAddr, visitor);
+    if (SatbGap::Enabled()) {
+        SatbGap::NoteScanDone(obj);
+    }
 }
 
 BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)

@@ -7,6 +7,7 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/SatbGap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -17,14 +18,25 @@
 
 namespace MapleRuntime {
 namespace {
-void RememberNewReference(Mutator* mutator, BaseObject* ref)
+// Returns 1 if SATB enqueue ran for ref; 0 if skipped (null/mutator/POSCTRL).
+int RememberNewReference(Mutator* mutator, BaseObject* ref, BaseObject* holder, RefField<false>* field,
+                         const char* site)
 {
     if (mutator == nullptr || ref == nullptr) {
-        return;
+        return 0;
+    }
+    if (SatbGap::ShouldSkipSatbNew(holder, field, ref, site)) {
+        return 0;
     }
     // Keep the tracing closure for references inserted after their owner may have been scanned.
     // ShouldEnqueue filters trace-region and already marked objects and deduplicates the rest.
     mutator->RememberObjectInSatbBuffer(ref);
+    return 1;
+}
+
+void RememberNewReference(Mutator* mutator, BaseObject* ref)
+{
+    (void)RememberNewReference(mutator, ref, nullptr, nullptr, "generic");
 }
 } // namespace
 
@@ -130,7 +142,10 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
     if (rememberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(rememberedObject);
     }
-    RememberNewReference(mutator, ref);
+    const int satbNew = RememberNewReference(mutator, ref, obj, &field, "TraceWriteRef");
+    if (SatbGap::Enabled()) {
+        SatbGap::NoteWrite(obj, &field, rememberedObject, ref, satbNew, "TraceWriteRef");
+    }
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
