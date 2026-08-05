@@ -56,6 +56,53 @@ namespace {
 class MinorPhaseBuffer;
 thread_local MinorPhaseBuffer* gMinorPhaseBuffer = nullptr;
 
+struct MinorPhaseRecord {
+    uint64_t seq = 0;
+    const char* name = nullptr;
+    uint64_t us = 0;
+};
+
+class DeferredMinorPhaseRecords {
+public:
+    static void Append(uint64_t seq, const MinorPhaseRecord* records, size_t count)
+    {
+        auto& deferred = Records();
+        size_t& deferredSize = Size();
+        static const bool registered = std::atexit(Flush) == 0;
+        CHECK_DETAIL(registered, "failed to register deferred minor phase flush");
+        CHECK_DETAIL(deferredSize + count <= deferred.size(),
+                     "deferred minor phase buffer overflow: size=%zu append=%zu capacity=%zu", deferredSize, count,
+                     deferred.size());
+        for (size_t i = 0; i < count; ++i) {
+            deferred[deferredSize] = records[i];
+            deferred[deferredSize].seq = seq;
+            ++deferredSize;
+        }
+    }
+
+private:
+    static std::array<MinorPhaseRecord, 1U << 20>& Records()
+    {
+        static std::array<MinorPhaseRecord, 1U << 20> records{};
+        return records;
+    }
+
+    static size_t& Size()
+    {
+        static size_t size = 0;
+        return size;
+    }
+
+    static void Flush()
+    {
+        auto& records = Records();
+        size_t size = Size();
+        for (size_t i = 0; i < size; ++i) {
+            GcLog::Phase(records[i].seq, records[i].name, records[i].us);
+        }
+    }
+};
+
 class MinorPhaseBuffer {
 public:
     MinorPhaseBuffer() : previous(gMinorPhaseBuffer)
@@ -73,9 +120,7 @@ public:
             return;
         }
         gMinorPhaseBuffer = previous;
-        for (size_t i = 0; i < size; ++i) {
-            GcLog::Phase(records[i].name, records[i].us);
-        }
+        DeferredMinorPhaseRecords::Append(GcLog::CurrentSeq(), records.data(), size);
     }
 
     void Record(const char* name, uint64_t us)
@@ -87,14 +132,9 @@ public:
     }
 
 private:
-    struct RecordEntry {
-        const char* name = nullptr;
-        uint64_t us = 0;
-    };
-
     bool enabled = false;
     MinorPhaseBuffer* previous = nullptr;
-    std::array<RecordEntry, 32> records{};
+    std::array<MinorPhaseRecord, 32> records{};
     size_t size = 0;
 };
 
