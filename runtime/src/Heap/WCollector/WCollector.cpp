@@ -2521,10 +2521,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
     }
 
+    size_t residualPromoteRecords = 0;
+    size_t promotedPathRecords = 0;
     {
-        // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
-        MRT_PHASE_TIMER("young.evac_finish");
-        size_t residualPromoteRecords = 0;
+        // minorstw: residual young-region promotion and its cross-generation edge replay.
+        MRT_PHASE_TIMER("young.promote_residual");
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
@@ -2563,8 +2564,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 break;
             }
         }
-        size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
+        promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
+    }
 
+    size_t rebuiltRecords = 0;
+    size_t liveYoungRegions = 0;
+    {
+        // minorstw: rebuild old-to-young edges only while a live young region remains.
+        MRT_PHASE_TIMER("young.remset_rebuild");
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
         // live young region count is the product-path authority
         // (RegionInfo::youngRegionCount / GetYoungRegionCount —
@@ -2573,8 +2580,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // cost with zero output. P2 in-place aging reintroduces live young ⇒ gate
         // reopens automatically (structure, not an env switch).
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        size_t rebuiltRecords = 0;
-        const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
+        liveYoungRegions = RegionInfo::GetYoungRegionCount();
         if (liveYoungRegions == 0) {
             VLOG(REPORT,
                  "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
@@ -2608,9 +2614,17 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu "
              "youngRegionCount=%zu",
              rebuiltRecords, promotedPathRecords, residualPromoteRecords, liveYoungRegions);
+    }
 
+    {
+        // minorstw: retire the prior forwarding generation before rebuilding region lists.
+        MRT_PHASE_TIMER("young.forward_table_reset");
         fwdTable.PrepareForwardTable();
         ValidateMinorReferences("after-dispel", nullptr);
+    }
+    {
+        // minorstw: publish the surviving from-space regions back to the region manager.
+        MRT_PHASE_TIMER("young.reassemble_space");
         manager.ReassembleFromSpace();
     }
 }
