@@ -236,8 +236,9 @@ void Classify(uintptr_t value, Kind& kind, uintptr_t& baseOut, size_t& offsetOut
 }
 
 // Cheap gate: is slot == holder+16 where holder tip name is "default:Node"?
-// Returns false fast on non-matches (no full value Classify).
-// Strict TIM membership for tip — slot-16 is often mid-object garbage for non-+16 fields.
+// Static TypeInfos live in the binary (PageMapped), often NOT in TypeInfoManager —
+// so use TipLooksValid (TIM|PageMapped), then size+name. isz==40 rejects most
+// mid-object false tips before GetName.
 bool IsNodeNextSlot(uintptr_t slotU, uintptr_t& holderOut, TypeInfo*& holderTipOut)
 {
     holderOut = 0;
@@ -256,35 +257,23 @@ bool IsNodeNextSlot(uintptr_t slotU, uintptr_t& holderOut, TypeInfo*& holderTipO
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    // Holder must sit at an object start in this region (not mid-object).
     if (holder < region->GetRegionStart() || holder >= region->GetRegionAllocPtr()) {
         return false;
     }
     TypeInfo* tip = PeekTypeInfoAt(holder);
-    if (tip == nullptr) {
+    if (!TipLooksValid(tip)) {
         return false;
     }
-    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-    if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
-        return false;
-    }
-    // Require TypeInfoManager membership — refuse PageMapped-only tips (garbage mid-object).
-    if (!TypeInfoManager::GetTypeInfoManager().ContainsAddress(tipAddr)) {
-        return false;
-    }
-    if (Heap::IsHeapAddress(tipAddr)) {
-        return false;
-    }
-    if (!tip->IsVaildType()) {
-        return false;
-    }
-    MSize isz = tip->GetInstanceSize();
-    // Node payload instanceSize=40 (remsetholder size=48 with header).
-    if (isz != 40) {
+    // Node payload instanceSize=40 (remsetholder holderSize=48 = header+payload).
+    if (tip->GetInstanceSize() != 40) {
         return false;
     }
     const char* name = tip->GetName();
-    if (name == nullptr || std::strcmp(name, "default:Node") != 0) {
+    if (name == nullptr || !PageMapped(reinterpret_cast<uintptr_t>(name))) {
+        return false;
+    }
+    // Name must be exactly default:Node (remsetholder 115/115).
+    if (std::strcmp(name, "default:Node") != 0) {
         return false;
     }
     size_t size = SaneObjectSize(tip, region);
