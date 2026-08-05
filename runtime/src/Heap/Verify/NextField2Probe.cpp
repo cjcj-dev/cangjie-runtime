@@ -237,36 +237,51 @@ void Classify(uintptr_t value, Kind& kind, uintptr_t& baseOut, size_t& offsetOut
 
 // Cheap gate: is slot == holder+16 where holder tip name is "default:Node"?
 // Returns false fast on non-matches (no full value Classify).
+// Strict TIM membership for tip — slot-16 is often mid-object garbage for non-+16 fields.
 bool IsNodeNextSlot(uintptr_t slotU, uintptr_t& holderOut, TypeInfo*& holderTipOut)
 {
     holderOut = 0;
     holderTipOut = nullptr;
-    // Node size=48, next at +16 ⇒ slot must be 8-aligned; cheap reject.
-    if ((slotU & 0x7) != 0) {
-        return false;
-    }
-    if (slotU < 16) {
+    if ((slotU & 0x7) != 0 || slotU < 16) {
         return false;
     }
     if (!Heap::IsHeapAddress(slotU)) {
         return false;
     }
     uintptr_t holder = slotU - 16;
-    if (!Heap::IsHeapAddress(holder)) {
+    if ((holder & 0x7) != 0 || !Heap::IsHeapAddress(holder)) {
         return false;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(holder);
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
         return false;
     }
-    TypeInfo* tip = PeekTypeInfoAt(holder);
-    if (!TipLooksValid(tip)) {
+    // Holder must sit at an object start in this region (not mid-object).
+    if (holder < region->GetRegionStart() || holder >= region->GetRegionAllocPtr()) {
         return false;
     }
-    // Node instanceSize=40 payload + header ⇒ 48 rounded; accept tip size 40 or 48-ish.
+    TypeInfo* tip = PeekTypeInfoAt(holder);
+    if (tip == nullptr) {
+        return false;
+    }
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+        return false;
+    }
+    // Require TypeInfoManager membership — refuse PageMapped-only tips (garbage mid-object).
+    if (!TypeInfoManager::GetTypeInfoManager().ContainsAddress(tipAddr)) {
+        return false;
+    }
+    if (Heap::IsHeapAddress(tipAddr)) {
+        return false;
+    }
+    if (!tip->IsVaildType()) {
+        return false;
+    }
     MSize isz = tip->GetInstanceSize();
-    if (isz != 40 && isz != 48) {
-        // still allow name match if size differs slightly across layouts
+    // Node payload instanceSize=40 (remsetholder size=48 with header).
+    if (isz != 40) {
+        return false;
     }
     const char* name = tip->GetName();
     if (name == nullptr || std::strcmp(name, "default:Node") != 0) {
@@ -549,9 +564,9 @@ void NextField2Probe::NoteInstall(const char* path, const char* kind, void* slot
 
     const char* phaseName = Collector::GetGCPhaseName(phase);
     void* ra0 = __builtin_return_address(0);
-    void* ra1 = __builtin_return_address(1);
-    void* ra2 = __builtin_return_address(2);
-    void* ra3 = __builtin_return_address(3);
+    void* ra1 = __builtin_frame_address(1) != nullptr ? __builtin_return_address(1) : nullptr;
+    void* ra2 = __builtin_frame_address(2) != nullptr ? __builtin_return_address(2) : nullptr;
+    void* ra3 = nullptr;
 
     const char* tipBaseName = "?";
     if (tipBase != nullptr && TipLooksValid(tipBase)) {
