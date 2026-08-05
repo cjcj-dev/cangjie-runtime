@@ -40,6 +40,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/F3Consumer.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -331,6 +332,15 @@ bool WCollector::MarkObject(BaseObject* obj) const
         (void)region;
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
+        if (F3Consumer::Enabled()) {
+            const unsigned young = region->IsYoungRegion() ? 1u : 0u;
+            const GCPhase phase = GetGCPhase();
+            const unsigned major = (phase == GCPhase::GC_PHASE_TRACE || phase == GCPhase::GC_PHASE_ENUM ||
+                                    phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)
+                ? 1u
+                : 0u;
+            F3Consumer::NoteMark(obj, "MarkObject", young, major);
+        }
     }
     return marked;
 }
@@ -635,6 +645,12 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                          target, &field, obj, holderValid, holderMarked, holderSurvived, holderResurrected,
                          holderYoung, targetYoung, remsetContains, remsetSize, histHits, ringCap, ringTotal,
                          ringWrap, killBuf, sketch, reasonName, g_gcCount, static_cast<unsigned>(phase));
+                    // f3consumer: mark/scan/edge ledger for bucket-2 (a|b|c)
+                    if (F3Consumer::Enabled()) {
+                        char f3cVerdict[160];
+                        F3Consumer::DumpAtAbort(obj, &field, target, f3cVerdict, sizeof(f3cVerdict));
+                        VLOG(REPORT, "[GCV2][F3C][verdict] %s holder=%p target=%p", f3cVerdict, obj, target);
+                    }
                 }
             }
         }
@@ -748,7 +764,11 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
+            if (F3Consumer::ShouldSkipEdge(obj, &field, targetObj, "TraceRefField_cur")) {
+                return;
+            }
             workStack.push_back(targetObj);
+            F3Consumer::NoteEdgeFollow(obj, &field, targetObj, "TraceRefField_cur");
         }
         return;
     }
@@ -776,12 +796,21 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject(latest)) {
+        if (F3Consumer::ShouldSkipEdge(obj, &field, latest, "TraceRefField_latest")) {
+            return;
+        }
         workStack.push_back(latest);
+        F3Consumer::NoteEdgeFollow(obj, &field, latest, "TraceRefField_latest");
     }
 }
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
+    if (F3Consumer::Enabled()) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        const unsigned young = (region != nullptr && region->IsYoungRegion()) ? 1u : 0u;
+        F3Consumer::NoteScan(obj, "TraceObjectRefFields", young, 1u);
+    }
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
@@ -1928,16 +1957,6 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
     // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
     const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
-    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
-        BaseObject* target = ResolveMinorReference(field);
-        if (fullYoungScan) {
-            if (Heap::IsHeapAddress(target)) {
-                workStack.push_back(target);
-            }
-        } else {
-            PushYoungObject(target, workStack, "closure_edge");
-        }
-    };
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
@@ -1979,9 +1998,31 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             reachableVec.push_back(object);
         }
 
+        if (F3Consumer::Enabled()) {
+            F3Consumer::NoteScan(object, "TraceYoungClosure", isYoung ? 1u : 0u, 0u);
+        }
+
         if (!object->HasRefField()) {
             continue;
         }
+        auto pushTarget = [this, fullYoungScan, &workStack, object](RefField<>& field) {
+            BaseObject* target = ResolveMinorReference(field);
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(target)) {
+                    if (F3Consumer::ShouldSkipEdge(object, &field, target, "young_push_fys")) {
+                        return;
+                    }
+                    workStack.push_back(target);
+                    F3Consumer::NoteEdgeFollow(object, &field, target, "young_push_fys");
+                }
+            } else {
+                if (F3Consumer::ShouldSkipEdge(object, &field, target, "young_push")) {
+                    return;
+                }
+                PushYoungObject(target, workStack, "closure_edge");
+                F3Consumer::NoteEdgeFollow(object, &field, target, "young_push");
+            }
+        };
         if (UNLIKELY(object->IsWeakRef())) {
             RefField<>* referentField = reinterpret_cast<RefField<>*>(
                 reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
