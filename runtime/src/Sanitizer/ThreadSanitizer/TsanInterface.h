@@ -51,6 +51,11 @@ void TsanDeleteRaceProc(void* processor);
 void TsanNewRaceState(void* cjthread, void* parent, const void* pc);
 void TsanDeleteRaceState(void* thread);
 
+// GC pthread workers are not cjthreads; hang race state / proc on TLS so
+// CJ_MCC_TsanGetThreadState / GetRaceProc return a live thr for TSan hooks.
+void TsanAttachNativeThread();
+void TsanDetachNativeThread();
+
 template<typename T>
 inline T TsanAtomicLoad(const T* addr, int order)
 {
