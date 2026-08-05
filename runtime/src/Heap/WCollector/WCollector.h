@@ -204,6 +204,12 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                            MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
+    // R3: serial body of TraceYoungClosure (claim-on-pop via MarkObject for young).
+    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                 MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots);
+    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                   MinorSlotSet& reachableSlots, MinorSlotSet& weakSlots, GCThreadPool* threadPool);
+    friend class YoungMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
