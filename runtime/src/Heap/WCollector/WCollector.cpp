@@ -730,18 +730,22 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
 
-    static const bool account = []() {
+    static const bool accountEnv = []() {
         const char* value = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    static const bool preflipVerify = []() {
+    static const bool preflipVerifyEnv = []() {
         const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    static const bool preflipInject = []() {
+    static const bool preflipInjectEnv = []() {
         const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_INJECT");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
+    const bool account = accountEnv;
+    const bool preflipVerify = preflipVerifyEnv;
+    const bool preflipInject = preflipInjectEnv;
     // VERIFY always needs fixed counts so a non-zero residue can fail loud.
     const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
