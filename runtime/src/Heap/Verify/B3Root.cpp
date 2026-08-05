@@ -14,11 +14,15 @@
 #include "Base/Log.h"
 #include "Collector/FinalizerProcessor.h"
 #include "Common/Runtime.h"
+#include "Common/StackType.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
+#include "StackMap/CompressedStackMap.h"
+#include "StackMap/StackMap.h"
+#include "UnwindStack/GcStackInfo.h"
 
 namespace MapleRuntime {
 namespace {
@@ -154,6 +158,111 @@ void ScanBStackCons(Hit& h, BaseObject* holder)
             }
             return;
         }
+    });
+}
+
+const char* ReasonNameLocal(StackMapInvalidReason r)
+{
+    switch (r) {
+        case StackMapInvalidReason::NONE:
+            return "none";
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            return "ZERO_ENTRIES";
+        case StackMapInvalidReason::PC_MISS:
+            return "PC_MISS";
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            return "ZERO_ROOT_INDICES";
+    }
+    return "unknown";
+}
+
+// Attribute B_slot to a managed frame: which FA range, symbol, stackmap validity, slot in precise map?
+// Logs [GCV2][B3ROOT][FRAME] — default-off with B3ROOT.
+void AttributeConsSlotToFrame(void* consSlot, BaseObject* holder)
+{
+    if (consSlot == nullptr || holder == nullptr) {
+        return;
+    }
+    const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(consSlot);
+    MutatorManager::Instance().VisitAllMutators([slotAddr, holder, consSlot](Mutator& mut) {
+        uintptr_t top = mut.GetStackTopAddr();
+        uintptr_t sz = mut.GetStackSize();
+        if (top == 0 || sz == 0) {
+            return;
+        }
+        if (slotAddr < top || slotAddr >= top + sz) {
+            return; // not this mutator's stack
+        }
+        GCStackInfo gcStackInfo(&mut.GetUnwindContext());
+        gcStackInfo.FillInStackTrace();
+        auto& frames = gcStackInfo.GetStack();
+        if (frames.empty()) {
+            VLOG(REPORT, "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frames=0 (unwind empty)", consSlot, holder);
+            return;
+        }
+        // Frames are top-to-bottom; FA grows toward higher addresses (stack grows down).
+        // Slot lives in [nextFA, thisFA) for frame i when next is deeper, or [top, FA0) for top.
+        for (size_t i = 0; i < frames.size(); ++i) {
+            const FrameInfo& fr = frames[i];
+            uintptr_t fa = reinterpret_cast<uintptr_t>(fr.mFrame.GetFA());
+            uintptr_t lo = (i + 1 < frames.size()) ? reinterpret_cast<uintptr_t>(frames[i + 1].mFrame.GetFA()) : top;
+            // also allow slot just below FA (locals) even if next FA is wrong
+            if (!(slotAddr < fa && slotAddr >= lo) && !(slotAddr < fa && (fa - slotAddr) <= 8192)) {
+                continue;
+            }
+            if (fr.GetFrameType() != FrameType::MANAGED) {
+                VLOG(REPORT,
+                     "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frameIdx=%zu frameType=%u fa=%p "
+                     "offFromFA=%zd non-managed",
+                     consSlot, holder, i, static_cast<unsigned>(fr.GetFrameType()), reinterpret_cast<void*>(fa),
+                     static_cast<intptr_t>(fa) - static_cast<intptr_t>(slotAddr));
+                continue;
+            }
+            uintptr_t startIP = reinterpret_cast<uintptr_t>(fr.GetStartProc());
+            uintptr_t frameIP = reinterpret_cast<uintptr_t>(fr.mFrame.GetIP());
+            if (startIP == 0) {
+                const_cast<FrameInfo&>(fr).ResolveProcInfo();
+                startIP = reinterpret_cast<uintptr_t>(fr.GetStartProc());
+            }
+            StackMapBuilder builder(startIP, frameIP, fa);
+            RootMap rootMap = builder.Build<RootMap>();
+            const char* mapState = "VALID";
+            StackMapInvalidReason reason = StackMapInvalidReason::NONE;
+            if (!rootMap.IsValid()) {
+                reason = builder.GetInvalidReason();
+                mapState = ReasonNameLocal(reason);
+            }
+            // Does precise slot list include this consSlot?
+            int inPrecise = 0;
+            int preciseSlotN = 0;
+            if (rootMap.IsValid()) {
+                rootMap.VisitSlotRoots(
+                    [](ObjectRef&) {},
+                    [slotAddr, &inPrecise, &preciseSlotN, fa](SlotBias bias, BaseObject*) {
+                        ++preciseSlotN;
+                        uintptr_t s = static_cast<uintptr_t>(static_cast<intptr_t>(fa) + bias);
+                        if (s == slotAddr) {
+                            inPrecise = 1;
+                        }
+                    });
+            }
+            CString fname = fr.GetFuncName();
+            const char* sym = fname.IsEmpty() ? "?" : fname.Str();
+            // skip benign entry shells in the verdict tag but still log
+            int isEntryShell = (std::strcmp(sym, "user.main") == 0 || std::strcmp(sym, "cj_entry$") == 0) ? 1 : 0;
+            intptr_t offFromFA = static_cast<intptr_t>(fa) - static_cast<intptr_t>(slotAddr);
+            U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+            VLOG(REPORT,
+                 "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frameIdx=%zu symbol=%s start_ip=%p frame_ip=%p "
+                 "pc_off=%u fa=%p offFromFA=%zd mapState=%s inPreciseSlot=%d preciseSlotN=%d entryShell=%d",
+                 consSlot, holder, i, sym, reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+                 reinterpret_cast<void*>(fa), offFromFA, mapState, inPrecise, preciseSlotN, isEntryShell);
+            // one hit is enough
+            return;
+        }
+        VLOG(REPORT,
+             "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p NO_FRAME_MATCH frames=%zu top=%p", consSlot, holder,
+             frames.size(), reinterpret_cast<void*>(top));
     });
 }
 
@@ -295,6 +404,8 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
              "[GCV2][B3ROOT][ENUM_MISS_DETAIL] family=STACK reason=precise_VisitMutatorRoots_miss_wide_cons_hit "
              "consSlot=%p consValue=%p A_stackN=%zu B_stackN=%zu",
              bStack.sampleSlot, bStack.sampleValue, aStack.visitN, bStack.visitN);
+        // T1: which frame holds the cons slot + stackmap state (before other family scans that may SEGV)
+        AttributeConsSlotToFrame(bStack.sampleSlot, holderObj);
         // continue remaining families for completeness when possible
     }
 
