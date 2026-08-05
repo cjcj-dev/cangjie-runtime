@@ -23,6 +23,7 @@
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
+#include "Heap/Verify/TraceClear.h"
 #include "RegionList.h"
 #include "securec.h"
 #include "SlotList.h"
@@ -327,6 +328,14 @@ public:
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        // f3death: region-death ledger (default off via TraceClear::DeathEnabled / F3_REGION).
+        if (region != nullptr && (TraceClear::DeathEnabled() || TraceClear::Enabled())) {
+            TraceClear::NoteRegionEvent(region->GetRegionStart(), region->GetRegionSize(), "collect_region", region,
+                                        region->GetLiveByteCount(),
+                                        static_cast<unsigned int>(region->IsGhostFromRegion()),
+                                        static_cast<unsigned int>(region->GetRegionType()),
+                                        static_cast<unsigned int>(region->GetRouteState()));
+        }
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
