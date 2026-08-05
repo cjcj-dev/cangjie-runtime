@@ -58,8 +58,10 @@ thread_local MinorPhaseBuffer* gMinorPhaseBuffer = nullptr;
 
 class MinorPhaseBuffer {
 public:
-    MinorPhaseBuffer() : enabled(GcLog::Enabled()), previous(gMinorPhaseBuffer)
+    MinorPhaseBuffer() : previous(gMinorPhaseBuffer)
     {
+        const char* phaseTimers = std::getenv("MRT_GCV2_MINOR_PHASE_TIMERS");
+        enabled = GcLog::Enabled() && phaseTimers != nullptr && std::strcmp(phaseTimers, "0") != 0;
         if (enabled) {
             gMinorPhaseBuffer = this;
         }
