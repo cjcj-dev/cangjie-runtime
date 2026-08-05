@@ -13,6 +13,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Heap.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -30,6 +31,55 @@ const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
+
+// Diagnostic only (default off): on stack-map miss, conservatively scan pointer-sized
+// words below FA as potential roots. Not a product fix — may keep garbage alive.
+const bool STACKMAP_CONS_ON_MISS = []() {
+    const char* value = std::getenv("MRT_GCV2_STACKMAP_CONS_ON_MISS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+size_t StackMapConsMaxBytes()
+{
+    size_t maxBytes = 8192;
+    const char* env = std::getenv("MRT_GCV2_STACKMAP_CONS_MAX_BYTES");
+    if (env != nullptr && env[0] != '\0') {
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(env, &end, 10);
+        if (end != env && parsed > 0) {
+            maxBytes = static_cast<size_t>(parsed);
+        }
+    }
+    return maxBytes;
+}
+
+// Scan [FA - maxBytes, FA) word-by-word; visit slots that look like heap objects.
+// Frame locals sit below FA (stack grows down); see StackType.h FrameAddress layout.
+void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddress)
+{
+    const size_t maxBytes = StackMapConsMaxBytes();
+    size_t visited = 0;
+    for (size_t off = sizeof(void*); off <= maxBytes; off += sizeof(void*)) {
+        auto* slot = reinterpret_cast<ObjectRef*>(frameAddress - off);
+        BaseObject* obj = slot->object;
+        if (obj == nullptr) {
+            continue;
+        }
+        MAddress addr = reinterpret_cast<MAddress>(obj);
+        if (!Heap::IsHeapAddress(addr)) {
+            continue;
+        }
+        if (!Heap::GetHeap().GetAllocator().IsHeapObject(addr)) {
+            continue;
+        }
+        visitor(*slot);
+        ++visited;
+    }
+    if (visited > 0) {
+        LOG(RTLOG_ERROR, "GC stack map CONS_ON_MISS fa=%p scanned_bytes=%zu heap_slots=%zu",
+            reinterpret_cast<void*>(frameAddress), maxBytes, visited);
+    }
+}
 
 const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
 {
@@ -378,6 +428,10 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
+    } else if (STACKMAP_CONS_ON_MISS) {
+        // default-off diagnostic: mark path was silent skip; now optional cons scan
+        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
+        ConservativeScanMissFrame(visitor, frameAddress);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
@@ -440,6 +494,9 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
+        if (STACKMAP_CONS_ON_MISS) {
+            ConservativeScanMissFrame(slotRootVisitor, frameAddress);
+        }
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
