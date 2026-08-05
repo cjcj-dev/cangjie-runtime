@@ -21,6 +21,7 @@
 #include "cangjie/Parse/Parser.h"
 
 using namespace Cangjie;
+using StdAst::ParseRes;
 
 extern "C" {
 // A host compiler that is not the reference C++ implementation cannot pass a real MacroCall*
