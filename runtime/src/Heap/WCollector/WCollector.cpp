@@ -17,6 +17,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <algorithm>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <unordered_map>
@@ -123,20 +124,29 @@ struct MinorLedgerCost {
 thread_local MinorLedgerCost g_minorLedgerCost;
 
 // T2 closure-equality probe (setbitmap2): default off.
-// MRT_GCV2_CLOSURE_HASH=1 → after young mark, hash normalized reachable set.
-// Normalization: per object (offset_in_region, TypeInfo*) — no absolute address.
-// Emits [GCV2][closure-hash] run=N count=C addr_hash=H type_hist_hash=T use=U fullYoung=F
-// Catches: count/type-mix drift between SETBITMAP=0|1 under same recipe.
-// Misses: same-type same-count wrong individual objects (no identity across ASLR/alloc).
+// MRT_GCV2_CLOSURE_HASH=1 → dump normalized hash of product reachableVec (diagnostic only).
+// MRT_GCV2_CLOSURE_HASH=2 → in-process dual claim: product path + independent legacy set walk
+//   on the same roots/remset; compare absolute pointer sets (same process ⇒ real equality).
+// Catches: any missing/extra object between SETBITMAP claim styles under identical roots.
+// Misses (mode1 only): cross-process ASLR/alloc noise; mode2 is same-input.
 struct ClosureHashProbe {
-    static bool Enabled()
+    static int Mode()
     {
-        static const bool on = []() {
+        static const int mode = []() {
             const char* v = std::getenv("MRT_GCV2_CLOSURE_HASH");
-            return v != nullptr && std::strcmp(v, "1") == 0;
+            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
+                return 0;
+            }
+            if (std::strcmp(v, "2") == 0) {
+                return 2;
+            }
+            return 1; // "1" or any other truthy
         }();
-        return on;
+        return mode;
     }
+
+    static bool Dual() { return Mode() == 2; }
+    static bool Dump() { return Mode() >= 1; }
 
     static uint64_t Fnv1a(uint64_t h, uint64_t x)
     {
@@ -146,51 +156,76 @@ struct ClosureHashProbe {
         return h;
     }
 
-    static void Report(size_t minorRun, const std::vector<BaseObject*>& reachableVec, bool useBitmap,
-                       bool fullYoungScan)
+    static uint64_t PtrSetHash(const std::vector<BaseObject*>& vec)
     {
-        if (!Enabled()) {
+        std::vector<uint64_t> addrs;
+        addrs.reserve(vec.size());
+        for (BaseObject* o : vec) {
+            if (o != nullptr) {
+                addrs.push_back(reinterpret_cast<uint64_t>(o));
+            }
+        }
+        std::sort(addrs.begin(), addrs.end());
+        // unique
+        addrs.erase(std::unique(addrs.begin(), addrs.end()), addrs.end());
+        uint64_t h = 0xcbf29ce484222325ULL;
+        for (uint64_t a : addrs) {
+            h = Fnv1a(h, a);
+        }
+        return h;
+    }
+
+    static void ReportDump(size_t minorRun, const std::vector<BaseObject*>& reachableVec, bool useBitmap,
+                           bool fullYoungScan)
+    {
+        if (!Dump()) {
             return;
         }
-        // keys: (regionOffset, typeInfo) — stable under setarch -R if alloc order matches
-        std::vector<std::pair<uint64_t, uint64_t>> keys;
-        keys.reserve(reachableVec.size());
-        // type histogram: TypeInfo* → count (catches type-mix drift; ASLR-safe for code ptrs)
-        std::unordered_map<uint64_t, uint64_t> typeHist;
-        typeHist.reserve(reachableVec.size() / 8 + 16);
-        for (BaseObject* obj : reachableVec) {
-            if (obj == nullptr) {
-                continue;
+        uint64_t h = PtrSetHash(reachableVec);
+        VLOG(REPORT,
+             "[GCV2][closure-hash] run=%zu count=%zu ptr_hash=%llx use=%d fullYoung=%d",
+             minorRun, reachableVec.size(), static_cast<unsigned long long>(h),
+             static_cast<int>(useBitmap), static_cast<int>(fullYoungScan));
+    }
+
+    // Compare product reachableVec vs dual legacy set walk result.
+    static void ReportEqual(size_t minorRun, const std::vector<BaseObject*>& product,
+                            const std::vector<BaseObject*>& dual, bool productUseBitmap, bool fullYoungScan)
+    {
+        std::vector<uint64_t> a;
+        std::vector<uint64_t> b;
+        a.reserve(product.size());
+        b.reserve(dual.size());
+        for (BaseObject* o : product) {
+            if (o != nullptr) {
+                a.push_back(reinterpret_cast<uint64_t>(o));
             }
-            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-            uint64_t off = static_cast<uint64_t>(reinterpret_cast<MAddress>(obj) - region->GetRegionStart());
-            uint64_t ti = reinterpret_cast<uint64_t>(obj->GetTypeInfo());
-            keys.emplace_back(off, ti);
-            ++typeHist[ti];
         }
-        std::sort(keys.begin(), keys.end());
-        uint64_t addrHash = 0xcbf29ce484222325ULL;
-        for (const auto& k : keys) {
-            addrHash = Fnv1a(addrHash, k.first);
-            addrHash = Fnv1a(addrHash, k.second);
+        for (BaseObject* o : dual) {
+            if (o != nullptr) {
+                b.push_back(reinterpret_cast<uint64_t>(o));
+            }
         }
-        std::vector<std::pair<uint64_t, uint64_t>> hist;
-        hist.reserve(typeHist.size());
-        for (const auto& e : typeHist) {
-            hist.emplace_back(e.first, e.second);
-        }
-        std::sort(hist.begin(), hist.end());
-        uint64_t typeHash = 0xcbf29ce484222325ULL;
-        for (const auto& e : hist) {
-            typeHash = Fnv1a(typeHash, e.first);
-            typeHash = Fnv1a(typeHash, e.second);
+        std::sort(a.begin(), a.end());
+        std::sort(b.begin(), b.end());
+        a.erase(std::unique(a.begin(), a.end()), a.end());
+        b.erase(std::unique(b.begin(), b.end()), b.end());
+        const bool equal = (a == b);
+        size_t onlyA = 0;
+        size_t onlyB = 0;
+        if (!equal) {
+            std::vector<uint64_t> diff;
+            std::set_difference(a.begin(), a.end(), b.begin(), b.end(), std::back_inserter(diff));
+            onlyA = diff.size();
+            diff.clear();
+            std::set_difference(b.begin(), b.end(), a.begin(), a.end(), std::back_inserter(diff));
+            onlyB = diff.size();
         }
         VLOG(REPORT,
-             "[GCV2][closure-hash] run=%zu count=%zu addr_hash=%llx type_hist_hash=%llx "
-             "types=%zu use=%d fullYoung=%d",
-             minorRun, reachableVec.size(),
-             static_cast<unsigned long long>(addrHash), static_cast<unsigned long long>(typeHash),
-             typeHist.size(), static_cast<int>(useBitmap), static_cast<int>(fullYoungScan));
+             "[GCV2][closure-eq] run=%zu equal=%d prod_n=%zu dual_n=%zu only_prod=%zu only_dual=%zu "
+             "prod_use=%d fullYoung=%d",
+             minorRun, static_cast<int>(equal), a.size(), b.size(), onlyA, onlyB,
+             static_cast<int>(productUseBitmap), static_cast<int>(fullYoungScan));
     }
 };
 
@@ -3217,8 +3252,44 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan));
-    // setbitmap2: optional same-input closure hash (default off). Compare SETBITMAP=0|1.
-    ClosureHashProbe::Report(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
+    // setbitmap2: optional closure equality probe (default off).
+    // mode=1: dump product ptr-set hash; mode=2: in-process dual legacy set walk on same roots.
+    ClosureHashProbe::ReportDump(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
+    if (ClosureHashProbe::Dual()) {
+        // Independent legacy set claim on the *same* STW root/remset snapshot.
+        // Product path already ran (bitmap or legacy); dual always uses set claim.
+        // Mark bits may already be set — legacy path still inserts into set then MarkObject.
+        WorkStack dualStack = NewWorkStack();
+        for (BaseObject* object : allocationRoots) {
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(object)) {
+                    dualStack.push_back(object);
+                }
+            } else {
+                PushYoungObject(object, dualStack, "alloc_buffer");
+            }
+        }
+        VisitMinorRoots([this, fullYoungScan, &dualStack](BaseObject* object) {
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(object)) {
+                    dualStack.push_back(object);
+                }
+            } else {
+                PushYoungObject(object, dualStack, "minor_root");
+            }
+        });
+        MinorObjectSet dualObjects;
+        std::vector<BaseObject*> dualVec;
+        dualVec.reserve(reachableVec.size());
+        MinorSlotSet dualSlots;
+        MinorSlotSet dualWeaks;
+        TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
+                          /*useBitmapLedger=*/false);
+        RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr);
+        TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
+                          /*useBitmapLedger=*/false);
+        ClosureHashProbe::ReportEqual(minorTotalRuns + 1, reachableVec, dualVec, useBitmapLedger, fullYoungScan);
+    }
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
