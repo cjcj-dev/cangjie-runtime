@@ -58,12 +58,21 @@ public:
         if (!Enabled()) {
             return;
         }
-        WriteLog(true, REPORT,
-                 "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
-                 "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
-                 SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
-                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
-                 liveAfter, collected, heapUsed, threshold, ResidentKB());
+        if (ENABLE_LOG(REPORT)) {
+            WriteLog(true, REPORT,
+                     "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
+                     "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
+                     SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
+                     static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
+                     liveAfter, collected, heapUsed, threshold, ResidentKB());
+            return;
+        }
+        std::fprintf(stderr,
+                     "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
+                     "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu\n",
+                     SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
+                     static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
+                     liveAfter, collected, heapUsed, threshold, ResidentKB());
     }
 
     static void Phase(const char* name, uint64_t us)
@@ -83,8 +92,13 @@ public:
             safe[i] = keep ? c : '_';
         }
         safe[i] = '\0';
-        WriteLog(true, REPORT, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+        if (ENABLE_LOG(REPORT)) {
+            WriteLog(true, REPORT, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
+                     static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+            return;
+        }
+        std::fprintf(stderr, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu\n", SCHEMA_VERSION,
+                     static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
     }
 
     // Resident set in KB, read from /proc/self/statm. Returns 0 where the file is unavailable,
