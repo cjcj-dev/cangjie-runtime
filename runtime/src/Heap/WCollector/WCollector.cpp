@@ -41,6 +41,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/BulkEdge.h"
+#include "Heap/Verify/B3Root.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -640,6 +641,14 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     // bulkedge T0: bucket1 (valid unmarked) → reverse in-edges vs bulk slot set
                     if (BulkEdge::Enabled() && holderValid == 1 && holderMarked == 0 && obj != nullptr) {
                         BulkEdge::ClassifyHolderInEdges(obj, holderValid, holderMarked);
+                    }
+
+                    // b3root T0: dual-mode root holder (ENUM six families vs wide cons)
+                    if (B3Root::Enabled() && holderValid == 1 && holderMarked == 0 && obj != nullptr) {
+                        // field is a heap ref-field of holder ⇒ mutator load was from memory
+                        const int loadFromHeapField = 1;
+                        B3Root::ClassifyHolder(obj, holderValid, holderMarked, &field, loadFromHeapField,
+                                               const_cast<WCollector*>(this));
                     }
                 }
 
