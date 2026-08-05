@@ -1612,8 +1612,11 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 // + PushYoungObject + per-worker vectors. Env: MRT_GCV2_MARKPAR_WORKERS,
 // MRT_GCV2_MARKPAR_FORCE_SERIAL, MRT_GCV2_MARKPAR_INJECT_DISPEL.
 namespace {
-constexpr size_t kMarkparMaxWorkSize = 16;
-constexpr size_t kMarkparMinWorkSize = 8;
+// MarkStack::size() counts buffers (64 objs each), not objects. Major uses 16/8 for
+// deep concurrent stacks; young LIFO DFS stays shallow ⇒ those thresholds never fire
+// (pass1 active≡1 @w8). Use buffer-level 2/1 so steal engages on ~64–128 greys.
+constexpr size_t kMarkparMaxWorkSize = 2;
+constexpr size_t kMarkparMinWorkSize = 1;
 } // namespace
 
 struct YoungMarkingShared {
@@ -1878,24 +1881,19 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
         if (wantActive != prevActive) {
             threadPool->SetMaxActiveThreadNum(wantActive);
         }
-        // Seed like TracingCollector::TracingImpl: Start, main primary, fork/steal balances.
-        threadPool->Start();
-        const size_t rootSize = workStack.size();
-        if (rootSize > static_cast<size_t>(workers) * kMarkparMinWorkSize) {
-            const size_t chunkSize =
-                std::min(rootSize / static_cast<size_t>(workers) + 1, kMarkparMinWorkSize);
-            size_t slot = 1;
-            while (!workStack.empty() && slot < static_cast<size_t>(workers)) {
-                if (workStack.size() <= chunkSize) {
-                    break;
-                }
-                size_t take = std::min(chunkSize, workStack.size());
-                TracingCollector::WorkStackBuf* hSplit = workStack.split(take);
-                threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
-                shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
-                ++slot;
+        // Seed: peel root buffers to helpers first (roots often few buffers; steal covers
+        // discovered greys). Then Start + main primary + WaitFinish (major TracingImpl shape).
+        size_t slot = 1;
+        while (workStack.size() > 1 && slot < static_cast<size_t>(workers)) {
+            TracingCollector::WorkStackBuf* hSplit = workStack.split(1);
+            if (hSplit == nullptr) {
+                break;
             }
+            threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
+            shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
+            ++slot;
         }
+        threadPool->Start();
         YoungMarkingWork mainTask(shared, std::move(workStack), 0);
         mainTask.Execute(0);
         threadPool->WaitFinish();
