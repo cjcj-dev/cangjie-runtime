@@ -122,6 +122,78 @@ struct MinorLedgerCost {
 
 thread_local MinorLedgerCost g_minorLedgerCost;
 
+// T2 closure-equality probe (setbitmap2): default off.
+// MRT_GCV2_CLOSURE_HASH=1 → after young mark, hash normalized reachable set.
+// Normalization: per object (offset_in_region, TypeInfo*) — no absolute address.
+// Emits [GCV2][closure-hash] run=N count=C addr_hash=H type_hist_hash=T use=U fullYoung=F
+// Catches: count/type-mix drift between SETBITMAP=0|1 under same recipe.
+// Misses: same-type same-count wrong individual objects (no identity across ASLR/alloc).
+struct ClosureHashProbe {
+    static bool Enabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_CLOSURE_HASH");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        return on;
+    }
+
+    static uint64_t Fnv1a(uint64_t h, uint64_t x)
+    {
+        constexpr uint64_t kPrime = 0x100000001b3ULL;
+        h ^= x;
+        h *= kPrime;
+        return h;
+    }
+
+    static void Report(size_t minorRun, const std::vector<BaseObject*>& reachableVec, bool useBitmap,
+                       bool fullYoungScan)
+    {
+        if (!Enabled()) {
+            return;
+        }
+        // keys: (regionOffset, typeInfo) — stable under setarch -R if alloc order matches
+        std::vector<std::pair<uint64_t, uint64_t>> keys;
+        keys.reserve(reachableVec.size());
+        // type histogram: TypeInfo* → count (catches type-mix drift; ASLR-safe for code ptrs)
+        std::unordered_map<uint64_t, uint64_t> typeHist;
+        typeHist.reserve(reachableVec.size() / 8 + 16);
+        for (BaseObject* obj : reachableVec) {
+            if (obj == nullptr) {
+                continue;
+            }
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            uint64_t off = static_cast<uint64_t>(reinterpret_cast<MAddress>(obj) - region->GetRegionStart());
+            uint64_t ti = reinterpret_cast<uint64_t>(obj->GetTypeInfo());
+            keys.emplace_back(off, ti);
+            ++typeHist[ti];
+        }
+        std::sort(keys.begin(), keys.end());
+        uint64_t addrHash = 0xcbf29ce484222325ULL;
+        for (const auto& k : keys) {
+            addrHash = Fnv1a(addrHash, k.first);
+            addrHash = Fnv1a(addrHash, k.second);
+        }
+        std::vector<std::pair<uint64_t, uint64_t>> hist;
+        hist.reserve(typeHist.size());
+        for (const auto& e : typeHist) {
+            hist.emplace_back(e.first, e.second);
+        }
+        std::sort(hist.begin(), hist.end());
+        uint64_t typeHash = 0xcbf29ce484222325ULL;
+        for (const auto& e : hist) {
+            typeHash = Fnv1a(typeHash, e.first);
+            typeHash = Fnv1a(typeHash, e.second);
+        }
+        VLOG(REPORT,
+             "[GCV2][closure-hash] run=%zu count=%zu addr_hash=%llx type_hist_hash=%llx "
+             "types=%zu use=%d fullYoung=%d",
+             minorRun, reachableVec.size(),
+             static_cast<unsigned long long>(addrHash), static_cast<unsigned long long>(typeHash),
+             typeHist.size(), static_cast<int>(useBitmap), static_cast<int>(fullYoungScan));
+    }
+};
+
 template <typename SetT, typename KeyT>
 bool LedgerInsert(SetT& set, const KeyT& key, uint64_t& n, uint64_t& nNew, uint64_t& ns)
 {
@@ -3145,6 +3217,8 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan));
+    // setbitmap2: optional same-input closure hash (default off). Compare SETBITMAP=0|1.
+    ClosureHashProbe::Report(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
