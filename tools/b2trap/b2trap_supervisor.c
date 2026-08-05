@@ -1,6 +1,7 @@
 // b2trap_supervisor.c — zero-hot-path-overhead forensics supervisor
 // - ptrace parent; target never executes extra instructions in hot path
-// - hardware watchpoints (DR0..DR3) optional (-w); pure-dump arm uses none
+//   (except optional INT3 at NewObjectFast ret for mid-run DR arm — cold filter)
+// - hardware watchpoints (DR0..DR3) optional (-w static) or -A node (mid-run)
 // - on watchpoint trap: log rip/regs/slot value + classify value neighborhood
 // - on fatal signal: bounded dump (target-ish maps + stacks + region meta) or
 //   full RW dump for first FULL_DUMP_CAP events (calibration)
@@ -30,6 +31,10 @@
 #define FULL_DUMP_CAP_DEFAULT 2
 #define BOUNDED_PAD (2UL * 1024 * 1024)
 #define MAX_INTEREST 64
+#define MAX_SWBP 64
+#define MAX_ARMED 512
+#define NODE_OBJ_SIZE 48
+#define NODE_NEXT_OFF 16
 
 static FILE *g_log;
 static char g_outdir[512];
@@ -43,6 +48,30 @@ static int g_full_dump_cap = FULL_DUMP_CAP_DEFAULT;
 static int g_fatal_count = 0;
 static int g_force_full = 0; // -D full
 static int g_force_bounded = 0; // -D bounded
+
+// Mid-run arm: INT3 at CJ_MCC_NewObjectFast ret; on Node alloc, DR-watch obj+16.
+static int g_midrun_node = 0;       // -A node
+static unsigned long g_node_ti = 0;  // resolved after exec
+static unsigned g_arm_every = 1;    // -S N: arm every Nth Node (default 1)
+static unsigned g_arm_max = 0;      // -M N: stop arming after N Node slots (0=unlimited)
+static unsigned long g_node_seen = 0;
+static unsigned long g_node_armed_total = 0;
+static unsigned long g_swbp_hits = 0;
+static unsigned long g_wp_interior_hits = 0;
+static int g_rr = 0; // round-robin DR slot
+
+struct SwBp {
+    unsigned long addr;
+    unsigned char orig;
+    int active;
+};
+static struct SwBp g_swbp[MAX_SWBP];
+static int g_nswbp = 0;
+static int g_stepping_tid = -1;
+static unsigned long g_step_replant = 0;
+
+static pid_t g_armed[MAX_ARMED];
+static int g_narmed_t = 0;
 
 static void logln(const char *fmt, ...) {
     va_list ap;
@@ -59,6 +88,20 @@ static int peek(pid_t pid, unsigned long addr, unsigned long *out) {
     if (errno != 0)
         return -1;
     *out = (unsigned long)v;
+    return 0;
+}
+
+static int poke_byte(pid_t pid, unsigned long addr, unsigned char b, unsigned char *prev) {
+    errno = 0;
+    long word = ptrace(PTRACE_PEEKDATA, pid, (void *)addr, 0);
+    if (errno != 0)
+        return -1;
+    unsigned char *bytes = (unsigned char *)&word;
+    if (prev)
+        *prev = bytes[0];
+    bytes[0] = b;
+    if (ptrace(PTRACE_POKEDATA, pid, (void *)addr, (void *)word) != 0)
+        return -1;
     return 0;
 }
 
@@ -149,9 +192,6 @@ static void set_watchpoints(pid_t pid) {
 
 // DRs are NOT inherited across clone on Linux (verified empirically 2026-08-05):
 // every newly attached thread must be armed at its initial stop before it runs user code.
-#define MAX_ARMED 512
-static pid_t g_armed[MAX_ARMED];
-static int g_narmed_t = 0;
 static void maybe_arm(pid_t tid) {
     if (!g_nwp)
         return;
@@ -163,8 +203,185 @@ static void maybe_arm(pid_t tid) {
         g_armed[g_narmed_t++] = tid;
 }
 
+static void rearm_all_threads(void) {
+    // Force re-set on next stop; also poke currently tracked tids.
+    for (int i = 0; i < g_narmed_t; i++)
+        set_watchpoints(g_armed[i]);
+}
+
 static void clear_dr(pid_t pid) {
     ptrace(PTRACE_POKEUSER, pid, (void *)offsetof(struct user, u_debugreg[7]), (void *)0);
+}
+
+// Resolve default:Node.ti from target exe via nm on /proc/pid/exe.
+static unsigned long resolve_node_ti(pid_t pid) {
+    char linkp[64], realp[512], cmd[700];
+    snprintf(linkp, sizeof linkp, "/proc/%d/exe", pid);
+    ssize_t rl = readlink(linkp, realp, sizeof realp - 1);
+    if (rl <= 0)
+        return 0;
+    realp[rl] = 0;
+    snprintf(cmd, sizeof cmd, "nm -C '%s' 2>/dev/null", realp);
+    FILE *f = popen(cmd, "r");
+    if (!f)
+        return 0;
+    char line[512];
+    unsigned long off = 0;
+    while (fgets(line, sizeof line, f)) {
+        // exact: ".... R default:Node.ti" or ".... D default:Node.ti"
+        char *p = strstr(line, " default:Node.ti");
+        if (!p)
+            continue;
+        // reject longer names like default:Node.ti.field0
+        char c = p[strlen(" default:Node.ti")];
+        if (c && c != '\n' && c != ' ')
+            continue;
+        unsigned long a = 0;
+        if (sscanf(line, "%lx", &a) == 1) {
+            off = a;
+            break;
+        }
+    }
+    pclose(f);
+    if (!off)
+        return 0;
+    // PIE: absolute = exe load base + offset (nm gives file offset for ET_DYN)
+    return g_exe_lo + off;
+}
+
+// Plant INT3 at every CJ_MCC_NewObjectFast `ret` (c3 after the bump store).
+// Pattern (x86_64, verified on natural_wave):
+//   48 89 38              mov %rdi,(%rax)     ; store TypeInfo
+//   4c 89 02              mov %r8,(%rdx)      ; bump cursor
+//   c3                    ret
+static int plant_newobject_swbp(pid_t pid) {
+    if (!g_exe_lo || g_exe_hi <= g_exe_lo)
+        return 0;
+    unsigned long lo = g_exe_lo;
+    unsigned long hi = g_exe_hi;
+    unsigned long span = hi - lo;
+    if (span > 32UL * 1024 * 1024)
+        span = 32UL * 1024 * 1024;
+    unsigned char *buf = (unsigned char *)malloc(span);
+    if (!buf)
+        return 0;
+    size_t got = 0;
+    while (got < span) {
+        struct iovec li = {buf + got, 0}, ri = {(void *)(lo + got), 0};
+        size_t want = span - got;
+        if (want > 1 << 20)
+            want = 1 << 20;
+        li.iov_len = want;
+        ri.iov_len = want;
+        ssize_t r = process_vm_readv(pid, &li, 1, &ri, 1, 0);
+        if (r <= 0)
+            break;
+        got += (size_t)r;
+    }
+    static const unsigned char pat[] = {0x48, 0x89, 0x38, 0x4c, 0x89, 0x02, 0xc3};
+    int n = 0;
+    for (size_t i = 0; i + sizeof(pat) <= got && g_nswbp < MAX_SWBP; i++) {
+        if (memcmp(buf + i, pat, sizeof(pat)) != 0)
+            continue;
+        unsigned long addr = lo + i + 6; // the ret
+        unsigned char prev = 0;
+        if (poke_byte(pid, addr, 0xcc, &prev) != 0) {
+            logln("SWBP_PLANT_FAIL addr=%#lx errno=%d", addr, errno);
+            continue;
+        }
+        g_swbp[g_nswbp].addr = addr;
+        g_swbp[g_nswbp].orig = prev;
+        g_swbp[g_nswbp].active = 1;
+        g_nswbp++;
+        n++;
+        logln("SWBP_PLANT i=%d addr=%#lx orig=%#x", g_nswbp - 1, addr, prev);
+    }
+    free(buf);
+    logln("SWBP_PLANTED n=%d node_ti=%#lx arm_every=%u arm_max=%u", g_nswbp, g_node_ti, g_arm_every, g_arm_max);
+    return n;
+}
+
+static int find_swbp(unsigned long addr) {
+    for (int i = 0; i < g_nswbp; i++)
+        if (g_swbp[i].active && g_swbp[i].addr == addr)
+            return i;
+    return -1;
+}
+
+static void midrun_arm_slot(pid_t tid, unsigned long slot) {
+    if (g_arm_max && g_node_armed_total >= g_arm_max)
+        return;
+    int idx;
+    if (g_nwp < MAX_WP) {
+        idx = g_nwp;
+        g_nwp++;
+        g_hits[idx] = 0;
+    } else {
+        idx = g_rr % MAX_WP;
+        g_rr++;
+    }
+    g_wp[idx] = slot;
+    g_node_armed_total++;
+    logln("MIDRUN_ARM tid=%d dr=%d slot=%#lx node_seen=%lu armed_total=%lu nwp=%d", tid, idx, slot, g_node_seen,
+          g_node_armed_total, g_nwp);
+    // Reset armed-thread cache so maybe_arm re-sets; also poke all known tids.
+    g_narmed_t = 0;
+    set_watchpoints(tid);
+    rearm_all_threads();
+}
+
+static int handle_swbp(pid_t tid) {
+    struct user_regs_struct r;
+    if (ptrace(PTRACE_GETREGS, tid, 0, &r) != 0)
+        return 0;
+    unsigned long rip = (unsigned long)r.rip - 1; // INT3 advances rip past 0xcc
+    int bi = find_swbp(rip);
+    if (bi < 0)
+        return 0;
+    g_swbp_hits++;
+    // Restore orig byte and rewind rip onto the ret.
+    poke_byte(tid, rip, g_swbp[bi].orig, 0);
+    r.rip = rip;
+    ptrace(PTRACE_SETREGS, tid, 0, &r);
+
+    // At NewObjectFast ret: rax=obj, size was rsi (unclobbered on this epilogue).
+    unsigned long obj = (unsigned long)r.rax;
+    unsigned long size = (unsigned long)r.rsi;
+    unsigned long tip = 0;
+    int tip_ok = (peek(tid, obj, &tip) == 0);
+    int is_node = 0;
+    if (tip_ok && g_node_ti && tip == g_node_ti && size == NODE_OBJ_SIZE)
+        is_node = 1;
+    else if (tip_ok && g_node_ti && tip == g_node_ti)
+        is_node = 1; // size filter soft: still accept if tip matches
+    if (is_node) {
+        g_node_seen++;
+        if (g_arm_every == 0)
+            g_arm_every = 1;
+        if ((g_node_seen % g_arm_every) == 0) {
+            unsigned long slot = obj + NODE_NEXT_OFF;
+            midrun_arm_slot(tid, slot);
+        }
+        if (g_swbp_hits <= 200 || (g_node_seen % 64) == 0)
+            logln("NODE_ALLOC tid=%d obj=%#lx tip=%#lx size=%lu seen=%lu", tid, obj, tip, size, g_node_seen);
+    }
+
+    // Single-step the ret, then replant INT3.
+    g_stepping_tid = tid;
+    g_step_replant = rip;
+    ptrace(PTRACE_SINGLESTEP, tid, 0, 0);
+    return 1;
+}
+
+static void finish_step(pid_t tid) {
+    if (g_stepping_tid != tid)
+        return;
+    unsigned long addr = g_step_replant;
+    g_stepping_tid = -1;
+    g_step_replant = 0;
+    unsigned char prev = 0;
+    if (poke_byte(tid, addr, 0xcc, &prev) != 0)
+        logln("SWBP_REPLANT_FAIL addr=%#lx errno=%d", addr, errno);
 }
 
 static int dump_range(pid_t pid, unsigned long lo, unsigned long hi, const char *tag) {
@@ -244,9 +461,6 @@ static void dump_all_memory(pid_t pid, const char *tag) {
     logln("DUMP_MAPS_DONE mode=full pid=%d ndump=%d bytes≈%lu", pid, ndump, total);
 }
 
-// Bounded dump: stacks + maps covering interest addresses (regs / B2GEO) + neighbor pads.
-// Also keeps large anonymous RW maps that look like region-metadata arenas (small pages
-// with many RegionInfo) by dumping maps that contain (interest - BOUNDED_PAD).
 static void dump_bounded_memory(pid_t pid, const char *tag, unsigned long *interest, int ninterest) {
     read_maps(pid, tag);
     char p[64];
@@ -283,10 +497,8 @@ static void dump_bounded_memory(pid_t pid, const char *tag, unsigned long *inter
                 unsigned long a = interest[i];
                 if (!a)
                     continue;
-                // map contains address, or is within pad of address (neighbor region)
                 if ((a >= lo && a < hi) || (a + BOUNDED_PAD >= lo && a < hi + BOUNDED_PAD)) {
                     take = 1;
-                    // clip to pad around interest if map is huge
                     if (hi - lo > 8UL * 1024 * 1024) {
                         unsigned long clo = (a > BOUNDED_PAD) ? (a - BOUNDED_PAD) : lo;
                         unsigned long chi = a + BOUNDED_PAD;
@@ -294,7 +506,6 @@ static void dump_bounded_memory(pid_t pid, const char *tag, unsigned long *inter
                             clo = lo;
                         if (chi > hi)
                             chi = hi;
-                        // expand to cover whole map if map is a single 64K region page band
                         if (hi - lo <= 256UL * 1024) {
                             clo = lo;
                             chi = hi;
@@ -306,10 +517,7 @@ static void dump_bounded_memory(pid_t pid, const char *tag, unsigned long *inter
                 }
             }
         }
-        // Always take anonymous RW maps in the typical cj heap/meta band that are
-        // modest sized (region tables / small heaps) — catches region metadata.
         if (!take && is_rw && !path[0] && (lo >> 40) == 0x7f && (hi - lo) <= 16UL * 1024 * 1024) {
-            // only if any interest is in same 1GB superpage neighborhood
             for (int i = 0; i < ninterest; i++) {
                 unsigned long a = interest[i];
                 if (!a)
@@ -343,7 +551,6 @@ static void collect_interest_from_regs(pid_t tid, unsigned long *interest, int *
         unsigned long v = regs[i];
         if ((v >> 40) == 0x7f || (v >> 40) == 0x55) {
             interest[(*ninterest)++] = v;
-            // also track V-16 / V+16 for interior geometry
             if (*ninterest < MAX_INTEREST && v > 16)
                 interest[(*ninterest)++] = v - 16;
             if (*ninterest < MAX_INTEREST)
@@ -360,8 +567,6 @@ static void dump_thread_regs(pid_t tid, const char *tag) {
           "r8=%llx r9=%llx r10=%llx r11=%llx r12=%llx r13=%llx r14=%llx r15=%llx",
           tag, tid, r.rip, r.rax, r.rbx, r.rcx, r.rdx, r.rsi, r.rdi, r.rbp, r.rsp, r.r8, r.r9, r.r10, r.r11, r.r12,
           r.r13, r.r14, r.r15);
-    // T-A: scan GP regs for the B2 geometry: V where *V points into exe TEXT (code as "TypeInfo")
-    // while *(V-16) points into exe range (legit TypeInfo one slot before) = (obj+0x10)-as-base shape.
     unsigned long regs[16] = {r.rax, r.rbx, r.rcx, r.rdx, r.rsi, r.rdi, r.rbp, r.rsp,
                               r.r8,  r.r9,  r.r10, r.r11, r.r12, r.r13, r.r14, r.r15};
     const char *names[16] = {"rax", "rbx", "rcx", "rdx", "rsi", "rdi", "rbp", "rsp",
@@ -392,16 +597,44 @@ static void on_fatal(pid_t tid, int sig) {
     unsigned long interest[MAX_INTEREST];
     int ninterest = 0;
     collect_interest_from_regs(tid, interest, &ninterest);
+    for (int i = 0; i < g_nwp && ninterest < MAX_INTEREST; i++)
+        interest[ninterest++] = g_wp[i];
 
     g_fatal_count++;
     int do_full = g_force_full || (!g_force_bounded && g_fatal_count <= g_full_dump_cap);
-    logln("DUMP_POLICY fatal_n=%d full_cap=%d mode=%s ninterest=%d", g_fatal_count, g_full_dump_cap,
-          do_full ? "full" : "bounded", ninterest);
+    logln("DUMP_POLICY fatal_n=%d full_cap=%d mode=%s ninterest=%d midrun_nodes=%lu swbp_hits=%lu wp_interior=%lu",
+          g_fatal_count, g_full_dump_cap, do_full ? "full" : "bounded", ninterest, g_node_seen, g_swbp_hits,
+          g_wp_interior_hits);
     if (do_full)
         dump_all_memory(tid, stag);
     else
         dump_bounded_memory(tid, stag, interest, ninterest);
     logln("DUMP_DONE tid=%d sig=%d", tid, sig);
+}
+
+static void setup_after_exec(pid_t pid, const char *base) {
+    g_exe_lo = g_exe_hi = 0;
+    learn_exe_range(pid, base);
+    read_maps(pid, "exec");
+    g_narmed_t = 0;
+    g_nswbp = 0;
+    g_node_seen = 0;
+    g_node_armed_total = 0;
+    g_swbp_hits = 0;
+    g_wp_interior_hits = 0;
+    g_rr = 0;
+    if (g_midrun_node) {
+        // static -w slots cleared; mid-run owns DRs
+        g_nwp = 0;
+        g_node_ti = resolve_node_ti(pid);
+        logln("NODE_TI %#lx", g_node_ti);
+        if (!g_node_ti)
+            logln("NODE_TI_RESOLVE_FAIL");
+        plant_newobject_swbp(pid);
+    } else if (g_nwp) {
+        set_watchpoints(pid);
+    }
+    logln("EXEC_ARMED tid=%d midrun=%d nwp=%d nswbp=%d", pid, g_midrun_node, g_nwp, g_nswbp);
 }
 
 int main(int argc, char **argv) {
@@ -446,6 +679,22 @@ int main(int argc, char **argv) {
             }
             g_nwp++;
             a += 2;
+        } else if (!strcmp(argv[a], "-A")) {
+            if (!strcmp(argv[a + 1], "node"))
+                g_midrun_node = 1;
+            else {
+                fprintf(stderr, "bad -A %s (node)\n", argv[a + 1]);
+                return 2;
+            }
+            a += 2;
+        } else if (!strcmp(argv[a], "-S")) {
+            g_arm_every = (unsigned)atoi(argv[a + 1]);
+            if (!g_arm_every)
+                g_arm_every = 1;
+            a += 2;
+        } else if (!strcmp(argv[a], "-M")) {
+            g_arm_max = (unsigned)atoi(argv[a + 1]);
+            a += 2;
         } else if (!strcmp(argv[a], "--")) {
             a++;
             break;
@@ -455,8 +704,9 @@ int main(int argc, char **argv) {
         }
     }
     if (a >= argc) {
-        fprintf(stderr, "usage: supervisor [-o dir] [-t s] [-c cap] [-F full_cap] [-D full|bounded] [-w addr].. -- "
-                        "target [args]\n");
+        fprintf(stderr,
+                "usage: supervisor [-o dir] [-t s] [-c cap] [-F full_cap] [-D full|bounded] [-w addr].. "
+                "[-A node] [-S every] [-M max_arms] -- target [args]\n");
         return 2;
     }
     snprintf(exe_path, sizeof exe_path, "%s", argv[a]);
@@ -483,7 +733,8 @@ int main(int argc, char **argv) {
         _exit(127);
     }
     g_mainpid = pid;
-    logln("SUPERVISOR_START mainpid=%d nwp=%d target=%s full_cap=%d", pid, g_nwp, exe_path, g_full_dump_cap);
+    logln("SUPERVISOR_START mainpid=%d nwp=%d midrun=%d target=%s full_cap=%d", pid, g_nwp, g_midrun_node, exe_path,
+          g_full_dump_cap);
     for (int i = 0; i < g_nwp; i++)
         logln("WP_DEF %d addr=%#lx", i, g_wp[i]);
 
@@ -491,15 +742,10 @@ int main(int argc, char **argv) {
     int status;
     time_t t0 = time(0);
     int live = 1, exit_code = -1, termsig = 0, fatal_seen = 0, exec_armed = 0;
-    // first stop after TRACEME is the post-exec SIGTRAP: maps are already the target's.
     waitpid(pid, &status, 0);
     ptrace(PTRACE_SETOPTIONS, pid, 0, (void *)opts);
-    learn_exe_range(pid, base);
-    read_maps(pid, "exec");
-    if (g_nwp)
-        set_watchpoints(pid);
+    setup_after_exec(pid, base);
     exec_armed = 1;
-    logln("EXEC_ARMED tid=%d", pid);
     ptrace(PTRACE_CONT, pid, 0, 0);
 
     while (live > 0) {
@@ -537,7 +783,6 @@ int main(int argc, char **argv) {
             maybe_arm(w);
 
         if (event == PTRACE_EVENT_EXEC) {
-            // setarch / wrappers re-exec the real target — always re-learn exe range
             char newbase[256] = {0};
             char linkp[64], realp[512];
             snprintf(linkp, sizeof linkp, "/proc/%d/exe", w);
@@ -550,11 +795,7 @@ int main(int argc, char **argv) {
             } else {
                 snprintf(newbase, sizeof newbase, "%s", base);
             }
-            g_exe_lo = g_exe_hi = 0;
-            learn_exe_range(w, newbase);
-            read_maps(w, "exec");
-            if (g_nwp)
-                set_watchpoints(w);
+            setup_after_exec(w, newbase);
             exec_armed = 1;
             logln("EXEC_ARMED tid=%d exe=%s", w, newbase);
             ptrace(PTRACE_CONT, w, 0, 0);
@@ -574,8 +815,14 @@ int main(int argc, char **argv) {
         }
 
         if (sig == SIGTRAP) {
+            // Finish single-step after SWBP
+            if (g_stepping_tid == w) {
+                finish_step(w);
+                ptrace(PTRACE_CONT, w, 0, 0);
+                continue;
+            }
             siginfo_t si;
-            si.si_code = 0;
+            memset(&si, 0, sizeof si);
             ptrace(PTRACE_GETSIGINFO, w, 0, &si);
             if (si.si_code == TRAP_HWBKPT) {
                 errno = 0;
@@ -589,11 +836,20 @@ int main(int argc, char **argv) {
                     g_hits[i]++;
                     unsigned long slotval = 0;
                     int ok = (peek(w, g_wp[i], &slotval) == 0);
-                    if (g_hits[i] <= 100000) {
-                        unsigned long tip_at = 0, tip_before = 0;
-                        const char *cls = ok ? classify_value(w, slotval, &tip_at, &tip_before) : "peek_fail";
+                    unsigned long tip_at = 0, tip_before = 0;
+                    const char *cls = ok ? classify_value(w, slotval, &tip_at, &tip_before) : "peek_fail";
+                    if (cls && strstr(cls, "interior"))
+                        g_wp_interior_hits++;
+                    // Always log interior writes; throttle others after 1k
+                    if (g_hits[i] <= 1000 || (cls && strstr(cls, "interior")) || g_hits[i] <= g_hit_cap) {
                         logln("WP_HIT i=%d tid=%d rip=%llx slot=%#lx val=%#lx cls=%s tip_at=%#lx tip_before=%#lx hit=%lu",
                               i, w, r.rip, g_wp[i], slotval, cls, tip_at, tip_before, g_hits[i]);
+                        if (cls && strstr(cls, "interior")) {
+                            logln("WP_INTERIOR_WRITER i=%d rip=%llx slot=%#lx val=%#lx tip_before=%#lx "
+                                  "rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rbp=%llx rsp=%llx",
+                                  i, r.rip, g_wp[i], slotval, tip_before, r.rax, r.rbx, r.rcx, r.rdx, r.rsi, r.rdi,
+                                  r.rbp, r.rsp);
+                        }
                     }
                     if (g_hits[i] == g_hit_cap) {
                         logln("WP_CAP_REACHED i=%d slot=%#lx hits=%lu -> clearing DRs in this thread", i, g_wp[i],
@@ -605,6 +861,9 @@ int main(int argc, char **argv) {
                 ptrace(PTRACE_CONT, w, 0, 0);
                 continue;
             }
+            // Software BP (INT3): si_code typically SI_KERNEL or TRAP_BRKPT
+            if (handle_swbp(w))
+                continue;
             ptrace(PTRACE_CONT, w, 0, (void *)(long)sig);
             continue;
         }
@@ -623,10 +882,11 @@ int main(int argc, char **argv) {
 
         ptrace(PTRACE_CONT, w, 0, (void *)(long)sig);
     }
-    logln("SUPERVISOR_END exit=%d termsig=%d fatal_seen=%d fatal_count=%d", exit_code, termsig, fatal_seen,
-          g_fatal_count);
+    logln("SUPERVISOR_END exit=%d termsig=%d fatal_seen=%d fatal_count=%d node_seen=%lu armed_total=%lu "
+          "swbp_hits=%lu wp_interior=%lu",
+          exit_code, termsig, fatal_seen, g_fatal_count, g_node_seen, g_node_armed_total, g_swbp_hits,
+          g_wp_interior_hits);
     fclose(g_log);
-    // surface target fate to parent classifier (128+sig convention)
     if (termsig > 0)
         return 128 + termsig;
     if (exit_code >= 0)
