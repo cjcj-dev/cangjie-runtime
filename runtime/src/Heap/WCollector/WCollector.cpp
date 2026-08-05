@@ -50,6 +50,122 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+// T1 ledger-cost probe (setbitmap O1③): default off.
+// MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
+// MRT_GCV2_LEDGER_COST=2 → count only (no NanoSeconds; for overhead control)
+// Report line: [GCV2][ledger-cost] ...
+struct MinorLedgerCost {
+    uint64_t objInsNs = 0;
+    uint64_t objInsN = 0;
+    uint64_t objInsNew = 0;
+    uint64_t objLookNs = 0;
+    uint64_t objLookN = 0;
+    uint64_t slotInsNs = 0;
+    uint64_t slotInsN = 0;
+    uint64_t slotInsNew = 0;
+    uint64_t slotLookNs = 0;
+    uint64_t slotLookN = 0;
+    uint64_t weakInsNs = 0;
+    uint64_t weakInsN = 0;
+    uint64_t weakInsNew = 0;
+    uint64_t weakLookNs = 0;
+    uint64_t weakLookN = 0;
+
+    static int Mode()
+    {
+        static const int mode = []() {
+            const char* v = std::getenv("MRT_GCV2_LEDGER_COST");
+            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
+                return 0;
+            }
+            if (std::strcmp(v, "2") == 0 || std::strcmp(v, "count") == 0) {
+                return 2;
+            }
+            return 1;
+        }();
+        return mode;
+    }
+
+    void Reset() { *this = MinorLedgerCost{}; }
+
+    void Report() const
+    {
+        if (Mode() == 0) {
+            return;
+        }
+        const uint64_t insNs = objInsNs + slotInsNs + weakInsNs;
+        const uint64_t lookNs = objLookNs + slotLookNs + weakLookNs;
+        VLOG(REPORT,
+             "[GCV2][ledger-cost] mode=%d "
+             "obj_ins_n=%llu obj_ins_new=%llu obj_ins_ns=%llu "
+             "obj_look_n=%llu obj_look_ns=%llu "
+             "slot_ins_n=%llu slot_ins_new=%llu slot_ins_ns=%llu "
+             "slot_look_n=%llu slot_look_ns=%llu "
+             "weak_ins_n=%llu weak_ins_new=%llu weak_ins_ns=%llu "
+             "weak_look_n=%llu weak_look_ns=%llu "
+             "ins_total_ns=%llu look_total_ns=%llu all_ns=%llu",
+             Mode(),
+             static_cast<unsigned long long>(objInsN), static_cast<unsigned long long>(objInsNew),
+             static_cast<unsigned long long>(objInsNs),
+             static_cast<unsigned long long>(objLookN), static_cast<unsigned long long>(objLookNs),
+             static_cast<unsigned long long>(slotInsN), static_cast<unsigned long long>(slotInsNew),
+             static_cast<unsigned long long>(slotInsNs),
+             static_cast<unsigned long long>(slotLookN), static_cast<unsigned long long>(slotLookNs),
+             static_cast<unsigned long long>(weakInsN), static_cast<unsigned long long>(weakInsNew),
+             static_cast<unsigned long long>(weakInsNs),
+             static_cast<unsigned long long>(weakLookN), static_cast<unsigned long long>(weakLookNs),
+             static_cast<unsigned long long>(insNs), static_cast<unsigned long long>(lookNs),
+             static_cast<unsigned long long>(insNs + lookNs));
+    }
+};
+
+thread_local MinorLedgerCost g_minorLedgerCost;
+
+template <typename SetT, typename KeyT>
+bool LedgerInsert(SetT& set, const KeyT& key, uint64_t& n, uint64_t& nNew, uint64_t& ns)
+{
+    const int mode = MinorLedgerCost::Mode();
+    if (mode == 0) {
+        return set.insert(key).second;
+    }
+    if (mode == 2) {
+        ++n;
+        auto r = set.insert(key);
+        if (r.second) {
+            ++nNew;
+        }
+        return r.second;
+    }
+    uint64_t t0 = TimeUtil::NanoSeconds();
+    auto r = set.insert(key);
+    ns += TimeUtil::NanoSeconds() - t0;
+    ++n;
+    if (r.second) {
+        ++nNew;
+    }
+    return r.second;
+}
+
+template <typename SetT, typename KeyT>
+size_t LedgerCount(const SetT& set, const KeyT& key, uint64_t& n, uint64_t& ns)
+{
+    const int mode = MinorLedgerCost::Mode();
+    if (mode == 0) {
+        return set.count(key);
+    }
+    if (mode == 2) {
+        ++n;
+        return set.count(key);
+    }
+    uint64_t t0 = TimeUtil::NanoSeconds();
+    size_t c = set.count(key);
+    ns += TimeUtil::NanoSeconds() - t0;
+    ++n;
+    return c;
+}
+} // namespace
+
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 namespace {
 struct UntagRefFieldBreadcrumb {
@@ -1622,7 +1738,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
         workStack.pop_back();
-        if (!Heap::IsHeapAddress(object) || !reachableObjects.insert(object).second) {
+        if (!Heap::IsHeapAddress(object) ||
+            !LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
+                          g_minorLedgerCost.objInsNs)) {
             continue;
         }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -1638,7 +1756,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (UNLIKELY(object->IsWeakRef())) {
             RefField<>* referentField = reinterpret_cast<RefField<>*>(
                 reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            weakSlots.insert(reinterpret_cast<MAddress>(referentField));
+            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(referentField), g_minorLedgerCost.weakInsN,
+                               g_minorLedgerCost.weakInsNew, g_minorLedgerCost.weakInsNs);
             BaseObject* referent = ResolveMinorReference(*referentField);
             if (!Heap::IsHeapAddress(referent)) {
                 continue;
@@ -1651,7 +1770,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             continue;
         }
         object->ForEachRefField([&reachableSlots, &pushTarget](RefField<>& field) {
-            reachableSlots.insert(reinterpret_cast<MAddress>(&field));
+            (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
+                               g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
             pushTarget(field);
         });
     }
@@ -1716,6 +1836,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             holder->ForEachRefField([holder, &rememberedSlots, &rememberedOrigins](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
+                // rememberedSlots is the remset drain set (not the mark ledger); leave untimed.
                 if (rememberedSlots.count(slot) != 0) {
                     rememberedOrigins[slot] = holder;
                 }
@@ -1729,7 +1850,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             continue;
         }
-        if (weakSlots.count(slot) != 0) {
+        if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) != 0) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedWeak;
             }
@@ -1822,7 +1943,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
         }
         if (fullYoungScan) {
-            bool oracleKeep = reachableSlots.count(slot) != 0;
+            bool oracleKeep =
+                LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0;
             if (retainedProbe) {
                 if (keepByRetainedSnapshot == oracleKeep) {
                     ++filterCorrect;
@@ -2937,6 +3059,7 @@ void WCollector::DoYoungGarbageCollection()
             }
         });
     }
+    g_minorLedgerCost.Reset();
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         MRT_PHASE_TIMER("young.mark_closure");
@@ -2944,7 +3067,9 @@ void WCollector::DoYoungGarbageCollection()
     }
     MinorSlotSet liveRememberedSlots;
     for (MAddress slot : rememberedSlots) {
-        if (weakSlots.count(slot) == 0 && (!fullYoungScan || reachableSlots.count(slot) != 0)) {
+        if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
+            (!fullYoungScan ||
+             LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
             liveRememberedSlots.insert(slot);
         }
     }
@@ -2964,6 +3089,7 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.mark_from_remset");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
     }
+    g_minorLedgerCost.Report();
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
