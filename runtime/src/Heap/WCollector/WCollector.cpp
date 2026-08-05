@@ -446,6 +446,99 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    if (UNLIKELY(!latest->IsValidObject())) {
+        static const bool plainEdge = []() {
+            const char* value = std::getenv("MRT_GCV2_PLAINEDGE");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        if (plainEdge) {
+            const bool targetInHeap = Heap::IsHeapAddress(latest);
+            const bool holderInHeap = obj != nullptr && Heap::IsHeapAddress(obj);
+            const bool targetInGhost = targetInHeap && RegionInfo::InGhostFromRegion(latest);
+            RegionInfo* targetCurrent =
+                targetInHeap ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest)) : nullptr;
+            RegionInfo* targetGhost =
+                targetInHeap ? RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(latest)) : nullptr;
+            RegionInfo* holderCurrent =
+                holderInHeap ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj)) : nullptr;
+            const GCPhase phase = GetGCPhase();
+            const uint64_t gcStartNs = GCStats::GetPrevGCStartTime();
+            const auto dumpRegion = [](const char* role, BaseObject* object, RegionInfo* region) {
+                if (region == nullptr) {
+                    VLOG(REPORT,
+                         "[GCV2][PLAINEDGE][region] role=%s object=%p region=null "
+                         "NOT_AVAILABLE_no_region_metadata",
+                         role, object);
+                    return;
+                }
+                VLOG(REPORT,
+                     "[GCV2][PLAINEDGE][region] role=%s object=%p region=%p type=%u unmovable=%u "
+                     "young=%u youngAge=%u routeState=%u from=%u ghost=%u start=%#zx end=%#zx "
+                     "alloc=%#zx snapshotEpoch=%llu liveBytes=%zu",
+                     role, object, region, static_cast<unsigned>(region->GetRegionType()),
+                     static_cast<unsigned>(region->IsUnmovableFromRegion()),
+                     static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->GetYoungAge()),
+                     static_cast<unsigned>(region->GetRouteState()), static_cast<unsigned>(region->IsFromRegion()),
+                     static_cast<unsigned>(region->IsGhostFromRegion()),
+                     static_cast<size_t>(region->GetRegionStart()), static_cast<size_t>(region->GetRegionEnd()),
+                     static_cast<size_t>(region->GetRegionAllocPtr()),
+                     static_cast<unsigned long long>(region->GetSnapshotEpoch()), region->GetLiveByteCount());
+            };
+            VLOG(REPORT,
+                 "[GCV2][PLAINEDGE] latest=%p field=%p holder=%p branch=%s tagHigh16=%u "
+                 "targetInHeap=%u holderInHeap=%u unit.inGhostFromRegion=%u "
+                 "phase=%s(%u) completedGcCount=%zu gcStartNs=%llu",
+                 latest, &field, obj, IsOldPointer(oldField) ? "FindLatestVersion" : "plain_GetTargetObject",
+                 static_cast<unsigned>((oldField.GetFieldValue() >> 48) & 0xffffU),
+                 static_cast<unsigned>(targetInHeap), static_cast<unsigned>(holderInHeap),
+                 static_cast<unsigned>(targetInGhost), Collector::GetGCPhaseName(phase),
+                 static_cast<unsigned>(phase), g_gcCount, static_cast<unsigned long long>(gcStartNs));
+            dumpRegion("target_current", latest, targetCurrent);
+            dumpRegion("target_ghost", latest, targetGhost);
+            dumpRegion("holder_current", obj, holderCurrent);
+
+            char targetClear[384];
+            char holderClear[384];
+            const bool targetWasCleared =
+                targetInHeap && TraceClear::Lookup(reinterpret_cast<MAddress>(latest), targetClear, sizeof(targetClear));
+            const bool holderWasCleared =
+                holderInHeap && TraceClear::Lookup(reinterpret_cast<MAddress>(obj), holderClear, sizeof(holderClear));
+            if (!targetInHeap) {
+                std::snprintf(targetClear, sizeof(targetClear), "NOT_AVAILABLE_target_not_in_heap");
+            }
+            if (!holderInHeap) {
+                std::snprintf(holderClear, sizeof(holderClear), "NOT_AVAILABLE_holder_not_in_heap");
+            }
+            VLOG(REPORT,
+                 "[GCV2][PLAINEDGE][lifecycle] targetClearedRecent=%u targetClear={%s} "
+                 "holderClearedRecent=%u holderClear={%s}",
+                 static_cast<unsigned>(targetWasCleared), targetClear, static_cast<unsigned>(holderWasCleared),
+                 holderClear);
+
+            char ghostReclaim[384] = "NOT_AVAILABLE";
+            char dirtyTake[384] = "NOT_AVAILABLE";
+            char garbageReuse[384] = "NOT_AVAILABLE";
+            char clearGhost[384] = "NOT_AVAILABLE";
+            char dispel[384] = "NOT_AVAILABLE";
+            const bool targetGhostReclaimed = targetInHeap && TraceClear::LookupKind(
+                reinterpret_cast<MAddress>(latest), "ghost_reclaim", gcStartNs, ghostReclaim, sizeof(ghostReclaim));
+            const bool targetDirtyTaken = targetInHeap && TraceClear::LookupKind(
+                reinterpret_cast<MAddress>(latest), "dirty_take", gcStartNs, dirtyTake, sizeof(dirtyTake));
+            const bool targetGarbageReused = targetInHeap && TraceClear::LookupKind(
+                reinterpret_cast<MAddress>(latest), "garbage_reuse", gcStartNs, garbageReuse, sizeof(garbageReuse));
+            const bool targetGhostCleared = targetInHeap && TraceClear::LookupKind(
+                reinterpret_cast<MAddress>(latest), "clear_ghost", gcStartNs, clearGhost, sizeof(clearGhost));
+            const bool targetDispelled = targetInHeap && TraceClear::LookupKind(
+                reinterpret_cast<MAddress>(latest), "dispel", gcStartNs, dispel, sizeof(dispel));
+            VLOG(REPORT,
+                 "[GCV2][PLAINEDGE][supply-path] ghostReclaim=%u dirtyTake=%u garbageReuse=%u "
+                 "clearGhost=%u dispel=%u "
+                 "ghostReclaim={%s} dirtyTake={%s} garbageReuse={%s} clearGhost={%s} dispel={%s}",
+                 static_cast<unsigned>(targetGhostReclaimed), static_cast<unsigned>(targetDirtyTaken),
+                 static_cast<unsigned>(targetGarbageReused), static_cast<unsigned>(targetGhostCleared),
+                 static_cast<unsigned>(targetDispelled), ghostReclaim, dirtyTake, garbageReuse, clearGhost, dispel);
+        }
+    }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);

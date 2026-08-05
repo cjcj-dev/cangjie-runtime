@@ -60,7 +60,8 @@ void RecordEntry(const Entry& entry)
 
 bool TraceClear::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_TRACE_CLEAR") || EnvIsOne("MRT_GCV2_F3_REGION");
+    static const bool on = EnvIsOne("MRT_GCV2_TRACE_CLEAR") || EnvIsOne("MRT_GCV2_F3_REGION") ||
+                           EnvIsOne("MRT_GCV2_PLAINEDGE");
     return on;
 }
 
@@ -92,7 +93,7 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
 void TraceClear::NoteRegionEvent(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
                                  unsigned int isGhost, unsigned int regionType, unsigned int routeState)
 {
-    static const bool f3Region = EnvIsOne("MRT_GCV2_F3_REGION");
+    static const bool f3Region = EnvIsOne("MRT_GCV2_F3_REGION") || EnvIsOne("MRT_GCV2_PLAINEDGE");
     if (!f3Region || size == 0) {
         return;
     }
