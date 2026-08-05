@@ -63,6 +63,7 @@ public:
         const char* phaseTimers = std::getenv("MRT_GCV2_MINOR_PHASE_TIMERS");
         enabled = GcLog::Enabled() && phaseTimers != nullptr && std::strcmp(phaseTimers, "0") != 0;
         if (enabled) {
+            selectedPhase = static_cast<size_t>((GcLog::CurrentSeq() - 1) % 4);
             gMinorPhaseBuffer = this;
         }
     }
@@ -86,6 +87,8 @@ public:
         ++size;
     }
 
+    bool Selected(size_t phaseIndex) const { return selectedPhase == phaseIndex; }
+
 private:
     struct RecordEntry {
         const char* name = nullptr;
@@ -96,12 +99,16 @@ private:
     MinorPhaseBuffer* previous = nullptr;
     std::array<RecordEntry, 32> records{};
     size_t size = 0;
+    size_t selectedPhase = 0;
 };
 
 class MinorPhaseTimer {
 public:
-    explicit MinorPhaseTimer(const char* phaseName) : buffer(gMinorPhaseBuffer), name(phaseName)
+    MinorPhaseTimer(size_t phaseIndex, const char* phaseName) : buffer(gMinorPhaseBuffer), name(phaseName)
     {
+        if (buffer != nullptr && !buffer->Selected(phaseIndex)) {
+            buffer = nullptr;
+        }
         if (buffer != nullptr) {
             startUs = TimeUtil::MicroSeconds();
         }
@@ -120,7 +127,7 @@ private:
     uint64_t startUs = 0;
 };
 
-#define MRT_MINOR_PHASE_TIMER(name) MinorPhaseTimer MRT_minor_pt_##__LINE__(name)
+#define MRT_MINOR_PHASE_TIMER(index, name) MinorPhaseTimer MRT_minor_pt_##__LINE__(index, name)
 
 // T1 ledger-cost probe (setbitmap O1③): default off.
 // MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
@@ -2530,7 +2537,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
-        MRT_MINOR_PHASE_TIMER("young.ref_fix");
+        MRT_MINOR_PHASE_TIMER(2, "young.ref_fix");
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
         GCThreadPool* threadPool = GetThreadPool();
@@ -2580,7 +2587,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minorstw coarse phase: copy/forward plus evacuation metadata completion.
-        MRT_MINOR_PHASE_TIMER("young.copy_and_finish");
+        MRT_MINOR_PHASE_TIMER(3, "young.copy_and_finish");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
@@ -3267,7 +3274,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet weakSlots;
     {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
-        MRT_MINOR_PHASE_TIMER("young.root_enum");
+        MRT_MINOR_PHASE_TIMER(0, "young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         while (!enumRoots.empty()) {
@@ -3299,7 +3306,7 @@ void WCollector::DoYoungGarbageCollection()
     size_t liveBytes = 0;
     {
         // minorstw coarse phase: closure fixpoint, remembered-set rescan, and mark termination.
-        MRT_MINOR_PHASE_TIMER("young.mark_and_remset");
+        MRT_MINOR_PHASE_TIMER(1, "young.mark_and_remset");
         g_minorLedgerCost.Reset();
         {
             TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
