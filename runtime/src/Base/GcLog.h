@@ -77,6 +77,11 @@ public:
 
     static void Phase(const char* name, uint64_t us)
     {
+        Phase(CurrentSeq(), name, us);
+    }
+
+    static void Phase(uint64_t seq, const char* name, uint64_t us)
+    {
         if (!Enabled()) {
             return;
         }
@@ -94,11 +99,11 @@ public:
         safe[i] = '\0';
         if (ENABLE_LOG(REPORT)) {
             WriteLog(true, REPORT, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
-                     static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+                     static_cast<unsigned long long>(seq), safe, static_cast<unsigned long long>(us));
             return;
         }
         std::fprintf(stderr, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu\n", SCHEMA_VERSION,
-                     static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+                     static_cast<unsigned long long>(seq), safe, static_cast<unsigned long long>(us));
     }
 
     // Resident set in KB, read from /proc/self/statm. Returns 0 where the file is unavailable,
