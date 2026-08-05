@@ -45,21 +45,12 @@ void GCStats::Init()
     garbageRatio = 0.0;
     collectionRate = 0.0;
 
-    const char* jvmIhopEnv = std::getenv("MRT_GCV2_JVM_IHOP");
-    const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
     size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
-    if (useJvmIhop) {
-        // Modern G1 uses 45% only as its initial IHOP; UpdateGCStats remains the adaptive controller here.
-        constexpr size_t initialHeapOccupancyPercent = 45;
-        heapThreshold = maxCapacity * initialHeapOccupancyPercent / 100;
-    } else {
-        // 20 MB:set 20 MB as intial value
-        heapThreshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
-        // 0.2:set 20% heap size as intial value
-        heapThreshold = std::min(static_cast<size_t>(maxCapacity * 0.2), heapThreshold);
-    }
-    VLOG(REPORT, "[GCV2][jvm-ihop] enabled=%d initial-threshold=%zu max-capacity=%zu adaptive-update=1",
-         useJvmIhop, heapThreshold, maxCapacity);
+    // 45: start collecting once 45% of the heap is occupied. UpdateGCStats is the adaptive
+    // controller from there on; this only sets where it starts.
+    constexpr size_t initialHeapOccupancyPercent = 45;
+    heapThreshold = maxCapacity * initialHeapOccupancyPercent / 100;
+    VLOG(REPORT, "[GCV2][ihop] initial-threshold=%zu max-capacity=%zu", heapThreshold, maxCapacity);
 }
 
 void GCStats::Dump() const
