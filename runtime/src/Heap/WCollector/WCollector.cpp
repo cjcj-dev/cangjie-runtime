@@ -68,6 +68,8 @@ public:
     {
         auto& deferred = Records();
         size_t& deferredSize = Size();
+        static const bool registered = std::atexit(Flush) == 0;
+        CHECK_DETAIL(registered, "failed to register deferred minor phase flush");
         CHECK_DETAIL(deferredSize + count <= deferred.size(),
                      "deferred minor phase buffer overflow: size=%zu append=%zu capacity=%zu", deferredSize, count,
                      deferred.size());
@@ -75,15 +77,6 @@ public:
             deferred[deferredSize] = records[i];
             deferred[deferredSize].seq = seq;
             ++deferredSize;
-        }
-    }
-
-    static void Flush()
-    {
-        auto& records = Records();
-        size_t size = Size();
-        for (size_t i = 0; i < size; ++i) {
-            GcLog::Phase(records[i].seq, records[i].name, records[i].us);
         }
     }
 
@@ -100,6 +93,14 @@ private:
         return size;
     }
 
+    static void Flush()
+    {
+        auto& records = Records();
+        size_t size = Size();
+        for (size_t i = 0; i < size; ++i) {
+            GcLog::Phase(records[i].seq, records[i].name, records[i].us);
+        }
+    }
 };
 
 class MinorPhaseBuffer {
@@ -413,11 +414,6 @@ void PrintUntagRefFieldBreadcrumb() noexcept
     }
 }
 #endif
-
-WCollector::~WCollector()
-{
-    DeferredMinorPhaseRecords::Flush();
-}
 
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 {
