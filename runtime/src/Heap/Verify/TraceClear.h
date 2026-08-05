@@ -24,8 +24,15 @@ public:
     // kind: "compact" | "clear_units"
     static void NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore);
 
+    // F3-only lifecycle event, recorded in the same ring as payload clears.
+    static void NoteRegionEvent(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
+                                unsigned int isGhost, unsigned int regionType, unsigned int routeState);
+
     // Returns true if addr is in any recorded range; fills detail line into buf.
     static bool Lookup(MAddress addr, char* buf, size_t bufSize);
+
+    // Returns the newest matching event from the requested GC cycle.
+    static bool LookupKind(MAddress addr, const char* kind, uint64_t gcStartNs, char* buf, size_t bufSize);
 
     // Optional: dump last N ranges (VLOG).
     static void DumpRecent(size_t n);

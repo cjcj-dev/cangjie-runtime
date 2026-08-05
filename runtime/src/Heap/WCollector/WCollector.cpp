@@ -13,6 +13,7 @@
 #include <csignal>
 #endif
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -198,6 +199,126 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
             untagRefFieldBreadcrumb.active = 0;
         }
 #endif
+        if (UNLIKELY(!isValidTarget)) {
+            static const bool f3Region = []() {
+                const char* value = std::getenv("MRT_GCV2_F3_REGION");
+                return value != nullptr && std::strcmp(value, "1") == 0;
+            }();
+            if (f3Region) {
+                const bool targetInHeap = Heap::IsHeapAddress(target);
+                const bool holderInHeap = obj != nullptr && Heap::IsHeapAddress(obj);
+                const bool targetInGhost = targetInHeap && RegionInfo::InGhostFromRegion(target);
+                RegionInfo* targetCurrent = targetInHeap
+                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target))
+                    : nullptr;
+                RegionInfo* targetGhost = targetInHeap
+                    ? RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target))
+                    : nullptr;
+                RegionInfo* holderCurrent = holderInHeap
+                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj))
+                    : nullptr;
+                RegionInfo* holderGhost = holderInHeap
+                    ? RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj))
+                    : nullptr;
+                RegionInfo* selectedTargetRegion = targetInGhost ? targetGhost : targetCurrent;
+                const auto dumpRegion = [](const char* role, BaseObject* object, RegionInfo* region) {
+                    if (region == nullptr) {
+                        VLOG(REPORT,
+                             "[GCV2][F3_REGION][region] role=%s object=%p region=null "
+                             "NOT_AVAILABLE_no_region_metadata",
+                             role, object);
+                        return;
+                    }
+                    VLOG(REPORT,
+                         "[GCV2][F3_REGION][region] role=%s object=%p region=%p type=%u unmovable=%u "
+                         "young=%u youngAge=%u routeState=%u from=%u ghost=%u start=%#zx end=%#zx "
+                         "alloc=%#zx snapshotEpoch=%llu liveBytes=%zu",
+                         role, object, region, static_cast<unsigned>(region->GetRegionType()),
+                         static_cast<unsigned>(region->IsUnmovableFromRegion()),
+                         static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->GetYoungAge()),
+                         static_cast<unsigned>(region->GetRouteState()), static_cast<unsigned>(region->IsFromRegion()),
+                         static_cast<unsigned>(region->IsGhostFromRegion()),
+                         static_cast<size_t>(region->GetRegionStart()), static_cast<size_t>(region->GetRegionEnd()),
+                         static_cast<size_t>(region->GetRegionAllocPtr()),
+                         static_cast<unsigned long long>(region->GetSnapshotEpoch()), region->GetLiveByteCount());
+                };
+
+                const GCPhase phase = GetGCPhase();
+                const uint64_t gcStartNs = GCStats::GetPrevGCStartTime();
+                VLOG(REPORT,
+                     "[GCV2][F3_REGION] target=%p field=%p holder=%p targetInHeap=%u holderInHeap=%u "
+                     "unit.inGhostFromRegion=%u selectedBranch=%s targetCurrent=%p targetGhost=%p selected=%p "
+                     "phase=%s(%u) completedGcCount=%zu gcStartNs=%llu",
+                     target, &field, obj, static_cast<unsigned>(targetInHeap), static_cast<unsigned>(holderInHeap),
+                     static_cast<unsigned>(targetInGhost), targetInGhost ? "ghost" : "current", targetCurrent,
+                     targetGhost, selectedTargetRegion, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+                     g_gcCount, static_cast<unsigned long long>(gcStartNs));
+                dumpRegion("target_current_pre_find", target, targetCurrent);
+                dumpRegion("target_ghost_pre_find", target, targetGhost);
+                dumpRegion("holder_current", obj, holderCurrent);
+                dumpRegion("holder_ghost", obj, holderGhost);
+
+                char targetClear[384];
+                char holderClear[384];
+                const bool targetWasCleared = targetInHeap &&
+                    TraceClear::Lookup(reinterpret_cast<MAddress>(target), targetClear, sizeof(targetClear));
+                const bool holderWasCleared = holderInHeap &&
+                    TraceClear::Lookup(reinterpret_cast<MAddress>(obj), holderClear, sizeof(holderClear));
+                if (!targetInHeap) {
+                    std::snprintf(targetClear, sizeof(targetClear), "NOT_AVAILABLE_target_not_in_heap");
+                }
+                if (!holderInHeap) {
+                    std::snprintf(holderClear, sizeof(holderClear), "NOT_AVAILABLE_holder_not_in_heap");
+                }
+                VLOG(REPORT,
+                     "[GCV2][F3_REGION][lifecycle] targetClearedRecent=%u targetClear={%s} "
+                     "holderClearedRecent=%u holderClear={%s} "
+                     "targetRecycledSinceForward=NOT_AVAILABLE_no_forward_start_snapshotEpoch_baseline",
+                     static_cast<unsigned>(targetWasCleared), targetClear, static_cast<unsigned>(holderWasCleared),
+                     holderClear);
+
+                char ghostReclaim[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char dirtyTake[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char garbageReuse[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char clearGhost[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char dispel[384] = "NOT_AVAILABLE_target_not_in_heap";
+                const bool targetGhostReclaimed = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "ghost_reclaim", gcStartNs, ghostReclaim,
+                    sizeof(ghostReclaim));
+                const bool targetDirtyTaken = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "dirty_take", gcStartNs, dirtyTake, sizeof(dirtyTake));
+                const bool targetGarbageReused = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "garbage_reuse", gcStartNs, garbageReuse,
+                    sizeof(garbageReuse));
+                const bool targetGhostCleared = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "clear_ghost", gcStartNs, clearGhost,
+                    sizeof(clearGhost));
+                const bool targetDispelled = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "dispel", gcStartNs, dispel, sizeof(dispel));
+                VLOG(REPORT,
+                     "[GCV2][F3_REGION][supply-path] ghostReclaim=%u dirtyTake=%u garbageReuse=%u "
+                     "clearGhost=%u dispel=%u pathConfirmedGhostReclaimDirtyReuse=%u "
+                     "ghostReclaim={%s} dirtyTake={%s} garbageReuse={%s} clearGhost={%s} dispel={%s}",
+                     static_cast<unsigned>(targetGhostReclaimed), static_cast<unsigned>(targetDirtyTaken),
+                     static_cast<unsigned>(targetGarbageReused), static_cast<unsigned>(targetGhostCleared),
+                     static_cast<unsigned>(targetDispelled),
+                     static_cast<unsigned>(targetGhostReclaimed && targetDirtyTaken), ghostReclaim, dirtyTake,
+                     garbageReuse, clearGhost, dispel);
+
+                BaseObject* toVersion = targetInHeap ? FindToVersion(target) : nullptr;
+                const bool toInHeap = toVersion != nullptr && Heap::IsHeapAddress(toVersion);
+                const int toValid = toInHeap ? static_cast<int>(toVersion->IsValidObject()) : -1;
+                RegionInfo* toRegion = toInHeap
+                    ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toVersion))
+                    : nullptr;
+                VLOG(REPORT,
+                     "[GCV2][F3_REGION][forward] FindToVersion=%p toInHeap=%u toValid=%d "
+                     "findMayRouteRegion=%u TryForwardObject=NOT_CALLED_side_effectful_RouteRegion_and_object_copy",
+                     toVersion, static_cast<unsigned>(toInHeap), toValid, static_cast<unsigned>(targetInHeap));
+                dumpRegion("to_version_after_find", toVersion, toRegion);
+                dumpRegion("target_ghost_after_find", target, targetGhost);
+            }
+        }
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);

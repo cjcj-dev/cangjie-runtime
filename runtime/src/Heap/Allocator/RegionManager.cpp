@@ -969,24 +969,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     RequestForRegion(size);
 
 #if !defined(__OHOS__)
-    // Prefer non-ghost garbage: payload ClearUnits does not clear unit metadata ghost bits.
-    // Reusing a still-ghost region makes new objects look like ghost-from until dispel
-    // (RegionInfo.h:PrepareForwardableRegion). Skip ghost heads into ReclaimRegion;
-    // Dispel runs on next PrepareFromRegionList before any new ghost is installed.
-    for (size_t ghostSkip = 0; ghostSkip < 64; ++ghostSkip) {
-        RegionInfo* head = garbageRegionList.TakeHeadRegion();
-        if (head == nullptr) {
-            break;
-        }
-        DLOG(REGION, "take garbage region %p@[%#zx, %#zx) ghost=%u", head, head->GetRegionStart(),
-             head->GetRegionEnd(), static_cast<unsigned>(head->IsGhostFromRegion()));
-        if (head->IsGhostFromRegion()) {
-            DLOG(REGION, "defer ghost garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(),
-                 head->GetRegionEnd());
-            ReclaimRegion(head);
-            continue;
-        }
+    size_t gatedBytes = 0;
+    RegionInfo* head = TakeReclaimableGarbageRegion(&gatedBytes);
+    if (head != nullptr) {
+        DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
+            TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
+                                        head->GetLiveByteCount(),
+                                        static_cast<unsigned int>(head->IsGhostFromRegion()),
+                                        static_cast<unsigned int>(head->GetRegionType()),
+                                        static_cast<unsigned int>(head->GetRouteState()));
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -995,8 +987,9 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             ReclaimRegion(head);
         }
-        break;
     }
+#else
+    size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
     RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
@@ -1032,6 +1025,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         }
     }
 
+    if (gatedBytes > 0) {
+        static std::atomic<size_t> supplyGatedPressureCount { 0 };
+        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((n & (n - 1)) == 0) {
+            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
+        }
+    }
     return nullptr;
 }
 

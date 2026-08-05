@@ -51,6 +51,12 @@ public:
                 bool dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
 #endif
                 if (dirtyOk) {
+                    MAddress start = RegionInfo::GetUnitAddress(idx);
+                    RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
+                    TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
+                                                static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
+                                                static_cast<unsigned int>(dirtyRegion->GetRegionType()),
+                                                static_cast<unsigned int>(dirtyRegion->GetRouteState()));
                     DLOG(REGION, "c-tree %p alloc dirty units[%u+%u, %u) @[0x%zx, 0x%zx), %u dirty-units left",
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
