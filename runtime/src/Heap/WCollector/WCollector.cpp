@@ -3310,13 +3310,13 @@ void WCollector::DoYoungGarbageCollection()
                 BaseObject* referent = ResolveMinorReference(*referentField);
                 if (Heap::IsHeapAddress(referent)) {
                     referent->ForEachRefField(
-                        [&dualPush, &dualStack](RefField<>& field) {
+                        [this, &dualPush, &dualStack](RefField<>& field) {
                             dualPush(ResolveMinorReference(field), dualStack);
                         });
                 }
                 continue;
             }
-            object->ForEachRefField([&dualPush, &dualStack](RefField<>& field) {
+            object->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
                 dualPush(ResolveMinorReference(field), dualStack);
             });
         }
