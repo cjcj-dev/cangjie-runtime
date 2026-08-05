@@ -664,110 +664,92 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     size_t staticHits = 0;
 
                     // 1) STACK: precise roots + conservative word scan of each mutator stack
-                    try {
-                        MutatorManager::Instance().VisitAllMutators(
-                            [holderObj, &foundStack, &stackWords](Mutator& mut) {
-                                // Precise stack roots (stackmap-driven; miss frames skipped)
-                                mut.VisitStackRoots([&](ObjectRef& root) {
-                                    BaseObject* o = root.object;
-                                    if (o == nullptr) {
-                                        return;
-                                    }
-                                    if (!Heap::IsHeapAddress(o)) {
-                                        return;
-                                    }
-                                    // GetTargetObject-style: RefField strips tag when constructed
-                                    RefField<> rf(reinterpret_cast<MAddress>(o));
-                                    BaseObject* tgt = rf.GetTargetObject();
-                                    if (tgt == holderObj || o == holderObj) {
-                                        foundStack = 1;
-                                    }
-                                });
-                                // Conservative: word scan [stackTop, stackTop+size)
-                                uintptr_t top = mut.GetStackTopAddr();
-                                uintptr_t sz = mut.GetStackSize();
-                                if (top == 0 || sz == 0 || sz > (1ull << 28)) {
+                    // (no try/catch: runtime is -fno-exceptions)
+                    MutatorManager::Instance().VisitAllMutators(
+                        [holderObj, &foundStack, &stackWords](Mutator& mut) {
+                            mut.VisitStackRoots([&](ObjectRef& root) {
+                                BaseObject* o = root.object;
+                                if (o == nullptr) {
                                     return;
                                 }
-                                const size_t words = sz / sizeof(void*);
-                                auto* base = reinterpret_cast<void**>(top);
-                                for (size_t i = 0; i < words; ++i) {
-                                    ++stackWords;
-                                    void* w = base[i];
-                                    if (w == nullptr) {
-                                        continue;
-                                    }
-                                    if (!Heap::IsHeapAddress(w)) {
-                                        // try strip tag via RefField
-                                        RefField<> rf(reinterpret_cast<MAddress>(w));
-                                        BaseObject* tgt = rf.GetTargetObject();
-                                        if (tgt == holderObj) {
-                                            foundStack = 1;
-                                            return;
-                                        }
-                                        continue;
-                                    }
-                                    if (w == holderObj) {
-                                        foundStack = 1;
-                                        return;
-                                    }
-                                    RefField<> rf(reinterpret_cast<MAddress>(w));
-                                    if (rf.GetTargetObject() == holderObj) {
-                                        foundStack = 1;
-                                        return;
-                                    }
+                                if (o == holderObj) {
+                                    foundStack = 1;
+                                    return;
+                                }
+                                if (!Heap::IsHeapAddress(o)) {
+                                    return;
                                 }
                             });
-                    } catch (...) {
-                        // diagnostic only; never throw into product path
-                    }
+                            // Conservative: word scan [stackTop, stackTop+size)
+                            uintptr_t top = mut.GetStackTopAddr();
+                            uintptr_t sz = mut.GetStackSize();
+                            if (top == 0 || sz == 0 || sz > (1ull << 28)) {
+                                return;
+                            }
+                            const size_t words = sz / sizeof(void*);
+                            auto* base = reinterpret_cast<void**>(top);
+                            for (size_t i = 0; i < words; ++i) {
+                                ++stackWords;
+                                void* w = base[i];
+                                if (w == nullptr) {
+                                    continue;
+                                }
+                                if (w == holderObj) {
+                                    foundStack = 1;
+                                    return;
+                                }
+                                // tagged: low 48 bits address field via RefField bit layout
+                                if (Heap::IsHeapAddress(w)) {
+                                    continue; // already compared equality
+                                }
+                                RefField<> rf(reinterpret_cast<MAddress>(w));
+                                if (rf.IsTagged() && rf.GetTargetObject() == holderObj) {
+                                    foundStack = 1;
+                                    return;
+                                }
+                            }
+                        });
 
                     // 2) STATIC roots
-                    try {
-                        Heap::GetHeap().VisitStaticRoots(
-                            [holderObj, &foundStatic, &staticHits](RefField<>& rf) {
-                                ++staticHits;
-                                BaseObject* tgt = rf.GetTargetObject();
-                                if (tgt == holderObj) {
-                                    foundStatic = 1;
-                                }
-                            });
-                    } catch (...) {
-                    }
+                    Heap::GetHeap().VisitStaticRoots(
+                        [holderObj, &foundStatic, &staticHits](RefField<>& rf) {
+                            ++staticHits;
+                            BaseObject* tgt = rf.GetTargetObject();
+                            if (tgt == holderObj) {
+                                foundStatic = 1;
+                            }
+                        });
 
                     // 3) HEAP reverse edges: full ForEachObj + ForEachRefField
-                    try {
-                        Heap::GetHeap().ForEachObj(
-                            [holderObj, &foundHeap, &sampleHeapReferrer, &sampleHeapSlot, &sampleHeapMarked,
-                             &heapScanN](BaseObject* cand) {
-                                if (cand == nullptr || cand == holderObj) {
+                    Heap::GetHeap().ForEachObj(
+                        [holderObj, &foundHeap, &sampleHeapReferrer, &sampleHeapSlot, &sampleHeapMarked,
+                         &heapScanN](BaseObject* cand) {
+                            if (cand == nullptr || cand == holderObj) {
+                                return;
+                            }
+                            if (!cand->IsValidObject()) {
+                                return;
+                            }
+                            ++heapScanN;
+                            if (!cand->HasRefField()) {
+                                return;
+                            }
+                            cand->ForEachRefField([holderObj, cand, &foundHeap, &sampleHeapReferrer,
+                                                   &sampleHeapSlot, &sampleHeapMarked](RefField<>& rf) {
+                                BaseObject* tgt = rf.GetTargetObject();
+                                if (tgt != holderObj) {
                                     return;
                                 }
-                                if (!cand->IsValidObject()) {
-                                    return;
+                                foundHeap = 1;
+                                if (sampleHeapReferrer == nullptr) {
+                                    sampleHeapReferrer = cand;
+                                    sampleHeapSlot = reinterpret_cast<MAddress>(&rf);
+                                    sampleHeapMarked =
+                                        static_cast<int>(RegionSpace::IsMarkedObject(cand));
                                 }
-                                ++heapScanN;
-                                if (!cand->HasRefField()) {
-                                    return;
-                                }
-                                cand->ForEachRefField([holderObj, cand, &foundHeap, &sampleHeapReferrer,
-                                                       &sampleHeapSlot, &sampleHeapMarked](RefField<>& rf) {
-                                    BaseObject* tgt = rf.GetTargetObject();
-                                    if (tgt != holderObj) {
-                                        return;
-                                    }
-                                    foundHeap = 1;
-                                    if (sampleHeapReferrer == nullptr) {
-                                        sampleHeapReferrer = cand;
-                                        sampleHeapSlot = reinterpret_cast<MAddress>(&rf);
-                                        sampleHeapMarked =
-                                            static_cast<int>(RegionSpace::IsMarkedObject(cand));
-                                    }
-                                });
-                            },
-                            false);
-                    } catch (...) {
-                    }
+                            });
+                        },
+                        false);
 
                     const char* klass = "NO_HOLDER";
                     if (foundStack) {
