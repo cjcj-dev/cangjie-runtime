@@ -29,6 +29,7 @@
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Base/SysCall.h"
 #endif
+#include "Base/GcLog.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
@@ -52,6 +53,73 @@
 
 namespace MapleRuntime {
 namespace {
+class MinorPhaseBuffer;
+thread_local MinorPhaseBuffer* gMinorPhaseBuffer = nullptr;
+
+class MinorPhaseBuffer {
+public:
+    MinorPhaseBuffer() : enabled(GcLog::Enabled()), previous(gMinorPhaseBuffer)
+    {
+        if (enabled) {
+            gMinorPhaseBuffer = this;
+        }
+    }
+
+    ~MinorPhaseBuffer()
+    {
+        if (!enabled) {
+            return;
+        }
+        gMinorPhaseBuffer = previous;
+        for (size_t i = 0; i < size; ++i) {
+            GcLog::Phase(records[i].name, records[i].us);
+        }
+    }
+
+    void Record(const char* name, uint64_t us)
+    {
+        CHECK_DETAIL(size < records.size(), "minor phase buffer overflow: capacity=%zu", records.size());
+        records[size].name = name;
+        records[size].us = us;
+        ++size;
+    }
+
+private:
+    struct RecordEntry {
+        const char* name = nullptr;
+        uint64_t us = 0;
+    };
+
+    bool enabled = false;
+    MinorPhaseBuffer* previous = nullptr;
+    std::array<RecordEntry, 32> records{};
+    size_t size = 0;
+};
+
+class MinorPhaseTimer {
+public:
+    explicit MinorPhaseTimer(const char* phaseName) : buffer(gMinorPhaseBuffer), name(phaseName)
+    {
+        if (buffer != nullptr) {
+            startUs = TimeUtil::MicroSeconds();
+        }
+    }
+
+    ~MinorPhaseTimer()
+    {
+        if (buffer != nullptr) {
+            buffer->Record(name, TimeUtil::MicroSeconds() - startUs);
+        }
+    }
+
+private:
+    MinorPhaseBuffer* buffer = nullptr;
+    const char* name = nullptr;
+    uint64_t startUs = 0;
+};
+
+#define MRT_MINOR_PHASE_TIMER(name) MinorPhaseTimer MRT_minor_pt_##__LINE__(name)
+
 // T1 ledger-cost probe (setbitmap O1③): default off.
 // MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
 // MRT_GCV2_LEDGER_COST=2 → count only (no NanoSeconds; for overhead control)
@@ -2460,7 +2528,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
-        MRT_PHASE_TIMER("young.ref_fix");
+        MRT_MINOR_PHASE_TIMER("young.ref_fix");
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
         GCThreadPool* threadPool = GetThreadPool();
@@ -2510,7 +2578,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minortime: ⑥ copy / forward
-        MRT_PHASE_TIMER("young.copy");
+        MRT_MINOR_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
@@ -2525,7 +2593,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     size_t promotedPathRecords = 0;
     {
         // minorstw: residual young-region promotion and its cross-generation edge replay.
-        MRT_PHASE_TIMER("young.promote_residual");
+        MRT_MINOR_PHASE_TIMER("young.promote_residual");
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
@@ -2571,7 +2639,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     size_t liveYoungRegions = 0;
     {
         // minorstw: rebuild old-to-young edges only while a live young region remains.
-        MRT_PHASE_TIMER("young.remset_rebuild");
+        MRT_MINOR_PHASE_TIMER("young.remset_rebuild");
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
         // live young region count is the product-path authority
         // (RegionInfo::youngRegionCount / GetYoungRegionCount —
@@ -2618,13 +2686,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
     {
         // minorstw: retire the prior forwarding generation before rebuilding region lists.
-        MRT_PHASE_TIMER("young.forward_table_reset");
+        MRT_MINOR_PHASE_TIMER("young.forward_table_reset");
         fwdTable.PrepareForwardTable();
         ValidateMinorReferences("after-dispel", nullptr);
     }
     {
         // minorstw: publish the surviving from-space regions back to the region manager.
-        MRT_PHASE_TIMER("young.reassemble_space");
+        MRT_MINOR_PHASE_TIMER("young.reassemble_space");
         manager.ReassembleFromSpace();
     }
 }
@@ -3114,6 +3182,8 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    // Declared before the STW guard so destruction resumes mutators before phase records are emitted.
+    MinorPhaseBuffer phaseBuffer;
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
@@ -3131,7 +3201,7 @@ void WCollector::DoYoungGarbageCollection()
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     {
         // minortime: ① FlushAllocationRegions
-        MRT_PHASE_TIMER("young.flush_alloc");
+        MRT_MINOR_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
     }
     if (minorTotalRuns != 0) {
@@ -3144,7 +3214,7 @@ void WCollector::DoYoungGarbageCollection()
     YoungCollectionStats stats;
     {
         // minortime: ② PrepareYoungGarbageCandidates
-        MRT_PHASE_TIMER("young.prepare_candidates");
+        MRT_MINOR_PHASE_TIMER("young.prepare_candidates");
         stats = manager.PrepareYoungGarbageCandidates(
             [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
     }
@@ -3175,7 +3245,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
-        MRT_PHASE_TIMER("young.remset_drain");
+        MRT_MINOR_PHASE_TIMER("young.remset_drain");
         size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
         if (pinnedRemsetRecords != 0) {
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
@@ -3202,7 +3272,7 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet weakSlots;
     {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
-        MRT_PHASE_TIMER("young.root_enum");
+        MRT_MINOR_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
         while (!enumRoots.empty()) {
@@ -3233,7 +3303,7 @@ void WCollector::DoYoungGarbageCollection()
     g_minorLedgerCost.Reset();
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
-        MRT_PHASE_TIMER("young.mark_closure");
+        MRT_MINOR_PHASE_TIMER("young.mark_closure");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
@@ -3253,12 +3323,12 @@ void WCollector::DoYoungGarbageCollection()
     MinorSlotSet consumedSlots;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
-        MRT_PHASE_TIMER("young.remset_rescan");
+        MRT_MINOR_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                             &remsetStats);
     }
     {
-        MRT_PHASE_TIMER("young.mark_from_remset");
+        MRT_MINOR_PHASE_TIMER("young.mark_from_remset");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
@@ -3407,7 +3477,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
-        MRT_PHASE_TIMER("young.pre_evac_clear");
+        MRT_MINOR_PHASE_TIMER("young.pre_evac_clear");
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         WeakRefBuffer::Instance().ClearWeakRefBuffer();
         SatbBuffer::Instance().ClearBuffer();
@@ -3441,7 +3511,7 @@ void WCollector::DoYoungGarbageCollection()
 
     {
         // minortime: ⑧ post-evac finish
-        MRT_PHASE_TIMER("young.post_evac_finish");
+        MRT_MINOR_PHASE_TIMER("young.post_evac_finish");
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
         MergeResurrectExportObjects();
     }
