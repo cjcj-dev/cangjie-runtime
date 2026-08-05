@@ -277,7 +277,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      static_cast<unsigned>(targetWasCleared), targetClear, static_cast<unsigned>(holderWasCleared),
                      holderClear);
 
-                BaseObject* toVersion = FindToVersion(target);
+                BaseObject* toVersion = targetInHeap ? FindToVersion(target) : nullptr;
                 const bool toInHeap = toVersion != nullptr && Heap::IsHeapAddress(toVersion);
                 const int toValid = toInHeap ? static_cast<int>(toVersion->IsValidObject()) : -1;
                 RegionInfo* toRegion = toInHeap
@@ -285,8 +285,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     : nullptr;
                 VLOG(REPORT,
                      "[GCV2][F3_REGION][forward] FindToVersion=%p toInHeap=%u toValid=%d "
-                     "findMayRouteRegion=1 TryForwardObject=NOT_CALLED_side_effectful_RouteRegion_and_object_copy",
-                     toVersion, static_cast<unsigned>(toInHeap), toValid);
+                     "findMayRouteRegion=%u TryForwardObject=NOT_CALLED_side_effectful_RouteRegion_and_object_copy",
+                     toVersion, static_cast<unsigned>(toInHeap), toValid, static_cast<unsigned>(targetInHeap));
                 dumpRegion("to_version_after_find", toVersion, toRegion);
                 dumpRegion("target_ghost_after_find", target, targetGhost);
             }
