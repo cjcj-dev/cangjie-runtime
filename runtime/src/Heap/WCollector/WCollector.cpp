@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -51,6 +52,248 @@
 #endif
 
 namespace MapleRuntime {
+
+// rootshard T1/T2 probe (env MRT_GCV2_ROOTSHARD_PROBE=1, default off).
+// Records (slot, family) visits + CAS (slot, expected, new, family, ok) for
+// cross-family overlap / new-value divergence under A2 root-side parallel.
+namespace RootShardProbe {
+constexpr int kFamMutator = 0;
+constexpr int kFamStatic = 1;
+constexpr int kFamConcurrency = 2;
+constexpr int kFamFinalizerGC = 3;
+constexpr int kFamFinalizerFin = 4;
+constexpr int kFamExport = 5;
+constexpr int kFamCount = 6;
+constexpr const char* kFamName[kFamCount] = {
+    "mutator", "static", "concurrency", "finalizer_gc", "finalizer_fin", "export"
+};
+
+inline bool Enabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_ROOTSHARD_PROBE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+struct VisitRec {
+    uintptr_t slot = 0;
+    uint8_t fam = 0;
+};
+struct CasRec {
+    uintptr_t slot = 0;
+    uintptr_t expected = 0;
+    uintptr_t neu = 0;
+    uint8_t fam = 0;
+    uint8_t ok = 0;
+};
+
+constexpr size_t kMaxVisit = 1u << 20; // 1M
+constexpr size_t kMaxCas = 1u << 18;   // 256K
+
+struct State {
+    std::atomic<size_t> visitN{0};
+    std::atomic<size_t> casN{0};
+    std::atomic<size_t> visitDrop{0};
+    std::atomic<size_t> casDrop{0};
+    VisitRec visits[kMaxVisit];
+    CasRec cas[kMaxCas];
+    std::atomic<int> famActive{-1}; // TLS-like via thread_local below
+};
+
+inline State& S()
+{
+    static State* p = new State();
+    return *p;
+}
+
+inline thread_local int tFam = -1;
+
+inline void SetFamily(int fam) { tFam = fam; }
+inline int GetFamily() { return tFam; }
+
+inline void NoteVisit(const void* slot)
+{
+    if (!Enabled() || slot == nullptr) {
+        return;
+    }
+    int fam = tFam;
+    if (fam < 0 || fam >= kFamCount) {
+        return;
+    }
+    size_t i = S().visitN.fetch_add(1, std::memory_order_relaxed);
+    if (i >= kMaxVisit) {
+        S().visitDrop.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    S().visits[i] = VisitRec{reinterpret_cast<uintptr_t>(slot), static_cast<uint8_t>(fam)};
+}
+
+inline void NoteCas(const void* slot, uintptr_t expected, uintptr_t neu, bool ok)
+{
+    if (!Enabled() || slot == nullptr) {
+        return;
+    }
+    int fam = tFam;
+    if (fam < 0 || fam >= kFamCount) {
+        return;
+    }
+    size_t i = S().casN.fetch_add(1, std::memory_order_relaxed);
+    if (i >= kMaxCas) {
+        S().casDrop.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    S().cas[i] = CasRec{reinterpret_cast<uintptr_t>(slot), expected, neu, static_cast<uint8_t>(fam),
+                        static_cast<uint8_t>(ok ? 1 : 0)};
+}
+
+inline void Reset()
+{
+    if (!Enabled()) {
+        return;
+    }
+    S().visitN.store(0, std::memory_order_relaxed);
+    S().casN.store(0, std::memory_order_relaxed);
+    S().visitDrop.store(0, std::memory_order_relaxed);
+    S().casDrop.store(0, std::memory_order_relaxed);
+}
+
+inline void ReportAndClear(const char* phase)
+{
+    if (!Enabled()) {
+        return;
+    }
+    size_t vn = std::min(S().visitN.load(std::memory_order_relaxed), kMaxVisit);
+    size_t cn = std::min(S().casN.load(std::memory_order_relaxed), kMaxCas);
+
+    // slot -> bitmask of families
+    std::unordered_map<uintptr_t, uint8_t> slotMask;
+    slotMask.reserve(vn / 2 + 1);
+    size_t famCounts[kFamCount] = {};
+    for (size_t i = 0; i < vn; ++i) {
+        const auto& r = S().visits[i];
+        if (r.fam < kFamCount) {
+            ++famCounts[r.fam];
+            slotMask[r.slot] |= static_cast<uint8_t>(1u << r.fam);
+        }
+    }
+
+    size_t multiSlots = 0;
+    size_t pairCounts[kFamCount][kFamCount] = {};
+    std::vector<std::pair<uintptr_t, uint8_t>> multiList;
+    multiList.reserve(64);
+    for (const auto& kv : slotMask) {
+        uint8_t m = kv.second;
+        int bits = 0;
+        int ids[kFamCount];
+        for (int f = 0; f < kFamCount; ++f) {
+            if (m & (1u << f)) {
+                ids[bits++] = f;
+            }
+        }
+        if (bits < 2) {
+            continue;
+        }
+        ++multiSlots;
+        if (multiList.size() < 32) {
+            multiList.emplace_back(kv.first, m);
+        }
+        for (int a = 0; a < bits; ++a) {
+            for (int b = a + 1; b < bits; ++b) {
+                ++pairCounts[ids[a]][ids[b]];
+            }
+        }
+    }
+
+    // CAS: per-slot set of distinct new values + fail counts
+    struct CasAgg {
+        uintptr_t news[4] = {};
+        uint8_t nNews = 0;
+        uint8_t fams = 0;
+        size_t okN = 0;
+        size_t failN = 0;
+    };
+    std::unordered_map<uintptr_t, CasAgg> casMap;
+    casMap.reserve(cn / 2 + 1);
+    size_t casFail = 0;
+    size_t casOk = 0;
+    size_t divergentSlots = 0;
+    size_t multiFamCasSlots = 0;
+    for (size_t i = 0; i < cn; ++i) {
+        const auto& r = S().cas[i];
+        auto& a = casMap[r.slot];
+        a.fams |= static_cast<uint8_t>(1u << r.fam);
+        if (r.ok) {
+            ++a.okN;
+            ++casOk;
+        } else {
+            ++a.failN;
+            ++casFail;
+        }
+        bool seen = false;
+        for (uint8_t j = 0; j < a.nNews; ++j) {
+            if (a.news[j] == r.neu) {
+                seen = true;
+                break;
+            }
+        }
+        if (!seen && a.nNews < 4) {
+            a.news[a.nNews++] = r.neu;
+        }
+    }
+    for (const auto& kv : casMap) {
+        if (kv.second.nNews > 1) {
+            ++divergentSlots;
+        }
+        int bits = 0;
+        for (int f = 0; f < kFamCount; ++f) {
+            if (kv.second.fams & (1u << f)) {
+                ++bits;
+            }
+        }
+        if (bits > 1) {
+            ++multiFamCasSlots;
+        }
+    }
+
+    VLOG(REPORT,
+         "[ROOTSHARD] phase=%s visits=%zu cas=%zu visit_drop=%zu cas_drop=%zu "
+         "fam=[%zu,%zu,%zu,%zu,%zu,%zu] multi_slots=%zu cas_ok=%zu cas_fail=%zu "
+         "cas_divergent_slots=%zu cas_multi_fam_slots=%zu",
+         phase, vn, cn, S().visitDrop.load(std::memory_order_relaxed),
+         S().casDrop.load(std::memory_order_relaxed), famCounts[0], famCounts[1], famCounts[2], famCounts[3],
+         famCounts[4], famCounts[5], multiSlots, casOk, casFail, divergentSlots, multiFamCasSlots);
+
+    for (int a = 0; a < kFamCount; ++a) {
+        for (int b = a + 1; b < kFamCount; ++b) {
+            if (pairCounts[a][b] != 0) {
+                VLOG(REPORT, "[ROOTSHARD][pair] %s+%s slots=%zu", kFamName[a], kFamName[b], pairCounts[a][b]);
+            }
+        }
+    }
+    for (size_t i = 0; i < multiList.size(); ++i) {
+        VLOG(REPORT, "[ROOTSHARD][slot] addr=%#zx mask=%u", multiList[i].first,
+             static_cast<unsigned>(multiList[i].second));
+    }
+    // Sample divergent CAS if any
+    size_t shown = 0;
+    for (const auto& kv : casMap) {
+        if (kv.second.nNews <= 1) {
+            continue;
+        }
+        VLOG(REPORT, "[ROOTSHARD][div] slot=%#zx nNews=%u ok=%zu fail=%zu fams=%u n0=%#zx n1=%#zx", kv.first,
+             static_cast<unsigned>(kv.second.nNews), kv.second.okN, kv.second.failN,
+             static_cast<unsigned>(kv.second.fams), kv.second.news[0],
+             kv.second.nNews > 1 ? kv.second.news[1] : 0);
+        if (++shown >= 16) {
+            break;
+        }
+    }
+    Reset();
+}
+} // namespace RootShardProbe
+
 namespace {
 // T1 ledger-cost probe (setbitmap O1③): default off.
 // MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
@@ -918,7 +1161,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                  holder, &field, fromObj, latest);
         }
         RefField<> nullField(nullptr);
-        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+        bool casOk = field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+        RootShardProbe::NoteCas(&field, oldField.GetFieldValue(), nullField.GetFieldValue(), casOk);
         return;
     }
     // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
@@ -927,7 +1171,9 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
-    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+    bool casOk = field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+    RootShardProbe::NoteCas(&field, oldField.GetFieldValue(), newField.GetFieldValue(), casOk);
+    if (casOk) {
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
              oldField.GetFieldValue(), newField.GetFieldValue(), latest);
     }
@@ -1015,6 +1261,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
         return [this, trackFixed, acc](ObjectRef& root) {
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            RootShardProbe::NoteVisit(&field);
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
@@ -1031,6 +1278,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     };
     auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
         return [this, trackFixed, acc](RefField<>& field) {
+            RootShardProbe::NoteVisit(&field);
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
@@ -1269,16 +1517,25 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         VLOG(REPORT, "[F3][parallel] fallback=serial pool_unavailable");
         // Six root families serial (same order as before).
         {
+            RootShardProbe::Reset();
             RootAccount acc;
             RootVisitor fixRoot = makeRootVisitor(&acc);
             RefFieldVisitor fixRootField = makeRootFieldVisitor(&acc);
+            RootShardProbe::SetFamily(RootShardProbe::kFamMutator);
             MutatorManager::Instance().VisitAllMutators(
                 [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+            RootShardProbe::SetFamily(RootShardProbe::kFamStatic);
             Heap::GetHeap().VisitStaticRoots(fixRootField);
+            RootShardProbe::SetFamily(RootShardProbe::kFamConcurrency);
             Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+            RootShardProbe::SetFamily(RootShardProbe::kFamFinalizerGC);
             collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+            RootShardProbe::SetFamily(RootShardProbe::kFamFinalizerFin);
             collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+            RootShardProbe::SetFamily(RootShardProbe::kFamExport);
             Heap::GetHeap().VisitAllExportRoots(fixRoot);
+            RootShardProbe::SetFamily(-1);
+            RootShardProbe::ReportAndClear(requireSurvivedMark ? "preflip-serial" : "postflip-serial");
             rootTotals.rootSlots += acc.rootSlots;
             rootTotals.oldTaggedRootSlots += acc.oldTaggedRootSlots;
             rootTotals.fixedRootSlots += acc.fixedRootSlots;
@@ -1318,30 +1575,43 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
         // Roots first into queue, then heap workers. Start after all AddWork so helpers
         // see the full batch (same shape as Preforward: AddWork×N then Start then WaitFinish).
+        RootShardProbe::Reset();
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamMutator);
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[0]);
             MutatorManager::Instance().VisitAllMutators(
                 [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+            RootShardProbe::SetFamily(-1);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootFieldVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamStatic);
             RefFieldVisitor fixRootField = makeRootFieldVisitor(&rootAcc[1]);
             Heap::GetHeap().VisitStaticRoots(fixRootField);
+            RootShardProbe::SetFamily(-1);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamConcurrency);
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[2]);
             Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+            RootShardProbe::SetFamily(-1);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamFinalizerGC);
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[3]);
             collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+            RootShardProbe::SetFamily(-1);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamFinalizerFin);
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[4]);
             collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+            RootShardProbe::SetFamily(-1);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootShardProbe::SetFamily(RootShardProbe::kFamExport);
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[5]);
             Heap::GetHeap().VisitAllExportRoots(fixRoot);
+            RootShardProbe::SetFamily(-1);
         }));
 
         for (int32_t i = 0; i < heapWorkers; ++i) {
@@ -1352,6 +1622,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
         threadPool->Start();
         threadPool->WaitFinish();
+        RootShardProbe::ReportAndClear(requireSurvivedMark ? "preflip" : "postflip");
 
         for (const auto& a : rootAcc) {
             rootTotals.rootSlots += a.rootSlots;
