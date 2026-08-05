@@ -895,6 +895,12 @@ public:
     }
     void ClearLiveInfo()
     {
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
+        }
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "ClearLiveInfo must be called on a region head");
         BumpSnapshotEpoch();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
