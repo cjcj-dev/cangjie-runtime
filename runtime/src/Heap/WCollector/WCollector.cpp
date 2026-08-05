@@ -39,6 +39,7 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/B2RingProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -351,6 +352,8 @@ template<bool forward>
 bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseObject*& fromObj,
                                        BaseObject*& toObj) const
 {
+    B2RingProbe::ScopedInstallPath scopedPath(
+        forward ? "TryForwardRefField" : "TryUpdateRefFieldImpl");
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
         fromObj = oldRef.GetTargetObject();
@@ -402,6 +405,7 @@ bool WCollector::TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObje
 // this api untags current pointer as well as old pointer, caller should take care of this.
 bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const
 {
+    B2RingProbe::ScopedInstallPath scopedPath("TryUntagRefField");
     for (;;) {
         RefField<> oldRef(field);
         if (!oldRef.IsTagged()) {
@@ -891,6 +895,7 @@ void WCollector::TraceHeap()
 
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 {
+    B2RingProbe::ScopedInstallPath scopedPath("FixOldTaggedRefField");
     RefField<> oldField(field);
     if (!IsOldPointer(oldField)) {
         return;
@@ -1605,6 +1610,7 @@ std::atomic<size_t> g_minorRefCasOk{ 0 };
 // On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
 bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
 {
+    B2RingProbe::ScopedInstallPath scopedPath("CasInstallPlainTarget");
     RefField<> desired(plainTarget);
     MAddress desiredVal = desired.GetFieldValue();
     if (expected == desiredVal) {
@@ -2189,6 +2195,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
 {
+    B2RingProbe::ScopedInstallPath scopedPath("FixMinorEvacuatedSlot");
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);

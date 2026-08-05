@@ -10,6 +10,7 @@
 
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
+#include "Heap/Verify/B2RingProbe.h"
 #include "ObjectModel/RefField.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -23,6 +24,9 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
     uintptr_t newVal = newField.GetFieldValue();
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    // b2ring: two-word ring (slot,value) only — full coverage, zero classify.
+    B2RingProbe::NoteInstall(B2RingProbe::CurrentPath(), "SetTargetObject", this, const_cast<BaseObject*>(obj));
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -45,6 +49,9 @@ void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
 {
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newVal).GetAddress());
+    B2RingProbe::NoteInstall(B2RingProbe::CurrentPath(), "SetFieldValue", this, asObj);
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
