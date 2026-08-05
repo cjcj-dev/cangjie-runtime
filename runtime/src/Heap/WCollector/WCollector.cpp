@@ -1799,9 +1799,10 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
         size_t residualPromoteRecords = 0;
-        // Positive-control only (rebuildgate): keep one residual young so live-young
-        // count stays >0 and the rebuild gate must open. Default off — product path
-        // demotes every residual candidate (MINOR_CONCURRENCY_0805 §9.5).
+        // Positive-control only (rebuildgate): force one live young region so the
+        // rebuild gate must open. Prefer leaving a residual young undemoted; if
+        // residualPromote path is empty (product real_load: residual≡0), re-tag
+        // the first minor candidate as young after demote. Default off.
         const char* keepOneYoungEnv = std::getenv("MRT_GCV2_REBUILD_KEEP_ONE_YOUNG");
         const bool keepOneYoung =
             keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
@@ -1818,6 +1819,22 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
                 residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
+            }
+        }
+        if (keepOneYoung && !keptOneYoung) {
+            // No residual young remained (common today). Re-tag one candidate so
+            // GetYoungRegionCount()>0 and the structural gate opens for the dual-arm
+            // positive control. Not a product path.
+            for (RegionInfo* region : minorCandidateRegions) {
+                if (region == nullptr) {
+                    continue;
+                }
+                region->SetYoungRegionFlag(1);
+                keptOneYoung = true;
+                VLOG(REPORT,
+                     "[GCV2Minor][rebuild-gate] positive-control reyoung region=%p",
+                     region);
+                break;
             }
         }
         size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
