@@ -62,6 +62,16 @@ static unsigned long g_swbp_hits = 0;
 static unsigned long g_wp_interior_hits = 0;
 static int g_rr = 0; // round-robin DR slot
 
+// b2bulk: after interior hit, track whether the word sticks (PAYLOAD) or is
+// overwritten by later stores in the same bulk (TRANSIENT).
+static unsigned long g_bulk_slot[MAX_WP];
+static unsigned long g_bulk_interior_val[MAX_WP];
+static unsigned long g_bulk_old_val[MAX_WP];
+static int g_bulk_pending[MAX_WP];
+static unsigned long g_bulk_transient = 0;
+static unsigned long g_bulk_payload = 0;
+static unsigned long g_bulk_unknown = 0;
+
 struct SwBp {
     unsigned long addr;
     unsigned char orig;
@@ -656,6 +666,13 @@ static void setup_after_exec(pid_t pid, const char *base) {
     g_swbp_hits = 0;
     g_wp_interior_hits = 0;
     g_rr = 0;
+    g_bulk_transient = g_bulk_payload = g_bulk_unknown = 0;
+    for (int i = 0; i < MAX_WP; i++) {
+        g_bulk_pending[i] = 0;
+        g_bulk_slot[i] = 0;
+        g_bulk_interior_val[i] = 0;
+        g_bulk_old_val[i] = 0;
+    }
     if (g_midrun_node) {
         // static -w slots cleared; mid-run owns DRs
         g_nwp = 0;
@@ -879,15 +896,89 @@ int main(int argc, char **argv) {
                     const char *cls = ok ? classify_value(w, slotval, &tip_at, &tip_before) : "peek_fail";
                     if (cls && strstr(cls, "interior"))
                         g_wp_interior_hits++;
+                    // Resolve pending bulk-interior: a later write to same slot settles it.
+                    if (g_bulk_pending[i] && g_hits[i] > 1) {
+                        if (slotval != g_bulk_interior_val[i]) {
+                            const char *verdict =
+                                (cls && strstr(cls, "interior")) ? "STILL_INTERIOR_DIFF"
+                                : (cls && strstr(cls, "base_obj")) ? "BECAME_BASE"
+                                : (cls && strstr(cls, "null"))     ? "BECAME_NULL"
+                                                                  : "BECAME_OTHER";
+                            logln("B2BULK_SETTLE slot=%#lx interior_val=%#lx now=%#lx cls=%s verdict=%s "
+                                  "=> TRANSIENT rip=%llx",
+                                  g_wp[i], g_bulk_interior_val[i], slotval, cls ? cls : "?", verdict, r.rip);
+                            g_bulk_transient++;
+                            g_bulk_pending[i] = 0;
+                        }
+                    }
                     // Always log interior writes; throttle others after 1k
                     if (g_hits[i] <= 1000 || (cls && strstr(cls, "interior")) || g_hits[i] <= g_hit_cap) {
                         logln("WP_HIT i=%d tid=%d rip=%llx slot=%#lx val=%#lx cls=%s tip_at=%#lx tip_before=%#lx hit=%lu",
                               i, w, r.rip, g_wp[i], slotval, cls, tip_at, tip_before, g_hits[i]);
                         if (cls && strstr(cls, "interior")) {
+                            unsigned long rdi = (unsigned long)r.rdi;
+                            unsigned long rsi = (unsigned long)r.rsi;
+                            unsigned long rdx = (unsigned long)r.rdx;
+                            unsigned long rcx = (unsigned long)r.rcx;
+                            unsigned long rbx = (unsigned long)r.rbx;
+                            int unaligned = (rdi & 7) != 0;
+                            // Source candidate: ssse3 keeps dest progress in rdi; src base often in rbx/rdx.
+                            // Sample aligned source word that would land on this slot under same offset.
+                            unsigned long src_word = 0, src_addr = 0;
+                            int src_ok = 0;
+                            // Prefer rbx as bulk base (observed on h2/late samples).
+                            unsigned long cand_bases[4] = {rbx, rdx, rsi, 0};
+                            for (int bi = 0; bi < 3; bi++) {
+                                unsigned long base = cand_bases[bi];
+                                if (!base || (base >> 40) != 0x7f)
+                                    continue;
+                                // offset of slot relative to current dest pointer progress
+                                // rdi often = slot|1 mid-copy; align down
+                                unsigned long dest_prog = rdi & ~7UL;
+                                long delta = (long)g_wp[i] - (long)dest_prog;
+                                // try base + (slot - dest_aligned) and base itself
+                                unsigned long try_addrs[3] = {
+                                    base + (unsigned long)(g_wp[i] - (rdi & ~0xFULL)),
+                                    base,
+                                    base + NODE_NEXT_OFF,
+                                };
+                                (void)delta;
+                                for (int ti = 0; ti < 3; ti++) {
+                                    unsigned long sa = try_addrs[ti];
+                                    unsigned long sw = 0;
+                                    if (peek(w, sa, &sw) != 0)
+                                        continue;
+                                    unsigned long ta = 0, tb = 0;
+                                    const char *sc = classify_value(w, sw, &ta, &tb);
+                                    if (sc && strstr(sc, "interior") && sw == slotval) {
+                                        src_word = sw;
+                                        src_addr = sa;
+                                        src_ok = 1;
+                                        break;
+                                    }
+                                }
+                                if (src_ok)
+                                    break;
+                            }
                             logln("WP_INTERIOR_WRITER i=%d rip=%llx slot=%#lx val=%#lx tip_before=%#lx "
-                                  "rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rbp=%llx rsp=%llx",
+                                  "rax=%llx rbx=%llx rcx=%llx rdx=%llx rsi=%llx rdi=%llx rbp=%llx rsp=%llx "
+                                  "unaligned=%d rem_rcx=%llx rem_rdx=%llx",
                                   i, r.rip, g_wp[i], slotval, tip_before, r.rax, r.rbx, r.rcx, r.rdx, r.rsi, r.rdi,
-                                  r.rbp, r.rsp);
+                                  r.rbp, r.rsp, unaligned, rcx, rdx);
+                            if (src_ok)
+                                logln("B2BULK_SRC_MATCH src=%#lx word=%#lx == slotval (PAYLOAD candidate)", src_addr,
+                                      src_word);
+                            else
+                                logln("B2BULK_SRC_NO_MATCH rbx=%#lx rdx=%#lx rsi=%#lx (mid-copy regs; "
+                                      "src may already have advanced)",
+                                      rbx, rdx, rsi);
+                            // Arm settle tracking: next non-equal write decides TRANSIENT.
+                            g_bulk_slot[i] = g_wp[i];
+                            g_bulk_interior_val[i] = slotval;
+                            g_bulk_old_val[i] = slotval;
+                            g_bulk_pending[i] = 1;
+                            logln("B2BULK_TRACK_START slot=%#lx interior_val=%#lx (await settle write)", g_wp[i],
+                                  slotval);
                             // stack walk for memmove/memcpy callers
                             unsigned long sp = (unsigned long)r.rsp;
                             unsigned long bp = (unsigned long)r.rbp;
@@ -943,10 +1034,29 @@ int main(int argc, char **argv) {
 
         ptrace(PTRACE_CONT, w, 0, (void *)(long)sig);
     }
+    // Pending bulk tracks that never settled = still holding interior at end ⇒ PAYLOAD-ish.
+    for (int i = 0; i < MAX_WP; i++) {
+        if (!g_bulk_pending[i])
+            continue;
+        unsigned long now = 0;
+        int pok = (g_mainpid > 0 && peek(g_mainpid, g_bulk_slot[i], &now) == 0);
+        if (pok && now == g_bulk_interior_val[i]) {
+            logln("B2BULK_SETTLE_EOF slot=%#lx still=%#lx => PAYLOAD_OR_UNSETTLED", g_bulk_slot[i], now);
+            g_bulk_payload++;
+        } else if (pok) {
+            logln("B2BULK_SETTLE_EOF slot=%#lx interior=%#lx now=%#lx => TRANSIENT", g_bulk_slot[i],
+                  g_bulk_interior_val[i], now);
+            g_bulk_transient++;
+        } else {
+            logln("B2BULK_SETTLE_EOF slot=%#lx peek_fail => UNKNOWN", g_bulk_slot[i]);
+            g_bulk_unknown++;
+        }
+        g_bulk_pending[i] = 0;
+    }
     logln("SUPERVISOR_END exit=%d termsig=%d fatal_seen=%d fatal_count=%d node_seen=%lu armed_total=%lu "
-          "swbp_hits=%lu wp_interior=%lu",
+          "swbp_hits=%lu wp_interior=%lu bulk_transient=%lu bulk_payload=%lu bulk_unknown=%lu",
           exit_code, termsig, fatal_seen, g_fatal_count, g_node_seen, g_node_armed_total, g_swbp_hits,
-          g_wp_interior_hits);
+          g_wp_interior_hits, g_bulk_transient, g_bulk_payload, g_bulk_unknown);
     fclose(g_log);
     if (termsig > 0)
         return 128 + termsig;
