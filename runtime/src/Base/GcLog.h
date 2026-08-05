@@ -24,15 +24,19 @@ namespace MapleRuntime {
 // record is one line, `key=value` separated by spaces, with a stable field order and a schema
 // version so a reader can refuse a record it does not understand.
 //
-//   [GCLOG] v=1 rec=cycle seq= kind= reason= start_us= dur_us= live_before= live_after=
+//   [GCLOG] v=2 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
-//   [GCLOG] v=1 rec=phase seq= name= us=
+//   [GCLOG] v=2 rec=phase seq= name= us=
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
 // relying on line adjacency. Enabled with MRT_GC_LOG=1; the cost when off is one relaxed load.
 class GcLog {
 public:
-    static constexpr uint32_t SCHEMA_VERSION = 1;
+    static constexpr uint32_t SCHEMA_VERSION = 2;
+    // 128: longest phase name in the tree is well under this; longer ones are truncated.
+    // v2: dur/start are nanoseconds (were labelled us), phase names are folded to one token,
+    // and the cycle record moved so minors emit one too.
+    static constexpr size_t MAX_PHASE_NAME = 128;
 
     static bool Enabled()
     {
@@ -48,17 +52,17 @@ public:
 
     static uint64_t CompleteCycle() { return CycleCounter().fetch_add(1, std::memory_order_relaxed) + 1; }
 
-    static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startUs, uint64_t durUs,
+    static void Cycle(uint64_t seq, const char* kind, const char* reason, uint64_t startNs, uint64_t durNs,
                       size_t liveBefore, size_t liveAfter, size_t collected, size_t heapUsed, size_t threshold)
     {
         if (!Enabled()) {
             return;
         }
         WriteLog(true, REPORT,
-                 "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_us=%llu dur_us=%llu "
+                 "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
                  "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
                  SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
-                 static_cast<unsigned long long>(startUs), static_cast<unsigned long long>(durUs), liveBefore,
+                 static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
                  liveAfter, collected, heapUsed, threshold, ResidentKB());
     }
 
@@ -67,8 +71,20 @@ public:
         if (!Enabled()) {
             return;
         }
+        // Phase names are free text at the call sites ("enum roots & update old pointers within"),
+        // and a space would end the value halfway through for any key=value reader. Fold anything
+        // outside the safe set into '_' so a name is always one token.
+        char safe[MAX_PHASE_NAME + 1];
+        size_t i = 0;
+        for (; i < MAX_PHASE_NAME && name[i] != '\0'; ++i) {
+            char c = name[i];
+            bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
+                        c == '_' || c == '-';
+            safe[i] = keep ? c : '_';
+        }
+        safe[i] = '\0';
         WriteLog(true, REPORT, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
-                 static_cast<unsigned long long>(CurrentSeq()), name, static_cast<unsigned long long>(us));
+                 static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
     }
 
     // Resident set in KB, read from /proc/self/statm. Returns 0 where the file is unavailable,

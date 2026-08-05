@@ -7,6 +7,7 @@
 
 #include "CopyCollector.h"
 
+#include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
@@ -59,6 +60,13 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
 
     PostGarbageCollection(gcIndex);
     gcStats.gcEndTime = TimeUtil::NanoSeconds();
+    // Emitted here rather than from GCStats::Dump, because UpdateGCStats below (and so Dump) is
+    // skipped for young collections: a minor would produce no cycle record and its phases would
+    // be attributed to the next major.
+    GcLog::Cycle(GcLog::CompleteCycle(), reason == GC_REASON_YOUNG ? "minor" : "major",
+                 g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
+                 gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
+                 Heap::GetHeap().GetUsedPageSize(), gcStats.heapThreshold);
     if (reason != GC_REASON_YOUNG) {
         UpdateGCStats();
     }
