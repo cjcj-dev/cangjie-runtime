@@ -650,13 +650,21 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
 
 /**
  * Determine the default stack size and heap size according to system memory.
- * If system memory size is less then 1GB, heap size is 64MB and stack size is 64KB.
- * Otherwise heap size is 256MB and stack size is 1MB.
+ * Max heap defaults to a quarter of physical memory, floored at 64MB so a small
+ * container does not end up below the size this used to hand out. Stack size is
+ * 64KB below 1GB of system memory and 1MB above it.
  */
 static RuntimeParam InitRuntimeParam()
 {
     CheckSysmemSize();
-    size_t initHeapSize = InitHeapSize(g_sysmemSize > 1 * GB ? 256 * KB : 64 * KB);
+    // 4: a quarter of physical memory, measured in KB. 64UL * KB is 64MB, the floor.
+    constexpr size_t heapMemoryDivisor = 4;
+    constexpr size_t minDefaultHeapSize = 64UL * KB;
+    size_t defaultHeapSize = (g_sysmemSize / heapMemoryDivisor) / KB;
+    if (defaultHeapSize < minDefaultHeapSize) {
+        defaultHeapSize = minDefaultHeapSize;
+    }
+    size_t initHeapSize = InitHeapSize(defaultHeapSize);
     RuntimeParam param = {
         .heapParam = {
 #if defined(__OHOS__) || defined(__ANDROID__)
