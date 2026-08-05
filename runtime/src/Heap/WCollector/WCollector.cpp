@@ -7,6 +7,7 @@
 
 #include "WCollector.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
@@ -17,7 +18,9 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <string>
 #include <unordered_map>
+#include <vector>
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
 #endif
@@ -26,6 +29,8 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/GcThreadPool.h"
+#include "Heap/HeapWork.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
@@ -716,83 +721,228 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
 
+    // A2: parallel full-heap STW walk (ops/design/REMSET_OPTION1_SPEC_0805.txt §六).
+    // Sharding = atomic address cursor + region-head ownership; roots = 6 family tasks;
+    // account counters are per-worker then merged (H1/H2/H3).
     static const bool account = []() {
         const char* value = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
+    // CHUNK = 256 units × UNIT_SIZE (16MiB @ 64KB unit). Spec §六 T1.
+    constexpr size_t kChunkUnits = 256;
+    const size_t chunkBytes = kChunkUnits * RegionInfo::UNIT_SIZE;
+
+    struct RootAccount {
+        size_t rootSlots = 0;
+        size_t oldTaggedRootSlots = 0;
+        size_t fixedRootSlots = 0;
+    };
+    struct HeapAccount {
+        size_t processedRegions = 0;
+        size_t processedObjects = 0;
+        size_t invalidObjects = 0;
+        size_t filteredObjects = 0;
+        size_t refHolders = 0;
+        size_t fields = 0;
+        size_t oldTaggedSlots = 0;
+        size_t fixedSlots = 0;
+        size_t youngTargetSlots = 0;
+        size_t fromLiveObjects = 0;
+        size_t fromLiveFields = 0;
+        size_t rebuilt = 0;
+        size_t chunksTaken = 0;
+    };
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& regionManager = space.GetRegionManager();
+    RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
+    const uintptr_t heapStart = regionManager.GetRegionHeapStart();
+    const uintptr_t inactiveZone = regionManager.GetInactiveZone();
+
+    auto makeRootVisitor = [this](RootAccount* acc) -> RootVisitor {
+        return [this, acc](ObjectRef& root) {
+            RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            uintptr_t oldValue = field.GetFieldValue();
+            bool oldTagged = account && IsOldPointer(field);
+            if (account && acc != nullptr) {
+                ++acc->rootSlots;
+                if (oldTagged) {
+                    ++acc->oldTaggedRootSlots;
+                }
+            }
+            FixOldTaggedRefField(nullptr, field);
+            if (account && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+                ++acc->fixedRootSlots;
+            }
+        };
+    };
+    auto makeRootFieldVisitor = [this](RootAccount* acc) -> RefFieldVisitor {
+        return [this, acc](RefField<>& field) {
+            uintptr_t oldValue = field.GetFieldValue();
+            bool oldTagged = account && IsOldPointer(field);
+            if (account && acc != nullptr) {
+                ++acc->rootSlots;
+                if (oldTagged) {
+                    ++acc->oldTaggedRootSlots;
+                }
+            }
+            FixOldTaggedRefField(nullptr, field);
+            if (account && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+                ++acc->fixedRootSlots;
+            }
+        };
+    };
+
+    // `account` is function-local static const; referenced by nested lambdas below via
+    // enclosing-function scope (C++ allows this for variables with static storage).
+    auto processObject = [this, requireSurvivedMark, rebuildRemset](BaseObject* obj, HeapAccount& acc) {
+        RegionInfo* accountRegion = nullptr;
+        if (account) {
+            ++acc.processedObjects;
+            if (obj != nullptr) {
+                accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            }
+            // H2: region count is per-worker local; each region is owned by exactly one
+            // worker (region-head ownership), so summing processedRegions is exact.
+            // Monotonic lastProcessedRegion is local to this worker's visit order.
+        }
+        // Count region once via a side channel on the region walk (below), not here.
+        if (obj == nullptr || !obj->IsValidObject()) {
+            if (account) {
+                ++acc.invalidObjects;
+            }
+            return;
+        }
+        if (requireSurvivedMark) {
+            if (!IsSurvivedObject(obj)) {
+                if (account) {
+                    ++acc.filteredObjects;
+                }
+                return;
+            }
+            if (account && accountRegion != nullptr && accountRegion->IsFromRegion()) {
+                ++acc.fromLiveObjects;
+            }
+        }
+        if (!obj->HasRefField()) {
+            return;
+        }
+        if (account) {
+            ++acc.refHolders;
+        }
+        bool recordCrossGen = false;
+        if (rebuildRemset != nullptr) {
+            RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
+                             !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
+        }
+        bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
+                             accountRegion->IsFromRegion();
+        obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, &acc](RefField<>& field) {
+            uintptr_t oldValue = field.GetFieldValue();
+            bool oldTagged = account && IsOldPointer(field);
+            if (account) {
+                ++acc.fields;
+                if (forwardHolder) {
+                    ++acc.fromLiveFields;
+                }
+                if (oldTagged) {
+                    ++acc.oldTaggedSlots;
+                }
+            }
+            FixOldTaggedRefField(obj, field);
+            if (oldTagged && field.GetFieldValue() != oldValue) {
+                ++acc.fixedSlots;
+            }
+            if (!recordCrossGen) {
+                return;
+            }
+            BaseObject* target = field.GetTargetObject();
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                if (account) {
+                    ++acc.youngTargetSlots;
+                }
+                rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
+                ++acc.rebuilt;
+            }
+        });
+    };
+
+    // Region-head-ownership walk over [rangeStart, rangeEnd). H6: carry transient-extent
+    // guard verbatim. Spec §六 T1: first-step correction if region head is before rangeStart.
+    auto walkRange = [&processObject, requireSurvivedMark](uintptr_t rangeStart, uintptr_t rangeEnd,
+                                                            uintptr_t inactive, HeapAccount& acc) {
+        if (rangeStart >= rangeEnd || rangeStart >= inactive) {
+            return;
+        }
+        uintptr_t limit = std::min(rangeEnd, inactive);
+        uintptr_t addr = rangeStart;
+        // First-step correction: if the unit at rangeStart is mid-region, skip to that
+        // region's end — the region belongs to the worker that owns its head.
+        {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(addr);
+            uintptr_t regionStart = region->GetRegionStart();
+            uintptr_t nextAddr = region->GetRegionEnd();
+            if (nextAddr <= addr || nextAddr > inactive) {
+                // Transient illegal extent: step one unit, do not visit (H6).
+                addr += RegionInfo::UNIT_SIZE;
+            } else if (regionStart < rangeStart) {
+                addr = nextAddr;
+            }
+        }
+        RegionInfo* lastProcessedRegion = nullptr;
+        while (addr < limit) {
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(addr);
+            uintptr_t nextAddr = region->GetRegionEnd();
+            // H6 transient-extent guard — character-identical to ForEachObjUnsafe.
+            if (nextAddr <= addr || nextAddr > inactive) {
+                addr += RegionInfo::UNIT_SIZE;
+                continue;
+            }
+            // Region-head ownership: only visit if the region's head is in this chunk.
+            // Regions that spill past limit still belong entirely to this worker.
+            if (addr >= rangeStart && addr < limit) {
+                if (region->IsValidRegion() && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
+                    !(requireSurvivedMark && region->IsKnownEmpty())) {
+                    if (account && region != lastProcessedRegion) {
+                        lastProcessedRegion = region;
+                        ++acc.processedRegions;
+                    }
+                    region->VisitAllObjects([&processObject, &acc](BaseObject* object) {
+                        processObject(object, acc);
+                    });
+                }
+            }
+            addr = nextAddr;
+        }
+    };
+
+    auto heapWorkerBody = [&](std::atomic<uintptr_t>& cursor, HeapAccount& acc) {
+        for (;;) {
+            uintptr_t chunkStart = cursor.fetch_add(chunkBytes, std::memory_order_relaxed);
+            if (chunkStart >= inactiveZone) {
+                break;
+            }
+            ++acc.chunksTaken;
+            uintptr_t chunkEnd = chunkStart + chunkBytes;
+            walkRange(chunkStart, chunkEnd, inactiveZone, acc);
+        }
+    };
+
+    // H7: account shadow pass stays serial (diagnostic-only, not on hot path).
     std::array<size_t, regionTypeCount> regionTypes{};
-    RegionInfo* lastAccountRegion = nullptr;
-    RegionInfo* lastProcessedRegion = nullptr;
     size_t regions = 0;
     size_t knownEmptyRegions = 0;
     size_t objects = 0;
     size_t knownEmptyObjects = 0;
-    size_t processedRegions = 0;
-    size_t processedObjects = 0;
-    size_t invalidObjects = 0;
-    size_t filteredObjects = 0;
-    size_t refHolders = 0;
-    size_t fields = 0;
-    size_t oldTaggedSlots = 0;
-    size_t fixedSlots = 0;
-    size_t rootSlots = 0;
-    size_t oldTaggedRootSlots = 0;
-    size_t fixedRootSlots = 0;
-    size_t youngTargetSlots = 0;
     size_t fromRegions = 0;
-    size_t fromLiveObjects = 0;
-    size_t fromLiveFields = 0;
-
-    // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
-    RootVisitor fixRoot = [this, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](ObjectRef& root) {
-        RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        uintptr_t oldValue = field.GetFieldValue();
-        bool oldTagged = account && IsOldPointer(field);
-        if (account) {
-            ++rootSlots;
-            if (oldTagged) {
-                ++oldTaggedRootSlots;
-            }
-        }
-        FixOldTaggedRefField(nullptr, field);
-        if (oldTagged && field.GetFieldValue() != oldValue) {
-            ++fixedRootSlots;
-        }
-    };
-    RefFieldVisitor fixRootField = [this, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](RefField<>& field) {
-        uintptr_t oldValue = field.GetFieldValue();
-        bool oldTagged = account && IsOldPointer(field);
-        if (account) {
-            ++rootSlots;
-            if (oldTagged) {
-                ++oldTaggedRootSlots;
-            }
-        }
-        FixOldTaggedRefField(nullptr, field);
-        if (oldTagged && field.GetFieldValue() != oldValue) {
-            ++fixedRootSlots;
-        }
-    };
-
-    MutatorManager::Instance().VisitAllMutators(
-        [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
-    Heap::GetHeap().VisitStaticRoots(fixRootField);
-    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
-    collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
-    collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
-    Heap::GetHeap().VisitAllExportRoots(fixRoot);
-
-    // New-line: BaseObject::ForEachRefField ≡ main TracingCollector::ForEachRefSlot.
-    // Pre-dispel (requireSurvivedMark=true): objects still at markable addresses.
-    // Post-Flip after Forward: live objects sit in to-space without mark bits at the
-    // new address — IsSurvivedObject would skip almost every holder (defect⑤ residual).
-    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    RememberedSet* rebuildRemset = requireSurvivedMark ? nullptr : &Heap::GetHeap().GetRememberedSet();
-    size_t rebuilt = 0;
     if (account) {
-        // Keep the eligibility denominator independent of the optimized walker. In the candidate,
-        // this shadow pass counts objects in regions that the production visitor will prune.
+        RegionInfo* lastAccountRegion = nullptr;
         space.ForEachObj(
             [requireSurvivedMark, &regionTypes, &lastAccountRegion, &regions, &knownEmptyRegions, &objects,
              &knownEmptyObjects, &fromRegions](BaseObject* obj) {
@@ -819,90 +969,153 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             },
             false);
     }
-    space.GetRegionManager().ForEachObjUnsafe(
-        [this, requireSurvivedMark, rebuildRemset, &lastProcessedRegion, &processedRegions, &processedObjects,
-         &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &fixedSlots, &youngTargetSlots,
-         &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
-            RegionInfo* accountRegion = nullptr;
-            if (account) {
-                ++processedObjects;
-                if (obj != nullptr) {
-                    accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                }
-                if (accountRegion != nullptr && accountRegion != lastProcessedRegion) {
-                    lastProcessedRegion = accountRegion;
-                    ++processedRegions;
+
+    GCThreadPool* threadPool = GetThreadPool();
+    // Positive control for silent serial degradation (spec §六 T3 ②).
+    // Force serial via MRT_GCV2_STWPAR_FORCE_SERIAL=1 for bidirectional proof.
+    static const bool forceSerial = []() {
+        const char* value = std::getenv("MRT_GCV2_STWPAR_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool useParallel = threadPool != nullptr && !forceSerial;
+
+    RootAccount rootTotals{};
+    HeapAccount heapTotals{};
+    std::vector<size_t> chunksPerWorker;
+    size_t workersScheduled = 0;
+
+    if (!useParallel) {
+        VLOG(REPORT, "[F3][parallel] fallback=serial pool_unavailable");
+        // Six root families serial (same order as before).
+        {
+            RootAccount acc;
+            RootVisitor fixRoot = makeRootVisitor(&acc);
+            RefFieldVisitor fixRootField = makeRootFieldVisitor(&acc);
+            MutatorManager::Instance().VisitAllMutators(
+                [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+            Heap::GetHeap().VisitStaticRoots(fixRootField);
+            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+            collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+            collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+            Heap::GetHeap().VisitAllExportRoots(fixRoot);
+            rootTotals = acc;
+        }
+        {
+            HeapAccount acc;
+            // Single-threaded full range — equivalent to ForEachObjUnsafe.
+            walkRange(heapStart, inactiveZone, inactiveZone, acc);
+            // Count as one logical chunk for the diagnostic line.
+            if (heapStart < inactiveZone) {
+                acc.chunksTaken = 1;
+            }
+            heapTotals = acc;
+            chunksPerWorker.push_back(acc.chunksTaken);
+            workersScheduled = 1;
+        }
+    } else {
+        // Root-side: 6 family-level tasks (static family must not be split — mutex+dedup set).
+        // Heap-side: N cursor tasks. Same pool, same batch as Preforward (WCollector.cpp:964-976).
+        // Cap via MRT_GCV2_STWPAR_WORKERS for scale curve (1/2/4/8/16); never expand pool.
+        const int32_t helperNum = threadPool->GetMaxThreadNum();
+        // Caller's GC thread also drains via WaitFinish → effective capacity = helpers + 1.
+        const int32_t poolCap = helperNum + 1;
+        int32_t heapWorkers = poolCap;
+        {
+            const char* wEnv = std::getenv("MRT_GCV2_STWPAR_WORKERS");
+            if (wEnv != nullptr && wEnv[0] != '\0') {
+                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
+                if (want >= 1 && want < heapWorkers) {
+                    heapWorkers = want;
                 }
             }
-            if (obj == nullptr || !obj->IsValidObject()) {
-                if (account) {
-                    ++invalidObjects;
-                }
-                return;
+        }
+        std::vector<RootAccount> rootAcc(6);
+        std::vector<HeapAccount> heapAcc(static_cast<size_t>(heapWorkers));
+        std::atomic<uintptr_t> cursor{ heapStart };
+
+        // Roots first into queue, then heap workers. Start after all AddWork so helpers
+        // see the full batch (same shape as Preforward: AddWork×N then Start then WaitFinish).
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[0]);
+            MutatorManager::Instance().VisitAllMutators(
+                [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootFieldVisitor](size_t) {
+            RefFieldVisitor fixRootField = makeRootFieldVisitor(&rootAcc[1]);
+            Heap::GetHeap().VisitStaticRoots(fixRootField);
+        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[2]);
+            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[3]);
+            collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[4]);
+            collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[5]);
+            Heap::GetHeap().VisitAllExportRoots(fixRoot);
+        }));
+
+        for (int32_t i = 0; i < heapWorkers; ++i) {
+            HeapAccount* acc = &heapAcc[static_cast<size_t>(i)];
+            threadPool->AddWork(new (std::nothrow) LambdaWork(
+                [heapWorkerBody, &cursor, acc](size_t) { heapWorkerBody(cursor, *acc); }));
+        }
+
+        threadPool->Start();
+        threadPool->WaitFinish();
+
+        for (const auto& a : rootAcc) {
+            rootTotals.rootSlots += a.rootSlots;
+            rootTotals.oldTaggedRootSlots += a.oldTaggedRootSlots;
+            rootTotals.fixedRootSlots += a.fixedRootSlots;
+        }
+        chunksPerWorker.reserve(heapAcc.size());
+        for (const auto& a : heapAcc) {
+            heapTotals.processedRegions += a.processedRegions;
+            heapTotals.processedObjects += a.processedObjects;
+            heapTotals.invalidObjects += a.invalidObjects;
+            heapTotals.filteredObjects += a.filteredObjects;
+            heapTotals.refHolders += a.refHolders;
+            heapTotals.fields += a.fields;
+            heapTotals.oldTaggedSlots += a.oldTaggedSlots;
+            heapTotals.fixedSlots += a.fixedSlots;
+            heapTotals.youngTargetSlots += a.youngTargetSlots;
+            heapTotals.fromLiveObjects += a.fromLiveObjects;
+            heapTotals.fromLiveFields += a.fromLiveFields;
+            heapTotals.rebuilt += a.rebuilt;
+            heapTotals.chunksTaken += a.chunksTaken;
+            chunksPerWorker.push_back(a.chunksTaken);
+        }
+        workersScheduled = static_cast<size_t>(heapWorkers);
+    }
+
+    // Parallel-liveness positive control: at least 2 workers with chunks_taken>0 when heap
+    // spans >2×CHUNK (spec §六 T3 ①). Always print so silence ≠ "never fired".
+    {
+        size_t active = 0;
+        std::string chunksStr;
+        for (size_t i = 0; i < chunksPerWorker.size(); ++i) {
+            if (chunksPerWorker[i] != 0) {
+                ++active;
             }
-            if (requireSurvivedMark) {
-                if (!IsSurvivedObject(obj)) {
-                    if (account) {
-                        ++filteredObjects;
-                    }
-                    return;
-                }
-                if (account && accountRegion != nullptr && accountRegion->IsFromRegion()) {
-                    ++fromLiveObjects;
-                }
+            if (i != 0) {
+                chunksStr += ',';
             }
-            if (!obj->HasRefField()) {
-                return;
-            }
-            if (account) {
-                ++refHolders;
-            }
-            bool recordCrossGen = false;
-            if (rebuildRemset != nullptr) {
-                RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-                recordCrossGen = holderRegion != nullptr && !holderRegion->IsYoungRegion() &&
-                                 !holderRegion->IsGarbageRegion() && !holderRegion->IsFreeRegion();
-            }
-            bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
-                                 accountRegion->IsFromRegion();
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, &fields,
-                                  &oldTaggedSlots, &fixedSlots, &youngTargetSlots, &fromLiveFields,
-                                  &rebuilt](RefField<>& field) {
-                uintptr_t oldValue = field.GetFieldValue();
-                bool oldTagged = account && IsOldPointer(field);
-                if (account) {
-                    ++fields;
-                    if (forwardHolder) {
-                        ++fromLiveFields;
-                    }
-                    if (oldTagged) {
-                        ++oldTaggedSlots;
-                    }
-                }
-                FixOldTaggedRefField(obj, field);
-                if (oldTagged && field.GetFieldValue() != oldValue) {
-                    ++fixedSlots;
-                }
-                if (!recordCrossGen) {
-                    return;
-                }
-                BaseObject* target = field.GetTargetObject();
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                    if (account) {
-                        ++youngTargetSlots;
-                    }
-                    rebuildRemset->Record(reinterpret_cast<MAddress>(&field));
-                    ++rebuilt;
-                }
-            });
-        },
-        requireSurvivedMark);
-    if (rebuilt != 0) {
-        VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
+            chunksStr += std::to_string(chunksPerWorker[i]);
+        }
+        VLOG(REPORT, "[F3][parallel] phase=%s workers_active=%zu workers_scheduled=%zu chunks=[%s] parallel=%d",
+             requireSurvivedMark ? "preflip" : "postflip", active, workersScheduled, chunksStr.c_str(),
+             useParallel ? 1 : 0);
+    }
+
+    if (heapTotals.rebuilt != 0) {
+        VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", heapTotals.rebuilt);
     }
     if (account) {
         VLOG(REPORT,
@@ -913,10 +1126,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
              "rebuilt=%zu fromRegions=%zu fromLiveObjects=%zu fromLiveFields=%zu "
              "env=MRT_GCV2_PREFLIP_ACCOUNT=1",
              requireSurvivedMark ? "preflip" : "postflip", regions, knownEmptyRegions, objects, knownEmptyObjects,
-             processedRegions, processedObjects, invalidObjects, filteredObjects,
-             processedObjects - invalidObjects - filteredObjects, refHolders, fields, oldTaggedSlots, fixedSlots,
-             rootSlots, oldTaggedRootSlots, fixedRootSlots, youngTargetSlots, rebuilt, fromRegions,
-             fromLiveObjects, fromLiveFields);
+             heapTotals.processedRegions, heapTotals.processedObjects, heapTotals.invalidObjects,
+             heapTotals.filteredObjects,
+             heapTotals.processedObjects - heapTotals.invalidObjects - heapTotals.filteredObjects,
+             heapTotals.refHolders, heapTotals.fields, heapTotals.oldTaggedSlots, heapTotals.fixedSlots,
+             rootTotals.rootSlots, rootTotals.oldTaggedRootSlots, rootTotals.fixedRootSlots,
+             heapTotals.youngTargetSlots, heapTotals.rebuilt, fromRegions, heapTotals.fromLiveObjects,
+             heapTotals.fromLiveFields);
         VLOG(REPORT,
              "[GCV2][preflip-region-types] phase=%s type0=%zu type1=%zu type2=%zu type3=%zu type4=%zu "
              "type5=%zu type6=%zu type7=%zu type8=%zu type9=%zu type10=%zu type11=%zu type12=%zu type13=%zu "
