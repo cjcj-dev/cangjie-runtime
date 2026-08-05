@@ -622,6 +622,25 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     size_t fromRegions = 0;
     size_t fromLiveObjects = 0;
     size_t fromLiveFields = 0;
+    static const bool epochAccount = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_EPOCH_ACCOUNT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    MinorRegionSet toSpaceRegions;
+    if (epochAccount && !requireSurvivedMark) {
+        std::lock_guard<std::mutex> lock(postFlipToSpaceRegionsMtx);
+        toSpaceRegions = postFlipToSpaceRegions;
+    }
+    MinorRegionSet epochRegions;
+    MinorRegionSet epochToSpaceRegions;
+    size_t epochObjects = 0;
+    size_t epochToSpaceObjects = 0;
+    size_t epochRefHolders = 0;
+    size_t epochToSpaceRefHolders = 0;
+    size_t epochFields = 0;
+    size_t epochToSpaceFields = 0;
+    size_t epochOldTaggedSlots = 0;
+    size_t epochToSpaceOldTaggedSlots = 0;
 
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
     RootVisitor fixRoot = [this, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](ObjectRef& root) {
@@ -701,16 +720,32 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     space.GetRegionManager().ForEachObjUnsafe(
         [this, requireSurvivedMark, rebuildRemset, &lastProcessedRegion, &processedRegions, &processedObjects,
          &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &fixedSlots, &youngTargetSlots,
-         &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
+         &fromLiveObjects, &fromLiveFields, &rebuilt, &toSpaceRegions, &epochRegions, &epochToSpaceRegions,
+         &epochObjects, &epochToSpaceObjects, &epochRefHolders, &epochToSpaceRefHolders, &epochFields,
+         &epochToSpaceFields, &epochOldTaggedSlots, &epochToSpaceOldTaggedSlots](BaseObject* obj) {
             RegionInfo* accountRegion = nullptr;
-            if (account) {
-                ++processedObjects;
+            if (account || (epochAccount && !requireSurvivedMark)) {
                 if (obj != nullptr) {
                     accountRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
                 }
+            }
+            if (account) {
+                ++processedObjects;
                 if (accountRegion != nullptr && accountRegion != lastProcessedRegion) {
                     lastProcessedRegion = accountRegion;
                     ++processedRegions;
+                }
+            }
+            bool toSpaceHolder = false;
+            if (epochAccount && !requireSurvivedMark && obj != nullptr) {
+                ++epochObjects;
+                if (accountRegion != nullptr) {
+                    epochRegions.insert(accountRegion);
+                    toSpaceHolder = toSpaceRegions.count(accountRegion) != 0;
+                    if (toSpaceHolder) {
+                        epochToSpaceRegions.insert(accountRegion);
+                        ++epochToSpaceObjects;
+                    }
                 }
             }
             if (obj == nullptr || !obj->IsValidObject()) {
@@ -736,6 +771,12 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             if (account) {
                 ++refHolders;
             }
+            if (epochAccount && !requireSurvivedMark) {
+                ++epochRefHolders;
+                if (toSpaceHolder) {
+                    ++epochToSpaceRefHolders;
+                }
+            }
             bool recordCrossGen = false;
             if (rebuildRemset != nullptr) {
                 RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -744,11 +785,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                                  accountRegion->IsFromRegion();
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, &fields,
+            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, toSpaceHolder, &fields,
                                   &oldTaggedSlots, &fixedSlots, &youngTargetSlots, &fromLiveFields,
-                                  &rebuilt](RefField<>& field) {
+                                  &rebuilt, &epochFields, &epochToSpaceFields, &epochOldTaggedSlots,
+                                  &epochToSpaceOldTaggedSlots](RefField<>& field) {
                 uintptr_t oldValue = field.GetFieldValue();
-                bool oldTagged = account && IsOldPointer(field);
+                bool inspectOldTag = account || (epochAccount && !requireSurvivedMark);
+                bool oldTagged = inspectOldTag && IsOldPointer(field);
                 if (account) {
                     ++fields;
                     if (forwardHolder) {
@@ -758,8 +801,20 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                         ++oldTaggedSlots;
                     }
                 }
+                if (epochAccount && !requireSurvivedMark) {
+                    ++epochFields;
+                    if (oldTagged) {
+                        ++epochOldTaggedSlots;
+                    }
+                    if (toSpaceHolder) {
+                        ++epochToSpaceFields;
+                        if (oldTagged) {
+                            ++epochToSpaceOldTaggedSlots;
+                        }
+                    }
+                }
                 FixOldTaggedRefField(obj, field);
-                if (oldTagged && field.GetFieldValue() != oldValue) {
+                if (account && oldTagged && field.GetFieldValue() != oldValue) {
                     ++fixedSlots;
                 }
                 if (!recordCrossGen) {
@@ -782,6 +837,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         requireSurvivedMark);
     if (rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", rebuilt);
+    }
+    if (epochAccount && !requireSurvivedMark) {
+        VLOG(REPORT,
+             "[GCV2][postflip-epoch-account] regions=%zu toSpaceRegionsRecorded=%zu toSpaceRegionsVisited=%zu "
+             "objects=%zu toSpaceObjects=%zu refHolders=%zu toSpaceRefHolders=%zu fields=%zu toSpaceFields=%zu "
+             "oldTagged=%zu toSpaceOldTagged=%zu preExistingOldTagged=%zu "
+             "env=MRT_GCV2_POSTFLIP_EPOCH_ACCOUNT=1",
+             epochRegions.size(), toSpaceRegions.size(), epochToSpaceRegions.size(), epochObjects, epochToSpaceObjects,
+             epochRefHolders, epochToSpaceRefHolders, epochFields, epochToSpaceFields, epochOldTaggedSlots,
+             epochToSpaceOldTaggedSlots, epochOldTaggedSlots - epochToSpaceOldTaggedSlots);
     }
     if (account) {
         VLOG(REPORT,
@@ -2304,6 +2369,14 @@ void WCollector::DoGarbageCollection()
         DoYoungGarbageCollection();
         return;
     }
+    static const bool epochAccount = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_EPOCH_ACCOUNT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (epochAccount) {
+        std::lock_guard<std::mutex> lock(postFlipToSpaceRegionsMtx);
+        postFlipToSpaceRegions.clear();
+    }
     TraceHeap();
     PostTrace();
 
@@ -2358,8 +2431,21 @@ void WCollector::ProcessFinalizers()
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
+    static const bool epochAccount = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_EPOCH_ACCOUNT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    bool recordToSpace = epochAccount && gcReason != GC_REASON_YOUNG && IsGhostFromObject(obj);
     BaseObject* to = TryForwardObject(obj);
-    return (to != nullptr) ? to : obj;
+    BaseObject* current = (to != nullptr) ? to : obj;
+    if (recordToSpace) {
+        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(current));
+        if (toRegion != nullptr) {
+            std::lock_guard<std::mutex> lock(postFlipToSpaceRegionsMtx);
+            postFlipToSpaceRegions.insert(toRegion);
+        }
+    }
+    return current;
 }
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)

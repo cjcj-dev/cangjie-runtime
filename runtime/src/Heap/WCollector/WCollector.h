@@ -7,6 +7,7 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
+#include <mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -246,6 +247,8 @@ private:
     uint16_t currentTagID = 0;
     uint64_t minorTotalRuns = 0;
     MinorRegionSet minorCandidateRegions;
+    std::mutex postFlipToSpaceRegionsMtx;
+    MinorRegionSet postFlipToSpaceRegions;
 };
 } // namespace MapleRuntime
 #endif // ~MRT_WCOLLECTOR_H
