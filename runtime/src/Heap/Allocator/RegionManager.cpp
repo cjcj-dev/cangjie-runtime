@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -937,7 +938,9 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     if (!Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
         size_t heapThreshold = collector.GetGCStats().GetThreshold();
-        size_t youngRegionTriggerBytes = 32 * MB;
+        // 0.0.2 product default: minor off (size_t::max). Was 32*MB.
+        // Opt-in young: MRT_GCV2_JVM_YOUNG_TRIGGER=1 (existing). RegionManager.cpp:940.
+        size_t youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
         const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
         const bool useJvmYoungTrigger =
             jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
