@@ -202,7 +202,17 @@ RTErrorCode InitCJRuntime(const struct RuntimeParam* param)
 #endif
     unsigned int cpus = std::thread::hardware_concurrency();
     uint32_t defaultProcs = cpus != 0 ? static_cast<uint32_t>(cpus) : 8;
-    size_t initHeapSize = param->heapParam.heapSize == 0 ? 64 * 1024 : param->heapParam.heapSize;
+    // Default heap is a quarter of physical memory, measured in KB. g_sysmemSize is filled by
+    // CheckSysmemSize() above and stays at its 1GB initializer when the platform query fails,
+    // which yields a 256MB default. Floored at the previous fixed default so a small container
+    // cannot end up with less heap than it had before.
+    constexpr size_t DEFAULT_HEAP_MEMORY_DIVISOR = 4;
+    constexpr size_t MIN_DEFAULT_HEAP_SIZE_KB = 64 * MapleRuntime::KB; // 64MB, the previous default
+    size_t defaultHeapSize = (g_sysmemSize / DEFAULT_HEAP_MEMORY_DIVISOR) / MapleRuntime::KB;
+    if (defaultHeapSize < MIN_DEFAULT_HEAP_SIZE_KB) {
+        defaultHeapSize = MIN_DEFAULT_HEAP_SIZE_KB;
+    }
+    size_t initHeapSize = param->heapParam.heapSize == 0 ? defaultHeapSize : param->heapParam.heapSize;
 #if defined(__OHOS__)
     // use limited heap size in OHOS devices --
     // (   , 2GB] -- 128MB
