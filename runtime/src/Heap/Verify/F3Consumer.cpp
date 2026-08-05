@@ -9,6 +9,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <mutex>
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -17,7 +18,7 @@
 namespace MapleRuntime {
 namespace {
 
-constexpr size_t kCap = 8192;
+constexpr size_t kCap = 4096;
 
 struct Entry {
     void* obj = nullptr;
@@ -33,7 +34,8 @@ struct Entry {
     char site[24];
 };
 
-std::atomic<size_t> gNext{ 0 };
+std::mutex gMu;
+size_t gNext = 0;
 Entry gTab[kCap];
 
 std::atomic<int> gPosCtrlFired{ 0 };
@@ -47,25 +49,21 @@ bool EnvIsOne(const char* name)
     return v != nullptr && std::strcmp(v, "1") == 0;
 }
 
-Entry* FindOrAlloc(void* obj)
+// Caller must hold gMu.
+Entry* FindOrAllocLocked(void* obj)
 {
     if (obj == nullptr) {
         return nullptr;
     }
-    size_t n = gNext.load(std::memory_order_acquire);
-    if (n > kCap) {
-        n = kCap;
-    }
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < gNext && i < kCap; ++i) {
         if (gTab[i].obj == obj) {
             return &gTab[i];
         }
     }
-    size_t slot = gNext.fetch_add(1, std::memory_order_acq_rel);
-    if (slot >= kCap) {
+    if (gNext >= kCap) {
         return nullptr;
     }
-    Entry& e = gTab[slot];
+    Entry& e = gTab[gNext++];
     e.obj = obj;
     e.field = nullptr;
     e.target = nullptr;
@@ -80,16 +78,13 @@ Entry* FindOrAlloc(void* obj)
     return &e;
 }
 
-Entry* Find(void* obj)
+// Caller must hold gMu.
+Entry* FindLocked(void* obj)
 {
     if (obj == nullptr) {
         return nullptr;
     }
-    size_t n = gNext.load(std::memory_order_acquire);
-    if (n > kCap) {
-        n = kCap;
-    }
-    for (size_t i = 0; i < n; ++i) {
+    for (size_t i = 0; i < gNext && i < kCap; ++i) {
         if (gTab[i].obj == obj) {
             return &gTab[i];
         }
@@ -124,7 +119,8 @@ void F3Consumer::NoteMark(void* obj, const char* site, unsigned int young, unsig
     if (!Enabled() || obj == nullptr) {
         return;
     }
-    Entry* e = FindOrAlloc(obj);
+    std::lock_guard<std::mutex> lg(gMu);
+    Entry* e = FindOrAllocLocked(obj);
     if (e == nullptr) {
         return;
     }
@@ -140,7 +136,8 @@ void F3Consumer::NoteScan(void* obj, const char* site, unsigned int young, unsig
     if (!Enabled() || obj == nullptr) {
         return;
     }
-    Entry* e = FindOrAlloc(obj);
+    std::lock_guard<std::mutex> lg(gMu);
+    Entry* e = FindOrAllocLocked(obj);
     if (e == nullptr) {
         return;
     }
@@ -157,10 +154,12 @@ void F3Consumer::NoteScan(void* obj, const char* site, unsigned int young, unsig
 
 void F3Consumer::NoteEdgeFollow(void* holder, void* field, void* target, const char* site)
 {
+    // Hot path: only record if holder already in ledger (was marked). Avoids O(heap) table growth.
     if (!Enabled() || holder == nullptr) {
         return;
     }
-    Entry* e = FindOrAlloc(holder);
+    std::lock_guard<std::mutex> lg(gMu);
+    Entry* e = FindLocked(holder);
     if (e == nullptr) {
         return;
     }
@@ -182,7 +181,11 @@ bool F3Consumer::ShouldSkipEdge(void* holder, void* field, void* target, const c
     if (site == nullptr || std::strncmp(site, "TraceRefField", 13) != 0) {
         return false;
     }
-    Entry* e = Find(holder);
+    if (gPosCtrlFired.load(std::memory_order_acquire) != 0) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lg(gMu);
+    Entry* e = FindLocked(holder);
     if (e == nullptr || e->marked == 0 || e->scanned == 0 || e->major == 0) {
         return false;
     }
@@ -223,12 +226,17 @@ void F3Consumer::DumpAtAbort(void* holder, void* field, void* target, char* verd
         return;
     }
 
-    Entry* e = Find(holder);
+    std::lock_guard<std::mutex> lg(gMu);
+    Entry* e = FindLocked(holder);
     const int marked = e != nullptr ? static_cast<int>(e->marked) : 0;
     const int scanned = e != nullptr ? static_cast<int>(e->scanned) : 0;
     const int followed = e != nullptr ? static_cast<int>(e->edgeFollowed) : 0;
     const int skipped = e != nullptr ? static_cast<int>(e->edgeSkipped) : 0;
-    const char* site = (e != nullptr && e->site[0] != '\0') ? e->site : "none";
+    char siteBuf[24] = "none";
+    if (e != nullptr && e->site[0] != '\0') {
+        std::snprintf(siteBuf, sizeof(siteBuf), "%s", e->site);
+    }
+    const char* site = siteBuf;
     const unsigned young = e != nullptr ? e->young : 0u;
     const unsigned major = e != nullptr ? e->major : 0u;
 
