@@ -414,10 +414,9 @@ void PrintUntagRefFieldBreadcrumb() noexcept
 }
 #endif
 
-void WCollector::Fini()
+WCollector::~WCollector()
 {
     DeferredMinorPhaseRecords::Flush();
-    CopyCollector::Fini();
 }
 
 bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
