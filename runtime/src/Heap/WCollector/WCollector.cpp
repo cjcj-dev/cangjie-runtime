@@ -277,6 +277,34 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      static_cast<unsigned>(targetWasCleared), targetClear, static_cast<unsigned>(holderWasCleared),
                      holderClear);
 
+                char ghostReclaim[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char dirtyTake[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char garbageReuse[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char clearGhost[384] = "NOT_AVAILABLE_target_not_in_heap";
+                char dispel[384] = "NOT_AVAILABLE_target_not_in_heap";
+                const bool targetGhostReclaimed = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "ghost_reclaim", gcStartNs, ghostReclaim,
+                    sizeof(ghostReclaim));
+                const bool targetDirtyTaken = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "dirty_take", gcStartNs, dirtyTake, sizeof(dirtyTake));
+                const bool targetGarbageReused = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "garbage_reuse", gcStartNs, garbageReuse,
+                    sizeof(garbageReuse));
+                const bool targetGhostCleared = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "clear_ghost", gcStartNs, clearGhost,
+                    sizeof(clearGhost));
+                const bool targetDispelled = targetInHeap && TraceClear::LookupKind(
+                    reinterpret_cast<MAddress>(target), "dispel", gcStartNs, dispel, sizeof(dispel));
+                VLOG(REPORT,
+                     "[GCV2][F3_REGION][supply-path] ghostReclaim=%u dirtyTake=%u garbageReuse=%u "
+                     "clearGhost=%u dispel=%u pathConfirmedGhostReclaimDirtyReuse=%u "
+                     "ghostReclaim={%s} dirtyTake={%s} garbageReuse={%s} clearGhost={%s} dispel={%s}",
+                     static_cast<unsigned>(targetGhostReclaimed), static_cast<unsigned>(targetDirtyTaken),
+                     static_cast<unsigned>(targetGarbageReused), static_cast<unsigned>(targetGhostCleared),
+                     static_cast<unsigned>(targetDispelled),
+                     static_cast<unsigned>(targetGhostReclaimed && targetDirtyTaken), ghostReclaim, dirtyTake,
+                     garbageReuse, clearGhost, dispel);
+
                 BaseObject* toVersion = targetInHeap ? FindToVersion(target) : nullptr;
                 const bool toInHeap = toVersion != nullptr && Heap::IsHeapAddress(toVersion);
                 const int toValid = toInHeap ? static_cast<int>(toVersion->IsValidObject()) : -1;

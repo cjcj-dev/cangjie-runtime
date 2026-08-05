@@ -981,12 +981,21 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx) ghost=%u", head, head->GetRegionStart(),
              head->GetRegionEnd(), static_cast<unsigned>(head->IsGhostFromRegion()));
         if (head->IsGhostFromRegion()) {
+            TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "ghost_reclaim", head,
+                                        head->GetLiveByteCount(), 1,
+                                        static_cast<unsigned int>(head->GetRegionType()),
+                                        static_cast<unsigned int>(head->GetRouteState()));
             DLOG(REGION, "defer ghost garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(),
                  head->GetRegionEnd());
             ReclaimRegion(head);
             continue;
         }
         if (head->GetUnitCount() == num) {
+            TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
+                                        head->GetLiveByteCount(),
+                                        static_cast<unsigned int>(head->IsGhostFromRegion()),
+                                        static_cast<unsigned int>(head->GetRegionType()),
+                                        static_cast<unsigned int>(head->GetRouteState()));
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());

@@ -823,6 +823,9 @@ public:
     {
         if (IsGhostFromRegion()) {
             size_t nUnit = GetUnitCount();
+            TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
+                                        GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
+                                        static_cast<unsigned int>(GetRouteState()));
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
@@ -836,8 +839,12 @@ public:
 
     void DispelGhostFromRegion()
     {
-        metadata.routeState = NORMAL;
         size_t nUnit = GetGhostRegionUnitCount();
+        TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
+                                    static_cast<unsigned int>(IsGhostFromRegion()),
+                                    static_cast<unsigned int>(GetRegionType()),
+                                    static_cast<unsigned int>(GetRouteState()));
+        metadata.routeState = NORMAL;
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
