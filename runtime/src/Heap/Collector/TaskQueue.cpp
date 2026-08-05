@@ -28,6 +28,7 @@ bool GCExecutor::Execute(void* owner)
                 GCStats::SetPrevGCStartTime(curTime);
                 collectorProxy->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
                 GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+                GCStats::NoteSetPrevGCFinishTime(GC_REASON_BACKUP);
             }
             break;
         }
@@ -37,7 +38,9 @@ bool GCExecutor::Execute(void* owner)
             // A young collection must not re-arm the heuristic/native full-GC throttle.
             if (gcReason != GC_REASON_YOUNG) {
                 GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+                GCStats::NoteSetPrevGCFinishTime(gcReason);
             }
+            GCStats::DumpThrottleProbe("post-gc");
             break;
         }
         case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {

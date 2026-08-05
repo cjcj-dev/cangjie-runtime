@@ -968,6 +968,20 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                      youngTriggerCeiling, youngRegionTriggerBytes < heapThreshold);
             }
             DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
+            {
+                static const bool throttleProbe = []() {
+                    const char* v = std::getenv("MRT_GCV2_THROTTLE_PROBE");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
+                if (throttleProbe) {
+                    VLOG(REPORT,
+                         "[GCV2][throttle-probe] young-request youngAllocated=%zu threshold=%zu overshootX=%.3f",
+                         youngAllocated, youngRegionTriggerBytes,
+                         youngRegionTriggerBytes == 0
+                             ? 0.0
+                             : static_cast<double>(youngAllocated) / static_cast<double>(youngRegionTriggerBytes));
+                }
+            }
             collector.RequestGC(GC_REASON_YOUNG, true);
         } else {
             size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();

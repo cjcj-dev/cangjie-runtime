@@ -39,8 +39,18 @@ public:
 
     static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime = timestamp; }
 
+    // Default-off cadence probe (MRT_GCV2_THROTTLE_PROBE=1). Records who writes
+    // prevGcFinishTime and who is suppressed by IsFrequentAsyncGC's 200ms window.
+    static void NoteSetPrevGCFinishTime(GCReason reason);
+    static void NoteThrottleHit(GCReason suppressedReason, GCReason lastWriterReason, uint64_t ageNs);
+    static void DumpThrottleProbe(const char* site);
+
     static uint64_t prevGcStartTime;
     static uint64_t prevGcFinishTime;
+    static std::atomic<uint32_t> lastPrevGcFinishReason;
+    static std::atomic<uint64_t> setPrevFinishByReason[GC_REASON_MAX];
+    static std::atomic<uint64_t> throttleHitByReason[GC_REASON_MAX];
+    static std::atomic<uint64_t> throttleHitTotal;
 
     GCReason reason;
     bool isConcurrentMark;

@@ -28,7 +28,14 @@ inline bool GCRequest::IsFrequentGC() const
 inline bool GCRequest::IsFrequentAsyncGC() const
 {
     int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
-    return (now - GCStats::GetPrevGCFinishTime() < minIntervelNs);
+    uint64_t prev = GCStats::GetPrevGCFinishTime();
+    bool frequent = (now - static_cast<int64_t>(prev) < static_cast<int64_t>(minIntervelNs));
+    if (frequent) {
+        GCStats::NoteThrottleHit(reason,
+            static_cast<GCReason>(GCStats::lastPrevGcFinishReason.load(std::memory_order_relaxed)),
+            static_cast<uint64_t>(now - static_cast<int64_t>(prev)));
+    }
+    return frequent;
 }
 
 // heuristic gc is triggered by object allocation,

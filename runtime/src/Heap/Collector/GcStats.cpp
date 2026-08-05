@@ -20,6 +20,86 @@ size_t g_gcCollectedTotalBytes = 0;
 
 uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
 uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+std::atomic<uint32_t> GCStats::lastPrevGcFinishReason{GC_REASON_INVALID};
+std::atomic<uint64_t> GCStats::setPrevFinishByReason[GC_REASON_MAX]{};
+std::atomic<uint64_t> GCStats::throttleHitByReason[GC_REASON_MAX]{};
+std::atomic<uint64_t> GCStats::throttleHitTotal{0};
+
+namespace {
+bool ThrottleProbeEnabled()
+{
+    static const bool enabled = []() {
+        const char* v = std::getenv("MRT_GCV2_THROTTLE_PROBE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return enabled;
+}
+
+const char* ReasonName(GCReason reason)
+{
+    if (reason < GC_REASON_MAX) {
+        return g_gcRequests[reason].name;
+    }
+    return "invalid";
+}
+} // namespace
+
+void GCStats::NoteSetPrevGCFinishTime(GCReason reason)
+{
+    if (!ThrottleProbeEnabled() || reason >= GC_REASON_MAX) {
+        return;
+    }
+    lastPrevGcFinishReason.store(static_cast<uint32_t>(reason), std::memory_order_relaxed);
+    setPrevFinishByReason[reason].fetch_add(1, std::memory_order_relaxed);
+}
+
+void GCStats::NoteThrottleHit(GCReason suppressedReason, GCReason lastWriterReason, uint64_t ageNs)
+{
+    if (!ThrottleProbeEnabled() || suppressedReason >= GC_REASON_MAX) {
+        return;
+    }
+    throttleHitTotal.fetch_add(1, std::memory_order_relaxed);
+    throttleHitByReason[suppressedReason].fetch_add(1, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][throttle-probe] HIT suppressed=%s lastWriter=%s ageNs=%llu minIntervalNs=%llu",
+         ReasonName(suppressedReason), ReasonName(lastWriterReason),
+         static_cast<unsigned long long>(ageNs),
+         static_cast<unsigned long long>(LONG_MIN_HEU_GC_INTERVAL_NS));
+}
+
+void GCStats::DumpThrottleProbe(const char* site)
+{
+    if (!ThrottleProbeEnabled()) {
+        return;
+    }
+    VLOG(REPORT,
+         "[GCV2][throttle-probe] dump site=%s totalHits=%llu lastWriter=%s "
+         "setFinish[user=%llu oom=%llu backup=%llu heu=%llu native=%llu heu_sync=%llu "
+         "native_sync=%llu force=%llu young=%llu] "
+         "hits[user=%llu oom=%llu backup=%llu heu=%llu native=%llu heu_sync=%llu "
+         "native_sync=%llu force=%llu young=%llu]",
+         site,
+         static_cast<unsigned long long>(throttleHitTotal.load(std::memory_order_relaxed)),
+         ReasonName(static_cast<GCReason>(lastPrevGcFinishReason.load(std::memory_order_relaxed))),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_USER].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_OOM].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_BACKUP].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_HEU].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_NATIVE].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_HEU_SYNC].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_NATIVE_SYNC].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_FORCE].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(setPrevFinishByReason[GC_REASON_YOUNG].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_USER].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_OOM].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_BACKUP].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_HEU].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_NATIVE].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_HEU_SYNC].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_NATIVE_SYNC].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_FORCE].load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(throttleHitByReason[GC_REASON_YOUNG].load(std::memory_order_relaxed)));
+}
 
 void GCStats::Init()
 {
