@@ -785,7 +785,8 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                                  accountRegion->IsFromRegion();
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, toSpaceHolder, &fields,
+            obj->ForEachRefField([this, obj, requireSurvivedMark, recordCrossGen, rebuildRemset, forwardHolder,
+                                  toSpaceHolder, &fields,
                                   &oldTaggedSlots, &fixedSlots, &youngTargetSlots, &fromLiveFields,
                                   &rebuilt, &epochFields, &epochToSpaceFields, &epochOldTaggedSlots,
                                   &epochToSpaceOldTaggedSlots](RefField<>& field) {
