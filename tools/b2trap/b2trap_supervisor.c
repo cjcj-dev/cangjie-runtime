@@ -25,6 +25,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <time.h>
+#include <dirent.h>
 
 #define MAX_WP 4
 #define DUMP_MAX_PER_MAP (512UL * 1024 * 1024)
@@ -33,6 +34,7 @@
 #define MAX_INTEREST 64
 #define MAX_SWBP 64
 #define MAX_ARMED 512
+#define MAX_TIDS 256
 #define NODE_OBJ_SIZE 48
 #define NODE_NEXT_OFF 16
 
@@ -84,6 +86,16 @@ static unsigned long g_step_replant = 0;
 
 static pid_t g_armed[MAX_ARMED];
 static int g_narmed_t = 0;
+
+// All observed tids (clone/stop); used for all-thread stack dump at fatal (T0 b2window).
+static pid_t g_tids[MAX_TIDS];
+static int g_ntids = 0;
+static unsigned long g_libc_lo = 0, g_libc_hi = 0;
+static unsigned long g_memmove_lo = 0, g_memmove_hi = 0; // __memmove_ssse3-ish range
+static unsigned long g_boundscheck_lo = 0, g_boundscheck_hi = 0;
+static unsigned long g_runtime_lo = 0, g_runtime_hi = 0;
+static unsigned long g_overlap_hits = 0;
+static unsigned long g_threads_dumped = 0;
 
 static void logln(const char *fmt, ...) {
     va_list ap;
@@ -204,7 +216,18 @@ static void set_watchpoints(pid_t pid) {
 
 // DRs are NOT inherited across clone on Linux (verified empirically 2026-08-05):
 // every newly attached thread must be armed at its initial stop before it runs user code.
+static void track_tid(pid_t tid) {
+    if (tid <= 0)
+        return;
+    for (int i = 0; i < g_ntids; i++)
+        if (g_tids[i] == tid)
+            return;
+    if (g_ntids < MAX_TIDS)
+        g_tids[g_ntids++] = tid;
+}
+
 static void maybe_arm(pid_t tid) {
+    track_tid(tid);
     if (!g_nwp)
         return;
     for (int i = 0; i < g_narmed_t; i++)
@@ -632,6 +655,217 @@ static void dump_thread_regs(pid_t tid, const char *tag) {
     }
 }
 
+// Learn libc / libboundscheck / runtime maps for rip classification at fatal.
+static void learn_lib_maps(pid_t pid) {
+    char p[64];
+    snprintf(p, sizeof p, "/proc/%d/maps", pid);
+    FILE *f = fopen(p, "r");
+    if (!f)
+        return;
+    char line[512];
+    while (fgets(line, sizeof line, f)) {
+        unsigned long lo, hi;
+        char perm[8] = {0};
+        unsigned long long off;
+        char path[256] = {0};
+        if (sscanf(line, "%lx-%lx %4s %llx %*s %*s %255[^\n]", &lo, &hi, perm, &off, path) < 4)
+            continue;
+        if (perm[2] != 'x')
+            continue;
+        if (strstr(path, "libc.so") || strstr(path, "libc-")) {
+            if (!g_libc_lo || lo < g_libc_lo)
+                g_libc_lo = lo;
+            if (hi > g_libc_hi)
+                g_libc_hi = hi;
+        } else if (strstr(path, "libboundscheck")) {
+            if (!g_boundscheck_lo || lo < g_boundscheck_lo)
+                g_boundscheck_lo = lo;
+            if (hi > g_boundscheck_hi)
+                g_boundscheck_hi = hi;
+        } else if (strstr(path, "libcangjie-runtime") || strstr(path, "cangjie-runtime")) {
+            if (!g_runtime_lo || lo < g_runtime_lo)
+                g_runtime_lo = lo;
+            if (hi > g_runtime_hi)
+                g_runtime_hi = hi;
+        }
+    }
+    fclose(f);
+    // __memmove_ssse3 is inside libc text; without symbol table we treat whole libc-x as memmove-ish
+    // and refine with stack/caller (boundscheck memmove_s) on match.
+    g_memmove_lo = g_libc_lo;
+    g_memmove_hi = g_libc_hi;
+    logln("LIB_MAPS libc=%#lx-%#lx boundscheck=%#lx-%#lx runtime=%#lx-%#lx", g_libc_lo, g_libc_hi, g_boundscheck_lo,
+          g_boundscheck_hi, g_runtime_lo, g_runtime_hi);
+}
+
+static int in_range(unsigned long pc, unsigned long lo, unsigned long hi) {
+    return lo && hi && pc >= lo && pc < hi;
+}
+
+static const char *classify_pc(unsigned long rip) {
+    if (is_exe_ptr(rip))
+        return "exe";
+    if (in_range(rip, g_libc_lo, g_libc_hi))
+        return "libc";
+    if (in_range(rip, g_boundscheck_lo, g_boundscheck_hi))
+        return "boundscheck";
+    if (in_range(rip, g_runtime_lo, g_runtime_hi))
+        return "runtime";
+    return "other";
+}
+
+// Return 1 if dest interval [dest, dest+len) covers any armed slot or interest addr.
+static int dest_covers_interest(unsigned long dest, unsigned long len, unsigned long *interest, int ninterest) {
+    if (!len || !dest)
+        return 0;
+    // Cap absurd rcx (ssse3 may use other regs mid-copy)
+    if (len > 64UL * 1024 * 1024)
+        len = 64UL * 1024 * 1024;
+    unsigned long d0 = dest;
+    unsigned long d1 = dest + len;
+    if (d1 < d0)
+        d1 = dest + 0x1000; // wrap guard: treat as small window
+    for (int i = 0; i < g_nwp; i++) {
+        unsigned long s = g_wp[i];
+        if (s && s >= d0 && s < d1)
+            return 1;
+    }
+    for (int i = 0; i < ninterest; i++) {
+        unsigned long s = interest[i];
+        if (!s)
+            continue;
+        // 8-byte slot alignment check around interest
+        unsigned long slot = s & ~7UL;
+        if (slot >= d0 && slot < d1)
+            return 1;
+        if (s >= d0 && s < d1)
+            return 1;
+    }
+    return 0;
+}
+
+// Dump every known thread: pc + rbp walk + memmove/bulk overlap check.
+// Requires all threads stopped (ptrace stop on fatal delivery; siblings may still be running —
+// we interrupt them with PTRACE_INTERRUPT when available, else best-effort GETREGS).
+static void dump_all_thread_stacks(pid_t fatal_tid, unsigned long *interest, int ninterest) {
+    track_tid(fatal_tid);
+    // Also scan /proc/pid/task for any tid we missed
+    char tdir[64];
+    snprintf(tdir, sizeof tdir, "/proc/%d/task", g_mainpid > 0 ? g_mainpid : fatal_tid);
+    DIR *d = opendir(tdir);
+    if (d) {
+        struct dirent *de;
+        while ((de = readdir(d)) != 0) {
+            if (de->d_name[0] < '0' || de->d_name[0] > '9')
+                continue;
+            track_tid((pid_t)atoi(de->d_name));
+        }
+        closedir(d);
+    }
+    learn_lib_maps(fatal_tid);
+    logln("ALL_THREADS_BEGIN n=%d fatal_tid=%d nwp=%d ninterest=%d", g_ntids, fatal_tid, g_nwp, ninterest);
+    // Stop siblings so GETREGS is coherent. TRACEME path has no PTRACE_SEIZE ⇒ no PTRACE_INTERRUPT;
+    // use tgkill(SIGSTOP). Their later waitpid stop is swallowed (SIGSTOP handler below).
+    for (int ti = 0; ti < g_ntids; ti++) {
+        if (g_tids[ti] != fatal_tid)
+            tgkill(g_mainpid > 0 ? g_mainpid : fatal_tid, g_tids[ti], SIGSTOP);
+    }
+    // Drain stop notifications briefly (fixed budget; no pgrep loops)
+    for (int spin = 0; spin < g_ntids * 4 + 8; spin++) {
+        int st = 0;
+        pid_t w = waitpid(-1, &st, __WALL | WNOHANG);
+        if (w <= 0)
+            break;
+        // leave them stopped; do not CONT yet
+        (void)st;
+    }
+    int n_memmove = 0, n_overlap = 0, n_ok = 0;
+    for (int ti = 0; ti < g_ntids; ti++) {
+        pid_t tid = g_tids[ti];
+        struct user_regs_struct r;
+        memset(&r, 0, sizeof r);
+        if (ptrace(PTRACE_GETREGS, tid, 0, &r) != 0) {
+            logln("THREAD_STACK tid=%d GETREGS_FAIL errno=%d", tid, errno);
+            continue;
+        }
+        n_ok++;
+        g_threads_dumped++;
+        unsigned long rip = (unsigned long)r.rip;
+        unsigned long rsp = (unsigned long)r.rsp;
+        unsigned long rbp = (unsigned long)r.rbp;
+        unsigned long rdi = (unsigned long)r.rdi;
+        unsigned long rsi = (unsigned long)r.rsi;
+        unsigned long rdx = (unsigned long)r.rdx;
+        unsigned long rcx = (unsigned long)r.rcx;
+        unsigned long rbx = (unsigned long)r.rbx;
+        const char *pccls = classify_pc(rip);
+        int in_libc = in_range(rip, g_libc_lo, g_libc_hi);
+        int in_bc = in_range(rip, g_boundscheck_lo, g_boundscheck_hi);
+        // ssse3 memmove: dest progress often in rdi; remaining length often rcx; bulk base rbx/rdx
+        unsigned long dest = rdi;
+        unsigned long rem = rcx;
+        // if rcx looks like pointer, try rdx as length (memcpy ABI: rdi dest, rsi src, rdx n)
+        if (rem > 0x1000000UL || rem == 0) {
+            if (rdx && rdx < 0x1000000UL)
+                rem = rdx;
+        }
+        int covers = dest_covers_interest(dest, rem ? rem : 64, interest, ninterest);
+        // also check dest-aligned window of 4KB around current progress (mid-copy rdi may be unaligned)
+        if (!covers && dest) {
+            unsigned long dbase = dest & ~0xfffUL;
+            covers = dest_covers_interest(dbase, 0x2000, interest, ninterest);
+        }
+        int memmove_like = in_libc || in_bc;
+        // stack scan for boundscheck / memmove return addresses
+        int stack_bc = 0, stack_libc = 0, stack_rt = 0;
+        for (int k = 0; k < 64; k++) {
+            unsigned long word = 0;
+            if (peek(tid, rsp + (unsigned long)k * 8, &word) != 0)
+                break;
+            if (in_range(word, g_boundscheck_lo, g_boundscheck_hi))
+                stack_bc = 1;
+            if (in_range(word, g_libc_lo, g_libc_hi))
+                stack_libc = 1;
+            if (in_range(word, g_runtime_lo, g_runtime_hi))
+                stack_rt = 1;
+        }
+        if (stack_bc && (in_libc || stack_libc))
+            memmove_like = 1;
+        logln("THREAD_STACK tid=%d fatal=%d rip=%#lx pccls=%s rsp=%#lx rbp=%#lx "
+              "rdi=%#lx rsi=%#lx rdx=%#lx rcx=%#lx rbx=%#lx "
+              "memmove_like=%d covers_slot=%d stack_bc=%d stack_libc=%d stack_rt=%d",
+              tid, tid == fatal_tid, rip, pccls, rsp, rbp, rdi, rsi, rdx, rcx, rbx, memmove_like, covers, stack_bc,
+              stack_libc, stack_rt);
+        // frame walk
+        unsigned long bp = rbp;
+        for (int f = 0; f < 16 && bp > 0x1000; f++) {
+            unsigned long saved_bp = 0, ret = 0;
+            if (peek(tid, bp, &saved_bp) != 0)
+                break;
+            if (peek(tid, bp + 8, &ret) != 0)
+                break;
+            logln("THREAD_FRAME tid=%d f=%d rbp=%#lx ret=%#lx retcls=%s", tid, f, bp, ret, classify_pc(ret));
+            if (saved_bp <= bp)
+                break;
+            bp = saved_bp;
+        }
+        if (memmove_like)
+            n_memmove++;
+        if (memmove_like && covers) {
+            n_overlap++;
+            g_overlap_hits++;
+            logln("B2WIN_OVERLAP tid=%d rip=%#lx dest=%#lx rem=%#lx covers=1 "
+                  "=> mutator in memmove covering interest/armed slot at fatal",
+                  tid, rip, dest, rem);
+        }
+    }
+    logln("ALL_THREADS_END n=%d got_regs=%d memmove_like=%d overlap=%d", g_ntids, n_ok, n_memmove, n_overlap);
+    if (n_overlap > 0)
+        logln("B2WIN_OVERLAP_CONFIRMED_%d/%d", n_overlap, n_ok > 0 ? n_ok : g_ntids);
+    else
+        logln("B2WIN_NO_OVERLAP n_threads=%d memmove_like=%d", n_ok, n_memmove);
+}
+
 static void on_fatal(pid_t tid, int sig) {
     const char *stag = sig == SIGABRT ? "abrt" : sig == SIGSEGV ? "segv" : "fatal";
     logln("FATAL_SIGNAL tid=%d sig=%d -> dumping", tid, sig);
@@ -643,11 +877,15 @@ static void on_fatal(pid_t tid, int sig) {
     for (int i = 0; i < g_nwp && ninterest < MAX_INTEREST; i++)
         interest[ninterest++] = g_wp[i];
 
+    // T0 b2window: all-thread stacks + memmove∩slot overlap before heavy memory dump
+    dump_all_thread_stacks(tid, interest, ninterest);
+
     g_fatal_count++;
     int do_full = g_force_full || (!g_force_bounded && g_fatal_count <= g_full_dump_cap);
-    logln("DUMP_POLICY fatal_n=%d full_cap=%d mode=%s ninterest=%d midrun_nodes=%lu swbp_hits=%lu wp_interior=%lu",
+    logln("DUMP_POLICY fatal_n=%d full_cap=%d mode=%s ninterest=%d midrun_nodes=%lu swbp_hits=%lu wp_interior=%lu "
+          "overlap=%lu thr_dumped=%lu",
           g_fatal_count, g_full_dump_cap, do_full ? "full" : "bounded", ninterest, g_node_seen, g_swbp_hits,
-          g_wp_interior_hits);
+          g_wp_interior_hits, g_overlap_hits, g_threads_dumped);
     if (do_full)
         dump_all_memory(tid, stag);
     else
@@ -667,6 +905,15 @@ static void setup_after_exec(pid_t pid, const char *base) {
     g_wp_interior_hits = 0;
     g_rr = 0;
     g_bulk_transient = g_bulk_payload = g_bulk_unknown = 0;
+    g_overlap_hits = 0;
+    g_threads_dumped = 0;
+    g_ntids = 0;
+    g_libc_lo = g_libc_hi = 0;
+    g_memmove_lo = g_memmove_hi = 0;
+    g_boundscheck_lo = g_boundscheck_hi = 0;
+    g_runtime_lo = g_runtime_hi = 0;
+    track_tid(pid);
+    learn_lib_maps(pid);
     for (int i = 0; i < MAX_WP; i++) {
         g_bulk_pending[i] = 0;
         g_bulk_slot[i] = 0;
@@ -861,6 +1108,8 @@ int main(int argc, char **argv) {
             unsigned long newtid = 0;
             ptrace(PTRACE_GETEVENTMSG, w, 0, &newtid);
             logln("CLONE tid=%d new=%lu", w, newtid);
+            if (newtid)
+                track_tid((pid_t)newtid);
             live++;
             ptrace(PTRACE_CONT, w, 0, 0);
             continue;
@@ -1054,9 +1303,11 @@ int main(int argc, char **argv) {
         g_bulk_pending[i] = 0;
     }
     logln("SUPERVISOR_END exit=%d termsig=%d fatal_seen=%d fatal_count=%d node_seen=%lu armed_total=%lu "
-          "swbp_hits=%lu wp_interior=%lu bulk_transient=%lu bulk_payload=%lu bulk_unknown=%lu",
+          "swbp_hits=%lu wp_interior=%lu bulk_transient=%lu bulk_payload=%lu bulk_unknown=%lu "
+          "overlap_hits=%lu threads_dumped=%lu ntids=%d",
           exit_code, termsig, fatal_seen, g_fatal_count, g_node_seen, g_node_armed_total, g_swbp_hits,
-          g_wp_interior_hits, g_bulk_transient, g_bulk_payload, g_bulk_unknown);
+          g_wp_interior_hits, g_bulk_transient, g_bulk_payload, g_bulk_unknown, g_overlap_hits, g_threads_dumped,
+          g_ntids);
     fclose(g_log);
     if (termsig > 0)
         return 128 + termsig;
