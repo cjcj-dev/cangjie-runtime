@@ -19,10 +19,10 @@
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
+#include "ObjectModel/MFuncdesc.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #include "StackMap/CompressedStackMap.h"
 #include "StackMap/StackMap.h"
-#include "UnwindStack/GcStackInfo.h"
 
 namespace MapleRuntime {
 namespace {
@@ -176,8 +176,9 @@ const char* ReasonNameLocal(StackMapInvalidReason r)
     return "unknown";
 }
 
-// Attribute B_slot to a managed frame: which FA range, symbol, stackmap validity, slot in precise map?
-// Logs [GCV2][B3ROOT][FRAME] — default-off with B3ROOT.
+// Attribute B_slot via FA chain walk (no Mutator uwContext — F3 abort often has empty/unreliable context).
+// x86_64 Cangjie frame: [FA]=callerFA, [FA+8]=return IP; startPC recovered via GetFuncStartPCFromFrameAddress.
+// Logs [GCV2][B3ROOT][FRAME].
 void AttributeConsSlotToFrame(void* consSlot, BaseObject* holder)
 {
     if (consSlot == nullptr || holder == nullptr) {
@@ -187,82 +188,120 @@ void AttributeConsSlotToFrame(void* consSlot, BaseObject* holder)
     MutatorManager::Instance().VisitAllMutators([slotAddr, holder, consSlot](Mutator& mut) {
         uintptr_t top = mut.GetStackTopAddr();
         uintptr_t sz = mut.GetStackSize();
-        if (top == 0 || sz == 0) {
+        if (top == 0 || sz == 0 || sz > (1ull << 28)) {
             return;
         }
         if (slotAddr < top || slotAddr >= top + sz) {
-            return; // not this mutator's stack
-        }
-        GCStackInfo gcStackInfo(&mut.GetUnwindContext());
-        gcStackInfo.FillInStackTrace();
-        auto& frames = gcStackInfo.GetStack();
-        if (frames.empty()) {
-            VLOG(REPORT, "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frames=0 (unwind empty)", consSlot, holder);
             return;
         }
-        // Frames are top-to-bottom; FA grows toward higher addresses (stack grows down).
-        // Slot lives in [nextFA, thisFA) for frame i when next is deeper, or [top, FA0) for top.
-        for (size_t i = 0; i < frames.size(); ++i) {
-            const FrameInfo& fr = frames[i];
-            uintptr_t fa = reinterpret_cast<uintptr_t>(fr.mFrame.GetFA());
-            uintptr_t lo = (i + 1 < frames.size()) ? reinterpret_cast<uintptr_t>(frames[i + 1].mFrame.GetFA()) : top;
-            // also allow slot just below FA (locals) even if next FA is wrong
-            if (!(slotAddr < fa && slotAddr >= lo) && !(slotAddr < fa && (fa - slotAddr) <= 8192)) {
-                continue;
+        // Seed FA: nearest saved FA word at/above slot that looks like a frame chain into this stack.
+        FrameAddress* fa = nullptr;
+        {
+            // scan upward from slot (toward higher addr) for a plausible FA pointer
+            uintptr_t scan = (slotAddr + sizeof(void*) - 1) & ~(sizeof(void*) - 1);
+            uintptr_t hi = top + sz;
+            for (size_t n = 0; n < 4096 && scan + sizeof(void*) <= hi; ++n, scan += sizeof(void*)) {
+                auto* cand = *reinterpret_cast<FrameAddress**>(scan);
+                uintptr_t c = reinterpret_cast<uintptr_t>(cand);
+                if (c > scan && c < hi && ((c & 0x7) == 0)) {
+                    // cand looks like FA further up the stack; treat scan itself as FA if [scan] is caller
+                    // Prefer: scan is the FA of the frame that owns slot (slot < FA).
+                    if (scan > slotAddr) {
+                        fa = reinterpret_cast<FrameAddress*>(scan);
+                        break;
+                    }
+                }
             }
-            if (fr.GetFrameType() != FrameType::MANAGED) {
-                VLOG(REPORT,
-                     "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frameIdx=%zu frameType=%u fa=%p "
-                     "offFromFA=%zd non-managed",
-                     consSlot, holder, i, static_cast<unsigned>(fr.GetFrameType()), reinterpret_cast<void*>(fa),
-                     static_cast<intptr_t>(fa) - static_cast<intptr_t>(slotAddr));
-                continue;
+        }
+        // Fallback: walk from stack top region looking for FA chain containing slot
+        if (fa == nullptr) {
+            // use mutator recorded FA if in range
+            FrameAddress* mutFa = mut.GetUnwindContext().frameInfo.mFrame.GetFA();
+            uintptr_t mfa = reinterpret_cast<uintptr_t>(mutFa);
+            if (mutFa != nullptr && mfa > slotAddr && mfa < top + sz) {
+                fa = mutFa;
             }
-            uintptr_t startIP = reinterpret_cast<uintptr_t>(fr.GetStartProc());
-            uintptr_t frameIP = reinterpret_cast<uintptr_t>(fr.mFrame.GetIP());
-            if (startIP == 0) {
-                const_cast<FrameInfo&>(fr).ResolveProcInfo();
-                startIP = reinterpret_cast<uintptr_t>(fr.GetStartProc());
+        }
+        if (fa == nullptr) {
+            VLOG(REPORT, "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p NO_FA_SEED top=%p sz=%zu", consSlot, holder,
+                 reinterpret_cast<void*>(top), sz);
+            return;
+        }
+        // Walk FA chain upward (caller direction) until FA > slot; the first FA > slot owns the locals below it.
+        size_t frameIdx = 0;
+        FrameAddress* cur = fa;
+        FrameAddress* owner = nullptr;
+        for (; cur != nullptr && frameIdx < 256; ++frameIdx) {
+            uintptr_t cfa = reinterpret_cast<uintptr_t>(cur);
+            if (cfa <= top || cfa >= top + sz) {
+                break;
             }
-            StackMapBuilder builder(startIP, frameIP, fa);
+            if (cfa > slotAddr) {
+                owner = cur;
+                break;
+            }
+            cur = cur->callerFrameAddress;
+        }
+        if (owner == nullptr) {
+            VLOG(REPORT, "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p NO_OWNER_FA seed=%p walked=%zu", consSlot, holder,
+                 fa, frameIdx);
+            return;
+        }
+        uintptr_t ownerFA = reinterpret_cast<uintptr_t>(owner);
+        // return IP sits at FA+sizeof(void*) on x86_64 System V
+        uintptr_t retIP = *reinterpret_cast<uintptr_t*>(ownerFA + sizeof(void*));
+        uint32_t* startPCPtr = FrameInfo::GetFuncStartPCFromFrameAddress(owner);
+        uintptr_t startIP = reinterpret_cast<uintptr_t>(startPCPtr);
+        // frameIP for stackmap is the IP at safepoint; retIP is the call-return site (same as unwind IP)
+        uintptr_t frameIP = retIP;
+        const char* sym = "?";
+        CString fname;
+        int hasDesc = 0;
+        U32 codeSize = 0;
+        if (startIP != 0) {
+            FuncDescRef desc = MFuncDesc::GetFuncDesc(startIP);
+            if (desc != nullptr) {
+                hasDesc = 1;
+                fname = desc->GetFuncName();
+                if (!fname.IsEmpty()) {
+                    sym = fname.Str();
+                }
+                codeSize = desc->GetCodeSize();
+            }
+        }
+        // stackmap at this PC
+        const char* mapState = "NO_START";
+        int inPrecise = 0;
+        int preciseSlotN = 0;
+        U32 pcOff = 0;
+        if (startIP != 0 && frameIP != 0) {
+            pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+            StackMapBuilder builder(startIP, frameIP, ownerFA);
             RootMap rootMap = builder.Build<RootMap>();
-            const char* mapState = "VALID";
-            StackMapInvalidReason reason = StackMapInvalidReason::NONE;
-            if (!rootMap.IsValid()) {
-                reason = builder.GetInvalidReason();
-                mapState = ReasonNameLocal(reason);
-            }
-            // Does precise slot list include this consSlot?
-            int inPrecise = 0;
-            int preciseSlotN = 0;
             if (rootMap.IsValid()) {
+                mapState = "VALID";
                 rootMap.VisitSlotRoots(
                     [](ObjectRef&) {},
-                    [slotAddr, &inPrecise, &preciseSlotN, fa](SlotBias bias, BaseObject*) {
+                    [slotAddr, &inPrecise, &preciseSlotN, ownerFA](SlotBias bias, BaseObject*) {
                         ++preciseSlotN;
-                        uintptr_t s = static_cast<uintptr_t>(static_cast<intptr_t>(fa) + bias);
+                        uintptr_t s = static_cast<uintptr_t>(static_cast<intptr_t>(ownerFA) + bias);
                         if (s == slotAddr) {
                             inPrecise = 1;
                         }
                     });
+            } else {
+                mapState = ReasonNameLocal(builder.GetInvalidReason());
             }
-            CString fname = fr.GetFuncName();
-            const char* sym = fname.IsEmpty() ? "?" : fname.Str();
-            // skip benign entry shells in the verdict tag but still log
-            int isEntryShell = (std::strcmp(sym, "user.main") == 0 || std::strcmp(sym, "cj_entry$") == 0) ? 1 : 0;
-            intptr_t offFromFA = static_cast<intptr_t>(fa) - static_cast<intptr_t>(slotAddr);
-            U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
-            VLOG(REPORT,
-                 "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frameIdx=%zu symbol=%s start_ip=%p frame_ip=%p "
-                 "pc_off=%u fa=%p offFromFA=%zd mapState=%s inPreciseSlot=%d preciseSlotN=%d entryShell=%d",
-                 consSlot, holder, i, sym, reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
-                 reinterpret_cast<void*>(fa), offFromFA, mapState, inPrecise, preciseSlotN, isEntryShell);
-            // one hit is enough
-            return;
         }
+        int isEntryShell = (std::strcmp(sym, "user.main") == 0 || std::strcmp(sym, "cj_entry$") == 0) ? 1 : 0;
+        intptr_t offFromFA = static_cast<intptr_t>(ownerFA) - static_cast<intptr_t>(slotAddr);
         VLOG(REPORT,
-             "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p NO_FRAME_MATCH frames=%zu top=%p", consSlot, holder,
-             frames.size(), reinterpret_cast<void*>(top));
+             "[GCV2][B3ROOT][FRAME] consSlot=%p holder=%p frameIdx=%zu symbol=%s start_ip=%p frame_ip=%p "
+             "pc_off=%u fa=%p offFromFA=%zd mapState=%s inPreciseSlot=%d preciseSlotN=%d entryShell=%d "
+             "hasDesc=%d codeSize=%u",
+             consSlot, holder, frameIdx, sym, reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+             reinterpret_cast<void*>(ownerFA), offFromFA, mapState, inPrecise, preciseSlotN, isEntryShell, hasDesc,
+             codeSize);
     });
 }
 
