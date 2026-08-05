@@ -14,6 +14,7 @@
 
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
+#include "Heap/Heap.h"
 
 namespace MapleRuntime {
 namespace {
@@ -31,6 +32,8 @@ struct Entry {
     MAddress start = 0;
     MAddress end = 0;
     uint64_t ns = 0;
+    uint64_t gcStartNs = 0;
+    unsigned int phase = 0;
     size_t liveBefore = 0;
     void* region = nullptr;
     char kind[kKindLen] = {};
@@ -45,7 +48,7 @@ size_t gTotal = 0;
 
 bool TraceClear::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_TRACE_CLEAR");
+    static const bool on = EnvIsOne("MRT_GCV2_TRACE_CLEAR") || EnvIsOne("MRT_GCV2_F3_REGION");
     return on;
 }
 
@@ -58,6 +61,8 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
     e.start = start;
     e.end = start + size;
     e.ns = TimeUtil::NanoSeconds();
+    e.gcStartNs = GCStats::GetPrevGCStartTime();
+    e.phase = static_cast<unsigned int>(Heap::GetHeap().GetGCPhase());
     e.liveBefore = liveBefore;
     e.region = region;
     if (kind != nullptr) {
@@ -71,9 +76,10 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
         ++gTotal;
     }
     VLOG(REPORT,
-         "[GCV2][trace-clear] kind=%s range=[%#zx,%#zx) size=%zu region=%p liveBefore=%zu total=%zu "
-         "env=MRT_GCV2_TRACE_CLEAR=1",
-         e.kind, static_cast<size_t>(e.start), static_cast<size_t>(e.end), size, region, liveBefore, gTotal);
+         "[GCV2][trace-clear] kind=%s range=[%#zx,%#zx) size=%zu region=%p liveBefore=%zu phase=%u "
+         "gcStartNs=%llu total=%zu env=MRT_GCV2_TRACE_CLEAR=1|MRT_GCV2_F3_REGION=1",
+         e.kind, static_cast<size_t>(e.start), static_cast<size_t>(e.end), size, region, liveBefore, e.phase,
+         static_cast<unsigned long long>(e.gcStartNs), gTotal);
 }
 
 bool TraceClear::Lookup(MAddress addr, char* buf, size_t bufSize)
@@ -99,9 +105,11 @@ bool TraceClear::Lookup(MAddress addr, char* buf, size_t bufSize)
         }
         if (addr >= e.start && addr < e.end) {
             std::snprintf(buf, bufSize,
-                          "yes kind=%s range=[%#zx,%#zx) region=%p liveBefore=%zu ageNs=%llu total=%zu",
+                          "yes kind=%s range=[%#zx,%#zx) region=%p liveBefore=%zu ageNs=%llu phase=%u "
+                          "gcStartNs=%llu total=%zu",
                           e.kind, static_cast<size_t>(e.start), static_cast<size_t>(e.end), e.region, e.liveBefore,
-                          static_cast<unsigned long long>(TimeUtil::NanoSeconds() - e.ns), gTotal);
+                          static_cast<unsigned long long>(TimeUtil::NanoSeconds() - e.ns), e.phase,
+                          static_cast<unsigned long long>(e.gcStartNs), gTotal);
             return true;
         }
     }
