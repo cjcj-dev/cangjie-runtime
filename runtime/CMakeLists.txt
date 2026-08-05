@@ -58,6 +58,18 @@ endif ()
 # project name: CangjieRuntime
 project(CangjieRuntime C CXX ASM)
 
+# Use a compiler cache when one is on PATH. Rebuilds of this tree are dominated by recompiling
+# translation units that did not change, which is exactly what the cache removes. Set
+# CANGJIE_DISABLE_COMPILER_CACHE=ON to build without it.
+if(NOT CANGJIE_DISABLE_COMPILER_CACHE)
+    find_program(CANGJIE_COMPILER_CACHE NAMES ccache sccache)
+    if(CANGJIE_COMPILER_CACHE)
+        message(STATUS "Using compiler cache: ${CANGJIE_COMPILER_CACHE}")
+        set(CMAKE_C_COMPILER_LAUNCHER "${CANGJIE_COMPILER_CACHE}")
+        set(CMAKE_CXX_COMPILER_LAUNCHER "${CANGJIE_COMPILER_CACHE}")
+    endif()
+endif()
+
 if(BUILD_GCC_TOOLCHAIN AND (CMAKE_C_COMPILER_ID STREQUAL "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "Clang"))
     message(STATUS "Add compile option for clang, --gcc-toolchain=${BUILD_GCC_TOOLCHAIN}")
     add_compile_options(--gcc-toolchain=${BUILD_GCC_TOOLCHAIN})

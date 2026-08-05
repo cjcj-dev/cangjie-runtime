@@ -10,6 +10,7 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "Heap/Heap.h"
 
