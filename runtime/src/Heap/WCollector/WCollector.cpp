@@ -1372,6 +1372,30 @@ void WCollector::PostResolveCycleTask()
 #endif
 }
 
+// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install plain target under multi-worker fix.
+// Same-value concurrent writes converge; first writer wins. Counters for positive control.
+namespace {
+std::atomic<size_t> g_minorRefCasFail{ 0 };
+std::atomic<size_t> g_minorRefCasOk{ 0 };
+
+// Install plain (untagged) target into field. expected = observed tagged/old value.
+// On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
+bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
+{
+    RefField<> desired(plainTarget);
+    MAddress desiredVal = desired.GetFieldValue();
+    if (expected == desiredVal) {
+        return true;
+    }
+    if (field.CompareExchange(expected, desiredVal)) {
+        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+} // namespace
+
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
@@ -1385,12 +1409,14 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     //   routed to-version → plain to
     //   unmoved valid from → plain from
     //   dead/stale → null the slot (caller drops the edge)
+    // N2: plain SetTargetObject → CAS (FYS=1 multi-writer safe; product default FYS=1).
+    MAddress expected = value.GetFieldValue();
     BaseObject* to = FindToVersion(object);
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            field.SetTargetObject(to);
+            (void)CasInstallPlainTarget(field, expected, to);
             return to;
         }
     }
@@ -1398,7 +1424,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
-            field.SetTargetObject(object);
+            (void)CasInstallPlainTarget(field, expected, object);
             return object;
         }
     }
@@ -1410,7 +1436,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              "(drop; full-GC remset/root residue after Flip)",
              &field, static_cast<size_t>(value.GetFieldValue()), object, to);
     }
-    field.SetTargetObject(nullptr);
+    (void)CasInstallPlainTarget(field, expected, nullptr);
     return nullptr;
 }
 
@@ -1832,7 +1858,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
             if (to == nullptr && !fromLive) {
                 ++scrubbedStaleOldTag;
-                field->SetTargetObject(nullptr);
+                // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
+                (void)CasInstallPlainTarget(*field, peek.GetFieldValue(), nullptr);
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,
@@ -1900,6 +1927,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 
 bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
 {
+    // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
+    // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
     BaseObject* target = ResolveMinorReference(field);
     BaseObject* current = target;
@@ -1907,12 +1936,28 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     RefField<> newField(current);
-    if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+    MAddress oldVal = oldField.GetFieldValue();
+    MAddress newVal = newField.GetFieldValue();
+    if (oldVal == newVal) {
         return false;
     }
-    CHECK_DETAIL(field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue()),
-                 "minor reference changed while the world was stopped field=%p from=%p to=%p",
-                 &field, target, current);
+    // Re-read after resolve (resolve may have CAS-installed plain already).
+    oldVal = field.GetFieldValue();
+    if (oldVal == newVal) {
+        return false;
+    }
+    if (field.CompareExchange(oldVal, newVal)) {
+        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    // CAS fail: accept if current == desired or already a plain/newer install (major style).
+    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    MAddress cur = field.GetFieldValue();
+    if (cur == newVal) {
+        return true;
+    }
+    // Peer may have installed same logical target via ResolveMinorReference first
+    // (old tagged → plain) then another worker forwarded; either is a valid fix.
     return true;
 }
 
@@ -1942,6 +1987,48 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
 }
 
+// R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
+// root families = 6 family-level tasks (static not split). Template = A2 stwpar2.
+// Env: MRT_GCV2_REFFIX_WORKERS, MRT_GCV2_REFFIX_FORCE_SERIAL.
+void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
+{
+    // 5 root families as separate tasks (static kept whole — mutex+dedup set).
+    // Order matches serial FixMinorRootSlots.
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+            RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            (void)FixMinorEvacuatedSlot(field);
+        };
+        MutatorManager::Instance().VisitAllMutators(
+            [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+    }));
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
+        RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+        Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    }));
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+            RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            (void)FixMinorEvacuatedSlot(field);
+        };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
+    }));
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+            RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            (void)FixMinorEvacuatedSlot(field);
+        };
+        collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
+    }));
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+            RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            (void)FixMinorEvacuatedSlot(field);
+        };
+        Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    }));
+}
+
 void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
@@ -1964,18 +2051,146 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         return object;
     };
 
-    auto fixForwardedReferences = [this, &reachableObjects, &rememberedSlots, &currentObject]() {
-        FixMinorRootSlots();
-        PreforwardDiscoveredExternObjects();
-        PreforwardAllResurrectExportFromObjects();
-        for (BaseObject* object : reachableObjects) {
-            FixMinorObjectSlots(currentObject(object));
+    // Materialize sets once as vectors for index sharding (object disjoint ⇒ slot disjoint
+    // for reachable holders; remset/root overlap covered by N1+N2 idempotent CAS).
+    std::vector<BaseObject*> reachableVec(reachableObjects.begin(), reachableObjects.end());
+    std::vector<MAddress> remsetVec(rememberedSlots.begin(), rememberedSlots.end());
+
+    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &currentObject](size_t beginObj, size_t endObj,
+                                                                           size_t beginSlot, size_t endSlot,
+                                                                           size_t& objectsTaken) {
+        for (size_t i = beginObj; i < endObj; ++i) {
+            FixMinorObjectSlots(currentObject(reachableVec[i]));
+            ++objectsTaken;
         }
-        for (MAddress slot : rememberedSlots) {
+        for (size_t i = beginSlot; i < endSlot; ++i) {
+            MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
                 (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
             }
         }
+    };
+
+    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &currentObject]() {
+        FixMinorRootSlots();
+        PreforwardDiscoveredExternObjects();
+        PreforwardAllResurrectExportFromObjects();
+        for (BaseObject* object : reachableVec) {
+            FixMinorObjectSlots(currentObject(object));
+        }
+        for (MAddress slot : remsetVec) {
+            if (Heap::IsHeapAddress(slot)) {
+                (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+            }
+        }
+    };
+
+    auto fixForwardedReferencesParallel = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
+        // T-D ③: dispel must stay frozen across the parallel window.
+        const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
+        // Positive control: MRT_GCV2_REFFIX_INJECT_DISPEL=1 forces a synthetic bump so
+        // the assertion path is proven to fire (not a silent always-pass).
+        {
+            const char* inject = std::getenv("MRT_GCV2_REFFIX_INJECT_DISPEL");
+            if (inject != nullptr && std::strcmp(inject, "1") == 0) {
+                RegionInfo::InjectDispelCountForTest();
+                VLOG(REPORT, "[GCV2][reffix] inject_dispel=1 (positive control)");
+            }
+        }
+
+        const size_t nObj = reachableVec.size();
+        const size_t nSlot = remsetVec.size();
+        const int32_t helperNum = pool->GetMaxThreadNum();
+        const int32_t poolCap = helperNum + 1;
+        int32_t heapWorkers = poolCap;
+        {
+            const char* wEnv = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (wEnv != nullptr && wEnv[0] != '\0') {
+                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
+                if (want >= 1 && want < heapWorkers) {
+                    heapWorkers = want;
+                }
+            }
+        }
+        // At least 1 heap worker; root families = 5 additional tasks.
+        if (heapWorkers < 1) {
+            heapWorkers = 1;
+        }
+        std::vector<size_t> objectsTaken(static_cast<size_t>(heapWorkers), 0);
+        std::atomic<size_t> objCursor{ 0 };
+        std::atomic<size_t> slotCursor{ 0 };
+        // Chunk size: aim ~heapWorkers*4 grabs for load balance; min 64 objects.
+        const size_t objChunk = std::max<size_t>(64, (nObj + static_cast<size_t>(heapWorkers) * 4 - 1) /
+                                                        (static_cast<size_t>(heapWorkers) * 4 + 1));
+        const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
+                                                         (static_cast<size_t>(heapWorkers) * 4 + 1));
+
+        FixMinorRootSlotsParallel(pool);
+        pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
+        pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
+
+        for (int32_t w = 0; w < heapWorkers; ++w) {
+            size_t* taken = &objectsTaken[static_cast<size_t>(w)];
+            pool->AddWork(new (std::nothrow) LambdaWork(
+                [fixHeapSlice, &objCursor, &slotCursor, nObj, nSlot, objChunk, slotChunk, taken](size_t) {
+                    for (;;) {
+                        size_t o0 = nObj;
+                        size_t o1 = nObj;
+                        size_t s0 = nSlot;
+                        size_t s1 = nSlot;
+                        bool got = false;
+                        if (objCursor.load(std::memory_order_relaxed) < nObj) {
+                            o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
+                            if (o0 < nObj) {
+                                o1 = std::min(o0 + objChunk, nObj);
+                                got = true;
+                            } else {
+                                o0 = o1 = nObj;
+                            }
+                        }
+                        if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
+                            s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
+                            if (s0 < nSlot) {
+                                s1 = std::min(s0 + slotChunk, nSlot);
+                                got = true;
+                            } else {
+                                s0 = s1 = nSlot;
+                            }
+                        }
+                        if (!got) {
+                            break;
+                        }
+                        fixHeapSlice(o0, o1, s0, s1, *taken);
+                    }
+                }));
+        }
+
+        pool->Start();
+        pool->WaitFinish();
+
+        const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
+        CHECK_DETAIL(dispelAtExit == dispelAtEntry,
+                     "T-D ghost dispel during parallel ref_fix window entry=%zu exit=%zu "
+                     "(plain InGhostFromRegion read assumes phase isolation)",
+                     dispelAtEntry, dispelAtExit);
+
+        size_t active = 0;
+        std::string takenStr;
+        for (size_t i = 0; i < objectsTaken.size(); ++i) {
+            if (objectsTaken[i] != 0) {
+                ++active;
+            }
+            if (i != 0) {
+                takenStr += ',';
+            }
+            takenStr += std::to_string(objectsTaken[i]);
+        }
+        VLOG(REPORT,
+             "[GCV2][reffix][parallel] workers_active=%zu workers_scheduled=%d objects_taken=[%s] "
+             "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu parallel=1",
+             active, heapWorkers, takenStr.c_str(), nObj, nSlot,
+             g_minorRefCasOk.load(std::memory_order_relaxed),
+             g_minorRefCasFail.load(std::memory_order_relaxed));
     };
 
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
@@ -1985,6 +2200,18 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
         MRT_PHASE_TIMER("young.ref_fix");
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+
+        GCThreadPool* threadPool = GetThreadPool();
+        static const bool forceSerialEnv = []() {
+            const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        const bool forceSerial = forceSerialEnv;
+        const bool useParallel = threadPool != nullptr && !forceSerial;
+
+        // pass1 root fix (before PrepareForwardTable) — serial sandwich stays;
+        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
+        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
         FixMinorRootSlots();
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
@@ -1994,7 +2221,26 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
-        fixForwardedReferences();
+
+        // Reset CAS counters for this fix window (positive-control visibility).
+        g_minorRefCasFail.store(0, std::memory_order_relaxed);
+        g_minorRefCasOk.store(0, std::memory_order_relaxed);
+
+        if (!useParallel) {
+            VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial pool_unavailable");
+            // pass1 roots already done; only heap+remset+pass2 roots remain.
+            // Mirror serial fixForwardedReferences but roots again (same as before).
+            fixForwardedReferencesSerial();
+            VLOG(REPORT,
+                 "[GCV2][reffix][parallel] workers_active=1 workers_scheduled=1 objects_taken=[%zu] "
+                 "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu parallel=0",
+                 reachableVec.size(), reachableVec.size(), remsetVec.size(),
+                 g_minorRefCasOk.load(std::memory_order_relaxed),
+                 g_minorRefCasFail.load(std::memory_order_relaxed));
+        } else {
+            fixForwardedReferencesParallel(threadPool);
+        }
+
         ValidateMinorReferences("before-return", &reachableObjects);
         // Mid-evac checkpoint: after slot fix, before region reclaim.
         postEvacPoint("post-fix-pre-forward", true);
