@@ -419,6 +419,8 @@ public:
     }
 
     void ReclaimRegion(RegionInfo* region);
+    // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
+    void ReclaimRegionToMarkQuarantine(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
     // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
     // Called on both CollectRegion and the direct large-region release path.
@@ -613,19 +615,32 @@ public:
     {
         size_t retainedRegions = 0;
         size_t retainedBytes = 0;
-        ghostFromRegionList.VisitAllGhostRegions([this, &retainedRegions, &retainedBytes](RegionInfo* region) {
+        size_t markQuarantinedRegions = 0;
+        size_t markQuarantinedBytes = 0;
+        ghostFromRegionList.VisitAllGhostRegions(
+            [this, &retainedRegions, &retainedBytes, &markQuarantinedRegions,
+             &markQuarantinedBytes](RegionInfo* region) {
             DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
                  region->GetRegionEnd());
+            // Count ghost garbage retention before dispel (historical GhostRetention metric).
             if (region->IsGhostFromRegion() && region->IsGarbageRegion()) {
                 ++retainedRegions;
                 retainedBytes += region->GetGhostRegionSize();
             }
             region->DispelGhostFromRegion();
             if (TryTakeGarbageRegionAfterDispel(region)) {
-                ReclaimRegion(region);
+                // mark-epoch gate (OPTION_2): do not publish to dirty tree until major mark ends.
+                // Mutator TakeRegion would ClearUnits payload while concurrent mark may still
+                // follow plain SATB edges into this range (REPORT-tracewin 16/16).
+                size_t bytes = region->GetRegionSize();
+                ReclaimRegionToMarkQuarantine(region);
+                ++markQuarantinedRegions;
+                markQuarantinedBytes += bytes;
             }
         });
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
+        VLOG(REPORT, "[MarkQuarantine] installed_regions=%zu installed_bytes=%zu held_units=%u",
+             markQuarantinedRegions, markQuarantinedBytes, freeRegionManager.GetMarkQuarantineUnitCount());
 
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
@@ -634,6 +649,25 @@ public:
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
+    }
+
+    // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
+    // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
+    // ranges are no longer traced. Safe to publish units to dirty tree for ClearUnits reuse.
+    // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
+    // released here — mark is already done, so no TRACE can race those units. Units held from
+    // prior minor PrepareForwardTable are the ones that covered the TRACE window.
+    void ReleaseMarkQuarantine()
+    {
+        size_t heldBefore = freeRegionManager.GetMarkQuarantineUnitCount();
+        size_t units = freeRegionManager.ReleaseMarkQuarantineToDirty();
+        size_t bytes = units * RegionInfo::UNIT_SIZE;
+        VLOG(REPORT,
+             "[MarkQuarantine] released_units=%zu released_bytes=%zu held_before=%zu held_after=%u",
+             units, bytes, heldBefore, freeRegionManager.GetMarkQuarantineUnitCount());
+        // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
+        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
+             heldBefore * RegionInfo::UNIT_SIZE);
     }
 
     void ClearAllLiveInfo()

@@ -947,6 +947,10 @@ void WCollector::PostTrace()
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
     InvalidateOldTaggedRefsBeforeDispel();
     fwdTable.PrepareForwardTable();
+    // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
+    // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
+    // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
+    space.GetRegionManager().ReleaseMarkQuarantine();
 }
 
 void WCollector::Preforward()

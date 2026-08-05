@@ -27,12 +27,14 @@ public:
     {
         dirtyUnitTree.Fini();
         releasedUnitTree.Fini();
+        markQuarantineTree.Fini();
     }
 
     void Initialize(UnitCount regionCnt)
     {
         releasedUnitTree.Init(regionCnt);
         dirtyUnitTree.Init(regionCnt);
+        markQuarantineTree.Init(regionCnt);
     }
 
     RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem)
@@ -110,6 +112,49 @@ public:
         }
     }
 
+    // mark-epoch quarantine: units reclaimed after DispelGhost must not enter the dirty
+    // tree (mutator TakeRegion → ClearUnits) until the next major concurrent mark ends.
+    // INV: concurrent mark may still hold plain strong refs into this range (SATB).
+    void AddMarkQuarantineUnits(UnitIndex idx, UnitCount num)
+    {
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
+        if (UNLIKELY(!markQuarantineTree.MergeInsert(idx, num, true))) {
+            LOG(RTLOG_FATAL, "tid %d: failed to add mark-quarantine units [%u+%u, %u)", GetTid(), idx, num, idx + num);
+        }
+    }
+
+    // Release point = major PostTrace entry (TRACE+CLEAR_SATB done). Moves all quarantined
+    // units into the dirty tree so allocation may ClearUnits them again.
+    size_t ReleaseMarkQuarantineToDirty()
+    {
+        size_t releasedUnits = 0;
+        ScopedEnterSaferegion enterSaferegion(true);
+        std::lock_guard<std::mutex> lockQ(markQuarantineTreeMutex);
+        std::lock_guard<std::mutex> lockD(dirtyUnitTreeMutex);
+        while (true) {
+            auto node = markQuarantineTree.RootNode();
+            if (node == nullptr) {
+                break;
+            }
+            UnitIndex idx = node->GetIndex();
+            UnitCount num = node->GetCount();
+            markQuarantineTree.ReleaseRootNode();
+            if (UNLIKELY(!dirtyUnitTree.MergeInsert(idx, num, true))) {
+                LOG(RTLOG_FATAL, "tid %d: failed to promote mark-quarantine units [%u+%u, %u) to dirty",
+                    GetTid(), idx, num, idx + num);
+            }
+            releasedUnits += num;
+        }
+        return releasedUnits;
+    }
+
+    UnitCount GetMarkQuarantineUnitCount() const
+    {
+        std::lock_guard<std::mutex> lg(markQuarantineTreeMutex);
+        return markQuarantineTree.GetTotalCount();
+    }
+
     void AddReleaseUnits(UnitIndex idx, UnitCount num)
     {
         ScopedEnterSaferegion enterSaferegion(true);
@@ -179,6 +224,10 @@ private:
     // dirty units are neither cleared nor released, thus must be zeroed explicitly for allocation.
     mutable std::mutex dirtyUnitTreeMutex;
     CartesianTree dirtyUnitTree;
+
+    // Post-dispel units held until major mark ends (see AddMarkQuarantineUnits).
+    mutable std::mutex markQuarantineTreeMutex;
+    CartesianTree markQuarantineTree;
 };
 } // namespace MapleRuntime
 #endif // MRT_FREE_REGION_MANAGER_H
