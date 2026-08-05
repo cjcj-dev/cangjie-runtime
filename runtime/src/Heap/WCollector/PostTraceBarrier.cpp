@@ -7,6 +7,7 @@
 
 #include "PostTraceBarrier.h"
 
+#include "Heap/Verify/BulkEdge.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -113,6 +114,9 @@ void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dst
 {
     CHECK(obj != nullptr);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dst, dstLen, "PostTrace.WriteStruct");
+    }
 
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
@@ -138,6 +142,9 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
                                          const GCTib gctib) const
 {
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dst, dstLen, "PostTrace.WriteStaticStruct");
+    }
 
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
         RefField<> oldField(refField);
@@ -260,6 +267,9 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dstField, dstSize, "PostTrace.CopyStructArray");
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

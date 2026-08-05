@@ -9,6 +9,7 @@
 
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
+#include "Heap/Verify/BulkEdge.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -189,6 +190,9 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
 
     if (!dstObj->HasRefField()) {
         CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
+        if (BulkEdge::Enabled()) {
+            BulkEdge::NoteBulkRange(dstField, dstSize, "Preforward.CopyStructArray.noref");
+        }
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
         Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
@@ -201,6 +205,9 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
 
     CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dstField, dstSize, "Preforward.CopyStructArray");
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

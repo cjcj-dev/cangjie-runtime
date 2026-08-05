@@ -30,6 +30,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/BulkEdge.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -1893,6 +1894,9 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                reinterpret_cast<void*>(srcField), srcSize) == EOK,
                      "MCC_ArrayCopyGeneric memmove_s failed");
+        if (BulkEdge::Enabled()) {
+            BulkEdge::NoteBulkRange(dstField, dstSize, "MCC.ArrayCopyGeneric.struct_noref");
+        }
         return;
     }
     switch (type) {
@@ -1931,6 +1935,9 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                    reinterpret_cast<void*>(srcField), srcSize) == EOK,
                          "MCC_ArrayCopyGeneric memmove_s failed");
+            if (BulkEdge::Enabled()) {
+                BulkEdge::NoteBulkRange(dstField, dstSize, "MCC.ArrayCopyGeneric.prim");
+            }
             break;
         }
         case TypeKind::TYPE_KIND_TUPLE:

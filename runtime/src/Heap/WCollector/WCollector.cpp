@@ -40,6 +40,7 @@
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/BulkEdge.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
@@ -635,6 +636,11 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                          target, &field, obj, holderValid, holderMarked, holderSurvived, holderResurrected,
                          holderYoung, targetYoung, remsetContains, remsetSize, histHits, ringCap, ringTotal,
                          ringWrap, killBuf, sketch, reasonName, g_gcCount, static_cast<unsigned>(phase));
+
+                    // bulkedge T0: bucket1 (valid unmarked) → reverse in-edges vs bulk slot set
+                    if (BulkEdge::Enabled() && holderValid == 1 && holderMarked == 0 && obj != nullptr) {
+                        BulkEdge::ClassifyHolderInEdges(obj, holderValid, holderMarked);
+                    }
                 }
 
                 // rootskip T0: who holds the F3 holder at abort? (default off)

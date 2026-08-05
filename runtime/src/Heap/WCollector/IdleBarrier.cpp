@@ -7,6 +7,7 @@
 
 #include "IdleBarrier.h"
 
+#include "Heap/Verify/BulkEdge.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -147,11 +148,15 @@ void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dst, dstLen, "Idle.WriteStruct");
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     CHECK(srcLen == dstLen);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);
 #endif
+    (void)obj;
 }
 
 void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
@@ -244,6 +249,9 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dstField, dstSize, "Idle.CopyStructArray");
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

@@ -7,6 +7,7 @@
 
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/BulkEdge.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -155,6 +156,9 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dst, dstLen, "Enum.WriteStruct");
+    }
 
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
@@ -293,6 +297,9 @@ void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
         CHECK_DETAIL(
             memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK,
             "memmove_s failed");
+        if (BulkEdge::Enabled()) {
+            BulkEdge::NoteBulkRange(dstField, dstSize, "Enum.CopyStructArray.noref");
+        }
 #if defined(CANGJIE_TSAN_SUPPORT)
         Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
         Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
@@ -325,6 +332,9 @@ void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+    if (BulkEdge::Enabled()) {
+        BulkEdge::NoteBulkRange(dstField, dstSize, "Enum.CopyStructArray");
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
