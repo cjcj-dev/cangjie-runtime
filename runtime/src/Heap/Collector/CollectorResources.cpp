@@ -231,6 +231,9 @@ void CollectorResources::StartGCThreads()
         // Off by default: on real_load the formula picks 23 workers on a 32-core
         // domain and costs 2.22x task-clock for 1.14x wall (REPORT-jvmparam),
         // which reproduces the earlier no-headroom result from REPORT-gcthreads.
+        // MRT_GCV2_GC_THREADS=<n> (n>=1) overrides both paths when set; unset
+        // keeps the historical default-2 / JVM-formula switch unchanged.
+        const char* explicitThreadsEnv = std::getenv("MRT_GCV2_GC_THREADS");
         const char* jvmThreadsEnv = std::getenv("MRT_GCV2_JVM_GC_THREADS");
         const bool useJvmThreads = jvmThreadsEnv != nullptr && std::strcmp(jvmThreadsEnv, "1") == 0;
         unsigned int activeProcessorCount = std::thread::hardware_concurrency();
@@ -247,26 +250,38 @@ void CollectorResources::StartGCThreads()
         }
 #endif
         activeProcessorCount = std::max(activeProcessorCount, 1U);
-        if (useJvmThreads) {
-            constexpr unsigned int parallelThreadSwitchPoint = 8;
-            constexpr unsigned int parallelThreadNumerator = 5;
-            constexpr unsigned int parallelThreadDenominator = 8;
-            unsigned int parallelThreads = activeProcessorCount <= parallelThreadSwitchPoint ?
-                activeProcessorCount : parallelThreadSwitchPoint +
-                    (activeProcessorCount - parallelThreadSwitchPoint) * parallelThreadNumerator /
-                        parallelThreadDenominator;
-            gcThreadCount = static_cast<int32_t>(parallelThreads);
-            concurrentGcThreadCount = std::max(static_cast<int32_t>((parallelThreads + 2) / 4), 1);
-        } else {
-            gcThreadCount = 2;
-            concurrentGcThreadCount = 2;
+        bool useExplicitThreads = false;
+        if (explicitThreadsEnv != nullptr && explicitThreadsEnv[0] != '\0') {
+            char* endPtr = nullptr;
+            long parsed = std::strtol(explicitThreadsEnv, &endPtr, 10);
+            if (endPtr != explicitThreadsEnv && *endPtr == '\0' && parsed >= 1 && parsed <= 1024) {
+                gcThreadCount = static_cast<int32_t>(parsed);
+                concurrentGcThreadCount = std::max(static_cast<int32_t>((parsed + 2) / 4), 1);
+                useExplicitThreads = true;
+            }
+        }
+        if (!useExplicitThreads) {
+            if (useJvmThreads) {
+                constexpr unsigned int parallelThreadSwitchPoint = 8;
+                constexpr unsigned int parallelThreadNumerator = 5;
+                constexpr unsigned int parallelThreadDenominator = 8;
+                unsigned int parallelThreads = activeProcessorCount <= parallelThreadSwitchPoint ?
+                    activeProcessorCount : parallelThreadSwitchPoint +
+                        (activeProcessorCount - parallelThreadSwitchPoint) * parallelThreadNumerator /
+                            parallelThreadDenominator;
+                gcThreadCount = static_cast<int32_t>(parallelThreads);
+                concurrentGcThreadCount = std::max(static_cast<int32_t>((parallelThreads + 2) / 4), 1);
+            } else {
+                gcThreadCount = 2;
+                concurrentGcThreadCount = 2;
+            }
         }
         int32_t helperThreads = gcThreadCount - 1;
         VLOG(REPORT,
              "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "
-             "active processor count %u, affinity detected %d, jvm formula %d",
+             "active processor count %u, affinity detected %d, jvm formula %d, explicit threads %d",
              gcThreadCount, helperThreads, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
-             useJvmThreads);
+             useJvmThreads, useExplicitThreads ? 1 : 0);
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
     }
