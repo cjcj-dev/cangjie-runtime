@@ -667,17 +667,14 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                     // (no try/catch: runtime is -fno-exceptions)
                     MutatorManager::Instance().VisitAllMutators(
                         [holderObj, &foundStack, &stackWords](Mutator& mut) {
-                            mut.VisitStackRoots([&](ObjectRef& root) {
+                            // public entry: VisitMutatorRoots -> VisitStackRoots (protected)
+                            mut.VisitMutatorRoots([&](ObjectRef& root) {
                                 BaseObject* o = root.object;
                                 if (o == nullptr) {
                                     return;
                                 }
                                 if (o == holderObj) {
                                     foundStack = 1;
-                                    return;
-                                }
-                                if (!Heap::IsHeapAddress(o)) {
-                                    return;
                                 }
                             });
                             // Conservative: word scan [stackTop, stackTop+size)
