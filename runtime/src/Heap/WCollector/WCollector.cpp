@@ -1763,70 +1763,82 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
     // Earliest post-mark checkpoint: still before any fix/forward mutates refs.
     postEvacPoint("evac-enter", true);
 
-    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    FixMinorRootSlots();
-    PreforwardDiscoveredExternObjects();
-    PreforwardAllResurrectExportFromObjects();
-    postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
-
-    TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
-    fwdTable.PrepareForwardTable();
-    TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-    postEvacPoint("pre-fix-forwarded", false);
-    fixForwardedReferences();
-    ValidateMinorReferences("before-return", &reachableObjects);
-    // Mid-evac checkpoint: after slot fix, before region reclaim.
-    postEvacPoint("post-fix-pre-forward", true);
-
-    ForwardFromSpace();
-    postEvacPoint("post-forward-pre-reclaim", true);
     {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            ValidateMinorReferences("post-forward-pre-reclaim", &reachableObjects);
-        }
+        // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
+        MRT_PHASE_TIMER("young.ref_fix");
+        TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+        FixMinorRootSlots();
+        PreforwardDiscoveredExternObjects();
+        PreforwardAllResurrectExportFromObjects();
+        postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
+
+        TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        fwdTable.PrepareForwardTable();
+        TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+        postEvacPoint("pre-fix-forwarded", false);
+        fixForwardedReferences();
+        ValidateMinorReferences("before-return", &reachableObjects);
+        // Mid-evac checkpoint: after slot fix, before region reclaim.
+        postEvacPoint("post-fix-pre-forward", true);
     }
 
-    size_t residualPromoteRecords = 0;
-    for (RegionInfo* region : minorCandidateRegions) {
-        if (region->IsYoungRegion()) {
-            // Residual candidates not forwarded above (e.g. raw-pointer pinned):
-            // still demote to old; must replay young→young edges that become old→young.
-            region->PreserveRetainedLiveInfo();
-            residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
-        }
-    }
-    size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
-
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    size_t rebuiltRecords = 0;
-    for (BaseObject* object : reachableObjects) {
-        BaseObject* holder = currentObject(object);
-        RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-        if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
-            continue;
-        }
-        holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
-            BaseObject* target = ResolveMinorReference(field);
-            if (!Heap::IsHeapAddress(target)) {
-                return;
+    {
+        // minortime: ⑥ copy / forward
+        MRT_PHASE_TIMER("young.copy");
+        ForwardFromSpace();
+        postEvacPoint("post-forward-pre-reclaim", true);
+        {
+            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+                ValidateMinorReferences("post-forward-pre-reclaim", &reachableObjects);
             }
-            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (targetRegion->IsYoungRegion()) {
-                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                ++rebuiltRecords;
-            }
-        });
+        }
     }
-    VLOG(REPORT,
-         "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu",
-         rebuiltRecords, promotedPathRecords, residualPromoteRecords);
 
-    fwdTable.PrepareForwardTable();
-    ValidateMinorReferences("after-dispel", nullptr);
-    manager.ReassembleFromSpace();
+    {
+        // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
+        MRT_PHASE_TIMER("young.evac_finish");
+        size_t residualPromoteRecords = 0;
+        for (RegionInfo* region : minorCandidateRegions) {
+            if (region->IsYoungRegion()) {
+                // Residual candidates not forwarded above (e.g. raw-pointer pinned):
+                // still demote to old; must replay young→young edges that become old→young.
+                region->PreserveRetainedLiveInfo();
+                residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
+                region->SetYoungRegionFlag(0);
+                region->SetYoungAge(0);
+            }
+        }
+        size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
+
+        RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+        size_t rebuiltRecords = 0;
+        for (BaseObject* object : reachableObjects) {
+            BaseObject* holder = currentObject(object);
+            RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
+                continue;
+            }
+            holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
+                BaseObject* target = ResolveMinorReference(field);
+                if (!Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion->IsYoungRegion()) {
+                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                    ++rebuiltRecords;
+                }
+            });
+        }
+        VLOG(REPORT,
+             "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu",
+             rebuiltRecords, promotedPathRecords, residualPromoteRecords);
+
+        fwdTable.PrepareForwardTable();
+        ValidateMinorReferences("after-dispel", nullptr);
+        manager.ReassembleFromSpace();
+    }
 }
 
 void WCollector::ValidateMinorReferences(const char* point, const MinorObjectSet* reachableObjects)
@@ -2308,6 +2320,8 @@ void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
+    // ("young collection stw time N us"). Body timers below exclude that wait.
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
     // force via POST_EVAC so we do not need global VERIFY_HEAP (avoids pre-evac side effects).
     {
@@ -2320,7 +2334,11 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
-    FlushAllocationRegions();
+    {
+        // minortime: ① FlushAllocationRegions
+        MRT_PHASE_TIMER("young.flush_alloc");
+        FlushAllocationRegions();
+    }
     if (minorTotalRuns != 0) {
         ValidateMinorReferences("round2-start", nullptr);
     }
@@ -2328,8 +2346,13 @@ void WCollector::DoYoungGarbageCollection()
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     RegionManager& manager = space.GetRegionManager();
     minorCandidateRegions.clear();
-    YoungCollectionStats stats = manager.PrepareYoungGarbageCandidates(
-        [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    YoungCollectionStats stats;
+    {
+        // minortime: ② PrepareYoungGarbageCandidates
+        MRT_PHASE_TIMER("young.prepare_candidates");
+        stats = manager.PrepareYoungGarbageCandidates(
+            [this](RegionInfo* region) { minorCandidateRegions.insert(region); });
+    }
     // HotSpot g1HeapVerifier.cpp:424 verify_region_sets placement: after region accounting is stable.
     VerifyRegionSets("after-prepare-young");
     // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
@@ -2354,13 +2377,16 @@ void WCollector::DoYoungGarbageCollection()
     // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
-    size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
-    if (pinnedRemsetRecords != 0) {
-        VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
-    }
-
     MinorSlotSet rememberedSlots;
-    Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
+    {
+        // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
+        MRT_PHASE_TIMER("young.remset_drain");
+        size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
+        if (pinnedRemsetRecords != 0) {
+            VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
+        }
+        Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
+    }
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
@@ -2369,33 +2395,41 @@ void WCollector::DoYoungGarbageCollection()
     MinorObjectSet allocationRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
-    WorkStack enumRoots = NewWorkStack();
-    theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
-    while (!enumRoots.empty()) {
-        BaseObject* object = enumRoots.back();
-        enumRoots.pop_back();
-        if (Heap::IsHeapAddress(object)) {
-            allocationRoots.insert(object);
-        }
-        if (fullYoungScan) {
+    {
+        // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
+        MRT_PHASE_TIMER("young.root_enum");
+        WorkStack enumRoots = NewWorkStack();
+        theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+        while (!enumRoots.empty()) {
+            BaseObject* object = enumRoots.back();
+            enumRoots.pop_back();
             if (Heap::IsHeapAddress(object)) {
-                workStack.push_back(object);
+                allocationRoots.insert(object);
             }
-        } else {
-            PushYoungObject(object, workStack, "alloc_buffer");
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(object)) {
+                    workStack.push_back(object);
+                }
+            } else {
+                PushYoungObject(object, workStack, "alloc_buffer");
+            }
         }
+        VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(object)) {
+                    workStack.push_back(object);
+                }
+            } else {
+                // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
+                PushYoungObject(object, workStack, "minor_root");
+            }
+        });
     }
-    VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
-        if (fullYoungScan) {
-            if (Heap::IsHeapAddress(object)) {
-                workStack.push_back(object);
-            }
-        } else {
-            // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
-            PushYoungObject(object, workStack, "minor_root");
-        }
-    });
-    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    {
+        // minortime: ⑤ mark closure pass-1 (from roots)
+        MRT_PHASE_TIMER("young.mark_closure");
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    }
     MinorSlotSet liveRememberedSlots;
     for (MAddress slot : rememberedSlots) {
         if (weakSlots.count(slot) == 0 && (!fullYoungScan || reachableSlots.count(slot) != 0)) {
@@ -2408,9 +2442,16 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedSlots.size();
     MinorSlotSet consumedSlots;
-    RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
-                        &remsetStats);
-    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    {
+        // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
+        MRT_PHASE_TIMER("young.remset_rescan");
+        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
+                            &remsetStats);
+    }
+    {
+        MRT_PHASE_TIMER("young.mark_from_remset");
+        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableSlots, weakSlots);
+    }
     static const bool verifyRemsetEnabled = []() {
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
@@ -2465,11 +2506,16 @@ void WCollector::DoYoungGarbageCollection()
     // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
     ProbeUnmarkedLive(allocationRoots, rememberedSlots);
 
-    TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
-    WeakRefBuffer::Instance().ClearWeakRefBuffer();
-    SatbBuffer::Instance().ClearBuffer();
+    {
+        // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
+        MRT_PHASE_TIMER("young.pre_evac_clear");
+        TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        WeakRefBuffer::Instance().ClearWeakRefBuffer();
+        SatbBuffer::Instance().ClearBuffer();
+    }
 
     size_t allocatedBefore = space.AllocatedBytes();
+    // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
     EvacuateYoungRegions(reachableObjects, liveRememberedSlots);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
@@ -2494,8 +2540,12 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
 
-    TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
-    MergeResurrectExportObjects();
+    {
+        // minortime: ⑧ post-evac finish
+        MRT_PHASE_TIMER("young.post_evac_finish");
+        TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        MergeResurrectExportObjects();
+    }
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
     VLOG(REPORT,
