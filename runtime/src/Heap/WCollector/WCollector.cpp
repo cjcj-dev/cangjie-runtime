@@ -707,6 +707,20 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
+    // A1 (preflipacc §5 / rspec §四 A1): production skips the preflip full-heap walk.
+    // Population was empty across 123 majors × 3 loads; cost was ~27% of major total_gc.
+    // VERIFY / ACCOUNT still force the walk so soak/ALOT can keep the insurance tripwire.
+    static const bool preflipWalk = []() {
+        const char* verify = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        if (verify != nullptr && std::strcmp(verify, "1") == 0) {
+            return true;
+        }
+        const char* account = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
+        return account != nullptr && std::strcmp(account, "1") == 0;
+    }();
+    if (!preflipWalk) {
+        return;
+    }
     InvalidateOldTaggedRefs(true);
 }
 
@@ -720,6 +734,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         const char* value = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    static const bool preflipVerify = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool preflipInject = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_INJECT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // VERIFY always needs fixed counts so a non-zero residue can fail loud.
+    const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
     std::array<size_t, regionTypeCount> regionTypes{};
     RegionInfo* lastAccountRegion = nullptr;
@@ -745,11 +769,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     size_t fromLiveFields = 0;
 
     // bfb5e8b2: bind as RootVisitor/RefFieldVisitor (auto lambda not convertible to RootVisitor*).
-    RootVisitor fixRoot = [this, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](ObjectRef& root) {
+    RootVisitor fixRoot = [this, trackFixed, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         uintptr_t oldValue = field.GetFieldValue();
-        bool oldTagged = account && IsOldPointer(field);
-        if (account) {
+        bool oldTagged = trackFixed && IsOldPointer(field);
+        if (trackFixed) {
             ++rootSlots;
             if (oldTagged) {
                 ++oldTaggedRootSlots;
@@ -760,10 +784,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             ++fixedRootSlots;
         }
     };
-    RefFieldVisitor fixRootField = [this, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](RefField<>& field) {
+    RefFieldVisitor fixRootField = [this, trackFixed, &rootSlots, &oldTaggedRootSlots, &fixedRootSlots](RefField<>& field) {
         uintptr_t oldValue = field.GetFieldValue();
-        bool oldTagged = account && IsOldPointer(field);
-        if (account) {
+        bool oldTagged = trackFixed && IsOldPointer(field);
+        if (trackFixed) {
             ++rootSlots;
             if (oldTagged) {
                 ++oldTaggedRootSlots;
@@ -774,6 +798,38 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             ++fixedRootSlots;
         }
     };
+
+    // Positive control: plant one old-tagged root so PREFLIP_VERIFY must observe fixed>0.
+    // Only on the preflip path; postflip population is real and must not be perturbed.
+    MAddress injectRootStorage = 0;
+    if (requireSurvivedMark && preflipVerify && preflipInject) {
+        BaseObject* injectTarget = nullptr;
+        RegionSpace& injectSpace = reinterpret_cast<RegionSpace&>(theAllocator);
+        injectSpace.ForEachObj(
+            [&injectTarget](BaseObject* obj) {
+                if (injectTarget != nullptr || obj == nullptr || !obj->IsValidObject()) {
+                    return;
+                }
+                injectTarget = obj;
+            },
+            false);
+        if (injectTarget != nullptr) {
+            // Layout-compat: ObjectRef is a single pointer word; FixOldTaggedRefField
+            // reinterprets it as RefField<> (same as VisitMutatorRoots).
+            RefField<> planted(injectTarget, 1, GetPreviousTagID());
+            injectRootStorage = planted.GetFieldValue();
+            ObjectRef injectRoot{};
+            *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
+            fixRoot(injectRoot);
+            VLOG(REPORT,
+                 "[GCV2][preflip-verify-inject] planted old-tag root target=%p raw=%#zx fixedRoots_now=%zu "
+                 "env=MRT_GCV2_PREFLIP_VERIFY_INJECT=1",
+                 injectTarget, static_cast<uintptr_t>(injectRootStorage), fixedRootSlots);
+        } else {
+            VLOG(REPORT,
+                 "[GCV2][preflip-verify-inject] no live object to plant env=MRT_GCV2_PREFLIP_VERIFY_INJECT=1");
+        }
+    }
 
     MutatorManager::Instance().VisitAllMutators(
         [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
@@ -820,9 +876,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             false);
     }
     space.GetRegionManager().ForEachObjUnsafe(
-        [this, requireSurvivedMark, rebuildRemset, &lastProcessedRegion, &processedRegions, &processedObjects,
-         &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &fixedSlots, &youngTargetSlots,
-         &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
+        [this, requireSurvivedMark, rebuildRemset, trackFixed, account, &lastProcessedRegion, &processedRegions,
+         &processedObjects, &invalidObjects, &filteredObjects, &refHolders, &fields, &oldTaggedSlots, &fixedSlots,
+         &youngTargetSlots, &fromLiveObjects, &fromLiveFields, &rebuilt](BaseObject* obj) {
             RegionInfo* accountRegion = nullptr;
             if (account) {
                 ++processedObjects;
@@ -865,12 +921,12 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                                  accountRegion->IsFromRegion();
-            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, &fields,
-                                  &oldTaggedSlots, &fixedSlots, &youngTargetSlots, &fromLiveFields,
+            obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, trackFixed, account,
+                                  &fields, &oldTaggedSlots, &fixedSlots, &youngTargetSlots, &fromLiveFields,
                                   &rebuilt](RefField<>& field) {
                 uintptr_t oldValue = field.GetFieldValue();
-                bool oldTagged = account && IsOldPointer(field);
-                if (account) {
+                bool oldTagged = trackFixed && IsOldPointer(field);
+                if (trackFixed) {
                     ++fields;
                     if (forwardHolder) {
                         ++fromLiveFields;
@@ -924,6 +980,30 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
              requireSurvivedMark ? "preflip" : "postflip", regionTypes[0], regionTypes[1], regionTypes[2],
              regionTypes[3], regionTypes[4], regionTypes[5], regionTypes[6], regionTypes[7], regionTypes[8],
              regionTypes[9], regionTypes[10], regionTypes[11], regionTypes[12], regionTypes[13], regionTypes[14]);
+    }
+    // A1 VERIFY tripwire: preflip fixed population must stay empty. Any fix is a named failure.
+    if (requireSurvivedMark && preflipVerify) {
+        const size_t fixedTotal = fixedSlots + fixedRootSlots;
+        VLOG(REPORT,
+             "[GCV2][preflip-verify] fixed=%zu fixedRoots=%zu fixedTotal=%zu oldTagged=%zu oldTaggedRoots=%zu "
+             "fields=%zu rootSlots=%zu env=MRT_GCV2_PREFLIP_VERIFY=1",
+             fixedSlots, fixedRootSlots, fixedTotal, oldTaggedSlots, oldTaggedRootSlots, fields, rootSlots);
+        if (fixedTotal > 0) {
+            static const bool preflipVerifyFatal = []() {
+                const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_FATAL");
+                return value != nullptr && std::strcmp(value, "1") == 0;
+            }();
+            LOG(RTLOG_ERROR,
+                "[GCV2][preflip-verify] PREFLIP_RESIDUE fixed=%zu fixedRoots=%zu fixedTotal=%zu "
+                "oldTagged=%zu oldTaggedRoots=%zu (production skips preflip; residue means insurance needed)",
+                fixedSlots, fixedRootSlots, fixedTotal, oldTaggedSlots, oldTaggedRootSlots);
+            if (preflipVerifyFatal) {
+                CHECK_DETAIL(false,
+                             "MRT_GCV2_PREFLIP_VERIFY_FATAL: preflip residue fixedTotal=%zu "
+                             "(fixed=%zu fixedRoots=%zu)",
+                             fixedTotal, fixedSlots, fixedRootSlots);
+            }
+        }
     }
 }
 
