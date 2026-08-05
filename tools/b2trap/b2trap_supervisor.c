@@ -54,6 +54,7 @@ static int g_midrun_node = 0;       // -A node
 static unsigned long g_node_ti = 0;  // resolved after exec
 static unsigned g_arm_every = 1;    // -S N: arm every Nth Node (default 1)
 static unsigned g_arm_max = 0;      // -M N: stop arming after N Node slots (0=unlimited)
+static unsigned long g_arm_skip = 0; // -K N: skip first N Node allocs before arming
 static int g_rr_replace = 0;       // -R: when 4 DRs full, round-robin replace (default: hold)
 static unsigned long g_node_seen = 0;
 static unsigned long g_node_armed_total = 0;
@@ -380,7 +381,7 @@ static int handle_swbp(pid_t tid) {
         g_node_seen++;
         if (g_arm_every == 0)
             g_arm_every = 1;
-        if ((g_node_seen % g_arm_every) == 0) {
+        if (g_node_seen > g_arm_skip && ((g_node_seen - g_arm_skip) % g_arm_every) == 0) {
             unsigned long slot = obj + NODE_NEXT_OFF;
             midrun_arm_slot(tid, slot);
         }
@@ -726,6 +727,9 @@ int main(int argc, char **argv) {
             a += 2;
         } else if (!strcmp(argv[a], "-M")) {
             g_arm_max = (unsigned)atoi(argv[a + 1]);
+            a += 2;
+        } else if (!strcmp(argv[a], "-K")) {
+            g_arm_skip = strtoul(argv[a + 1], 0, 0);
             a += 2;
         } else if (!strcmp(argv[a], "-R")) {
             g_rr_replace = 1;
