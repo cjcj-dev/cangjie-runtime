@@ -32,9 +32,10 @@ static CJThreadRecorder<RaceProcHandle> g_procState{};
 // slot that returns null and all memory/atomic hooks become no-ops.
 static thread_local RaceStateHandle g_nativeRaceState = nullptr;
 static thread_local RaceProcHandle g_nativeRaceProc = nullptr;
-// Process-wide parent for native-thread state_create (secondary thr need a parent;
-// bare __tsan_init is only for the primary thread and leaves secondary thr half-wired).
-static RaceStateHandle g_nativeRootState = nullptr;
+// Parent thr for state_create: the primary thr from the first TsanInitialize.
+// ⛔ Never call __tsan_init again as a synthetic parent — second init leaves a
+// thr that SlotLock cannot take from another OS thread (SIGSEGV in ThreadCreate).
+static std::atomic<RaceStateHandle> g_primaryRaceState{nullptr};
 static std::mutex g_nativeAttachMu;
 
 void TsanInitialize()
@@ -58,7 +59,11 @@ void TsanInitialize()
     if (CJThreadGetSanitizerContext(cjthread) != nullptr) {
         return;
     }
-    CJThreadSetSanitizerContext(cjthread, REAL(__tsan_init)());
+    RaceStateHandle rs = REAL(__tsan_init)();
+    CJThreadSetSanitizerContext(cjthread, rs);
+    // Publish primary thr for GC pthread attach (state_create parent).
+    RaceStateHandle expected = nullptr;
+    g_primaryRaceState.compare_exchange_strong(expected, rs, std::memory_order_release);
     // One-way gate for the getters below: once any cjthread is tracked, TSAN is live.
     // Concurrent stores of the same value are harmless.
     g_initialized.store(true, std::memory_order_release);
@@ -69,35 +74,20 @@ void TsanAttachNativeThread()
     if (g_nativeRaceState != nullptr) {
         return;
     }
-    // GC pool pthreads start during runtime bootstrap, before any cjthread has
-    // called TsanInitialize. Calling __tsan_init from a bare pthread as the
-    // first thr in the process half-wires global TSAN and SEGV's on later hooks.
-    // Only attach once the primary thr is live (g_initialized).
-    if (!g_initialized.load(std::memory_order_acquire)) {
+    RaceStateHandle parent = g_primaryRaceState.load(std::memory_order_acquire);
+    if (parent == nullptr) {
         return;
     }
     std::lock_guard<std::mutex> lock(g_nativeAttachMu);
     if (g_nativeRaceState != nullptr) {
         return;
     }
-    // Prefer a live cjthread thr as parent; else a process-wide root created
-    // under the lock after primary init (never the first thr in the process).
-    RaceStateHandle parent = nullptr;
-    void* cjthread = CJThreadGetHandle();
-    if (cjthread != nullptr) {
-        parent = CJThreadGetSanitizerContext(cjthread);
-    }
-    if (parent == nullptr) {
-        if (g_nativeRootState == nullptr) {
-            g_nativeRootState = REAL(__tsan_init)();
-        }
-        parent = g_nativeRootState;
-    }
+    parent = g_primaryRaceState.load(std::memory_order_acquire);
     if (parent == nullptr) {
         return;
     }
-    // Child thr = state_create(parent): ThreadCreate+ThreadStart fully wire thr
-    // for this OS thread (bare __tsan_init on secondary pthreads is insufficient).
+    // Child thr = state_create(primary): ThreadCreate+ThreadStart wire thr fully.
+    // Proc first so ThreadState::proc() → CJ_MCC_TsanGetRaceProc sees TLS.
     g_nativeRaceProc = REAL(__tsan_proc_create)();
     g_nativeRaceState = REAL(__tsan_state_create)(parent, __builtin_return_address(0));
 }
