@@ -946,15 +946,22 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // Absolute young-size ceiling (bytes) on top of HEU×k. STW minor cost
         // scales with young candidate volume; HEU×50% alone grows to multi-GiB
         // on large heaps (heapscale2: ~5.3 GiB → ~100 s pause).
-        // Default = no absolute cap (HEU-fraction only). Product C is selected
-        // from the youngcap pause-vs-size curve and written as youngAbsCapDefault.
-        // Override: MRT_GCV2_YOUNG_CAP=<N>KB|MB|GB  (T0 sweep / ops tuning)
-        //   · unset / "none" → no absolute cap
-        //   · valid size → that absolute cap
-        size_t youngAbsCapBytes = 0;
+        // Product default C = 64MB from youngcap T0 curve (kkk2 lean real_load N=8):
+        //   cap     pause_med  p90     minor  pause×count  wall
+        //   64MB    290 ms     323 ms  94     27.7 s       47.4 s  ← chosen
+        //   256MB  1510 ms    1700 ms  28     39.0 s       61.8 s
+        //   512MB  3780 ms    4034 ms  14     49.7 s       71.5 s
+        //   1GB    8996 ms    9203 ms   8     61.2 s       77.7 s
+        //   2GB   22674 ms   23519 ms   3     62.6 s       73.6 s
+        //   none  (0 minor on kkk2 — HEU×50%≈11 GiB not hit; heapscale2 100 s)
+        // Override: MRT_GCV2_YOUNG_CAP=<N>KB|MB|GB | "none" (ops / T0 re-sweep)
+        constexpr size_t youngAbsCapDefaultBytes = 64UL * 1024 * 1024;
+        size_t youngAbsCapBytes = youngAbsCapDefaultBytes;
         if (const char* capEnv = std::getenv("MRT_GCV2_YOUNG_CAP")) {
-            if (std::strcmp(capEnv, "none") != 0 && std::strcmp(capEnv, "NONE") != 0) {
-                // ParseSizeFromEnv returns KB; 0 = parse failure → no cap.
+            if (std::strcmp(capEnv, "none") == 0 || std::strcmp(capEnv, "NONE") == 0) {
+                youngAbsCapBytes = 0; // HEU-fraction only
+            } else {
+                // ParseSizeFromEnv returns KB; 0 = parse failure → keep default.
                 size_t capKb = CString::ParseSizeFromEnv(capEnv);
                 if (capKb > 0) {
                     youngAbsCapBytes = capKb * KB;
