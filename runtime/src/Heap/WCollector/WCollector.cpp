@@ -1021,14 +1021,36 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         }
         return 0;
     }();
+    // extermfix (A1 shape): production postflip skips 乙 tag fix; keep 甲 walk + 丙 remset.
+    // MRT_GCV2_POSTFLIP_FIX=1 restores 乙 (soak / ALOT insurance / control arm).
+    static const bool postflipFixEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_FIX");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // T2: default-off staleness histogram over tagged slots in the postflip walk.
+    // staleness = (currentTagID - tagID + TAG_ID_COUNT) % TAG_ID_COUNT; max must stay ≤1.
+    static const bool postflipStalenessEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_STALENESS");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    // T1 positive control: plant one multi-gen-stale root so STALENESS must report max≥2.
+    static const bool postflipStalenessInjectEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_POSTFLIP_STALENESS_INJECT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
     // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
     const bool account = accountEnv;
     const bool preflipVerify = preflipVerifyEnv;
     const bool preflipInject = preflipInjectEnv;
+    const bool postflipFix = postflipFixEnv;
+    const bool trackStaleness = !requireSurvivedMark && postflipStalenessEnv;
+    const bool stalenessInject = !requireSurvivedMark && postflipStalenessInjectEnv;
     // Ablation only on postflip (requireSurvivedMark=false); preflip stays untouched.
     const int splitMode = requireSurvivedMark ? 0 : splitCostMode;
     const bool splitTime = splitMode == 1;
-    const bool skipFix = splitMode == 2 || splitMode == 4 || splitMode == 5;
+    // Product default: skip 乙 on postflip unless POSTFLIP_FIX=1; ablation can force skip too.
+    const bool productSkipFix = !requireSurvivedMark && !postflipFix;
+    const bool skipFix = productSkipFix || splitMode == 2 || splitMode == 4 || splitMode == 5;
     const bool skipRemset = splitMode == 3 || splitMode == 4 || splitMode == 5;
     const bool skipWalk = splitMode == 5;
     // VERIFY always needs fixed counts so a non-zero residue can fail loud.
@@ -1066,6 +1088,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         size_t remsetCalls = 0;
         size_t fieldVisits = 0;
         size_t objVisits = 0;
+        // extermfix T2: per-staleness histogram over tagged slots (index = staleness).
+        size_t staleHist[TAG_ID_COUNT] = {};
+        size_t taggedSlots = 0;
+        size_t maxStaleness = 0;
     };
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
@@ -1074,12 +1100,35 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const uintptr_t heapStart = regionManager.GetRegionHeapStart();
     const uintptr_t inactiveZone = regionManager.GetInactiveZone();
 
-    auto makeRootVisitor = [this, trackFixed, skipFix, skipWalk](RootAccount* acc) -> RootVisitor {
-        return [this, trackFixed, skipFix, skipWalk, acc](ObjectRef& root) {
-            if (skipWalk || skipFix) {
+    auto noteStaleness = [this](RefField<>& field, HeapAccount* hAcc) {
+        if (hAcc == nullptr || !field.IsTagged()) {
+            return;
+        }
+        const uint16_t tag = field.GetTagID();
+        const size_t stale =
+            static_cast<size_t>((currentTagID + TAG_ID_COUNT - tag) % TAG_ID_COUNT);
+        ++hAcc->taggedSlots;
+        if (stale < TAG_ID_COUNT) {
+            ++hAcc->staleHist[stale];
+        }
+        if (stale > hAcc->maxStaleness) {
+            hAcc->maxStaleness = stale;
+        }
+    };
+
+    auto makeRootVisitor = [this, trackFixed, skipFix, skipWalk, trackStaleness,
+                            noteStaleness](RootAccount* acc, HeapAccount* hAcc) -> RootVisitor {
+        return [this, trackFixed, skipFix, skipWalk, trackStaleness, noteStaleness, acc, hAcc](ObjectRef& root) {
+            if (skipWalk) {
                 return;
             }
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
+            if (trackStaleness) {
+                noteStaleness(field, hAcc);
+            }
+            if (skipFix) {
+                return;
+            }
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
@@ -1094,9 +1143,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
         };
     };
-    auto makeRootFieldVisitor = [this, trackFixed, skipFix, skipWalk](RootAccount* acc) -> RefFieldVisitor {
-        return [this, trackFixed, skipFix, skipWalk, acc](RefField<>& field) {
-            if (skipWalk || skipFix) {
+    auto makeRootFieldVisitor = [this, trackFixed, skipFix, skipWalk, trackStaleness,
+                                 noteStaleness](RootAccount* acc, HeapAccount* hAcc) -> RefFieldVisitor {
+        return [this, trackFixed, skipFix, skipWalk, trackStaleness, noteStaleness, acc, hAcc](RefField<>& field) {
+            if (skipWalk) {
+                return;
+            }
+            if (trackStaleness) {
+                noteStaleness(field, hAcc);
+            }
+            if (skipFix) {
                 return;
             }
             uintptr_t oldValue = field.GetFieldValue();
@@ -1115,7 +1171,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     };
 
     auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed, splitTime, skipFix,
-                          skipRemset, skipWalk](BaseObject* obj, HeapAccount& acc) {
+                          skipRemset, skipWalk, trackStaleness, noteStaleness](BaseObject* obj, HeapAccount& acc) {
         if (skipWalk) {
             return;
         }
@@ -1163,9 +1219,12 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
-                              splitTime, skipFix, skipRemset, &acc](RefField<>& field) {
+                              splitTime, skipFix, skipRemset, trackStaleness, noteStaleness, &acc](RefField<>& field) {
             if (splitTime) {
                 ++acc.fieldVisits;
+            }
+            if (trackStaleness) {
+                noteStaleness(field, &acc);
             }
             uintptr_t oldValue = field.GetFieldValue();
             bool oldTagged = trackFixed && IsOldPointer(field);
@@ -1316,6 +1375,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // A1 positive control: plant one old-tagged root so PREFLIP_VERIFY must observe fixed>0.
     // Serial, before parallel dispatch; only on preflip path.
     RootAccount injectAcc{};
+    HeapAccount injectHeapAcc{};
     if (requireSurvivedMark && preflipVerify && preflipInject) {
         BaseObject* injectTarget = nullptr;
         space.ForEachObj(
@@ -1331,7 +1391,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             MAddress injectRootStorage = planted.GetFieldValue();
             ObjectRef injectRoot{};
             *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
-            RootVisitor fixRoot = makeRootVisitor(&injectAcc);
+            RootVisitor fixRoot = makeRootVisitor(&injectAcc, &injectHeapAcc);
             fixRoot(injectRoot);
             VLOG(REPORT,
                  "[GCV2][preflip-verify-inject] planted old-tag root target=%p raw=%#zx fixedRoots_now=%zu "
@@ -1340,6 +1400,40 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         } else {
             VLOG(REPORT,
                  "[GCV2][preflip-verify-inject] no live object to plant env=MRT_GCV2_PREFLIP_VERIFY_INJECT=1");
+        }
+    }
+    // T1 positive control (extermfix): plant a root with staleness = min(2, N-1) so the
+    // STALENESS probe must report maxStaleness ≥ 2 when N≥3 (or max=N-1 when N=2).
+    if (stalenessInject) {
+        BaseObject* injectTarget = nullptr;
+        space.ForEachObj(
+            [&injectTarget](BaseObject* obj) {
+                if (injectTarget != nullptr || obj == nullptr || !obj->IsValidObject()) {
+                    return;
+                }
+                injectTarget = obj;
+            },
+            false);
+        if (injectTarget != nullptr) {
+            const uint16_t injectStale = static_cast<uint16_t>(
+                TAG_ID_COUNT > 2 ? 2 : (TAG_ID_COUNT - 1));
+            const uint16_t injectTag =
+                static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - injectStale) % TAG_ID_COUNT);
+            RefField<> planted(injectTarget, 1, injectTag);
+            MAddress injectRootStorage = planted.GetFieldValue();
+            ObjectRef injectRoot{};
+            *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
+            // Observe only — skipFix may be on; noteStaleness still runs in makeRootVisitor.
+            RootVisitor observe = makeRootVisitor(&injectAcc, &injectHeapAcc);
+            observe(injectRoot);
+            VLOG(REPORT,
+                 "[GCV2][postflip-staleness-inject] planted tag=%u stale=%u target=%p raw=%#zx "
+                 "maxStale_now=%zu env=MRT_GCV2_POSTFLIP_STALENESS_INJECT=1",
+                 static_cast<unsigned>(injectTag), static_cast<unsigned>(injectStale), injectTarget,
+                 static_cast<uintptr_t>(injectRootStorage), injectHeapAcc.maxStaleness);
+        } else {
+            VLOG(REPORT,
+                 "[GCV2][postflip-staleness-inject] no live object env=MRT_GCV2_POSTFLIP_STALENESS_INJECT=1");
         }
     }
 
@@ -1354,7 +1448,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const bool useParallel = threadPool != nullptr && !forceSerial;
 
     RootAccount rootTotals = injectAcc;
-    HeapAccount heapTotals{};
+    HeapAccount heapTotals = injectHeapAcc;
     std::vector<size_t> chunksPerWorker;
     size_t workersScheduled = 0;
 
@@ -1363,8 +1457,8 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         // Six root families serial (same order as before).
         {
             RootAccount acc;
-            RootVisitor fixRoot = makeRootVisitor(&acc);
-            RefFieldVisitor fixRootField = makeRootFieldVisitor(&acc);
+            RootVisitor fixRoot = makeRootVisitor(&acc, &heapTotals);
+            RefFieldVisitor fixRootField = makeRootFieldVisitor(&acc, &heapTotals);
             MutatorManager::Instance().VisitAllMutators(
                 [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
             Heap::GetHeap().VisitStaticRoots(fixRootField);
@@ -1384,7 +1478,34 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             if (heapStart < inactiveZone) {
                 acc.chunksTaken = 1;
             }
-            heapTotals = acc;
+            // Merge heap walk into totals (preserve inject/root staleness already in heapTotals).
+            heapTotals.processedRegions += acc.processedRegions;
+            heapTotals.processedObjects += acc.processedObjects;
+            heapTotals.invalidObjects += acc.invalidObjects;
+            heapTotals.filteredObjects += acc.filteredObjects;
+            heapTotals.refHolders += acc.refHolders;
+            heapTotals.fields += acc.fields;
+            heapTotals.oldTaggedSlots += acc.oldTaggedSlots;
+            heapTotals.fixedSlots += acc.fixedSlots;
+            heapTotals.youngTargetSlots += acc.youngTargetSlots;
+            heapTotals.fromLiveObjects += acc.fromLiveObjects;
+            heapTotals.fromLiveFields += acc.fromLiveFields;
+            heapTotals.rebuilt += acc.rebuilt;
+            heapTotals.chunksTaken += acc.chunksTaken;
+            heapTotals.walkStructNs += acc.walkStructNs;
+            heapTotals.fixNs += acc.fixNs;
+            heapTotals.remsetNs += acc.remsetNs;
+            heapTotals.fixCalls += acc.fixCalls;
+            heapTotals.remsetCalls += acc.remsetCalls;
+            heapTotals.fieldVisits += acc.fieldVisits;
+            heapTotals.objVisits += acc.objVisits;
+            heapTotals.taggedSlots += acc.taggedSlots;
+            for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
+                heapTotals.staleHist[si] += acc.staleHist[si];
+            }
+            if (acc.maxStaleness > heapTotals.maxStaleness) {
+                heapTotals.maxStaleness = acc.maxStaleness;
+            }
             chunksPerWorker.push_back(acc.chunksTaken);
             workersScheduled = 1;
         }
@@ -1406,36 +1527,44 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
         }
         std::vector<RootAccount> rootAcc(6);
+        // rootStaleAcc[i] receives staleness from root family i (parallel-safe).
+        std::vector<HeapAccount> rootStaleAcc(6);
         std::vector<HeapAccount> heapAcc(static_cast<size_t>(heapWorkers));
         std::atomic<uintptr_t> cursor{ heapStart };
 
         // Roots first into queue, then heap workers. Start after all AddWork so helpers
         // see the full batch (same shape as Preforward: AddWork×N then Start then WaitFinish).
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[0]);
-            MutatorManager::Instance().VisitAllMutators(
-                [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootFieldVisitor](size_t) {
-            RefFieldVisitor fixRootField = makeRootFieldVisitor(&rootAcc[1]);
-            Heap::GetHeap().VisitStaticRoots(fixRootField);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[2]);
-            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[3]);
-            collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[4]);
-            collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
-        }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
-            RootVisitor fixRoot = makeRootVisitor(&rootAcc[5]);
-            Heap::GetHeap().VisitAllExportRoots(fixRoot);
-        }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootVisitor](size_t) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[0], &rootStaleAcc[0]);
+                MutatorManager::Instance().VisitAllMutators(
+                    [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
+            }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootFieldVisitor](size_t) {
+                RefFieldVisitor fixRootField = makeRootFieldVisitor(&rootAcc[1], &rootStaleAcc[1]);
+                Heap::GetHeap().VisitStaticRoots(fixRootField);
+            }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootVisitor](size_t) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[2], &rootStaleAcc[2]);
+                Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
+            }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootVisitor](size_t) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[3], &rootStaleAcc[3]);
+                collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
+            }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootVisitor](size_t) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[4], &rootStaleAcc[4]);
+                collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
+            }));
+        threadPool->AddWork(new (std::nothrow) LambdaWork(
+            [this, &rootAcc, &rootStaleAcc, &makeRootVisitor](size_t) {
+                RootVisitor fixRoot = makeRootVisitor(&rootAcc[5], &rootStaleAcc[5]);
+                Heap::GetHeap().VisitAllExportRoots(fixRoot);
+            }));
 
         for (int32_t i = 0; i < heapWorkers; ++i) {
             HeapAccount* acc = &heapAcc[static_cast<size_t>(i)];
@@ -1450,6 +1579,15 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             rootTotals.rootSlots += a.rootSlots;
             rootTotals.oldTaggedRootSlots += a.oldTaggedRootSlots;
             rootTotals.fixedRootSlots += a.fixedRootSlots;
+        }
+        for (const auto& a : rootStaleAcc) {
+            heapTotals.taggedSlots += a.taggedSlots;
+            for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
+                heapTotals.staleHist[si] += a.staleHist[si];
+            }
+            if (a.maxStaleness > heapTotals.maxStaleness) {
+                heapTotals.maxStaleness = a.maxStaleness;
+            }
         }
         chunksPerWorker.reserve(heapAcc.size());
         for (const auto& a : heapAcc) {
@@ -1473,6 +1611,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             heapTotals.remsetCalls += a.remsetCalls;
             heapTotals.fieldVisits += a.fieldVisits;
             heapTotals.objVisits += a.objVisits;
+            heapTotals.taggedSlots += a.taggedSlots;
+            for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
+                heapTotals.staleHist[si] += a.staleHist[si];
+            }
+            if (a.maxStaleness > heapTotals.maxStaleness) {
+                heapTotals.maxStaleness = a.maxStaleness;
+            }
             chunksPerWorker.push_back(a.chunksTaken);
         }
         workersScheduled = static_cast<size_t>(heapWorkers);
@@ -1512,6 +1657,36 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         VLOG(REPORT, "[GCV2][postflip-split] mode=%d ablated skipFix=%d skipRemset=%d skipWalk=%d "
                      "env=MRT_GCV2_POSTFLIP_SPLIT_COST",
              splitMode, skipFix ? 1 : 0, skipRemset ? 1 : 0, skipWalk ? 1 : 0);
+    }
+    // extermfix product path: one-line note when 乙 is skipped (postflip only).
+    if (!requireSurvivedMark && productSkipFix && splitMode == 0) {
+        VLOG(REPORT,
+             "[GCV2][postflip-fix] skipped=1 product_default=1 restore=MRT_GCV2_POSTFLIP_FIX=1 "
+             "tag_id_count=%u",
+             static_cast<unsigned>(TAG_ID_COUNT));
+    }
+    // T2 staleness histogram (postflip only; env MRT_GCV2_POSTFLIP_STALENESS=1).
+    if (trackStaleness) {
+        std::string histStr;
+        for (size_t si = 0; si < TAG_ID_COUNT; ++si) {
+            if (si != 0) {
+                histStr += ',';
+            }
+            histStr += std::to_string(si);
+            histStr += '=';
+            histStr += std::to_string(heapTotals.staleHist[si]);
+        }
+        VLOG(REPORT,
+             "[GCV2][postflip-staleness] max=%zu tagged=%zu hist=[%s] tag_id_count=%u "
+             "skipFix=%d inject=%d env=MRT_GCV2_POSTFLIP_STALENESS=1",
+             heapTotals.maxStaleness, heapTotals.taggedSlots, histStr.c_str(),
+             static_cast<unsigned>(TAG_ID_COUNT), skipFix ? 1 : 0, stalenessInject ? 1 : 0);
+        if (heapTotals.maxStaleness >= 2) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][postflip-staleness] STALENESS_GE_2 max=%zu tagged=%zu hist=[%s] "
+                "(trace-heal assumption broken if this is not an inject control)",
+                heapTotals.maxStaleness, heapTotals.taggedSlots, histStr.c_str());
+        }
     }
 
     if (heapTotals.rebuilt != 0) {

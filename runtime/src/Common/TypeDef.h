@@ -23,9 +23,11 @@ using MAddress = Uptr; // Managed address
 constexpr Uptr NULL_ADDRESS = 0;
 
 // Tag-ID generation count for WCollector phase tags (RefField tagID field).
-// Default 2 preserves upstream N=2 behaviour; rebuild with -DMRT_TAG_ID_COUNT=N to widen.
+// Default 3: after skipping postflip tag-fix (乙), stale tags live until the next
+// major TRACE heals them; N=2 would wrap "one gen behind" into current.
+// Override with -DMRT_TAG_ID_COUNT=N to rebuild other widths.
 #ifndef MRT_TAG_ID_COUNT
-#define MRT_TAG_ID_COUNT 2
+#define MRT_TAG_ID_COUNT 3
 #endif
 constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
 // Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
