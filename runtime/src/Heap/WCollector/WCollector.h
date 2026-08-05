@@ -50,7 +50,7 @@ public:
         collectorType = CollectorType::SMOOTH_COLLECTOR;
     }
 
-    ~WCollector() override = default;
+    ~WCollector() override;
 
     void Init() override { ForwardDataManager::GetForwardDataManager().InitializeForwardData(); }
 
