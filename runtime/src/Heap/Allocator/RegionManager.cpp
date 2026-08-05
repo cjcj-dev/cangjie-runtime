@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <string>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -243,6 +244,51 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 // size of huge page is 2048KB.
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 
+// copyaudit (MRT_GCV2_COPY_AUDIT=1, default off): ⑥ pooled forward + exclusive copy tallies.
+// Shared with WCollector.cpp (extern below). Zero control-flow change when env unset.
+constexpr size_t kCopyAuditMaxWorkers = 64;
+static std::atomic<size_t> g_copyAuditRegions[kCopyAuditMaxWorkers];
+static std::atomic<size_t> g_copyAuditTasks { 0 };
+
+static bool CopyAuditEnabled()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_COPY_AUDIT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return on;
+}
+
+static void CopyAuditResetPool()
+{
+    g_copyAuditTasks.store(0, std::memory_order_relaxed);
+    for (size_t i = 0; i < kCopyAuditMaxWorkers; ++i) {
+        g_copyAuditRegions[i].store(0, std::memory_order_relaxed);
+    }
+}
+
+thread_local size_t g_copyAuditTlsWorkerId = 0;
+std::atomic<size_t> g_copyAuditExclusivePreforward { 0 };
+std::atomic<size_t> g_copyAuditExclusiveForward { 0 };
+std::atomic<size_t> g_copyAuditBytesPreforward { 0 };
+std::atomic<size_t> g_copyAuditBytesForward { 0 };
+std::atomic<size_t> g_copyAuditAlreadyPreforward { 0 };
+std::atomic<size_t> g_copyAuditAlreadyForward { 0 };
+std::atomic<size_t> g_copyAuditObjsPerWorker[kCopyAuditMaxWorkers];
+
+void CopyAuditResetObjectCounters()
+{
+    g_copyAuditExclusivePreforward.store(0, std::memory_order_relaxed);
+    g_copyAuditExclusiveForward.store(0, std::memory_order_relaxed);
+    g_copyAuditBytesPreforward.store(0, std::memory_order_relaxed);
+    g_copyAuditBytesForward.store(0, std::memory_order_relaxed);
+    g_copyAuditAlreadyPreforward.store(0, std::memory_order_relaxed);
+    g_copyAuditAlreadyForward.store(0, std::memory_order_relaxed);
+    for (size_t i = 0; i < kCopyAuditMaxWorkers; ++i) {
+        g_copyAuditObjsPerWorker[i].store(0, std::memory_order_relaxed);
+    }
+}
+
 class ForwardTask : public HeapWork {
 public:
     ForwardTask(RegionManager& manager, RegionList& fromSpace)
@@ -250,11 +296,19 @@ public:
 
     ~ForwardTask() = default;
 
-    void Execute(size_t) override
+    void Execute(size_t threadId) override
     {
+        const bool audit = CopyAuditEnabled();
+        const size_t wid = (threadId < kCopyAuditMaxWorkers) ? threadId : (kCopyAuditMaxWorkers - 1);
+        if (audit) {
+            g_copyAuditTlsWorkerId = wid;
+        }
         while (true) {
             RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
             if (region == nullptr) { break; }
+            if (audit) {
+                g_copyAuditRegions[wid].fetch_add(1, std::memory_order_relaxed);
+            }
             regionManager.ForwardRegion(region);
         }
     }
@@ -1051,22 +1105,88 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
+    // Emit [GCV2Minor][copy] only on young GC (⑥); major still runs pooled path silently.
+    const bool youngGc =
+        Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    const bool audit = CopyAuditEnabled() && youngGc;
+    if (audit) {
+        CopyAuditResetPool();
+        // Zero only ⑥-phase exclusive/already/bytes/objs; ⑦ tallies kept for post-evac line.
+        g_copyAuditExclusiveForward.store(0, std::memory_order_relaxed);
+        g_copyAuditAlreadyForward.store(0, std::memory_order_relaxed);
+        g_copyAuditBytesForward.store(0, std::memory_order_relaxed);
+        for (size_t i = 0; i < kCopyAuditMaxWorkers; ++i) {
+            g_copyAuditObjsPerWorker[i].store(0, std::memory_order_relaxed);
+        }
+        g_copyAuditTlsWorkerId = 0;
+    }
     if (threadPool != nullptr) {
         int32_t threadNum = threadPool->GetMaxThreadNum() + 1;
         // We won't change fromRegionList during gc, so we can use it without lock.
         size_t regionCount = fromRegionList.GetRegionCount();
         if (UNLIKELY(regionCount == 0)) {
+            if (audit) {
+                VLOG(REPORT,
+                     "[GCV2Minor][copy] workers_active=0 tasks=0 regions=[] objects=[] "
+                     "exclusive=0 already=0 bytes=0 parallel=0 regionCount=0");
+            }
             return;
         }
 
         // we start threadPool before adding work so that we can concurrently add tasks;
+        if (audit) {
+            g_copyAuditTasks.store(static_cast<size_t>(threadNum), std::memory_order_relaxed);
+        }
         threadPool->Start();
         for (int32_t i = 0; i < threadNum; ++i) {
             threadPool->AddWork(new (std::nothrow) ForwardTask(*this, fromRegionList));
         }
         threadPool->WaitFinish();
+        if (audit) {
+            size_t active = 0;
+            std::string regionsStr;
+            std::string objectsStr;
+            const size_t n = static_cast<size_t>(threadNum) < kCopyAuditMaxWorkers
+                ? static_cast<size_t>(threadNum)
+                : kCopyAuditMaxWorkers;
+            for (size_t i = 0; i < n; ++i) {
+                size_t r = g_copyAuditRegions[i].load(std::memory_order_relaxed);
+                size_t o = g_copyAuditObjsPerWorker[i].load(std::memory_order_relaxed);
+                if (r != 0 || o != 0) {
+                    ++active;
+                }
+                if (i != 0) {
+                    regionsStr += ',';
+                    objectsStr += ',';
+                }
+                regionsStr += std::to_string(r);
+                objectsStr += std::to_string(o);
+            }
+            size_t exclusive = g_copyAuditExclusiveForward.load(std::memory_order_relaxed);
+            size_t already = g_copyAuditAlreadyForward.load(std::memory_order_relaxed);
+            size_t bytes = g_copyAuditBytesForward.load(std::memory_order_relaxed);
+            VLOG(REPORT,
+                 "[GCV2Minor][copy] workers_active=%zu tasks=%d regions=[%s] objects=[%s] "
+                 "exclusive=%zu already=%zu bytes=%zu parallel=%d regionCount=%zu",
+                 active, threadNum, regionsStr.c_str(), objectsStr.c_str(), exclusive, already, bytes,
+                 (active >= 2) ? 1 : 0, regionCount);
+        }
     } else {
+        if (audit) {
+            g_copyAuditTasks.store(1, std::memory_order_relaxed);
+            g_copyAuditTlsWorkerId = 0;
+        }
         ForwardFromRegions();
+        if (audit) {
+            size_t exclusive = g_copyAuditExclusiveForward.load(std::memory_order_relaxed);
+            size_t already = g_copyAuditAlreadyForward.load(std::memory_order_relaxed);
+            size_t bytes = g_copyAuditBytesForward.load(std::memory_order_relaxed);
+            size_t o = g_copyAuditObjsPerWorker[0].load(std::memory_order_relaxed);
+            VLOG(REPORT,
+                 "[GCV2Minor][copy] workers_active=1 tasks=1 regions=[] objects=[%zu] "
+                 "exclusive=%zu already=%zu bytes=%zu parallel=0 fallback=serial pool_unavailable",
+                 o, exclusive, already, bytes);
+        }
     }
 }
 

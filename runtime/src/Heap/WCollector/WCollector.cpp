@@ -9,6 +9,18 @@
 
 #include <array>
 #include <atomic>
+// copyaudit counters (defined in RegionManager.cpp; MRT_GCV2_COPY_AUDIT=1)
+namespace MapleRuntime {
+extern thread_local size_t g_copyAuditTlsWorkerId;
+extern std::atomic<size_t> g_copyAuditExclusivePreforward;
+extern std::atomic<size_t> g_copyAuditExclusiveForward;
+extern std::atomic<size_t> g_copyAuditBytesPreforward;
+extern std::atomic<size_t> g_copyAuditBytesForward;
+extern std::atomic<size_t> g_copyAuditAlreadyPreforward;
+extern std::atomic<size_t> g_copyAuditAlreadyForward;
+extern std::atomic<size_t> g_copyAuditObjsPerWorker[];
+void CopyAuditResetObjectCounters();
+}
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <csignal>
 #endif
@@ -1944,6 +1956,14 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 
 void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, const MinorSlotSet& rememberedSlots)
 {
+    static const bool copyAudit = []() {
+        const char* value = std::getenv("MRT_GCV2_COPY_AUDIT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (copyAudit) {
+        CopyAuditResetObjectCounters();
+        g_copyAuditTlsWorkerId = 0;
+    }
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     auto postEvacPoint = [this](const char* point, bool runHeap = true) {
         const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
@@ -1998,12 +2018,33 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         ValidateMinorReferences("before-return", &reachableObjects);
         // Mid-evac checkpoint: after slot fix, before region reclaim.
         postEvacPoint("post-fix-pre-forward", true);
+        if (copyAudit) {
+            // ⑦ demand-copy = exclusive copies under PREFORWARD (currentObject→ForwardObject).
+            size_t exclusive = g_copyAuditExclusivePreforward.load(std::memory_order_relaxed);
+            size_t already = g_copyAuditAlreadyPreforward.load(std::memory_order_relaxed);
+            size_t bytes = g_copyAuditBytesPreforward.load(std::memory_order_relaxed);
+            VLOG(REPORT,
+                 "[GCV2Minor][reffix] exclusive=%zu already=%zu bytes=%zu reachable=%zu "
+                 "env=MRT_GCV2_COPY_AUDIT=1",
+                 exclusive, already, bytes, reachableObjects.size());
+        }
     }
 
     {
         // minortime: ⑥ copy / forward
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
+        if (copyAudit) {
+            size_t copyEx = g_copyAuditExclusiveForward.load(std::memory_order_relaxed);
+            size_t reffixEx = g_copyAuditExclusivePreforward.load(std::memory_order_relaxed);
+            size_t ratioX100 = (copyEx == 0)
+                ? (reffixEx == 0 ? 0 : 999900)
+                : (reffixEx * 100 / copyEx);
+            VLOG(REPORT,
+                 "[GCV2Minor][copy-vs-reffix] reffix_exclusive=%zu copy_exclusive=%zu "
+                 "ratio_reffix_over_copy_x100=%zu env=MRT_GCV2_COPY_AUDIT=1",
+                 reffixEx, copyEx, ratioX100);
+        }
         postEvacPoint("post-forward-pre-reclaim", true);
         {
             const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
@@ -2911,6 +2952,10 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion)
 {
     CHECK(GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD || GetGCPhase() == GCPhase::GC_PHASE_FORWARD);
+    static const bool copyAudit = []() {
+        const char* value = std::getenv("MRT_GCV2_COPY_AUDIT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
     do {
         StateWord oldWord = obj->GetStateWord();
 
@@ -2918,6 +2963,13 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
             DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
+            if (copyAudit) {
+                if (GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD) {
+                    g_copyAuditAlreadyPreforward.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    g_copyAuditAlreadyForward.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
             return toObj;
         }
 
@@ -2943,6 +2995,24 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
+    static const bool copyAudit = []() {
+        const char* value = std::getenv("MRT_GCV2_COPY_AUDIT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (copyAudit) {
+        if (GetGCPhase() == GCPhase::GC_PHASE_PREFORWARD) {
+            g_copyAuditExclusivePreforward.fetch_add(1, std::memory_order_relaxed);
+            g_copyAuditBytesPreforward.fetch_add(size, std::memory_order_relaxed);
+        } else {
+            g_copyAuditExclusiveForward.fetch_add(1, std::memory_order_relaxed);
+            g_copyAuditBytesForward.fetch_add(size, std::memory_order_relaxed);
+            size_t wid = g_copyAuditTlsWorkerId;
+            if (wid >= 64) {
+                wid = 63;
+            }
+            g_copyAuditObjsPerWorker[wid].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
