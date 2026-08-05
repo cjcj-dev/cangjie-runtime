@@ -3296,6 +3296,7 @@ void WCollector::DoYoungGarbageCollection()
         });
     }
     MinorSlotSet liveRememberedSlots;
+    size_t liveBytes = 0;
     {
         // minorstw coarse phase: closure fixpoint, remembered-set rescan, and mark termination.
         MRT_MINOR_PHASE_TIMER("young.mark_and_remset");
@@ -3456,7 +3457,6 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
 
-    size_t liveBytes = 0;
     for (RegionInfo* region : minorCandidateRegions) {
         liveBytes += region->GetLiveByteCount();
     }
