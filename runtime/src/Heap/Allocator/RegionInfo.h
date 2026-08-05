@@ -796,9 +796,7 @@ public:
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
-        if (GetLiveByteCount() > 0) {
-            SetInGhostRegion(1);
-        }
+        SetInGhostRegion(1);
 
         metadata.nextRegionIdx0 = metadata.nextRegionIdx;
 
@@ -814,9 +812,7 @@ public:
 
             array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
             mdata.ownerRegion0 = this;
-            if (GetLiveByteCount() > 0) {
-                array[i].SetInGhostRegion(1);
-            }
+            array[i].SetInGhostRegion(1);
         }
     }
 
