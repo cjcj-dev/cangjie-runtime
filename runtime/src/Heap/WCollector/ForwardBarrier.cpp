@@ -23,10 +23,22 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
     // Soft-resolve every tagged outcome. A bare `do { ... } while (true)` with no
     // progress path livelocks the mutator (no safepoint) and GC then spins forever in
     // EnsurePhaseTransition(IDLE) — gate005 t300/t540 stacks, 4/4 TIMEOUT packages.
+    //
+    // TAG_NARROW (MRT_GCV2_TAG_NARROW=1): Enum/Trace write plain from-refs (no bit48).
+    // Plain must still resolve here — otherwise mutators pin from-objects during FORWARD
+    // (AddRawPointerObject CHECK, RegionManager.h:405). Anchor: tagsurface T2 abort.
     for (;;) {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+            BaseObject* target = tmpField.GetTargetObject();
+            if (Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target) &&
+                !theCollector.IsUnmovableFromObject(target)) {
+                BaseObject* toObj = theCollector.ForwardObject(target);
+                RefField<> newField(toObj);
+                (void)field.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue());
+                return toObj;
+            }
+            return target;
         }
         // One-gen-stale (IsOldPointer): never CHECK-spin. Match IdleBarrier / F3 soft path.
         if (theCollector.IsOldPointer(tmpField)) {

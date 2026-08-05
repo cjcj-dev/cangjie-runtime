@@ -169,6 +169,8 @@ protected:
     // MRT_GCV2_TAG_NARROW=1 (default off): never set bit48 on ref fields.
     // Experiment for stock-std bare loads (String.myData / indexOf F1). Product default
     // keeps upstream tagging (IsFromObject → isTagged=1, tagID=currentTagID).
+    // Companion: Forward/Preforward barriers + ForwardUpdateRawRef resolve plain from-refs
+    // (IsGhostFromObject) so AddRawPointerObject is not handed a movable from during FORWARD.
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
         static const bool tagNarrow = []() {

@@ -785,6 +785,17 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 return oldObj;
             }
         }
+    } else if (!oldField.IsTagged() && Heap::IsHeapAddress(oldObj) && IsGhostFromObject(oldObj) &&
+               !IsUnmovableFromObject(oldObj)) {
+        // TAG_NARROW: plain from-ref (no bit48). Same install as tagged current path.
+        BaseObject* toVersion = TryForwardObject(oldObj);
+        if (toVersion != nullptr) {
+            RefField<> newField(toVersion);
+            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+                DLOG(FIX, "fix plain raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
+                return toVersion;
+            }
+        }
     }
 
     return oldObj;

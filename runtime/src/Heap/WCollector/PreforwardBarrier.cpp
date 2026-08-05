@@ -22,10 +22,19 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
 {
     // Same progress guarantee as ForwardBarrier::ReadReference — see that file.
     // Preforward is the prior phase; residual tagged + failed forward also livelocks.
+    // TAG_NARROW plain-from resolve: see ForwardBarrier::ReadReference.
     for (;;) {
         RefField<> tmpField(field);
         if (LIKELY(!tmpField.IsTagged())) {
-            return tmpField.GetTargetObject();
+            BaseObject* target = tmpField.GetTargetObject();
+            if (Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target) &&
+                !theCollector.IsUnmovableFromObject(target)) {
+                BaseObject* toObj = theCollector.ForwardObject(target);
+                RefField<> newField(toObj);
+                (void)field.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue());
+                return toObj;
+            }
+            return target;
         }
         if (theCollector.IsOldPointer(tmpField)) {
             BaseObject* toVersion = nullptr;
