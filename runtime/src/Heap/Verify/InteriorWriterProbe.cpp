@@ -301,16 +301,29 @@ void InteriorWriterProbe::NoteInstall(const char* path, const char* kind, void* 
     if (!Enabled()) {
         return;
     }
-    if (!gArmedLogged.exchange(true, std::memory_order_relaxed)) {
-        size_t dumpMax = EnvSizeT("MRT_GCV2_INTERIOR_WRITER_DUMP_MAX", 64);
-        gDumpLeft.store(dumpMax, std::memory_order_relaxed);
-        IWR_LOG("ARMED env=MRT_GCV2_INTERIOR_WRITER=1 dumpMax=%zu", dumpMax);
-    }
 
     const char* pathStr = path;
     if (pathStr == nullptr || pathStr[0] == '\0' || std::strcmp(pathStr, "sink") == 0) {
         pathStr = CurrentPath();
     }
+    // Keep mutator sink light: full classify only on named GC paths + 1/4096 sink sample.
+    // remsetholder hitrate already dropped 8→2/12; every-install classify masks B2.
+    bool namedPath = pathStr != nullptr && std::strcmp(pathStr, "sink") != 0;
+    static std::atomic<uint64_t> gSinkSeq{0};
+    if (!namedPath) {
+        uint64_t n = gSinkSeq.fetch_add(1, std::memory_order_relaxed);
+        if ((n & 0xfff) != 0) { // 1/4096
+            return;
+        }
+    }
+
+    if (!gArmedLogged.exchange(true, std::memory_order_relaxed)) {
+        size_t dumpMax = EnvSizeT("MRT_GCV2_INTERIOR_WRITER_DUMP_MAX", 64);
+        gDumpLeft.store(dumpMax, std::memory_order_relaxed);
+        IWR_LOG("ARMED env=MRT_GCV2_INTERIOR_WRITER=1 dumpMax=%zu (named GC paths full; sink 1/4096)",
+                dumpMax);
+    }
+
     const char* kindStr = kind != nullptr ? kind : "?";
 
     uintptr_t val = reinterpret_cast<uintptr_t>(value);
@@ -405,6 +418,9 @@ void InteriorWriterProbe::FlushSummary(const char* site)
     if (!Enabled()) {
         return;
     }
+    // Always emit so lean runs that skip post-minor still leave a trail at atexit.
+    static std::atomic<bool> gAnyFlush{false};
+    (void)gAnyFlush.exchange(true, std::memory_order_relaxed);
     uint64_t total = gTotal.load(std::memory_order_relaxed);
     uint64_t base = gBase.load(std::memory_order_relaxed);
     uint64_t interior = gInterior.load(std::memory_order_relaxed);
@@ -438,5 +454,22 @@ void InteriorWriterProbe::FlushSummary(const char* site)
                 static_cast<unsigned long long>(pb), static_cast<unsigned long long>(pi));
     }
 }
+
+namespace {
+void AtexitFlush()
+{
+    InteriorWriterProbe::FlushSummary("atexit");
+}
+
+struct AtexitRegistrar {
+    AtexitRegistrar()
+    {
+        if (InteriorWriterProbe::Enabled()) {
+            std::atexit(AtexitFlush);
+        }
+    }
+};
+AtexitRegistrar gAtexitRegistrar;
+} // namespace
 
 } // namespace MapleRuntime
