@@ -680,6 +680,20 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
+void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
+{
+    size_t num = region->GetUnitCount();
+    size_t unitIndex = region->GetUnitIdx();
+    if (num >= HUGE_PAGE) {
+        UntagHugePage(region, num);
+    }
+    DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
+         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+    HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
+    region->InitFreeUnits();
+    freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
+}
+
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
     size_t res = region->GetRegionSize();
