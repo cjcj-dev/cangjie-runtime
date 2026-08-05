@@ -13,8 +13,6 @@
 namespace MapleRuntime {
 
 class BaseObject;
-template <bool isVolatile>
-class RefField;
 
 // F3 scan forensics for bucket-2 (holder marked, target dead):
 //   MRT_GCV2_F3_SCAN=1       dump type/gctib/enum at F3_DEATH abort (default off)
@@ -22,17 +20,18 @@ class RefField;
 //   MRT_GCV2_F3S_POSCTRL_OFF=<bytes>  field offset from object base (default 40)
 //   MRT_GCV2_F3S_POSCTRL_TYPE=<substr> optional type-name filter (empty = any)
 // Does not widen IsValidObject / IsMarked / TryUntag; evidence only.
+// field is RefField<>* passed as void* to keep this header free of RefField template.
 class F3Scan {
 public:
     static bool Enabled();
     static bool PosCtrlEnabled();
 
     // True if this edge should be intentionally not followed (bucket-2 POSCTRL).
-    static bool ShouldSkipEdge(BaseObject* holder, RefField<>* field, BaseObject* target, const char* site);
+    static bool ShouldSkipEdge(BaseObject* holder, void* field, BaseObject* target, const char* site);
 
     // At F3 abort: dump holder type, size, slot offset, gctib bit, simulated enum set,
     // and classify S1/S2/S3 into verdictBuf.
-    static void DumpAtAbort(BaseObject* holder, RefField<>* field, BaseObject* target, char* verdictBuf,
+    static void DumpAtAbort(BaseObject* holder, void* field, BaseObject* target, char* verdictBuf,
                             size_t verdictBufSize);
 
     static bool PosCtrlMatch(BaseObject* holder, BaseObject* target);

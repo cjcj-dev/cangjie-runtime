@@ -189,7 +189,7 @@ bool F3Scan::PosCtrlEnabled()
     return on;
 }
 
-bool F3Scan::ShouldSkipEdge(BaseObject* holder, RefField<>* field, BaseObject* target, const char* site)
+bool F3Scan::ShouldSkipEdge(BaseObject* holder, void* field, BaseObject* target, const char* site)
 {
     if (!PosCtrlEnabled() || holder == nullptr || field == nullptr || target == nullptr) {
         return false;
@@ -237,8 +237,7 @@ bool F3Scan::PosCtrlMatch(BaseObject* holder, BaseObject* target)
     return gPosFired.load(std::memory_order_acquire) != 0 && holder == gPosHolder && target == gPosTarget;
 }
 
-void F3Scan::DumpAtAbort(BaseObject* holder, RefField<>* field, BaseObject* target, char* verdictBuf,
-                         size_t verdictBufSize)
+void F3Scan::DumpAtAbort(BaseObject* holder, void* field, BaseObject* target, char* verdictBuf, size_t verdictBufSize)
 {
     if (verdictBuf != nullptr && verdictBufSize > 0) {
         verdictBuf[0] = '\0';
