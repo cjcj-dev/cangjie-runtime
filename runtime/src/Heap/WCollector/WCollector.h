@@ -7,6 +7,8 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
+#include <cstdlib>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -164,9 +166,16 @@ protected:
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
 
+    // MRT_GCV2_TAG_NARROW=1 (default off): never set bit48 on ref fields.
+    // Experiment for stock-std bare loads (String.myData / indexOf F1). Product default
+    // keeps upstream tagging (IsFromObject → isTagged=1, tagID=currentTagID).
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
-        if (IsFromObject(target)) {
+        static const bool tagNarrow = []() {
+            const char* value = std::getenv("MRT_GCV2_TAG_NARROW");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        if (!tagNarrow && IsFromObject(target)) {
             return RefField<>(target, 1, currentTagID);
         } else {
             return RefField<>(target);
