@@ -6,6 +6,7 @@
 
 
 #include <atomic>
+#include <mutex>
 
 #include "TsanInterface.h"
 
@@ -31,6 +32,10 @@ static CJThreadRecorder<RaceProcHandle> g_procState{};
 // slot that returns null and all memory/atomic hooks become no-ops.
 static thread_local RaceStateHandle g_nativeRaceState = nullptr;
 static thread_local RaceProcHandle g_nativeRaceProc = nullptr;
+// Process-wide parent for native-thread state_create (secondary thr need a parent;
+// bare __tsan_init is only for the primary thread and leaves secondary thr half-wired).
+static RaceStateHandle g_nativeRootState = nullptr;
+static std::mutex g_nativeAttachMu;
 
 void TsanInitialize()
 {
@@ -64,9 +69,27 @@ void TsanAttachNativeThread()
     if (g_nativeRaceState != nullptr) {
         return;
     }
-    // Root ThreadState for this OS thread (same allocator path as cjthread init).
-    g_nativeRaceState = REAL(__tsan_init)();
+    std::lock_guard<std::mutex> lock(g_nativeAttachMu);
+    if (g_nativeRaceState != nullptr) {
+        return;
+    }
+    // Prefer an already-tracked cjthread as parent; else one process-wide root thr.
+    RaceStateHandle parent = nullptr;
+    void* cjthread = CJThreadGetHandle();
+    if (cjthread != nullptr) {
+        parent = CJThreadGetSanitizerContext(cjthread);
+    }
+    if (parent == nullptr) {
+        if (g_nativeRootState == nullptr) {
+            g_nativeRootState = REAL(__tsan_init)();
+            g_initialized.store(true, std::memory_order_release);
+        }
+        parent = g_nativeRootState;
+    }
+    // Child thr = state_create(parent) so ThreadCreate+ThreadStart wire the thr fully
+    // (bare __tsan_init alone left secondary thr half-wired → SIGSEGV on MemoryAccess).
     g_nativeRaceProc = REAL(__tsan_proc_create)();
+    g_nativeRaceState = REAL(__tsan_state_create)(parent, __builtin_return_address(0));
     g_initialized.store(true, std::memory_order_release);
 }
 
