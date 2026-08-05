@@ -432,7 +432,11 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                 const char* value = std::getenv("MRT_GCV2_F3_REGION");
                 return value != nullptr && std::strcmp(value, "1") == 0;
             }();
-            if (f3Region) {
+            static const bool f3Death = []() {
+                const char* value = std::getenv("MRT_GCV2_F3_DEATH");
+                return value != nullptr && std::strcmp(value, "1") == 0;
+            }();
+            if (f3Region || f3Death) {
                 const bool targetInHeap = Heap::IsHeapAddress(target);
                 const bool holderInHeap = obj != nullptr && Heap::IsHeapAddress(obj);
                 const bool targetInGhost = targetInHeap && RegionInfo::InGhostFromRegion(target);
@@ -473,14 +477,17 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 
                 const GCPhase phase = GetGCPhase();
                 const uint64_t gcStartNs = GCStats::GetPrevGCStartTime();
+                // TryUntagRefField is const; GetGCStats() is non-const on Collector.
+                const GCReason reasonNow = const_cast<WCollector*>(this)->GetGCStats().reason;
+                const char* reasonName = (reasonNow == GC_REASON_YOUNG) ? "minor" : "major";
                 VLOG(REPORT,
                      "[GCV2][F3_REGION] target=%p field=%p holder=%p targetInHeap=%u holderInHeap=%u "
                      "unit.inGhostFromRegion=%u selectedBranch=%s targetCurrent=%p targetGhost=%p selected=%p "
-                     "phase=%s(%u) completedGcCount=%zu gcStartNs=%llu",
+                     "phase=%s(%u) completedGcCount=%zu gcStartNs=%llu reason=%s",
                      target, &field, obj, static_cast<unsigned>(targetInHeap), static_cast<unsigned>(holderInHeap),
                      static_cast<unsigned>(targetInGhost), targetInGhost ? "ghost" : "current", targetCurrent,
                      targetGhost, selectedTargetRegion, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-                     g_gcCount, static_cast<unsigned long long>(gcStartNs));
+                     g_gcCount, static_cast<unsigned long long>(gcStartNs), reasonName);
                 dumpRegion("target_current_pre_find", target, targetCurrent);
                 dumpRegion("target_ghost_pre_find", target, targetGhost);
                 dumpRegion("holder_current", obj, holderCurrent);
@@ -545,6 +552,90 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      toVersion, static_cast<unsigned>(toInHeap), toValid, static_cast<unsigned>(targetInHeap));
                 dumpRegion("to_version_after_find", toVersion, toRegion);
                 dumpRegion("target_ghost_after_find", target, targetGhost);
+
+                // f3death: who killed target's region + was holder live / edge in remset?
+                if (f3Death) {
+                    char killBuf[512];
+                    size_t histHits = 0;
+                    if (targetInHeap) {
+                        histHits = TraceClear::DumpHistory(reinterpret_cast<MAddress>(target), killBuf,
+                                                           sizeof(killBuf));
+                    } else {
+                        std::snprintf(killBuf, sizeof(killBuf), "NOT_AVAILABLE_target_not_in_heap");
+                    }
+                    size_t ringCap = 0;
+                    size_t ringTotal = 0;
+                    size_t ringWrap = 0;
+                    TraceClear::RingStats(ringCap, ringTotal, ringWrap);
+
+                    // Holder liveness proxies at abort time (mark bitmap from last GC).
+                    // true root-reachability would require a full re-scan; mark bits + survived
+                    // are the production-side "was this object kept" signals available here.
+                    int holderValid = -1;
+                    int holderMarked = -1;
+                    int holderSurvived = -1;
+                    int holderResurrected = -1;
+                    int holderYoung = -1;
+                    if (holderInHeap && obj != nullptr) {
+                        holderValid = static_cast<int>(obj->IsValidObject());
+                        if (holderValid == 1) {
+                            holderMarked = static_cast<int>(IsMarkedObject(obj));
+                            holderSurvived = static_cast<int>(Heap::GetHeap().IsSurvivedObject(obj));
+                            holderResurrected = static_cast<int>(RegionSpace::IsResurrectedObject(obj));
+                        }
+                        if (holderCurrent != nullptr) {
+                            holderYoung = static_cast<int>(holderCurrent->IsYoungRegion());
+                        }
+                    }
+
+                    // Edge in remset? Contains() is non-destructive active-buffer probe.
+                    // Note: DrainForMinor swaps buffers; a drained edge is NOT in active buffer.
+                    // We report both active-Contains and "holder young ⇒ remset not required".
+                    const MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+                    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+                    const size_t remsetSize = rs.Size();
+                    const int remsetContains = static_cast<int>(rs.Contains(fieldAddr));
+                    // Also probe external / out-of-heap fields via Contains itself.
+                    int targetYoung = -1;
+                    if (targetCurrent != nullptr) {
+                        targetYoung = static_cast<int>(targetCurrent->IsYoungRegion());
+                    } else if (targetGhost != nullptr) {
+                        targetYoung = static_cast<int>(targetGhost->IsYoungRegion());
+                    }
+                    // Classification sketch printed for post-hoc bucketing (not a final verdict).
+                    // CONSUMER: holder kept (marked/survived) AND remsetContains=1 AND target dead
+                    // MISSING_EDGE: holder kept AND remsetContains=0 AND holder not young (old→young needs remset)
+                    // RESURRECT: holderValid now but not marked/survived (or holder was cleared)
+                    // UNCLASSIFIED: insufficient signals
+                    const char* sketch = "UNCLASSIFIED";
+                    if (holderValid == 1 && (holderMarked == 1 || holderSurvived == 1)) {
+                        if (remsetContains == 1) {
+                            sketch = "F3_DEATH_CONSUMER_candidate";
+                        } else if (holderYoung == 0 && targetYoung == 1 && remsetContains == 0) {
+                            sketch = "F3_DEATH_MISSING_EDGE_candidate";
+                        } else if (holderYoung == 1) {
+                            sketch = "F3_DEATH_HOLDER_YOUNG_no_remset_required";
+                        } else {
+                            sketch = "F3_DEATH_HOLDER_LIVE_edge_unknown";
+                        }
+                    } else if (holderValid == 1 && holderMarked == 0 && holderSurvived == 0) {
+                        sketch = "F3_DEATH_RESURRECT_candidate_holder_unmarked";
+                    } else if (holderValid == 0) {
+                        sketch = "F3_DEATH_HOLDER_INVALID";
+                    } else if (holderWasCleared) {
+                        sketch = "F3_DEATH_RESURRECT_candidate_holder_cleared";
+                    }
+
+                    VLOG(REPORT,
+                         "[GCV2][F3_DEATH] target=%p field=%p holder=%p "
+                         "holderValid=%d holderMarked=%d holderSurvived=%d holderResurrected=%d "
+                         "holderYoung=%d targetYoung=%d remsetContains=%d remsetSize=%zu "
+                         "histHits=%zu ringCap=%zu ringTotal=%zu ringWrap=%zu "
+                         "kill={%s} sketch=%s reason=%s gcIndex=%zu phase=%u",
+                         target, &field, obj, holderValid, holderMarked, holderSurvived, holderResurrected,
+                         holderYoung, targetYoung, remsetContains, remsetSize, histHits, ringCap, ringTotal,
+                         ringWrap, killBuf, sketch, reasonName, g_gcCount, static_cast<unsigned>(phase));
+                }
             }
         }
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
