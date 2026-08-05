@@ -42,6 +42,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/WCollector/TraceCoverProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -569,6 +570,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
     RefField<> oldField(field);
+    // tracecover: static-root ENUM visits every slot (incl. current-tag early return).
+    TraceCoverProbe::MarkSlot(&field);
     // if field is already tagged currently, it is also already enumerated.
     if (IsCurrentPointer(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
@@ -615,6 +618,8 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 {
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
+    // tracecover: ENUM root slot is visited even when already current-tagged.
+    TraceCoverProbe::MarkSlot(&refField);
     CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
@@ -650,6 +655,8 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
+    // tracecover: every reachable ref-field is visited here (incl. current-tag fast path).
+    TraceCoverProbe::MarkSlot(&field);
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
@@ -871,6 +878,8 @@ void WCollector::TraceHeap()
     WorkStack foreignStack = NewWorkStack();
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
+    // tracecover: reset side-channel set for this major; ENUM+TRACE mark slots into it.
+    TraceCoverProbe::BeginMajorCycle();
 
     {
         MRT_PHASE_TIMER("enum roots & update old pointers within");
@@ -1012,11 +1021,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const uintptr_t heapStart = regionManager.GetRegionHeapStart();
     const uintptr_t inactiveZone = regionManager.GetInactiveZone();
 
-    auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
-        return [this, trackFixed, acc](ObjectRef& root) {
+    // coverPost: only postflip (!requireSurvivedMark) buckets rewrites vs trace-cover set.
+    const bool coverPost = !requireSurvivedMark && TraceCoverProbe::Enabled();
+    auto makeRootVisitor = [this, trackFixed, coverPost](RootAccount* acc) -> RootVisitor {
+        return [this, trackFixed, coverPost, acc](ObjectRef& root) {
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = (trackFixed || coverPost) && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
                 if (oldTagged) {
@@ -1024,15 +1035,20 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
-                ++acc->fixedRootSlots;
+            if (oldTagged && field.GetFieldValue() != oldValue) {
+                if (trackFixed && acc != nullptr) {
+                    ++acc->fixedRootSlots;
+                }
+                if (coverPost) {
+                    TraceCoverProbe::AccountFixed(&field, 1);
+                }
             }
         };
     };
-    auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
-        return [this, trackFixed, acc](RefField<>& field) {
+    auto makeRootFieldVisitor = [this, trackFixed, coverPost](RootAccount* acc) -> RefFieldVisitor {
+        return [this, trackFixed, coverPost, acc](RefField<>& field) {
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = (trackFixed || coverPost) && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
                 if (oldTagged) {
@@ -1040,13 +1056,18 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
-                ++acc->fixedRootSlots;
+            if (oldTagged && field.GetFieldValue() != oldValue) {
+                if (trackFixed && acc != nullptr) {
+                    ++acc->fixedRootSlots;
+                }
+                if (coverPost) {
+                    TraceCoverProbe::AccountFixed(&field, 1);
+                }
             }
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed](BaseObject* obj,
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed, coverPost](BaseObject* obj,
                                                                                           HeapAccount& acc) {
         RegionInfo* accountRegion = nullptr;
         if (account) {
@@ -1089,9 +1110,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
-                              &acc](RefField<>& field) {
+                              coverPost, &acc](RefField<>& field) {
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = (trackFixed || coverPost) && IsOldPointer(field);
             if (trackFixed) {
                 ++acc.fields;
                 if (forwardHolder) {
@@ -1103,7 +1124,12 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
             FixOldTaggedRefField(obj, field);
             if (oldTagged && field.GetFieldValue() != oldValue) {
-                ++acc.fixedSlots;
+                if (trackFixed) {
+                    ++acc.fixedSlots;
+                }
+                if (coverPost) {
+                    TraceCoverProbe::AccountFixed(&field, 0);
+                }
             }
             if (!recordCrossGen) {
                 return;
@@ -1399,6 +1425,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     if (heapTotals.rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", heapTotals.rebuilt);
+    }
+    if (coverPost) {
+        TraceCoverProbe::ReportPostflip();
     }
     if (account) {
         VLOG(REPORT,

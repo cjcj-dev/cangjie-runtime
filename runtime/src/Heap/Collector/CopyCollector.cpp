@@ -10,6 +10,7 @@
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
+#include "Heap/WCollector/TraceCoverProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -34,6 +35,8 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    // tracecover: any object relocation (Forward/Compact) must migrate side-channel marks.
+    TraceCoverProbe::MigrateObject(&fromObj, &toObj, size);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

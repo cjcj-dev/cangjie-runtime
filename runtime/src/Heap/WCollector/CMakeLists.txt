@@ -11,6 +11,7 @@ set(SRC_LIST
     "PostTraceBarrier.cpp"
     "PreforwardBarrier.cpp"
     "ForwardBarrier.cpp"
+    "TraceCoverProbe.cpp"
     "WCollector.cpp"
 )
 
