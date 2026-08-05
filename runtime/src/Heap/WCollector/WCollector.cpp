@@ -1799,8 +1799,19 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
         size_t residualPromoteRecords = 0;
+        // Positive-control only (rebuildgate): keep one residual young so live-young
+        // count stays >0 and the rebuild gate must open. Default off — product path
+        // demotes every residual candidate (MINOR_CONCURRENCY_0805 §9.5).
+        const char* keepOneYoungEnv = std::getenv("MRT_GCV2_REBUILD_KEEP_ONE_YOUNG");
+        const bool keepOneYoung =
+            keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
+        bool keptOneYoung = false;
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
+                if (keepOneYoung && !keptOneYoung) {
+                    keptOneYoung = true;
+                    continue;
+                }
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
                 // still demote to old; must replay young→young edges that become old→young.
                 region->PreserveRetainedLiveInfo();
@@ -1811,29 +1822,49 @@ void WCollector::EvacuateYoungRegions(const MinorObjectSet& reachableObjects, co
         }
         size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
 
+        // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
+        // live young region count is the product-path authority
+        // (RegionInfo::youngRegionCount / GetYoungRegionCount —
+        // RegionManager.cpp:185-209; VerifyRegions.cpp:325). When count==0 every
+        // holder is non-young and every target is non-young ⇒ rebuild walk is pure
+        // cost with zero output. P2 in-place aging reintroduces live young ⇒ gate
+        // reopens automatically (structure, not an env switch).
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
         size_t rebuiltRecords = 0;
-        for (BaseObject* object : reachableObjects) {
-            BaseObject* holder = currentObject(object);
-            RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-            if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
-                continue;
+        const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
+        if (liveYoungRegions == 0) {
+            VLOG(REPORT,
+                 "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
+        } else {
+            for (BaseObject* object : reachableObjects) {
+                BaseObject* holder = currentObject(object);
+                RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
+                    continue;
+                }
+                holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (!Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion->IsYoungRegion()) {
+                        rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                        ++rebuiltRecords;
+                    }
+                });
             }
-            holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
-                BaseObject* target = ResolveMinorReference(field);
-                if (!Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                if (targetRegion->IsYoungRegion()) {
-                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                    ++rebuiltRecords;
-                }
-            });
+            if (rebuiltRecords == 0) {
+                VLOG(REPORT,
+                     "[GCV2Minor][rebuild-gate] anomaly open-gate-zero-output "
+                     "youngRegionCount=%zu",
+                     liveYoungRegions);
+            }
         }
         VLOG(REPORT,
-             "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu",
-             rebuiltRecords, promotedPathRecords, residualPromoteRecords);
+             "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu "
+             "youngRegionCount=%zu",
+             rebuiltRecords, promotedPathRecords, residualPromoteRecords, liveYoungRegions);
 
         fwdTable.PrepareForwardTable();
         ValidateMinorReferences("after-dispel", nullptr);
