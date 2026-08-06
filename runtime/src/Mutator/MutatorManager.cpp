@@ -406,7 +406,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
         (void)caller->LeaveSaferegion();
     }
 
-    VLOG(REPORT,
+    LOG(RTLOG_REPORT,
          "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
          "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu "
          "deferred_create=%zu exit_transition=%zu stw_calls=%zu "
