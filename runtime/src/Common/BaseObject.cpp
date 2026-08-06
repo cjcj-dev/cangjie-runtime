@@ -177,3 +177,7 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
     return false;
 }
 } // namespace MapleRuntime
+
+// Phase B: the read-barrier mask the compiler tests against (see TypeDef.h for why).
+// "All colour bits set" keeps the predicate identical to the shift form it replaces.
+extern "C" unsigned long g_cjLoadBadMask = 0xFFFF000000000000UL;

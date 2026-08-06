@@ -90,6 +90,13 @@ public:
     virtual bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const { std::abort(); }
     virtual RefField<> GetAndTryTagRefField(BaseObject*) const { std::abort(); }
 
+    // "Does this reference need the barrier before use?" -- the question every consumer of the
+    // two predicates below is actually asking. Today a reference carries no colour unless it is
+    // being evacuated, so the answer is exactly IsTagged(); phase C of the colouring work
+    // (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6) makes it a mask test. Non-virtual and phase
+    // independent: the encoding is a property of RefField, not of the collector's phase.
+    bool IsLoadBad(RefField<>& ref) const { return ref.IsTagged(); }
+
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
     virtual void AddRawPointerObject(BaseObject*) { std::abort(); }

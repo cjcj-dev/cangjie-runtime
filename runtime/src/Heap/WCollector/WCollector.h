@@ -86,15 +86,27 @@ public:
         return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
     }
 
+    // Phase A of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
+    //
+    // Today a reference carries no colour unless it is being evacuated, so "needs the barrier"
+    // is exactly "tagged", and every consumer spells that as one of the two predicates below.
+    // Those two share a blind spot: an untagged value satisfies neither, so an if/else-if chain
+    // over them lets it through unexamined. That is correct while good == 0 and wrong the moment
+    // a good colour is non-zero, which is what phase C does.
+    //
+    // IsLoadBad is declared on Collector (Collector.h) so the six phase barriers, which hold a
+    // Collector&, can spell it. Phase C changes that one body -- as in ZGC's
+    // ZPointer::is_load_bad, zAddress.inline.hpp:626-628 -- instead of ~90 call sites.
+
     // note this api is not atomic, caller should take care of this.
     // N>2: any non-current tagged ref is "old" (not only previous); else older tags are dropped.
     bool IsOldPointer(RefField<>& ref) const override
     {
-        return ref.IsTagged() && ref.GetTagID() != currentTagID;
+        return IsLoadBad(ref) && ref.GetTagID() != currentTagID;
     }
 
     // note this api is not atomic, caller should take care of this.
-    bool IsCurrentPointer(RefField<>& ref) const override { return ref.IsTagged() && ref.GetTagID() == currentTagID; }
+    bool IsCurrentPointer(RefField<>& ref) const override { return IsLoadBad(ref) && ref.GetTagID() == currentTagID; }
 
     void AddRawPointerObject(BaseObject* obj) override
     {

@@ -25,7 +25,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
     // EnsurePhaseTransition(IDLE) — gate005 t300/t540 stacks, 4/4 TIMEOUT packages.
     for (;;) {
         RefField<> tmpField(field);
-        if (LIKELY(!tmpField.IsTagged())) {
+        if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
             return tmpField.GetTargetObject();
         }
         // One-gen-stale (IsOldPointer): never CHECK-spin. Match IdleBarrier / F3 soft path.
