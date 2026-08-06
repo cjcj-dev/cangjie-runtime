@@ -85,18 +85,10 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
-    if (SlotWriterProbe::Enabled() && obj != nullptr && obj->IsValidObject() && obj->HasRefField()) {
-        // Bulk struct store: attribute each ref word after the memcpy.
-        auto note = [obj](RefField<>& field) {
-            SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
-                                          "WriteStruct");
-        };
-        MAddress content = reinterpret_cast<MAddress>(obj) + TYPEINFO_PTR_SIZE;
-        // Only walk the written range if it overlaps object content.
-        (void)dst;
-        (void)dstLen;
-        obj->GetGCTib().ForEachBitmapWord(content, note);
-    }
+    // Note: do not walk GCTib here under SLOTWRITER — WriteStruct can run while
+    // the destination object header is still mid-construction (SEGV@tip).
+    // Slot history for bulk stores is still covered when the same words are later
+    // written via WriteReference/Atomic*, or shows as NO_BARRIER_WRITE_FOR_SLOT.
     RecordCrossGenEdgesInStruct(obj, dst, dstLen);
 }
 
