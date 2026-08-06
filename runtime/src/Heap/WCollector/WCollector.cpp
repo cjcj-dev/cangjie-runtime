@@ -3177,6 +3177,9 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    if (UNLIKELY(MutatorManager::EpochHandshakeEnabled())) {
+        (void)MutatorManager::Instance().RunEpochHandshake("pre-minor");
+    }
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
