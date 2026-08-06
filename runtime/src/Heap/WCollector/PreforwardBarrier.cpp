@@ -20,47 +20,26 @@
 namespace MapleRuntime {
 BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    // Same progress guarantee as ForwardBarrier::ReadReference — see that file.
-    // Preforward is the prior phase; residual tagged + failed forward also livelocks.
     for (;;) {
-        RefField<> tmpField(field);
-        if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
-            return tmpField.GetTargetObject();
+        RefField<> oldField(field);
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
         }
-        if (theCollector.IsOldPointer(tmpField)) {
-            BaseObject* toVersion = nullptr;
-            if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-                return toVersion;
+
+        BaseObject* loadGood = oldTarget;
+        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+            loadGood = theCollector.make_load_good(oldField);
+            if (theCollector.IsGhostFromObject(loadGood)) {
+                loadGood = theCollector.ForwardObject(loadGood);
             }
-            BaseObject* target = nullptr;
-            if (theCollector.TryUntagRefField(obj, field, target)) {
-                return target;
-            }
-            return tmpField.GetTargetObject();
         }
-        if (theCollector.IsCurrentPointer(tmpField)) {
-            BaseObject* target = tmpField.GetTargetObject();
-            if (theCollector.IsUnmovableFromObject(target)) {
-                if (theCollector.TryUntagRefField(obj, field, target)) {
-                    return target;
-                }
-            } else {
-                BaseObject* toObj = nullptr;
-                if (theCollector.TryForwardRefField(obj, field, toObj)) {
-                    return toObj;
-                }
-                BaseObject* soft = nullptr;
-                if (theCollector.TryUntagRefField(obj, field, soft)) {
-                    return soft;
-                }
-                return target;
-            }
-        } else {
-            BaseObject* target = nullptr;
-            if (theCollector.TryUntagRefField(obj, field, target)) {
-                return target;
-            }
-            return tmpField.GetTargetObject();
+
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
+        // observed value as the CAS expected value and retry after a concurrent update.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
         }
     }
 }
