@@ -85,12 +85,7 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        } else if (theCollector.IsOldPointer(dstRef)) {
-            dstRef.SetTargetObject(ReadReference(nullptr, dstRef));
-        }
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
