@@ -105,7 +105,8 @@ struct HolderFate {
 };
 
 constexpr size_t kPerSlotCap = 8;
-constexpr size_t kWatchCap = 4096;
+// Cap high: gold holder is often late in TRACE; 4k evicted it (NEVER_WATCHED false negative).
+constexpr size_t kWatchCap = 1 << 20;
 
 std::atomic<int> gEnabled{ -1 };
 std::atomic<size_t> gSeq{ 0 };
@@ -550,17 +551,34 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
             markedNow = hr->IsMarkedObject(holder) ? 1 : 0;
         }
     }
+    // origin=trace_* means major TraceRefField is actively scanning this holder NOW.
+    const bool majorVisitingNow =
+        origin != nullptr && (std::strncmp(origin, "trace_", 6) == 0 || std::strcmp(origin, "trace_latest") == 0 ||
+                              std::strcmp(origin, "trace_current") == 0);
     if (!fateFound) {
         SW_LOG("HOLDER_FATE holder=%p NEVER_WATCHED "
                "(no young→young NoteYoungYoungWatch for this holder under SLOTWRITER)",
                holder);
         SW_LOG("YC_T0 holder=%p slot=%#zx offset=%zd origin=%s "
                "in_minor_reachable=NO in_reffix_obj=NO watched_slot_reffix=NO "
-               "marked_now=%u mark_bmp_null_now=%u holder_young_now=%u",
+               "marked_now=%u mark_bmp_null_now=%u holder_young_now=%u major_visiting_now=%u",
                holder, static_cast<size_t>(slot), offset, origin == nullptr ? "null" : origin,
                static_cast<unsigned>(markedNow), static_cast<unsigned>(markBmpNullNow),
-               static_cast<unsigned>(holderYoungNow));
-        SW_LOG("YC_VERDICT=HOLDER_NEVER_WATCHED holder=%p", holder);
+               static_cast<unsigned>(holderYoungNow), static_cast<unsigned>(majorVisitingNow));
+        // Even without watch history: crash on major TraceRefField with marked holder
+        // still answers T0 for the concurrent-mark path.
+        if (majorVisitingNow && markedNow) {
+            SW_LOG("YC_VERDICT=乙_MAJOR_TRACE_HOLDER_MARKED_VALUE_INVALID holder=%p "
+                   "(major TraceRefField visiting marked holder; slot never minor-reachable/reffix; "
+                   "crash before any minor face — minor closure N/A)",
+                   holder);
+        } else if (majorVisitingNow) {
+            SW_LOG("YC_VERDICT=乙_MAJOR_TRACE_HOLDER_UNMARKED holder=%p "
+                   "(major visiting holder but mark bit 0 at invalid time)",
+                   holder);
+        } else {
+            SW_LOG("YC_VERDICT=HOLDER_NEVER_WATCHED holder=%p", holder);
+        }
     } else {
         // If reffix visited watched slot via remset path, also count.
         if (slot != 0) {
@@ -587,18 +605,25 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
                fate.minorReachSeq, fate.majorVisitSeq, fate.reffixObjSeq, fate.reffixSlotSeq,
                static_cast<unsigned>(markedNow), static_cast<unsigned>(markBmpNullNow),
                static_cast<unsigned>(holderYoungNow));
+        const bool majorHit = fate.majorTraceVisit || majorVisitingNow;
         SW_LOG("YC_T0 holder=%p slot=%#zx offset=%zd origin=%s "
                "in_minor_reachable=%s in_reffix_obj=%s watched_slot_reffix=%s "
-               "marked_at_watch=%u marked_now=%u major_trace_visit=%u",
+               "marked_at_watch=%u marked_now=%u major_trace_visit=%u major_visiting_now=%u",
                holder, static_cast<size_t>(slot), offset, origin == nullptr ? "null" : origin,
                fate.minorReachable ? "YES" : "NO", fate.reffixObject ? "YES" : "NO",
                fate.reffixWatchedSlot ? "YES" : "NO", static_cast<unsigned>(fate.markedAtWatch),
-               static_cast<unsigned>(markedNow), static_cast<unsigned>(fate.majorTraceVisit));
+               static_cast<unsigned>(markedNow), static_cast<unsigned>(fate.majorTraceVisit),
+               static_cast<unsigned>(majorVisitingNow));
         if (fate.minorReachable && fate.reffixObject && fate.reffixWatchedSlot) {
             SW_LOG("YC_VERDICT=甲_CONSUME_SIDE holder=%p "
                    "(in reachable + reffix visited object+slot but value still invalid)",
                    holder);
-        } else if (!fate.minorReachable && !fate.majorTraceVisit) {
+        } else if (!fate.minorReachable && majorHit && majorVisitingNow) {
+            SW_LOG("YC_VERDICT=乙_MAJOR_TRACE_NOT_MINOR holder=%p "
+                   "(crash on major concurrent TraceRefField; minor reachable/reffix never claimed holder; "
+                   "young→young remset skip + no FYS minor before invalid)",
+                   holder);
+        } else if (!fate.minorReachable && !majorHit) {
             SW_LOG("YC_VERDICT=乙_CLOSURE_INCOMPLETE holder=%p "
                    "(not in minor reachableVec; major TraceObjectRefFields never visited holder either)",
                    holder);
