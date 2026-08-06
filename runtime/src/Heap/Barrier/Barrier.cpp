@@ -11,6 +11,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "ObjectModel/Field.inline.h"
+#include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -89,8 +90,22 @@ void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress
 
 void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    // R9 bulk：memcpy 会把栈上 plain 整块灌进堆；post-copy 补色环模板 = PostTraceBarrier.cpp:117-128。
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
+    if (obj != nullptr) {
+        obj->ForEachRefInStruct(
+            [=](RefField<>& refField) {
+                RefField<> oldField(refField);
+                MAddress oldValue = oldField.GetFieldValue();
+                BaseObject* latest = ReadReference(nullptr, oldField);
+                RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+                if (oldValue != newField.GetFieldValue()) {
+                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                }
+            },
+            dst, dst + dstLen);
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     CHECK_EQ(srcLen, dstLen);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
@@ -110,8 +125,18 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    // R9 bulk：静态槽 barrier 可见；post-copy 补色 = EnumBarrier.cpp:192-200。
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
+    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
+        RefField<> oldField(refField);
+        MAddress oldValue = oldField.GetFieldValue();
+        BaseObject* untagged = ReadReference(nullptr, oldField);
+        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
+        if (oldValue != newField.GetFieldValue()) {
+            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        }
+    });
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstLen < srcLen ? dstLen : srcLen);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
@@ -244,9 +269,25 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
 void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                MAddress srcField, MIndex srcSize) const
 {
+    (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+    // R9：堆 dst 上 memmove 可能灌入栈 plain；逐槽补色。非堆 dst = Y5 保持 plain。
+    // heap→heap 已有色时 GetAndTryTagRefField 幂等（Y6 不新增 plain，补色也无害）。
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
+        MAddress end = dstField + dstSize;
+        for (MAddress cur = dstField; cur + sizeof(RefField<>) <= end; cur += sizeof(RefField<>)) {
+            RefField<>& refField = *reinterpret_cast<RefField<>*>(cur);
+            RefField<> oldField(refField);
+            MAddress oldValue = oldField.GetFieldValue();
+            BaseObject* latest = ReadReference(nullptr, oldField);
+            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+            if (oldValue != newField.GetFieldValue()) {
+                refField.CompareExchange(oldValue, newField.GetFieldValue());
+            }
+        }
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstSize < srcSize ? dstSize : srcSize);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), copyLen);
@@ -264,9 +305,23 @@ void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstS
 void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+    // R9 bulk：struct 数组 memmove 后对堆 dst 引用槽补色（模板 PostTrace WriteStruct post-copy）。
+    if (dstObj != nullptr && dstObj->HasRefField() && Heap::IsHeapAddress(dstObj)) {
+        RefFieldVisitor recolour = [this](RefField<false>& field) {
+            RefField<> oldField(field);
+            MAddress oldValue = oldField.GetFieldValue();
+            BaseObject* latest = ReadReference(nullptr, oldField);
+            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+            if (oldValue != newField.GetFieldValue()) {
+                field.CompareExchange(oldValue, newField.GetFieldValue());
+            }
+        };
+        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstSize < srcSize ? dstSize : srcSize);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), copyLen);

@@ -152,7 +152,21 @@ void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 
 void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    // R9 bulk：Idle 墙钟 memcpy 灌 plain；post-copy 补色环 = PostTraceBarrier.cpp:117-128。
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
+    if (obj != nullptr) {
+        obj->ForEachRefInStruct(
+            [=](RefField<>& refField) {
+                RefField<> oldField(refField);
+                MAddress oldValue = oldField.GetFieldValue();
+                BaseObject* latest = ReadReference(nullptr, oldField);
+                RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+                if (oldValue != newField.GetFieldValue()) {
+                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                }
+            },
+            dst, dst + dstLen);
+    }
 #if defined(CANGJIE_TSAN_SUPPORT)
     CHECK(srcLen == dstLen);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
@@ -168,8 +182,22 @@ void IdleBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
-    WriteStructImpl(nullptr, dst, dstLen, src, srcLen);
+    // R9：静态槽 barrier 可见，不能只走 WriteStructImpl(nullptr)（那边 obj==null 跳过补色）。
+    CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
+    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
+        RefField<> oldField(refField);
+        MAddress oldValue = oldField.GetFieldValue();
+        BaseObject* untagged = ReadReference(nullptr, oldField);
+        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
+        if (oldValue != newField.GetFieldValue()) {
+            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        }
+    });
     RecordStaticCrossGenEdges(dst, gctib);
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);
+#endif
 }
 
 void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstSize, BaseObject* srcObj, MAddress src,
@@ -250,6 +278,20 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
+
+    // R9 bulk：堆 dst 上 memmove 后补规范色（栈源恒 plain）。非堆 dst = Y5。
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
+        RefFieldVisitor recolour = [this](RefField<false>& field) {
+            RefField<> oldField(field);
+            MAddress oldValue = oldField.GetFieldValue();
+            BaseObject* latest = ReadReference(nullptr, oldField);
+            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+            if (oldValue != newField.GetFieldValue()) {
+                field.CompareExchange(oldValue, newField.GetFieldValue());
+            }
+        };
+        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);

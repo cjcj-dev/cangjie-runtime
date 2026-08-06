@@ -195,6 +195,20 @@ void ForwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, 
 
     CHECK(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) == EOK);
 
+    // R9 bulk：堆 dst 补色（与 Idle/base 同形）。
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
+        RefFieldVisitor recolour = [this](RefField<false>& field) {
+            RefField<> oldField(field);
+            MAddress oldValue = oldField.GetFieldValue();
+            BaseObject* latest = ReadReference(nullptr, oldField);
+            RefField<> newField = theCollector.GetAndTryTagRefField(latest);
+            if (oldValue != newField.GetFieldValue()) {
+                field.CompareExchange(oldValue, newField.GetFieldValue());
+            }
+        };
+        static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
+    }
+
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), dstSize);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
