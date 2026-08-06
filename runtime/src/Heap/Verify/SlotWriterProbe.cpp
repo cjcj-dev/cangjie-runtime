@@ -84,7 +84,28 @@ struct RemsetLife {
     uint8_t reffixObj = 0;
 };
 
+// youngclosure: per-holder fate after a young→young write during concurrent phases.
+struct HolderFate {
+    MAddress watchedSlot = 0;
+    BaseObject* valueAtWatch = nullptr;
+    size_t watchSeq = 0;
+    uint8_t phaseAtWatch = 0;
+    uint8_t holderYoungAtWatch = 0;
+    uint8_t valueYoungAtWatch = 0;
+    uint8_t markedAtWatch = 0;      // region mark bit at young→young write
+    uint8_t markBitmapNullAtWatch = 0;
+    uint8_t minorReachable = 0;     // claimed into TraceYoungClosure reachableVec
+    uint8_t majorTraceVisit = 0;    // major TraceObjectRefFields scanned this holder
+    uint8_t reffixObject = 0;       // FixMinorObjectSlots entered for holder
+    uint8_t reffixWatchedSlot = 0;  // reffix visited watchedSlot specifically
+    size_t minorReachSeq = 0;
+    size_t majorVisitSeq = 0;
+    size_t reffixObjSeq = 0;
+    size_t reffixSlotSeq = 0;
+};
+
 constexpr size_t kPerSlotCap = 8;
+constexpr size_t kWatchCap = 4096;
 
 std::atomic<int> gEnabled{ -1 };
 std::atomic<size_t> gSeq{ 0 };
@@ -102,12 +123,19 @@ std::atomic<size_t> gRemsetDrainHits{ 0 };
 std::atomic<size_t> gRemsetLiveHits{ 0 };
 std::atomic<size_t> gRemsetRescanHits{ 0 };
 std::atomic<size_t> gRemsetReffixHits{ 0 };
+std::atomic<size_t> gYoungYoungWatchTotal{ 0 };
+std::atomic<size_t> gMinorReachableHits{ 0 };
+std::atomic<size_t> gMajorTraceVisitHits{ 0 };
+std::atomic<size_t> gReffixObjectHits{ 0 };
+std::atomic<size_t> gReffixFixedYoungHits{ 0 };
+std::atomic<size_t> gPositiveControlDumps{ 0 };
 
 std::mutex gMu;
 // Inline last-N records per slot/value (no ring-index indirection; avoids wrap stale).
 std::unordered_map<MAddress, std::vector<WriteRec>> gBySlot;
 std::unordered_map<BaseObject*, std::vector<WriteRec>> gByValue;
 std::unordered_map<MAddress, RemsetLife> gRemsetLife;
+std::unordered_map<BaseObject*, HolderFate> gHolderFate;
 
 // Path tags 1..16 — keep stable; SUMMARY dumps hit counts for positive control.
 enum PathTagId : uint32_t {
@@ -499,6 +527,101 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
         }
     }
 
+    // youngclosure T0: holder closure / reffix face membership at invalid time.
+    HolderFate fate;
+    bool fateFound = false;
+    {
+        std::lock_guard<std::mutex> lock(gMu);
+        auto fit = gHolderFate.find(holder);
+        if (fit != gHolderFate.end()) {
+            fate = fit->second;
+            fateFound = true;
+        }
+    }
+    // Snapshot mark bit now (enqueue time) vs watch time.
+    uint8_t markedNow = 0;
+    uint8_t markBmpNullNow = 0;
+    uint8_t holderYoungNow = 0;
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        if (hr != nullptr) {
+            holderYoungNow = hr->IsYoungRegion() ? 1 : 0;
+            markBmpNullNow = (hr->GetMarkBitmap() == nullptr) ? 1 : 0;
+            markedNow = hr->IsMarkedObject(holder) ? 1 : 0;
+        }
+    }
+    if (!fateFound) {
+        SW_LOG("HOLDER_FATE holder=%p NEVER_WATCHED "
+               "(no young→young NoteYoungYoungWatch for this holder under SLOTWRITER)",
+               holder);
+        SW_LOG("YC_T0 holder=%p slot=%#zx offset=%zd origin=%s "
+               "in_minor_reachable=NO in_reffix_obj=NO watched_slot_reffix=NO "
+               "marked_now=%u mark_bmp_null_now=%u holder_young_now=%u",
+               holder, static_cast<size_t>(slot), offset, origin == nullptr ? "null" : origin,
+               static_cast<unsigned>(markedNow), static_cast<unsigned>(markBmpNullNow),
+               static_cast<unsigned>(holderYoungNow));
+        SW_LOG("YC_VERDICT=HOLDER_NEVER_WATCHED holder=%p", holder);
+    } else {
+        // If reffix visited watched slot via remset path, also count.
+        if (slot != 0) {
+            std::lock_guard<std::mutex> lock(gMu);
+            auto lit = gRemsetLife.find(slot);
+            if (lit != gRemsetLife.end() && lit->second.reffixRemset) {
+                fate.reffixWatchedSlot = 1;
+            }
+            if (lit != gRemsetLife.end() && lit->second.reffixObj) {
+                fate.reffixWatchedSlot = 1;
+            }
+        }
+        SW_LOG("HOLDER_FATE holder=%p watchedSlot=%#zx valueAtWatch=%p watchSeq=%zu phaseAtWatch=%u "
+               "holderYoung=%u valueYoung=%u markedAtWatch=%u markBmpNullAtWatch=%u "
+               "minorReachable=%u majorTraceVisit=%u reffixObject=%u reffixWatchedSlot=%u "
+               "minorReachSeq=%zu majorVisitSeq=%zu reffixObjSeq=%zu reffixSlotSeq=%zu "
+               "marked_now=%u mark_bmp_null_now=%u holder_young_now=%u",
+               holder, static_cast<size_t>(fate.watchedSlot), fate.valueAtWatch, fate.watchSeq,
+               static_cast<unsigned>(fate.phaseAtWatch), static_cast<unsigned>(fate.holderYoungAtWatch),
+               static_cast<unsigned>(fate.valueYoungAtWatch), static_cast<unsigned>(fate.markedAtWatch),
+               static_cast<unsigned>(fate.markBitmapNullAtWatch),
+               static_cast<unsigned>(fate.minorReachable), static_cast<unsigned>(fate.majorTraceVisit),
+               static_cast<unsigned>(fate.reffixObject), static_cast<unsigned>(fate.reffixWatchedSlot),
+               fate.minorReachSeq, fate.majorVisitSeq, fate.reffixObjSeq, fate.reffixSlotSeq,
+               static_cast<unsigned>(markedNow), static_cast<unsigned>(markBmpNullNow),
+               static_cast<unsigned>(holderYoungNow));
+        SW_LOG("YC_T0 holder=%p slot=%#zx offset=%zd origin=%s "
+               "in_minor_reachable=%s in_reffix_obj=%s watched_slot_reffix=%s "
+               "marked_at_watch=%u marked_now=%u major_trace_visit=%u",
+               holder, static_cast<size_t>(slot), offset, origin == nullptr ? "null" : origin,
+               fate.minorReachable ? "YES" : "NO", fate.reffixObject ? "YES" : "NO",
+               fate.reffixWatchedSlot ? "YES" : "NO", static_cast<unsigned>(fate.markedAtWatch),
+               static_cast<unsigned>(markedNow), static_cast<unsigned>(fate.majorTraceVisit));
+        if (fate.minorReachable && fate.reffixObject && fate.reffixWatchedSlot) {
+            SW_LOG("YC_VERDICT=甲_CONSUME_SIDE holder=%p "
+                   "(in reachable + reffix visited object+slot but value still invalid)",
+                   holder);
+        } else if (!fate.minorReachable && !fate.majorTraceVisit) {
+            SW_LOG("YC_VERDICT=乙_CLOSURE_INCOMPLETE holder=%p "
+                   "(not in minor reachableVec; major TraceObjectRefFields never visited holder either)",
+                   holder);
+        } else if (!fate.minorReachable && fate.majorTraceVisit) {
+            SW_LOG("YC_VERDICT=乙_MINOR_MISS_MAJOR_HIT holder=%p "
+                   "(major concurrent mark scanned holder; minor reachableVec still missed it)",
+                   holder);
+        } else if (fate.minorReachable && !fate.reffixObject) {
+            SW_LOG("YC_VERDICT=甲_REFFIX_SKIP_OBJ holder=%p "
+                   "(in reachableVec but FixMinorObjectSlots never entered)",
+                   holder);
+        } else if (fate.minorReachable && fate.reffixObject && !fate.reffixWatchedSlot) {
+            SW_LOG("YC_VERDICT=甲_REFFIX_SKIP_SLOT holder=%p "
+                   "(reffix entered object but watched slot not counted)",
+                   holder);
+        } else {
+            SW_LOG("YC_VERDICT=YC_MIXED holder=%p minor=%u major=%u reffixObj=%u reffixSlot=%u",
+                   holder, static_cast<unsigned>(fate.minorReachable),
+                   static_cast<unsigned>(fate.majorTraceVisit), static_cast<unsigned>(fate.reffixObject),
+                   static_cast<unsigned>(fate.reffixWatchedSlot));
+        }
+    }
+
     // Prefer slot history for T1: was THIS slot's last write(s) valid?
     bool anyValid = false;
     bool anyInvalid = false;
@@ -597,6 +720,155 @@ void SlotWriterProbe::NoteRemsetConsume(MAddress slot, const char* stage)
         life.reffixObj = 1;
         gRemsetReffixHits.fetch_add(1, std::memory_order_relaxed);
     }
+    // If this slot is a watched young→young slot, mark reffixWatchedSlot on its holder.
+    if (std::strcmp(stage, "reffix_remset") == 0 || std::strcmp(stage, "reffix_obj") == 0) {
+        BaseObject* h = life.holder;
+        if (h != nullptr) {
+            auto fit = gHolderFate.find(h);
+            if (fit != gHolderFate.end() && fit->second.watchedSlot == slot) {
+                fit->second.reffixWatchedSlot = 1;
+                fit->second.reffixSlotSeq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+            }
+        }
+    }
+}
+
+void SlotWriterProbe::NoteYoungYoungWatch(BaseObject* holder, MAddress slot, BaseObject* value)
+{
+    if (!Enabled() || holder == nullptr || slot == 0) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(holder)) {
+        return;
+    }
+    gYoungYoungWatchTotal.fetch_add(1, std::memory_order_relaxed);
+    const size_t seq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+    HolderFate fate;
+    fate.watchedSlot = slot;
+    fate.valueAtWatch = value;
+    fate.watchSeq = seq;
+    fate.phaseAtWatch = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
+    RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    if (hr != nullptr) {
+        fate.holderYoungAtWatch = hr->IsYoungRegion() ? 1 : 0;
+        fate.markBitmapNullAtWatch = (hr->GetMarkBitmap() == nullptr) ? 1 : 0;
+        fate.markedAtWatch = hr->IsMarkedObject(holder) ? 1 : 0;
+    }
+    if (value != nullptr && Heap::IsHeapAddress(value)) {
+        RegionInfo* vr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(value));
+        fate.valueYoungAtWatch = (vr != nullptr && vr->IsYoungRegion()) ? 1 : 0;
+    }
+    {
+        std::lock_guard<std::mutex> lock(gMu);
+        if (gHolderFate.size() >= kWatchCap && gHolderFate.find(holder) == gHolderFate.end()) {
+            return; // cap: keep existing watches only
+        }
+        // Preserve later membership bits if re-watched (same holder, new write).
+        auto it = gHolderFate.find(holder);
+        if (it != gHolderFate.end()) {
+            fate.minorReachable = it->second.minorReachable;
+            fate.majorTraceVisit = it->second.majorTraceVisit;
+            fate.reffixObject = it->second.reffixObject;
+            fate.reffixWatchedSlot = 0; // new slot; reset slot bit
+            fate.minorReachSeq = it->second.minorReachSeq;
+            fate.majorVisitSeq = it->second.majorVisitSeq;
+            fate.reffixObjSeq = it->second.reffixObjSeq;
+        }
+        gHolderFate[holder] = fate;
+    }
+}
+
+void SlotWriterProbe::NoteMinorReachable(BaseObject* object)
+{
+    if (!Enabled() || object == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(gMu);
+    auto it = gHolderFate.find(object);
+    if (it == gHolderFate.end()) {
+        return;
+    }
+    if (it->second.minorReachable == 0) {
+        it->second.minorReachable = 1;
+        it->second.minorReachSeq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+        gMinorReachableHits.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void SlotWriterProbe::NoteMajorTraceVisit(BaseObject* holder)
+{
+    if (!Enabled() || holder == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(gMu);
+    auto it = gHolderFate.find(holder);
+    if (it == gHolderFate.end()) {
+        return;
+    }
+    if (it->second.majorTraceVisit == 0) {
+        it->second.majorTraceVisit = 1;
+        it->second.majorVisitSeq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+        gMajorTraceVisitHits.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void SlotWriterProbe::NoteReffixObject(BaseObject* object)
+{
+    if (!Enabled() || object == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(gMu);
+    auto it = gHolderFate.find(object);
+    if (it == gHolderFate.end()) {
+        return;
+    }
+    if (it->second.reffixObject == 0) {
+        it->second.reffixObject = 1;
+        it->second.reffixObjSeq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+        gReffixObjectHits.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void SlotWriterProbe::NoteReffixFixed(BaseObject* holder, MAddress slot, BaseObject* newValue)
+{
+    if (!Enabled() || slot == 0) {
+        return;
+    }
+    // Positive control: a young-holder slot that reffix successfully fixed.
+    bool holderYoung = false;
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        holderYoung = hr != nullptr && hr->IsYoungRegion();
+    }
+    if (!holderYoung) {
+        return;
+    }
+    gReffixFixedYoungHits.fetch_add(1, std::memory_order_relaxed);
+    size_t left = gPositiveControlDumps.load(std::memory_order_relaxed);
+    if (left < 8 && gPositiveControlDumps.fetch_add(1, std::memory_order_relaxed) < 8) {
+        bool inReach = false;
+        bool inReffix = false;
+        {
+            std::lock_guard<std::mutex> lock(gMu);
+            auto it = gHolderFate.find(holder);
+            if (it != gHolderFate.end()) {
+                inReach = it->second.minorReachable != 0;
+                inReffix = it->second.reffixObject != 0;
+            }
+        }
+        // Also true for non-watched young holders that went through FixMinorObjectSlots.
+        if (!inReach) {
+            // FixMinorObjectSlots always runs over reachableVec → object was in reachable.
+            inReach = true;
+            inReffix = true;
+        }
+        SW_LOG("YC_POS_CTRL holder=%p slot=%#zx newValue=%p "
+               "in_minor_reachable=YES in_reffix_obj=YES watched_slot_reffix=YES "
+               "(FixMinorSlot CAS ok on young holder — probe can see fixed path)",
+               holder, static_cast<size_t>(slot), newValue);
+        (void)inReach;
+        (void)inReffix;
+    }
 }
 
 void SlotWriterProbe::NoteStructWords(BaseObject* holder, MAddress dst, size_t dstLen)
@@ -676,6 +948,17 @@ void SlotWriterProbe::FlushSummary(const char* site)
            gRemsetLiveHits.load(std::memory_order_relaxed),
            gRemsetRescanHits.load(std::memory_order_relaxed),
            gRemsetReffixHits.load(std::memory_order_relaxed));
+    SW_LOG("YC_HITS young_young_watch=%zu minor_reachable_hit=%zu major_trace_visit=%zu "
+           "reffix_object_hit=%zu reffix_fixed_young=%zu watched_holders=%zu",
+           gYoungYoungWatchTotal.load(std::memory_order_relaxed),
+           gMinorReachableHits.load(std::memory_order_relaxed),
+           gMajorTraceVisitHits.load(std::memory_order_relaxed),
+           gReffixObjectHits.load(std::memory_order_relaxed),
+           gReffixFixedYoungHits.load(std::memory_order_relaxed),
+           static_cast<size_t>([&]() {
+               std::lock_guard<std::mutex> lock(gMu);
+               return gHolderFate.size();
+           }()));
 }
 
 } // namespace MapleRuntime

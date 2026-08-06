@@ -717,6 +717,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
+    if (SlotWriterProbe::Enabled()) {
+        SlotWriterProbe::NoteMajorTraceVisit(obj);
+    }
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
@@ -1947,6 +1950,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                     continue;
                 }
                 reachableVec.push_back(object);
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteMinorReachable(object);
+                }
             } else {
                 // FYS path may visit non-young holders; claim via set (no mark bitmap on old).
                 if (!fullYoungScan) {
@@ -1957,6 +1963,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                     continue;
                 }
                 reachableVec.push_back(object);
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteMinorReachable(object);
+                }
             }
         } else {
             if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
@@ -1969,6 +1978,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                 continue;
             }
             reachableVec.push_back(object);
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteMinorReachable(object);
+            }
         }
 
         if (!object->HasRefField()) {
@@ -2336,11 +2348,18 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
         return;
     }
     const bool swOn = SlotWriterProbe::Enabled();
-    object->ForEachRefField([this, swOn](RefField<>& field) {
+    if (swOn) {
+        SlotWriterProbe::NoteReffixObject(object);
+    }
+    object->ForEachRefField([this, swOn, object](RefField<>& field) {
         if (swOn) {
             SlotWriterProbe::NoteRemsetConsume(reinterpret_cast<MAddress>(&field), "reffix_obj");
         }
-        (void)FixMinorEvacuatedSlot(field);
+        bool fixed = FixMinorEvacuatedSlot(field);
+        if (swOn && fixed) {
+            SlotWriterProbe::NoteReffixFixed(object, reinterpret_cast<MAddress>(&field),
+                                            field.GetTargetObject());
+        }
     });
 }
 

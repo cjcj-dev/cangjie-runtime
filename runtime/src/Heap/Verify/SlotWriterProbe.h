@@ -49,6 +49,21 @@ public:
     // stage: "drain" | "live" | "rescan" | "reffix_remset" | "reffix_obj"
     static void NoteRemsetConsume(MAddress slot, const char* stage);
 
+    // youngclosure T0: watch young holder after young→young skip (holder may miss closure).
+    static void NoteYoungYoungWatch(BaseObject* holder, MAddress slot, BaseObject* value);
+
+    // minor TraceYoungClosure claimed this object into reachableVec.
+    static void NoteMinorReachable(BaseObject* object);
+
+    // major concurrent TraceObjectRefFields / TraceRefField is scanning this holder.
+    static void NoteMajorTraceVisit(BaseObject* holder);
+
+    // young.ref_fix FixMinorObjectSlots entered for this object (object-level, not per-slot).
+    static void NoteReffixObject(BaseObject* object);
+
+    // Positive control: a young slot that reffix actually fixed (FixMinorSlot CAS ok).
+    static void NoteReffixFixed(BaseObject* holder, MAddress slot, BaseObject* newValue);
+
     // Optional: dump ring stats at process end / abort site.
     static void FlushSummary(const char* site);
 };

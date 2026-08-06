@@ -427,6 +427,10 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
                 NoteWrite(fieldAddress, phase, REASON_HOLDER_YOUNG, false);
             }
             noteSw(REASON_HOLDER_YOUNG, false, true, true);
+            // youngclosure: watch this young holder so T0 can answer closure membership.
+            if (swOn) {
+                SlotWriterProbe::NoteYoungYoungWatch(obj, fieldAddress, ref);
+            }
             return;
         }
         theRememberedSet.Record(fieldAddress);
