@@ -670,7 +670,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         CHECK_DETAIL(targetObj->IsValidObject(),
@@ -682,13 +682,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
 
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    BaseObject* latest = make_load_good(oldField);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
