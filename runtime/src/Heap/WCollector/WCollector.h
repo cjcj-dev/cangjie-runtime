@@ -128,7 +128,7 @@ public:
         currentMarkedYoung ^= MARKED_YOUNG_MASK;
         set_good_masks();
         if (++youngMarkFlipCount == 1) {
-            LOG(RTLOG_INFO, "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx",
+            LOG(RTLOG_ERROR, "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx",
                 youngMarkFlipCount, ::g_cjMarkBadMask);
         }
     }
@@ -138,7 +138,7 @@ public:
         currentMarkedOld ^= MARKED_OLD_MASK;
         set_good_masks();
         if (++oldMarkFlipCount == 1) {
-            LOG(RTLOG_INFO, "[ZCOLOR2][mark-mask-flip] generation=old count=%zu g_cjMarkBadMask=%#lx",
+            LOG(RTLOG_ERROR, "[ZCOLOR2][mark-mask-flip] generation=old count=%zu g_cjMarkBadMask=%#lx",
                 oldMarkFlipCount, ::g_cjMarkBadMask);
         }
     }
