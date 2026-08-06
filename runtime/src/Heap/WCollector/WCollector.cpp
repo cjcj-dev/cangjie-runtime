@@ -35,6 +35,7 @@
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
+#include "Heap/Verify/B4CopyProbe.h"
 #include "Heap/Verify/VerifyHeap.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
@@ -364,6 +365,9 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         }
         RefField<> tmpField(toObj);
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+            if (B4CopyProbe::Enabled()) {
+                B4CopyProbe::NoteFixupWrite(obj, &field, toObj, forward ? "TryForwardRefField" : "TryUpdateRefField");
+            }
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, oldRef.GetFieldValue(),
