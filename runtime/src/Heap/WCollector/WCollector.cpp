@@ -594,8 +594,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
     RefField<> oldField(field);
-    // if field is already tagged currently, it is also already enumerated.
-    if (IsCurrentPointer(oldField)) {
+    // A mark-good root has passed this mark epoch and is necessarily load-good
+    // (OpenJDK zAddress.inline.hpp:658-664).
+    if (is_mark_good(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = oldField.GetTargetObject();
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
@@ -603,13 +604,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         return;
     }
 
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    BaseObject* latest = make_load_good(oldField);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
