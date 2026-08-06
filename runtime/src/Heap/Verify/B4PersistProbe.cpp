@@ -616,4 +616,20 @@ void B4PersistProbe::FlushSummary(const char* site)
             static_cast<unsigned long long>(gTargetUnknown.load()));
 }
 
+namespace {
+void AtexitFlush()
+{
+    B4PersistProbe::FlushSummary("atexit");
+}
+struct AtexitRegistrar {
+    AtexitRegistrar()
+    {
+        if (B4PersistProbe::Enabled()) {
+            std::atexit(AtexitFlush);
+        }
+    }
+};
+AtexitRegistrar gAtexitRegistrar;
+} // namespace
+
 } // namespace MapleRuntime
