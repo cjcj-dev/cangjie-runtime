@@ -83,6 +83,10 @@ public:
     virtual bool IsFromObject(BaseObject*) const { std::abort(); }
     virtual bool IsGhostFromObject(BaseObject*) const { std::abort(); }
     virtual bool IsUnmovableFromObject(BaseObject*) const { std::abort(); }
+    // nullptr means either (1) no routed to-version for a heap from-object, or
+    // (2) obj is non-heap/null (gate) — not "dead". Callers must not treat (2) as
+    // stale residue and must not CAS-null non-heap slots (may be RO static roots).
+    // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
     virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
 
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }

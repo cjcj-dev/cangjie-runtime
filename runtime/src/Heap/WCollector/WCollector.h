@@ -272,6 +272,8 @@ public:
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
         // check, so null / non-heap (incl. colour-only null after flip) aborts as
         // "GetUnitIdxAt OOB addr=0". FixOldTaggedRefField then nulls the slot.
+        // nullptr here is dual: non-heap/null gate OR no to-version for a heap from.
+        // Soft-resolve paths must not CAS-null on the non-heap reading (RO static).
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return nullptr;
         }
