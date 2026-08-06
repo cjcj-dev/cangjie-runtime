@@ -119,9 +119,16 @@ public:
             (MARKED_OLD_MASK & ~currentMarkedOld);
     }
 
-    void FlipRemapColour()
+    // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start
+    // (zAddress.cpp:138-151): each generation independently alternates the two accepted pairs.
+    void flip_young_relocate_start()
     {
         ZPointerRemappedYoungMask ^= REMAP_COLOUR_MASK;
+        set_good_masks();
+    }
+
+    void flip_old_relocate_start()
+    {
         ZPointerRemappedOldMask ^= REMAP_COLOUR_MASK;
         set_good_masks();
     }

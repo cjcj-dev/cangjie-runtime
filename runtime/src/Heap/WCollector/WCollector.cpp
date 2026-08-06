@@ -1546,6 +1546,10 @@ void WCollector::Preforward()
     MRT_PHASE_TIMER("Preforward");
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        // This collector relocates both generations in one full-GC relocation set. Match the two
+        // generation relocate-start flips while mutators are stopped, before any root is forwarded.
+        flip_young_relocate_start();
+        flip_old_relocate_start();
     }
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -3533,11 +3537,8 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // Phase C: swapping the colour is what makes every reference written before this point read
-    // as stale. It is one store, where the walk below is a full-heap stop-the-world pass.
-    FlipRemapColour();
-    // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
-    // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
+    // FlipTagID just turned this cycle's current-tags into IsOldPointer. F3 pre-flip only
+    // saw the previous tag generation. This pass must NOT filter IsSurvivedObject:
     // after Forward, live holders are in to-space without mark bits at the new addr.
     //
     // This walk exists because a reference could not say for itself that its colour was stale, so
