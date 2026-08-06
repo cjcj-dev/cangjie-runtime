@@ -40,6 +40,7 @@ public:
         SUSPENSION_FOR_SYNC = 2,
         SUSPENSION_FOR_EXIT = 4,
         SUSPENSION_FOR_CPU_PROFILE = 8,
+        SUSPENSION_FOR_EPOCH_HANDSHAKE = 16,
     };
 
     enum GCPhaseTransitionState : uint32_t {
@@ -62,12 +63,30 @@ public:
         SAFE_REGION_FALSE = 0x03020100,
     };
 
+    enum EpochHandshakeState : uint32_t {
+        EPOCH_HANDSHAKE_IDLE,
+        EPOCH_HANDSHAKE_REQUESTED,
+        EPOCH_HANDSHAKE_CLAIMED,
+        EPOCH_HANDSHAKE_ACKNOWLEDGED,
+    };
+
+    enum EpochHandshakeLifecycle : uint32_t {
+        EPOCH_HANDSHAKE_STARTING,
+        EPOCH_HANDSHAKE_RUNNING,
+        EPOCH_HANDSHAKE_PARKED,
+        EPOCH_HANDSHAKE_EXITING,
+    };
+
     // Called when a mutator starts and finishes, respectively.
     void Init()
     {
         observerCnt = 0;
         mutatorPhase.store(GCPhase::GC_PHASE_IDLE);
         inManagedContext.store(true);
+        epochHandshakeRequest.store(0, std::memory_order_relaxed);
+        epochHandshakeCompletion.store(0, std::memory_order_relaxed);
+        epochHandshakeState.store(EPOCH_HANDSHAKE_IDLE, std::memory_order_relaxed);
+        epochHandshakeLifecycle.store(EPOCH_HANDSHAKE_STARTING, std::memory_order_relaxed);
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -273,6 +292,30 @@ public:
         return (suspensionFlag.load(std::memory_order_acquire) != 0) || HasPreemptRequest();
     }
 
+    void RequestEpochHandshake(uint64_t epoch);
+    bool AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf);
+
+    bool FinishedEpochHandshake(uint64_t epoch) const
+    {
+        return epochHandshakeCompletion.load(std::memory_order_acquire) == epoch;
+    }
+
+    bool CanGcAssistEpochHandshake() const
+    {
+        return InSaferegion() ||
+            epochHandshakeLifecycle.load(std::memory_order_acquire) != EPOCH_HANDSHAKE_RUNNING;
+    }
+
+    EpochHandshakeLifecycle GetEpochHandshakeLifecycle() const
+    {
+        return epochHandshakeLifecycle.load(std::memory_order_acquire);
+    }
+
+    void SetEpochHandshakeLifecycle(EpochHandshakeLifecycle state)
+    {
+        epochHandshakeLifecycle.store(state, std::memory_order_release);
+    }
+
     void SetSafepointStatePtr(uint64_t* slot) { safepointStatePtr = slot; }
 
     void SetSafepointActive(bool value)
@@ -429,6 +472,7 @@ public:
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
         DoLeaveSaferegion();
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
         SetSafepointStatePtr(&tlData->safepointState);
         SetSafepointActive(false);
     }
@@ -436,6 +480,7 @@ public:
     void PreparedToPark(void* pc, void* fa)
     {
         SetSafepointStatePtr(nullptr);
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             return;
         }
@@ -579,6 +624,14 @@ private:
         AllocBuffer* allocBuffer = { nullptr };
         ScheduleHandle schedule = { nullptr };
     } foreignThreadInfo;
+
+    // Step-0 no-op epoch handshake state. Keep these fields at the end of Mutator's
+    // existing product layout: compiler-generated code has hard-coded offsets in the
+    // prefix (RUNTIME_MAP §6), while the handshake is runtime-only.
+    std::atomic<uint64_t> epochHandshakeRequest = { 0 };
+    std::atomic<uint64_t> epochHandshakeCompletion = { 0 };
+    std::atomic<EpochHandshakeState> epochHandshakeState = { EPOCH_HANDSHAKE_IDLE };
+    std::atomic<EpochHandshakeLifecycle> epochHandshakeLifecycle = { EPOCH_HANDSHAKE_STARTING };
 
 public:
 #ifdef INTERPRETER_ENABLED
