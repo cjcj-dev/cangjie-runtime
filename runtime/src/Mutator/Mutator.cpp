@@ -236,8 +236,9 @@ void Mutator::HandleSuspensionRequest()
 void Mutator::RequestEpochHandshake(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "epoch handshake request must not use epoch zero");
-    CHECK_DETAIL(epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_IDLE ||
-                     FinishedEpochHandshake(epoch - 1),
+    EpochHandshakeState state = epochHandshakeState.load(std::memory_order_acquire);
+    CHECK_DETAIL((state == EPOCH_HANDSHAKE_IDLE || state == EPOCH_HANDSHAKE_ACKNOWLEDGED) &&
+                     epochHandshakeRequest.load(std::memory_order_acquire) < epoch,
                  "overlapping epoch handshake request: mutator=%p epoch=%llu request=%llu completion=%llu state=%u",
                  this, static_cast<unsigned long long>(epoch),
                  static_cast<unsigned long long>(epochHandshakeRequest.load(std::memory_order_relaxed)),
