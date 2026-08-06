@@ -654,6 +654,11 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+        if (SlotWriterProbe::Enabled() && targetObj != nullptr && !targetObj->IsValidObject()) {
+            SlotWriterProbe::OnInvalidEnqueue(targetObj, obj, reinterpret_cast<MAddress>(&field),
+                                              oldField.GetFieldValue(), "trace_current");
+            SlotWriterProbe::FlushSummary("trace_current_invalid");
+        }
         CHECK_DETAIL(targetObj->IsValidObject(),
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
@@ -674,6 +679,11 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return;
+    }
+    if (SlotWriterProbe::Enabled() && !latest->IsValidObject()) {
+        SlotWriterProbe::OnInvalidEnqueue(latest, obj, reinterpret_cast<MAddress>(&field), oldField.GetFieldValue(),
+                                          "trace_latest");
+        SlotWriterProbe::FlushSummary("trace_latest_invalid");
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));

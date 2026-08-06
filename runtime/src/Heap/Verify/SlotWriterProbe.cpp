@@ -242,8 +242,9 @@ void SlotWriterProbe::NoteRefWrite(BaseObject* holder, MAddress slot, BaseObject
         }
     }
 
-    // Always log invalid-at-write stores (the bit the task needs first).
-    if (value != nullptr && !validAtWrite) {
+    // Log only heap addresses that fail IsValidObject at write time.
+    // Non-heap values (code pointers, native) are common and not the T1 bit.
+    if (heapValue && !validAtWrite) {
         size_t left = gDumpsLeft.load(std::memory_order_relaxed);
         if (left > 0 && gDumpsLeft.fetch_sub(1, std::memory_order_relaxed) > 0) {
             SW_LOG("WRITE_INVALID seq=%zu path=%s phase=%u holder=%p holderValid=%u slot=%#zx value=%p "
