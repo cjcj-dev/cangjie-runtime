@@ -38,6 +38,13 @@
 #endif
 
 namespace MapleRuntime {
+// OpenJDK zGenerationId.hpp:29-32. The ghost route snapshot records the generation which owned
+// the from-region, because the live RegionInfo young flag can be cleared after forwarding.
+enum class ZGenerationId : uint8_t {
+    young,
+    old,
+};
+
 template<typename T>
 class BitField {
 public:
@@ -795,6 +802,8 @@ public:
         return reinterpret_cast<BaseObject*>(toAddr);
     }
 
+    ZGenerationId generation_id() const { return metadata._generation_id; }
+
     void PrepareForwardableRegion()
     {
         CHECK(IsFromRegion());
@@ -805,6 +814,7 @@ public:
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
+        metadata._generation_id = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
         if (GetLiveByteCount() > 0) {
             SetInGhostRegion(1);
         }
@@ -1422,6 +1432,7 @@ private:
             BitField<uint16_t> regionStateBitField;
         };
         RouteState routeState; // todo: put in RouteInfo
+        ZGenerationId _generation_id;
         RwLock rwLock;
     };
 
