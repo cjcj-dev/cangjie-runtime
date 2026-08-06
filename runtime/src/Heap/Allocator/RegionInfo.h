@@ -32,6 +32,7 @@
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
+#include "Heap/Verify/SizeGuardForensics.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -1285,6 +1286,7 @@ private:
         size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
                                                    std::numeric_limits<size_t>::max();
         GCPhase phase = Heap::GetHeap().GetGCPhase();
+        SizeGuardForensics::DumpBeforeAbort(obj, objSize, this, regionStart, regionEnd);
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
             "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",

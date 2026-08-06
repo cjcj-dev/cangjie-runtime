@@ -39,6 +39,8 @@
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/InteriorSrcProbe.h"
+#include "Heap/Verify/B4BenignProbe.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
@@ -1667,6 +1669,8 @@ namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
 // can attribute invalid headers without threading origin through every visitor.
 thread_local const char* gMinorRootOrigin = "unknown";
+// interiorsrc: source slot address for NotePush (static/stack root RefField storage).
+thread_local uintptr_t gMinorRootSlotAddr = 0;
 } // namespace
 
 void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
@@ -1745,7 +1749,21 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    // interiorsrc: classify every young push (base vs interior) before validity CHECK.
+    // Gate MRT_GCV2_INTERIOR_SRC=1 (default off). Does not relax IsValidObject.
+    {
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            } else if (src == nullptr) {
+                src = "unknown";
+            }
+        }
+        InteriorSrcProbe::NotePush(src, object, gMinorRootSlotAddr, 0);
+    }
     if (!object->IsValidObject()) {
+        InteriorSrcProbe::FlushSummary("invalid-minor-root");
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
         // slot, or stackmap-mislabeled root). Printed once per process by default.
@@ -1844,7 +1862,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                 workStack.push_back(target);
             }
         } else {
+            gMinorRootSlotAddr = reinterpret_cast<uintptr_t>(&field);
             PushYoungObject(target, workStack, "closure_edge");
+            gMinorRootSlotAddr = 0;
         }
     };
     while (!workStack.empty()) {
@@ -1853,6 +1873,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
+        // b4benign: consume-side fate of interior-as-base (default off).
+        B4BenignProbe::NoteConsumeAsBase(object, "trace_young_pop");
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
@@ -2161,7 +2183,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+        gMinorRootSlotAddr = static_cast<uintptr_t>(slot);
         PushYoungObject(target, workStack, "remset");
+        gMinorRootSlotAddr = 0;
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
@@ -3248,6 +3272,8 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    InteriorSrcProbe::FlushSummary("post-minor-trace");
+    B4BenignProbe::FlushSummary("post-minor-trace");
     g_minorLedgerCost.Report();
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
