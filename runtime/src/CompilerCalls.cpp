@@ -30,6 +30,7 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/B4PersistProbe.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -1890,6 +1891,9 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
     TypeInfo* componentTypeInfo = arrayInfo->GetComponentTypeInfo();
     I8 type = componentTypeInfo->GetType();
     if (componentTypeInfo->IsStructType() && !componentTypeInfo->HasRefField()) {
+        if (B4PersistProbe::Enabled()) {
+            B4PersistProbe::NoteBulkRange(dstField, dstSize, "MCC.ArrayCopyGeneric.struct_noref");
+        }
         CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                reinterpret_cast<void*>(srcField), srcSize) == EOK,
                      "MCC_ArrayCopyGeneric memmove_s failed");
@@ -1928,6 +1932,9 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_CPOINTER:
         case TypeKind::TYPE_KIND_CFUNC:
         case TypeKind::TYPE_KIND_VARRAY: {
+            if (B4PersistProbe::Enabled()) {
+                B4PersistProbe::NoteBulkRange(dstField, dstSize, "MCC.ArrayCopyGeneric.prim");
+            }
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                    reinterpret_cast<void*>(srcField), srcSize) == EOK,
                          "MCC_ArrayCopyGeneric memmove_s failed");

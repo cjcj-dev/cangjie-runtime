@@ -10,6 +10,7 @@
 
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
+#include "Heap/Verify/B4PersistProbe.h"
 #include "ObjectModel/RefField.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -23,6 +24,13 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
     uintptr_t newVal = newField.GetFieldValue();
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    // b4persist: last typed write timeline (default off).
+    if (B4PersistProbe::Enabled()) {
+        B4PersistProbe::NoteTypedWrite(this, const_cast<BaseObject*>(obj), "SetTargetObject",
+                                       __builtin_return_address(0), __builtin_return_address(1),
+                                       __builtin_return_address(2));
+    }
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -45,6 +53,12 @@ void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
 {
     RefFieldValue oldVal = fieldVal;
     (void)oldVal;
+
+    if (B4PersistProbe::Enabled()) {
+        BaseObject* asObj = reinterpret_cast<BaseObject*>(RefField<>(newVal).GetAddress());
+        B4PersistProbe::NoteTypedWrite(this, asObj, "SetFieldValue", __builtin_return_address(0),
+                                       __builtin_return_address(1), __builtin_return_address(2));
+    }
 
     if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)

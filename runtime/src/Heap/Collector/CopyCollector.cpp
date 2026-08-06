@@ -10,6 +10,7 @@
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Common/Runtime.h"
+#include "Heap/Verify/B4PersistProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
@@ -30,6 +31,9 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 {
     uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
+    if (B4PersistProbe::Enabled()) {
+        B4PersistProbe::NoteBulkRange(static_cast<MAddress>(to), size, "CopyCollector.CopyObject");
+    }
     CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK, "memmove_s fail");
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);

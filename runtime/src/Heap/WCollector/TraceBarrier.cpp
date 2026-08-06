@@ -7,6 +7,7 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/B4PersistProbe.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -168,6 +169,9 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
             dst, dst + srcLen);
     }
     std::atomic_thread_fence(std::memory_order_seq_cst);
+    if (B4PersistProbe::Enabled()) {
+        B4PersistProbe::NoteBulkRange(dst, dstLen, "Trace.WriteStruct");
+    }
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
     if (obj != nullptr) {
@@ -327,6 +331,9 @@ void TraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MI
     MArray* dstArray = static_cast<MArray*>(dstObj);
     dstArray->ForEachRefFieldInRange(dstVisitor, dstField, dstField + srcSize);
 
+    if (B4PersistProbe::Enabled()) {
+        B4PersistProbe::NoteBulkRange(dstField, dstSize, "Trace.CopyStructArray");
+    }
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
