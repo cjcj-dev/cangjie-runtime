@@ -4,10 +4,14 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <cstdlib>
+
 #include "Common/ColourMask.h"
+#include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MArray.inline.h"
@@ -16,6 +20,32 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+// COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
+void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    if (LIKELY(!on)) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(slot)) {
+        return;
+    }
+    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
+        return;
+    }
+    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+    bool hasColour = (newVal & kColourMask) != 0;
+    bool tagged = ((newVal >> 48) & 1) != 0;
+    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
+    CHECK_DETAIL(hasColour && (loadGood || tagged),
+                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
+                 "hasColour=%d loadGood=%d tagged=%d",
+                 slot, newVal, hasColour, loadGood, tagged);
+}
+
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
