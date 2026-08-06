@@ -923,7 +923,7 @@ void WCollector::TraceHeap()
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
     // Full collection starts young and old marking in the same pause, as
-    // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:547-566).
+    // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
     flip_young_mark_start();
     flip_old_mark_start();
 
