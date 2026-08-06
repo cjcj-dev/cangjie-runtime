@@ -3148,6 +3148,9 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
+    if (UNLIKELY(MutatorManager::EpochHandshakeEnabled())) {
+        (void)MutatorManager::Instance().RunEpochHandshake("pre-minor");
+    }
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
