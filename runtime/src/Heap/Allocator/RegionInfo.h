@@ -778,9 +778,18 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
+    // RouteInfo is a geometric plan valid only for survivors (route domain).
+    // Out-of-domain inputs must get an observable negative (nullptr), never a
+    // syntactically-valid but empty to-slot or a toRegion2Idx INVALID abort.
+    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; REPORT-toregion2idx-probe §4.2.
     BaseObject* GetRoute(BaseObject* fromObj)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        size_t offset = GetAddressOffset(fromAddress);
+        LiveInfo* ghostLiveInfo = metadata.liveInfo0;
+        if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
+            return nullptr;
+        }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         return reinterpret_cast<BaseObject*>(toAddr);
