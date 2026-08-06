@@ -32,12 +32,23 @@ const bool STRICT_STACKMAP_ENABLED = []() {
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
-// Diagnostic only (default off): on stack-map miss, conservatively scan pointer-sized
-// words below FA as potential roots. Not a product fix — may keep garbage alive.
-const bool STACKMAP_CONS_ON_MISS = []() {
-    const char* value = std::getenv("MRT_GCV2_STACKMAP_CONS_ON_MISS");
-    return value != nullptr && std::strcmp(value, "1") == 0;
+// b3fix product (甲): frame-local conservative root supplement.
+//   · stack-map miss: was silent skip → now always cons-scan the frame
+//   · stack-map valid: precise slots may omit live refs (B3_TRUE_MISS on deep frames)
+//     → after precise visit, cons-scan same window so mark/fix see the same set
+// Default ON. Opt out: MRT_GCV2_STACKMAP_CONS_SUPPLEMENT=0
+// Legacy diag flag MRT_GCV2_STACKMAP_CONS_ON_MISS=1 still forces on when supplement off.
+const bool STACKMAP_CONS_SUPPLEMENT = []() {
+    const char* off = std::getenv("MRT_GCV2_STACKMAP_CONS_SUPPLEMENT");
+    if (off != nullptr && std::strcmp(off, "0") == 0) {
+        const char* legacy = std::getenv("MRT_GCV2_STACKMAP_CONS_ON_MISS");
+        return legacy != nullptr && std::strcmp(legacy, "1") == 0;
+    }
+    return true; // product default on
 }();
+
+// Keep old name as alias for call sites / logs.
+const bool STACKMAP_CONS_ON_MISS = STACKMAP_CONS_SUPPLEMENT;
 
 size_t StackMapConsMaxBytes()
 {
@@ -55,7 +66,8 @@ size_t StackMapConsMaxBytes()
 
 // Scan [FA - maxBytes, FA) word-by-word; visit slots that look like heap addresses.
 // Frame locals sit below FA (stack grows down); see StackType.h FrameAddress layout.
-// Range check only (Allocator::IsHeapObject is not on the abstract API; diagnostic OK).
+// Range check only (Allocator::IsHeapObject is not on the abstract API).
+// Used on BOTH mark (VisitStackRoots) and fix (VisitHeapReferencesOnStack).
 void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddress)
 {
     const size_t maxBytes = StackMapConsMaxBytes();
@@ -66,6 +78,15 @@ void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddres
         if (obj == nullptr) {
             continue;
         }
+        // Strip tag if present so tagged live refs are not dropped.
+        RefField<> rf(reinterpret_cast<MAddress>(obj));
+        if (rf.IsTagged()) {
+            obj = rf.GetTargetObject();
+            if (obj == nullptr) {
+                continue;
+            }
+            // visitor expects ObjectRef at slot; rewrite local view only for IsHeapAddress
+        }
         if (!Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj))) {
             continue;
         }
@@ -73,8 +94,8 @@ void ConservativeScanMissFrame(const RootVisitor& visitor, uintptr_t frameAddres
         ++visited;
     }
     if (visited > 0) {
-        LOG(RTLOG_ERROR, "GC stack map CONS_ON_MISS fa=%p scanned_bytes=%zu heap_slots=%zu",
-            reinterpret_cast<void*>(frameAddress), maxBytes, visited);
+        DLOG(ENUM, "GC stack map CONS_SUPPLEMENT fa=%p scanned_bytes=%zu heap_slots=%zu",
+             reinterpret_cast<void*>(frameAddress), maxBytes, visited);
     }
 }
 
@@ -425,10 +446,16 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-    } else if (STACKMAP_CONS_ON_MISS) {
-        // default-off diagnostic: mark path was silent skip; now optional cons scan
+        // b3fix (甲): VALID maps can still omit live slots (B3_TRUE_MISS deep frames).
+        // Supplement with frame-local cons so mark set matches fix set.
+        if (STACKMAP_CONS_SUPPLEMENT) {
+            ConservativeScanMissFrame(visitor, frameAddress);
+        }
+    } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
-        ConservativeScanMissFrame(visitor, frameAddress);
+        if (STACKMAP_CONS_SUPPLEMENT) {
+            ConservativeScanMissFrame(visitor, frameAddress);
+        }
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
@@ -489,9 +516,13 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
         heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
+        // b3fix (甲): same supplement as mark path (VisitStackRoots).
+        if (STACKMAP_CONS_SUPPLEMENT) {
+            ConservativeScanMissFrame(slotRootVisitor, frameAddress);
+        }
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
-        if (STACKMAP_CONS_ON_MISS) {
+        if (STACKMAP_CONS_SUPPLEMENT) {
             ConservativeScanMissFrame(slotRootVisitor, frameAddress);
         }
     }
