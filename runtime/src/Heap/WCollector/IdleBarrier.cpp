@@ -145,8 +145,9 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
-    // POSITIVE CONTROL (wbatch): intentional plain write to trip MRT_GCV2_ASSERT_COLOURED_WRITES.
-    field.SetTargetObject(ref);
+    // R3 人口最大：Idle 墙钟写一律规范色。
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    field.SetFieldValue(newField.GetFieldValue());
 }
 
 void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
