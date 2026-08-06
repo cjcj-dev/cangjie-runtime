@@ -42,6 +42,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/B4StaleProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -3113,6 +3114,11 @@ void WCollector::DoYoungGarbageCollection()
             VerifyHeapObjects("stw-enter", true);
             VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
         }
+        // b4stale: mutator IDLE gap is where b4first first sees interiors — scan here
+        // against bases snapped at prior post-evacuate / pre-evacuate.
+        B4StaleProbe::ScanInteriors("stw-enter");
+        B4StaleProbe::SnapshotBases("stw-enter");
+        B4StaleProbe::FlushSummary("stw-enter");
     }
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     {
@@ -3376,6 +3382,8 @@ void WCollector::DoYoungGarbageCollection()
         } else {
             VerifyHeapObjects("pre-evacuate");
         }
+        // b4stale T0: snapshot object bases before evacuate (WCollector.cpp pre-evac).
+        B4StaleProbe::SnapshotBases("pre-evacuate");
     }
 
     size_t liveBytes = 0;
@@ -3423,6 +3431,9 @@ void WCollector::DoYoungGarbageCollection()
                  "env=MRT_GCV2_VERIFY_POST_EVAC=1 remsetSnap=%zu",
                  minorTotalRuns + 1, remsetSnap.size());
         }
+        // b4stale: bases after evacuate + scan interiors vs prior snap.
+        B4StaleProbe::SnapshotBases("post-evacuate");
+        B4StaleProbe::ScanInteriors("post-evacuate");
     }
 
     {
