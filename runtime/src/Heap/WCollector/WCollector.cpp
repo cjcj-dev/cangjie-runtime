@@ -636,14 +636,14 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
     CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         rootSet.push_back(root);
         return;
     }
-    BaseObject* root = oldField.GetTargetObject();
+    BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext vctx;
