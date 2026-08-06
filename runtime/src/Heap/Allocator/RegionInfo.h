@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstring>
 #include <limits>
 #include <list>
 #include <map>
@@ -1277,7 +1278,9 @@ private:
         }
     }
 
-    NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
+    // b3unmask: MRT_GCV2_SIZEGUARD_SOFT=1 → count+log, no abort (diagnose B-3 vs B-4). Default still aborts.
+    // B3U_SWITCH_RegionInfo.h:1280
+    ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
@@ -1285,6 +1288,21 @@ private:
         size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
                                                    std::numeric_limits<size_t>::max();
         GCPhase phase = Heap::GetHeap().GetGCPhase();
+        static const bool soft = []() {
+            const char* v = std::getenv("MRT_GCV2_SIZEGUARD_SOFT");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (soft) {
+            static std::atomic<size_t> softHits{0};
+            size_t n = softHits.fetch_add(1, std::memory_order_relaxed) + 1;
+            LOG(RTLOG_ERROR,
+                "[GCV2][sizeguard][SOFT] hit=%zu obj=%p objSize=%zu region=%p regionStart=%#zx "
+                "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
+                n, obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(),
+                static_cast<unsigned>(GetRegionType()), static_cast<unsigned>(IsYoungRegion()),
+                static_cast<unsigned>(phase), bitCapacity, bitIndex, kMarkedBytesPerBit);
+            return;
+        }
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
             "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
