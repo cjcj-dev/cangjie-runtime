@@ -60,6 +60,8 @@ struct EpochHandshakeStats {
     size_t runningAck = 0;
     size_t parkedAck = 0;
     size_t exitingAck = 0;
+    size_t deferredCreates = 0;
+    size_t exitTransitions = 0;
     size_t stopTheWorldCalls = 0;
     uint64_t managementLockNanos = 0;
 };
@@ -213,6 +215,8 @@ public:
     static bool EpochHandshakeEnabled();
     EpochHandshakeStats RunEpochHandshake(const char* source);
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
+    void RecordEpochHandshakeCreateAttempt();
+    void RecordEpochHandshakeExitTransition();
 
     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
@@ -343,6 +347,8 @@ private:
     std::atomic<size_t> epochHandshakeRunningAck = { 0 };
     std::atomic<size_t> epochHandshakeParkedAck = { 0 };
     std::atomic<size_t> epochHandshakeExitingAck = { 0 };
+    std::atomic<size_t> epochHandshakeDeferredCreates = { 0 };
+    std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
     std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
     std::mutex epochHandshakeLedgerMutex;
     std::unordered_set<Mutator*> epochHandshakeAckedMutators;

@@ -128,6 +128,7 @@ void MutatorManager::UnbindMutator(Mutator& mutator) const
 
 Mutator* MutatorManager::CreateMutator()
 {
+    RecordEpochHandshakeCreateAttempt();
     Mutator* mutator = ConcurrencyModel::GetMutator();
     if (mutator == nullptr) {
         mutator = new (std::nothrow) Mutator();
@@ -153,6 +154,7 @@ void MutatorManager::TransitMutatorToExit()
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
+    RecordEpochHandshakeExitTransition();
     mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_EXITING);
     // Enter saferegion to avoid blocking gc stw
     mutator->MutatorLock();
@@ -294,6 +296,20 @@ void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, b
     }
 }
 
+void MutatorManager::RecordEpochHandshakeCreateAttempt()
+{
+    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
+        epochHandshakeDeferredCreates.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void MutatorManager::RecordEpochHandshakeExitTransition()
+{
+    if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
+        epochHandshakeExitTransitions.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 {
     EpochHandshakeStats stats;
@@ -320,6 +336,8 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     epochHandshakeRunningAck.store(0, std::memory_order_relaxed);
     epochHandshakeParkedAck.store(0, std::memory_order_relaxed);
     epochHandshakeExitingAck.store(0, std::memory_order_relaxed);
+    epochHandshakeDeferredCreates.store(0, std::memory_order_relaxed);
+    epochHandshakeExitTransitions.store(0, std::memory_order_relaxed);
     epochHandshakeStopTheWorldCalls.store(0, std::memory_order_relaxed);
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
@@ -371,6 +389,8 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     stats.runningAck = epochHandshakeRunningAck.load(std::memory_order_relaxed);
     stats.parkedAck = epochHandshakeParkedAck.load(std::memory_order_relaxed);
     stats.exitingAck = epochHandshakeExitingAck.load(std::memory_order_relaxed);
+    stats.deferredCreates = epochHandshakeDeferredCreates.load(std::memory_order_relaxed);
+    stats.exitTransitions = epochHandshakeExitTransitions.load(std::memory_order_relaxed);
     stats.stopTheWorldCalls = epochHandshakeStopTheWorldCalls.load(std::memory_order_relaxed);
     CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
                  "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
@@ -388,11 +408,12 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
 
     VLOG(REPORT,
          "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
-         "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu stw_calls=%zu "
+         "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu "
+         "deferred_create=%zu exit_transition=%zu stw_calls=%zu "
          "wlock_us=%llu env=MRT_GCV2_EPOCH_HANDSHAKE=1",
          source, static_cast<unsigned long long>(stats.epoch), stats.requested, stats.acked, stats.ackedTwice,
          stats.selfAck, stats.gcAssistedAck, stats.startingAck, stats.runningAck, stats.parkedAck,
-         stats.exitingAck, stats.stopTheWorldCalls,
+         stats.exitingAck, stats.deferredCreates, stats.exitTransitions, stats.stopTheWorldCalls,
          static_cast<unsigned long long>(stats.managementLockNanos / 1000));
     return stats;
 }
