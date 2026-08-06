@@ -41,6 +41,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/SlotWriterProbe.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -1740,6 +1741,13 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     VisitMinorValueRoots(visitor);
 }
 
+// slotwriter: TLS edge context for PushYoungObject so invalid enqueue can
+// attribute (holder, slot) without threading them through every call site.
+namespace {
+thread_local BaseObject* gSlotWriterHolder = nullptr;
+thread_local RefField<>* gSlotWriterSlot = nullptr;
+} // namespace
+
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -1760,6 +1768,16 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             } else if (src == nullptr) {
                 src = "unknown";
             }
+        }
+        if (SlotWriterProbe::Enabled()) {
+            MAddress slotAddr = reinterpret_cast<MAddress>(gSlotWriterSlot);
+            MAddress raw = 0;
+            if (gSlotWriterSlot != nullptr) {
+                RefField<> snap(*gSlotWriterSlot);
+                raw = snap.GetFieldValue();
+            }
+            SlotWriterProbe::OnInvalidEnqueue(object, gSlotWriterHolder, slotAddr, raw, src);
+            SlotWriterProbe::FlushSummary("push_invalid");
         }
         if (n < 8) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
@@ -1837,15 +1855,25 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
     // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
     const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
-    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
+    BaseObject* currentHolder = nullptr;
+    auto pushTarget = [this, fullYoungScan, &workStack, &currentHolder](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
+        gSlotWriterHolder = currentHolder;
+        gSlotWriterSlot = &field;
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(target)) {
+                if (SlotWriterProbe::Enabled() && target != nullptr && !target->IsValidObject()) {
+                    SlotWriterProbe::OnInvalidEnqueue(target, currentHolder, reinterpret_cast<MAddress>(&field),
+                                                      field.GetFieldValue(), "closure_edge");
+                    SlotWriterProbe::FlushSummary("fys_enqueue_invalid");
+                }
                 workStack.push_back(target);
             }
         } else {
             PushYoungObject(target, workStack, "closure_edge");
         }
+        gSlotWriterHolder = nullptr;
+        gSlotWriterSlot = nullptr;
     };
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
@@ -1853,7 +1881,14 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
-        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+        if (!object->IsValidObject()) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::OnInvalidEnqueue(object, nullptr, 0, 0, "closure_dequeue");
+                SlotWriterProbe::FlushSummary("dequeue_invalid");
+            }
+            CHECK_DETAIL(false, "minor closure reached invalid object %p", object);
+        }
+        currentHolder = object;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
 
