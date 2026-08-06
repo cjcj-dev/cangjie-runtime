@@ -184,8 +184,11 @@ public:
             return ZGenerationId::old;
         }
 
-        RegionInfo* forwarding =
-            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref.GetTargetObject()));
+        BaseObject* target = ref.GetTargetObject();
+        if (!Heap::IsHeapAddress(target)) {
+            return ZGenerationId::old;
+        }
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
         if (forwarding != nullptr && forwarding->generation_id() == ZGenerationId::young) {
             return ZGenerationId::young;
         }
@@ -198,6 +201,9 @@ public:
     // route installed by the other generation.
     BaseObject* relocate_or_remap(BaseObject* obj, ZGenerationId generation) const override
     {
+        if (!Heap::IsHeapAddress(obj)) {
+            return obj;
+        }
         RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
             return obj;
