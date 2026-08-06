@@ -45,6 +45,8 @@ public:
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
     bool IsCurrentPointer(RefField<>& ref) const override { return currentCollector->IsCurrentPointer(ref); }
+    bool is_young_load_good(RefField<>& ref) const override { return currentCollector->is_young_load_good(ref); }
+    bool is_old_load_good(RefField<>& ref) const override { return currentCollector->is_old_load_good(ref); }
     bool IsFromObject(BaseObject* obj) const override { return currentCollector->IsFromObject(obj); }
     bool IsGhostFromObject(BaseObject* obj) const override { return currentCollector->IsGhostFromObject(obj); }
     bool IsUnmovableFromObject(BaseObject* obj) const override { return currentCollector->IsUnmovableFromObject(obj); }

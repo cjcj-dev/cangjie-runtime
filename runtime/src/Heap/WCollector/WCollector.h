@@ -157,6 +157,19 @@ public:
     // note this api is not atomic, caller should take care of this.
     bool IsCurrentPointer(RefField<>& ref) const override { return IsLoadBad(ref) && ref.GetTagID() == currentTagID; }
 
+    // OpenJDK ZPointer::is_young_load_good/is_old_load_good
+    // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
+    // accepted bits in that generation's mask.
+    bool is_young_load_good(RefField<>& ref) const override
+    {
+        return (ref.GetFieldValue() & ZPointerRemappedYoungMask) != 0;
+    }
+
+    bool is_old_load_good(RefField<>& ref) const override
+    {
+        return (ref.GetFieldValue() & ZPointerRemappedOldMask) != 0;
+    }
+
     void AddRawPointerObject(BaseObject* obj) override
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
