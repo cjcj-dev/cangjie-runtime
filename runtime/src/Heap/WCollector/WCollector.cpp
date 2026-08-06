@@ -1716,6 +1716,12 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             return object;
         }
     }
+    // Non-heap (static/binary constants, etc.): FindToVersion nullptr means "not a heap
+    // object", not "dead residue". Return as-is; never CAS (slot may be RO static root).
+    // See reports/REPORT-zcdnull.md — CAS-null on RO static SEGV (si_addr=&field).
+    if (object != nullptr && !Heap::IsHeapAddress(object)) {
+        return object;
+    }
     static std::atomic<size_t> g_staleOldTagLogged{ 0 };
     size_t n = g_staleOldTagLogged.fetch_add(1, std::memory_order_relaxed);
     if (n < 16) {
@@ -2183,7 +2189,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 fromLive = fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
                            rawTarget->IsValidObject();
             }
-            if (to == nullptr && !fromLive) {
+            // Non-heap target: FindToVersion null + fromLive false is expected (not dead).
+            // Do not CAS-null — slot may be RO; drop remset edge only via fall-through scrub.
+            if (to == nullptr && !fromLive &&
+                (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 (void)CasInstallPlainTarget(*field, peek.GetFieldValue(), nullptr);
