@@ -220,12 +220,21 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
     // Compare on decoded object identity; CAS on observed raw bits (colour-aware).
     // Shape matches EnumBarrier.cpp:259-280 / IdleBarrier.cpp:121-138. Plain expected vs
     // coloured slot bits always fail (COLOUR_WRITEBACK_AUDIT R1).
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+    // Retries are bounded. ZGC terminates a self-healing retry because its colours form a
+    // monotone lattice; ours do not -- a reader may self-heal this very slot on every load,
+    // so the observed bits keep changing while the decoded identity stays oldRef, and an
+    // unbounded loop never lands the exchange. natural_wave span 47 minutes of user time in
+    // two spinning threads before this bound existed. Exhausting the budget reports failure,
+    // which compare-and-swap callers already have to handle.
+    constexpr int kCasAttempts = 8;
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    while (oldVersion == oldRef) {
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        // Recolour per attempt: a phase may flip mid-retry, and writing last epoch's colour
+        // would hand the next reader a value its mask calls bad.
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
                  oldFieldValue, oldVersion, oldRef, newRef);
