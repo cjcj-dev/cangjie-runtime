@@ -42,6 +42,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/B4CoverProbe.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -2192,30 +2193,40 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
+    const bool wasOldTag = IsOldPointer(oldField);
     BaseObject* target = ResolveMinorReference(field);
     BaseObject* current = target;
+    bool wasGhost = false;
     if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        wasGhost = true;
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     RefField<> newField(current);
-    MAddress oldVal = oldField.GetFieldValue();
+    const MAddress entryVal = oldField.GetFieldValue();
     MAddress newVal = newField.GetFieldValue();
-    if (oldVal == newVal) {
+    if (entryVal == newVal) {
+        B4CoverProbe::NoteFixVisit(reinterpret_cast<MAddress>(&field), entryVal, newVal, false, wasGhost, wasOldTag);
         return false;
     }
     // Re-read after resolve (resolve may have CAS-installed plain already).
-    oldVal = field.GetFieldValue();
+    MAddress oldVal = field.GetFieldValue();
     if (oldVal == newVal) {
+        // Resolve already rewrote the slot — count as fixed for coverage probe.
+        B4CoverProbe::NoteFixVisit(reinterpret_cast<MAddress>(&field), entryVal, newVal, true, wasGhost, wasOldTag);
         return false;
     }
     if (field.CompareExchange(oldVal, newVal)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        B4CoverProbe::NoteFixVisit(reinterpret_cast<MAddress>(&field), entryVal, newVal, true, wasGhost, wasOldTag);
         return true;
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
     MAddress cur = field.GetFieldValue();
-    if (cur == newVal) {
+    const bool peerInstalled = (cur == newVal);
+    B4CoverProbe::NoteFixVisit(reinterpret_cast<MAddress>(&field), entryVal, newVal, peerInstalled || (cur != entryVal),
+                               wasGhost, wasOldTag);
+    if (peerInstalled) {
         return true;
     }
     // Peer may have installed same logical target via ResolveMinorReference first
@@ -3114,6 +3125,10 @@ void WCollector::DoYoungGarbageCollection()
             VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
         }
     }
+    // b4cover: classify interiors vs prior minor remset/reach/fix ledger (mutator IDLE gap).
+    // Independent of POST_EVAC — B4COVER env alone arms the probe.
+    B4CoverProbe::ScanInteriors("stw-enter");
+    B4CoverProbe::FlushSummary("stw-enter");
     TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
     {
         // minortime: ① FlushAllocationRegions
@@ -3400,8 +3415,13 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     size_t allocatedBefore = space.AllocatedBytes();
+    // b4cover: remset face = liveRememberedSlots (what EvacuateYoungRegions actually fixes);
+    // reach face = ref fields of reachableVec (FixMinorObjectSlots).
+    B4CoverProbe::NoteRemsetDrain(liveRememberedSlots);
+    B4CoverProbe::NoteReachableFieldSlots(reachableVec);
     // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
     EvacuateYoungRegions(reachableVec, liveRememberedSlots);
+    B4CoverProbe::CommitMinorLedger("post-evacuate");
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
