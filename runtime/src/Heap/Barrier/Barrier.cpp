@@ -191,17 +191,24 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
 
 BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    RefField<false> tmpField(field.GetFieldValue(order));
-    if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* toVersion = ReadReference(nullptr, tmpField);
-        field.SetTargetObject(toVersion);
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toVersion);
-        return toVersion;
-    }
+    // Colour-era atomic read (matches Forward/Preforward AtomicRead shape):
+    // load-good/null fast path; load-bad → make_load_good + coloured exact-CAS self-heal.
+    // Compare uses decoded identity only on CAS sites; heal uses observed raw bits.
+    for (;;) {
+        RefField<false> tmpField(field.GetFieldValue(order));
+        BaseObject* target = tmpField.GetTargetObject();
+        if (target == nullptr || LIKELY(theCollector.is_load_good(tmpField))) {
+            DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
+            return target;
+        }
 
-    BaseObject* target = tmpField.GetTargetObject();
-    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-    return target;
+        BaseObject* loadGood = theCollector.make_load_good(tmpField);
+        RefField<> healed = theCollector.GetAndTryTagRefField(loadGood);
+        if (field.CompareExchange(tmpField.GetFieldValue(), healed.GetFieldValue())) {
+            DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+    }
 }
 
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,

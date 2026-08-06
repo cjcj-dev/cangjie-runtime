@@ -64,10 +64,20 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
     }
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    // Colour self-heal on the stack copy (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
+    // PostTrace ReadReference is an E-class assertion-only entry and must not be used to heal.
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
+        for (;;) {
+            RefField<> oldField(dstRef);
+            BaseObject* oldTarget = oldField.GetTargetObject();
+            if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+                return;
+            }
+            BaseObject* loadGood = theCollector.make_load_good(oldField);
+            RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+                return;
+            }
         }
     });
 }
@@ -86,9 +96,17 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
+        for (;;) {
+            RefField<> oldField(dstRef);
+            BaseObject* oldTarget = oldField.GetTargetObject();
+            if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+                return;
+            }
+            BaseObject* loadGood = theCollector.make_load_good(oldField);
+            RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+                return;
+            }
         }
     });
 }
@@ -159,29 +177,24 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
 
 BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    BaseObject* target = nullptr;
-    RefField<false> oldField(field.GetFieldValue(order));
-    if (theCollector.IsCurrentPointer(oldField)) {
-        target = oldField.GetTargetObject();
-        DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
-    }
+    // Colour self-heal on the real slot (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
+    // Exact observed value is the CAS expected; concurrent updates win and force a reload.
+    for (;;) {
+        RefField<false> oldField(field.GetFieldValue(order));
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), oldTarget);
+            return oldTarget;
+        }
 
-    BaseObject* toVersion = nullptr;
-    // note TryUpdateRefField and TryUntagRefField are all atomic operations.
-    if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
-        DLOG(TBARRIER, "iatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
-        return toVersion;
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        DCHECK(theCollector.is_load_good(goodField));
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
     }
-
-    if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
-        DLOG(TBARRIER, "jatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
-    }
-
-    target = ReadReference(nullptr, oldField);
-    DLOG(TBARRIER, "katomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-    return target;
 }
 
 void PostTraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,

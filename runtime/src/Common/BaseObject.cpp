@@ -182,11 +182,13 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
 // Phase B: the read-barrier mask the compiler tests against (see TypeDef.h for why).
 // "All colour bits set" keeps the predicate identical to the shift form it replaces.
 // Phase C: bad = mid-evacuation, or carrying a colour other than the one being handed out.
-// Starts with colour A good; WCollector::FlipRemapColour swaps it at a phase boundary.
+// The initial conceptual state is RemappedYoung0 x RemappedOld0, encoded by Remapped00.
 extern "C" unsigned long g_cjLoadBadMask =
-    MapleRuntime::TAGGED_BITS_MASK | MapleRuntime::REMAP_COLOUR_B;
+    MapleRuntime::TAGGED_BITS_MASK |
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00);
 
 // Mark-good includes load-good plus the current young and old mark epochs. The initial current
 // epochs are *_0, so their *_1 bits are bad (OpenJDK zAddress.cpp:78-87,120-127).
 extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = MapleRuntime::TAGGED_BITS_MASK |
-    MapleRuntime::REMAP_COLOUR_B | MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;

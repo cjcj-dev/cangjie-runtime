@@ -16,29 +16,24 @@
 #endif
 
 namespace MapleRuntime {
-// Because gc thread will also have impact on tagged pointer in enum and trace phase,
-// so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
-        return tmpField.GetTargetObject();
-    }
-    if (theCollector.IsCurrentPointer(tmpField)) {
-        return tmpField.GetTargetObject();
-    }
-    if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* fromVersion = tmpField.GetTargetObject();
-        BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
-        BaseObject* target = nullptr;
-        if (toVersion != nullptr) {
-            target = toVersion;
-        } else {
-            target = fromVersion;
+    for (;;) {
+        RefField<> oldField(field);
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
         }
-        return target;
+
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
+        // the CAS expected value. A concurrent GC update therefore wins rather than being
+        // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
+        }
     }
-    return tmpField.GetTargetObject();
 }
 
 BaseObject* EnumBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
@@ -73,12 +68,7 @@ void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        } else if (theCollector.IsOldPointer(dstRef)) {
-            dstRef.SetTargetObject(ReadReference(nullptr, dstRef));
-        }
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
@@ -95,29 +85,17 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        } else if (theCollector.IsOldPointer(dstRef)) {
-            dstRef.SetTargetObject(ReadReference(nullptr, dstRef));
-        }
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
 void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    // SATB snapshot of the pre-store slot value. Record point stays before the store
+    // (predclass/zcolorD hard constraint). Colour era: resolve via make_load_good
+    // (load-good + generation forwarding side table), not IsOldPointer/TryUpdateRefField.
     RefField<> tmpField(field);
-    BaseObject* remeberedObject = nullptr;
-    if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* toVersion = nullptr;
-        if (theCollector.TryUpdateRefField(obj, tmpField, toVersion)) {
-            remeberedObject = toVersion;
-        } else {
-            remeberedObject = field.GetTargetObject();
-        }
-    } else {
-        remeberedObject = tmpField.GetTargetObject();
-    }
+    BaseObject* remeberedObject = theCollector.make_load_good(tmpField);
     Mutator* mutator = Mutator::GetMutator();
     if (remeberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(remeberedObject);

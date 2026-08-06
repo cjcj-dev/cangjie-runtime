@@ -1546,6 +1546,10 @@ void WCollector::Preforward()
     MRT_PHASE_TIMER("Preforward");
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        // This collector relocates both generations in one full-GC relocation set. Match the two
+        // generation relocate-start flips while mutators are stopped, before any root is forwarded.
+        flip_young_relocate_start();
+        flip_old_relocate_start();
     }
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -1657,18 +1661,22 @@ void WCollector::PostResolveCycleTask()
 #endif
 }
 
-// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install plain target under multi-worker fix.
+// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
 // Same-value concurrent writes converge; first writer wins. Counters for positive control.
+// Colour-era: non-null installs use Collector::GetAndTryTagRefField (normative colour);
+// null stays plain (COLOUR_WRITEBACK_AUDIT Y1-Y3 — null carries no colour).
 namespace {
 std::atomic<size_t> g_minorRefCasFail{ 0 };
 std::atomic<size_t> g_minorRefCasOk{ 0 };
 
-// Install plain (untagged) target into field. expected = observed tagged/old value.
-// On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
-bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
+// expected = observed raw bits (colour-aware CAS). On CAS fail: accept (peer already updated).
+bool CasInstallResolvedTarget(const Collector* collector, RefField<>& field, MAddress expected, BaseObject* target)
 {
-    RefField<> desired(plainTarget);
-    MAddress desiredVal = desired.GetFieldValue();
+    MAddress desiredVal = 0;
+    if (target != nullptr) {
+        RefField<> desired = collector->GetAndTryTagRefField(target);
+        desiredVal = desired.GetFieldValue();
+    }
     if (expected == desiredVal) {
         return true;
     }
@@ -1685,23 +1693,36 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
     BaseObject* object = value.GetTargetObject();
-    if (!IsOldPointer(value)) {
+    // Colour-era gate: load-good/null may be used directly. Bad colour needs the
+    // generation route side table (to / valid-from / null). Must NOT use IsLoadBad
+    // alone to null a live ref (predclass risk: silent drop of live references).
+    if (object == nullptr || is_load_good(value)) {
         return object;
     }
     // Minor path must not call FindLatestVersion: after a full GC Flip, remset/root
-    // slots can still hold one-gen-stale tags whose from-copy was reclaimed (ghost
+    // slots can still hold one-gen-stale colours whose from-copy was reclaimed (ghost
     // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
-    //   routed to-version → plain to
-    //   unmoved valid from → plain from
+    //   routed to-version → coloured to
+    //   unmoved valid from → coloured from
     //   dead/stale → null the slot (caller drops the edge)
-    // N2: plain SetTargetObject → CAS (FYS=1 multi-writer safe; product default FYS=1).
+    // N2: CAS with observed raw bits (FYS=1 multi-writer safe; product default FYS=1).
     MAddress expected = value.GetFieldValue();
-    BaseObject* to = FindToVersion(object);
+    // Generation route: remap_generation + relocate_or_remap, then FindToVersion fallback
+    // for residue that has ghost route but colour did not move the address.
+    BaseObject* to = relocate_or_remap_object(object, remap_generation(value));
+    if (to == object) {
+        BaseObject* routed = FindToVersion(object);
+        if (routed != nullptr) {
+            to = routed;
+        } else {
+            to = nullptr;
+        }
+    }
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            (void)CasInstallPlainTarget(field, expected, to);
+            (void)CasInstallResolvedTarget(this, field, expected, to);
             return to;
         }
     }
@@ -1709,7 +1730,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
-            (void)CasInstallPlainTarget(field, expected, object);
+            (void)CasInstallResolvedTarget(this, field, expected, object);
             return object;
         }
     }
@@ -1721,7 +1742,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              "(drop; full-GC remset/root residue after Flip)",
              &field, static_cast<size_t>(value.GetFieldValue()), object, to);
     }
-    (void)CasInstallPlainTarget(field, expected, nullptr);
+    (void)CasInstallResolvedTarget(this, field, expected, nullptr);
     return nullptr;
 }
 
@@ -2170,10 +2191,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
         RefField<> peek(*field);
         BaseObject* rawTarget = peek.GetTargetObject();
-        // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
+        // Pre-check (before resolve): load-bad colour whose from has no to-version
         // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
-        if (IsOldPointer(peek)) {
-            BaseObject* to = FindToVersion(rawTarget);
+        // Gate is !is_load_good (colour), not IsOldPointer; drop only when side table +
+        // valid-from both fail (predclass: must not null live refs via colour alone).
+        if (rawTarget != nullptr && !is_load_good(peek)) {
+            BaseObject* remapped = relocate_or_remap_object(rawTarget, remap_generation(peek));
+            BaseObject* to = (remapped != rawTarget) ? remapped : FindToVersion(rawTarget);
             bool fromLive = false;
             if (to == nullptr && Heap::IsHeapAddress(rawTarget)) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(rawTarget));
@@ -2183,11 +2207,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             if (to == nullptr && !fromLive) {
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
-                (void)CasInstallPlainTarget(*field, peek.GetFieldValue(), nullptr);
+                (void)CasInstallResolvedTarget(this, *field, peek.GetFieldValue(), nullptr);
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,
-                         "[GCV2][remset-filter] drop slot=%#zx raw=%#llx target=%p reason=stale_oldtag "
+                         "[GCV2][remset-filter] drop slot=%#zx raw=%#llx target=%p reason=stale_colour "
                          "(no to-version; from invalid/reclaimed — pre-resolve)",
                          static_cast<size_t>(slot), static_cast<unsigned long long>(rawSlot), rawTarget);
                 }
@@ -3536,11 +3560,8 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // Phase C: swapping the colour is what makes every reference written before this point read
-    // as stale. It is one store, where the walk below is a full-heap stop-the-world pass.
-    FlipRemapColour();
-    // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
-    // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
+    // FlipTagID just turned this cycle's current-tags into IsOldPointer. F3 pre-flip only
+    // saw the previous tag generation. This pass must NOT filter IsSurvivedObject:
     // after Forward, live holders are in to-space without mark bits at the new addr.
     //
     // This walk exists because a reference could not say for itself that its colour was stale, so

@@ -20,47 +20,26 @@
 namespace MapleRuntime {
 BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    // Same progress guarantee as ForwardBarrier::ReadReference — see that file.
-    // Preforward is the prior phase; residual tagged + failed forward also livelocks.
     for (;;) {
-        RefField<> tmpField(field);
-        if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
-            return tmpField.GetTargetObject();
+        RefField<> oldField(field);
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
         }
-        if (theCollector.IsOldPointer(tmpField)) {
-            BaseObject* toVersion = nullptr;
-            if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-                return toVersion;
+
+        BaseObject* loadGood = oldTarget;
+        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+            loadGood = theCollector.make_load_good(oldField);
+            if (theCollector.IsGhostFromObject(loadGood)) {
+                loadGood = theCollector.ForwardObject(loadGood);
             }
-            BaseObject* target = nullptr;
-            if (theCollector.TryUntagRefField(obj, field, target)) {
-                return target;
-            }
-            return tmpField.GetTargetObject();
         }
-        if (theCollector.IsCurrentPointer(tmpField)) {
-            BaseObject* target = tmpField.GetTargetObject();
-            if (theCollector.IsUnmovableFromObject(target)) {
-                if (theCollector.TryUntagRefField(obj, field, target)) {
-                    return target;
-                }
-            } else {
-                BaseObject* toObj = nullptr;
-                if (theCollector.TryForwardRefField(obj, field, toObj)) {
-                    return toObj;
-                }
-                BaseObject* soft = nullptr;
-                if (theCollector.TryUntagRefField(obj, field, soft)) {
-                    return soft;
-                }
-                return target;
-            }
-        } else {
-            BaseObject* target = nullptr;
-            if (theCollector.TryUntagRefField(obj, field, target)) {
-                return target;
-            }
-            return tmpField.GetTargetObject();
+
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
+        // observed value as the CAS expected value and retry after a concurrent update.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
         }
     }
 }
@@ -103,35 +82,30 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
 
 BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    RefField<false> tmpField(field.GetFieldValue(order));
-    CHECK(!theCollector.IsOldPointer(tmpField));
-    if (theCollector.IsCurrentPointer(tmpField)) {
-        BaseObject* target = tmpField.GetTargetObject();
-        if (theCollector.IsUnmovableFromObject(target)) {
-            if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<>&>(field), target)) {
-                DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-                return target;
-            }
-        } else {
-            BaseObject* toObj = nullptr;
-            // note TryForwardRefField is atomic operation.
-            if (theCollector.TryForwardRefField(obj, reinterpret_cast<RefField<false>&>(field), toObj)) {
-                DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
-                return toObj;
-            } else {
-                BaseObject* oldVersion = tmpField.GetTargetObject();
-                BaseObject* toObj = theCollector.ForwardObject(oldVersion);
-                RefField<> newField(toObj);
-                (void)obj->CompareExchangeRefField(reinterpret_cast<RefField<false>&>(field), tmpField, newField);
-                DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toObj);
-                return toObj;
+    for (;;) {
+        RefField<false> oldField(field.GetFieldValue(order));
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), oldTarget);
+            return oldTarget;
+        }
+
+        BaseObject* loadGood = oldTarget;
+        if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+            loadGood = theCollector.make_load_good(oldField);
+            if (theCollector.IsGhostFromObject(loadGood)) {
+                loadGood = theCollector.ForwardObject(loadGood);
             }
         }
-    }
 
-    BaseObject* target = ReadReference(nullptr, tmpField);
-    DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
-    return target;
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
+        CHECK(theCollector.is_load_good(goodField));
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+    }
 }
 
 void PreforwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,

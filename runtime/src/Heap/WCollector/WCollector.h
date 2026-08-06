@@ -101,7 +101,9 @@ public:
 
     // The colour currently handed out. Flipping a phase swaps it and updates the mask the
     // compiler tests, which is what replaces walking the heap to strip stale colours.
-    Uptr currentRemapColour = REMAP_COLOUR_A;
+    Uptr ZPointerRemappedYoungMask = ZPointerRemapped10 | ZPointerRemapped00;
+    Uptr ZPointerRemappedOldMask = ZPointerRemapped01 | ZPointerRemapped00;
+    Uptr currentRemapColour = ZPointerRemapped00;
     Uptr currentMarkedYoung = MARKED_YOUNG_0;
     Uptr currentMarkedOld = MARKED_OLD_0;
     size_t youngMarkFlipCount = 0;
@@ -111,14 +113,23 @@ public:
     // load-good plus the current epoch from each independent mark family.
     void set_good_masks()
     {
-        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK & ~currentRemapColour);
+        currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
+        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ currentRemapColour);
         ::g_cjMarkBadMask = ::g_cjLoadBadMask | (MARKED_YOUNG_MASK & ~currentMarkedYoung) |
             (MARKED_OLD_MASK & ~currentMarkedOld);
     }
 
-    void FlipRemapColour()
+    // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start
+    // (zAddress.cpp:138-151): each generation independently alternates the two accepted pairs.
+    void flip_young_relocate_start()
     {
-        currentRemapColour = (currentRemapColour == REMAP_COLOUR_A) ? REMAP_COLOUR_B : REMAP_COLOUR_A;
+        ZPointerRemappedYoungMask ^= REMAP_COLOUR_MASK;
+        set_good_masks();
+    }
+
+    void flip_old_relocate_start()
+    {
+        ZPointerRemappedOldMask ^= REMAP_COLOUR_MASK;
         set_good_masks();
     }
 
@@ -152,6 +163,62 @@ public:
 
     // note this api is not atomic, caller should take care of this.
     bool IsCurrentPointer(RefField<>& ref) const override { return IsLoadBad(ref) && ref.GetTagID() == currentTagID; }
+
+    // OpenJDK ZPointer::is_young_load_good/is_old_load_good
+    // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
+    // accepted bits in that generation's mask.
+    bool is_young_load_good(RefField<>& ref) const override
+    {
+        return (ref.GetFieldValue() & ZPointerRemappedYoungMask) != 0;
+    }
+
+    bool is_old_load_good(RefField<>& ref) const override
+    {
+        return (ref.GetFieldValue() & ZPointerRemappedOldMask) != 0;
+    }
+
+    // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
+    // bit identifies the other generation; a double-bad colour consults the forwarding side table.
+    ZGenerationId remap_generation(RefField<>& ref) const override
+    {
+        CHECK_DETAIL(!is_load_good(ref), "load-good reference does not need remap");
+        bool youngLoadGood = is_young_load_good(ref);
+        bool oldLoadGood = is_old_load_good(ref);
+        if (oldLoadGood && !youngLoadGood) {
+            return ZGenerationId::young;
+        }
+        if (youngLoadGood && !oldLoadGood) {
+            return ZGenerationId::old;
+        }
+
+        BaseObject* target = ref.GetTargetObject();
+        if (!Heap::IsHeapAddress(target)) {
+            return ZGenerationId::old;
+        }
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+        if (forwarding != nullptr && forwarding->generation_id() == ZGenerationId::young) {
+            return ZGenerationId::young;
+        }
+        return ZGenerationId::old;
+    }
+
+    // OpenJDK ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140): an address
+    // outside the selected generation's forwarding table is already safe; a matching entry routes
+    // to the current object. The generation check prevents an address-reuse alias from selecting a
+    // route installed by the other generation.
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
+    {
+        if (!Heap::IsHeapAddress(obj)) {
+            return obj;
+        }
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (forwarding == nullptr || forwarding->generation_id() != generation) {
+            return obj;
+        }
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
+        return to == nullptr ? obj : to;
+    }
 
     void AddRawPointerObject(BaseObject* obj) override
     {
