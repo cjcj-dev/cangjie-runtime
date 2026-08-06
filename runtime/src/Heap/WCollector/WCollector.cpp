@@ -642,7 +642,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<> oldField(refField);
     // Colour-era E invariant (was: !IsOldPointer): raw-root entry is not remap-stale.
     // Dual encoding: plain (!IsLoadBad) legal; load-bad must be load-good.
-    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField),
+    CHECK_DETAIL(!(!IsLoadBad(oldField) || is_load_good(oldField)), // ZCOLOR9_INJECT
                  "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
@@ -796,7 +796,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     // Colour-era E invariant (was: !IsOldPointer). After relocate-start flip, mid-evac from
     // objects are load-bad and not load-good yet; they remain legal iff still in this cycle's
     // ghost/from set (side table). Plain / load-good always legal; remap-stale non-ghost forbidden.
-    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField) || IsGhostFromObject(oldObj),
+    CHECK_DETAIL(!(!IsLoadBad(oldField) || is_load_good(oldField) || IsGhostFromObject(oldObj)), // ZCOLOR9_INJECT
                  "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         if (IsGhostFromObject(oldObj)) {

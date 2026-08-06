@@ -22,7 +22,7 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
     // Dual encoding: plain (!IsLoadBad) remains legal; load-bad must already be load-good
     // (current remap colour). Forbids only remap-stale / non-current old tags.
     // Equiv. of !IsOldPointer under colour: !IsLoadBad || is_load_good.
-    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
+    CHECK(!(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField))); // ZCOLOR9_INJECT
     return tmpField.GetTargetObject();
 }
 
@@ -32,7 +32,7 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
 {
     RefField<> tmpField(field);
     // Colour-era E invariant (was: tagged ⇒ IsCurrentPointer): !IsLoadBad || is_load_good.
-    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
+    CHECK(!(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField))); // ZCOLOR9_INJECT
     BaseObject* referent = tmpField.GetTargetObject();
     if (referent == nullptr) {
         return nullptr;
@@ -98,7 +98,7 @@ void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& fiel
 {
     RefField<> tmpField(field);
     // Colour-era E invariant (was: !IsOldPointer): slot is not remap-stale before write.
-    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
+    CHECK(!(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField))); // ZCOLOR9_INJECT
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
