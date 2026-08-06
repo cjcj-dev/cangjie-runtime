@@ -594,8 +594,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 {
     RefField<> oldField(field);
-    // if field is already tagged currently, it is also already enumerated.
-    if (IsCurrentPointer(oldField)) {
+    // A mark-good root has passed this mark epoch and is necessarily load-good
+    // (OpenJDK zAddress.inline.hpp:658-664).
+    if (is_mark_good(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = oldField.GetTargetObject();
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
@@ -603,13 +604,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         return;
     }
 
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    BaseObject* latest = make_load_good(oldField);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -641,14 +636,14 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
     CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         rootSet.push_back(root);
         return;
     }
-    BaseObject* root = oldField.GetTargetObject();
+    BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
         if (VerifyRoots::Enabled()) {
             RootVerifyContext vctx;
@@ -675,7 +670,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         CHECK_DETAIL(targetObj->IsValidObject(),
@@ -687,13 +682,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
 
-    BaseObject* latest = nullptr;
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    BaseObject* latest = make_load_good(oldField);
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
@@ -755,19 +744,14 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                      targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    latest = make_load_good(oldField);
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
@@ -791,49 +775,47 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
-        if (IsGhostFromObject(oldObj)) {
-            BaseObject* toVersion = TryForwardObject(oldObj);
-            CHECK(toVersion != nullptr);
-            RefField<> newField(toVersion);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-                return toVersion;
+    if (IsGhostFromObject(oldObj)) {
+        BaseObject* toVersion = TryForwardObject(oldObj);
+        CHECK(toVersion != nullptr);
+        RefField<> newField(toVersion);
+        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
+        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
+            return toVersion;
+        }
+        // The CAS lost, so someone else wrote the slot. The old assertion said the winner
+        // cannot be a still-to-forward reference, which held only because "needs forwarding"
+        // and "carries the current tag" were the same thing. Once a good colour is non-zero
+        // (phase C) a mutator may legally store a reference to a from-object here, so that
+        // premise dies -- and an assertion whose premise is gone fires on legal states until
+        // someone stops reading it. Assert what still holds: the winning value must resolve
+        // to a live object. Count the case that becomes legal instead of asserting on it.
+        {
+            size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1) {
+                // Print on the first occurrence rather than at exit: this site lives in a run
+                // that usually dies on a signal, so an exit-time report never executes and a
+                // zero would mean "never wired up" as easily as "never happened".
+                VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
             }
-            // The CAS lost, so someone else wrote the slot. The old assertion said the winner
-            // cannot be a still-to-forward reference, which held only because "needs forwarding"
-            // and "carries the current tag" were the same thing. Once a good colour is non-zero
-            // (phase C) a mutator may legally store a reference to a from-object here, so that
-            // premise dies -- and an assertion whose premise is gone fires on legal states until
-            // someone stops reading it. Assert what still holds: the winning value must resolve
-            // to a live object. Count the case that becomes legal instead of asserting on it.
-            {
-                size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (n == 1) {
-                    // Print on the first occurrence rather than at exit: this site lives in a run
-                    // that usually dies on a signal, so an exit-time report never executes and a
-                    // zero would mean "never wired up" as easily as "never happened".
-                    VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
-                }
+        }
+        RefField<> raced(refField);
+        BaseObject* racedObj = raced.GetTargetObject();
+        CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
+                     "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
+        if (IsLoadBad(raced)) {
+            size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1) {
+                VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
             }
-            RefField<> raced(refField);
-            BaseObject* racedObj = raced.GetTargetObject();
-            CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
-                         "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
-            if (IsLoadBad(raced)) {
-                size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (n == 1) {
-                    VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
-                }
-            }
-        } else {
-            RefField<> newField(oldObj);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
-                return oldObj;
-            }
+        }
+    } else {
+        RefField<> newField(oldObj);
+        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
+        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
+            return oldObj;
         }
     }
 
