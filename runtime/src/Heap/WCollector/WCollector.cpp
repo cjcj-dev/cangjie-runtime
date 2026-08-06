@@ -806,13 +806,24 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             // premise dies -- and an assertion whose premise is gone fires on legal states until
             // someone stops reading it. Assert what still holds: the winning value must resolve
             // to a live object. Count the case that becomes legal instead of asserting on it.
-            g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed);
+            {
+                size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (n == 1) {
+                    // Print on the first occurrence rather than at exit: this site lives in a run
+                    // that usually dies on a signal, so an exit-time report never executes and a
+                    // zero would mean "never wired up" as easily as "never happened".
+                    VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
+                }
+            }
             RefField<> raced(refField);
             BaseObject* racedObj = raced.GetTargetObject();
             CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
                          "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
             if (IsLoadBad(raced)) {
-                g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed);
+                size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (n == 1) {
+                    VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
+                }
             }
         } else {
             RefField<> newField(oldObj);
