@@ -640,7 +640,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 {
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
-    CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
+    // E-class = !IsOldPointer (zc9fix). Fast path stays is_mark_good (zc7fix colour-era).
+    CHECK_DETAIL(!IsOldPointer(oldField),
+                 "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
@@ -791,7 +793,51 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     RefField<> oldField(refField);
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
+    // E-class entry invariant = !IsOldPointer (predclass E / pre-zcolor9).
+    // zcolor9 dual !IsLoadBad||is_load_good(+ghost) was strictly stronger; restore !IsOldPointer.
+    // Optional per-disjunct fire counters (MRT_GCV2_ZC9FIX_ASSERT=1). Body keeps colour-era
+    // IsGhostFromObject dispatch (main/zcolor7), not pre-colour IsCurrentPointer gate.
+    {
+        const bool t1 = !IsLoadBad(oldField);
+        const bool t2 = is_load_good(oldField);
+        const bool t3 = IsGhostFromObject(oldObj);
+        const bool oldInv = !IsOldPointer(oldField);
+        if (!(t1 || t2 || t3)) {
+            static std::atomic<size_t> fireCount{ 0 };
+            static std::atomic<size_t> t1True{ 0 };
+            static std::atomic<size_t> t2True{ 0 };
+            static std::atomic<size_t> t3True{ 0 };
+            static std::atomic<size_t> oldInvTrue{ 0 };
+            const size_t n = fireCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (t1) {
+                t1True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (t2) {
+                t2True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (t3) {
+                t3True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (oldInv) {
+                oldInvTrue.fetch_add(1, std::memory_order_relaxed);
+            }
+            static const bool logFire = []() {
+                const char* v = std::getenv("MRT_GCV2_ZC9FIX_ASSERT");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (logFire && n <= 20) {
+                LOG(RTLOG_ERROR,
+                    "[ZC9FIX][fwd-assert] n=%zu val=%zx t1_notLoadBad=%d t2_loadGood=%d t3_ghost=%d "
+                    "old_notOldPtr=%d tagID=%u curTag=%u",
+                    n, oldField.GetFieldValue(), static_cast<int>(t1), static_cast<int>(t2),
+                    static_cast<int>(t3), static_cast<int>(oldInv),
+                    static_cast<unsigned>(oldField.GetTagID()),
+                    static_cast<unsigned>(currentTagID));
+            }
+        }
+        CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
+                     oldField.GetFieldValue());
+    }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);

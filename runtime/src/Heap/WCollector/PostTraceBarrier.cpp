@@ -18,9 +18,8 @@ namespace MapleRuntime {
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
-    }
+    // E-class = !IsOldPointer (zcolor9 dual was too strong; see ForwardUpdateRawRef).
+    CHECK(!theCollector.IsOldPointer(tmpField));
     return tmpField.GetTargetObject();
 }
 
@@ -29,9 +28,8 @@ BaseObject* PostTraceBarrier::ReadStaticRef(RefField<false>& field) const { retu
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
-    }
+    // E-class = !IsOldPointer (same restoration as ReadReference).
+    CHECK(!theCollector.IsOldPointer(tmpField));
     BaseObject* referent = tmpField.GetTargetObject();
     if (referent == nullptr) {
         return nullptr;
@@ -114,6 +112,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
+    // E-class = !IsOldPointer (zcolor9 dual was too strong).
     CHECK(!theCollector.IsOldPointer(tmpField));
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
