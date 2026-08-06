@@ -91,18 +91,11 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
 
 void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    // SATB snapshot of the pre-store slot value. Record point stays before the store
+    // (predclass/zcolorD hard constraint). Colour era: resolve via make_load_good
+    // (load-good + generation forwarding side table), not IsOldPointer/TryUpdateRefField.
     RefField<> tmpField(field);
-    BaseObject* remeberedObject = nullptr;
-    if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* toVersion = nullptr;
-        if (theCollector.TryUpdateRefField(obj, tmpField, toVersion)) {
-            remeberedObject = toVersion;
-        } else {
-            remeberedObject = field.GetTargetObject();
-        }
-    } else {
-        remeberedObject = tmpField.GetTargetObject();
-    }
+    BaseObject* remeberedObject = theCollector.make_load_good(tmpField);
     Mutator* mutator = Mutator::GetMutator();
     if (remeberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(remeberedObject);
