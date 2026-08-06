@@ -10,6 +10,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/Verify/SlotWriterProbe.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -70,6 +71,8 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     WriteReferenceImpl(obj, field, ref);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "WriteReference");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
@@ -100,6 +103,8 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     field.SetTargetObject(ref);
+    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "WriteStatic");
     // Static/global slots are visited and fixed as roots in every minor collection.
     // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
@@ -155,6 +160,8 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     AtomicWriteReferenceImpl(obj, field, ref, order);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "AtomicWrite");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
@@ -174,6 +181,8 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
                                          MemoryOrder order) const
 {
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "AtomicSwap");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     return oldRef;
 }
@@ -209,6 +218,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 {
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
+        SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(), "CAS");
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     }
     return success;
