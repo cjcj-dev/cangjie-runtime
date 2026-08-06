@@ -878,6 +878,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);
+            // mark-good fast path (zcolor2 @ 84a64e88): already passed this mark epoch.
             if (is_mark_good(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
                 if (IsMarkedObject(targetObj)) {
@@ -892,13 +893,9 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                 return;
             }
 
-            BaseObject* latest = nullptr;
-            if (IsOldPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
-                latest = FindLatestVersion(targetObj);
-            } else {
-                latest = field.GetTargetObject();
-            }
+            // Slow path: load-good + generation route (OpenJDK ZBarrier::make_load_good),
+            // then recolour with current mark/remap. Replaces IsOldPointer/FindLatestVersion.
+            BaseObject* latest = make_load_good(oldField);
 
             // target object could be null or non-heap for some static variable.
             if (!Heap::IsHeapAddress(latest)) {
