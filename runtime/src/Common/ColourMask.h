@@ -35,6 +35,12 @@ extern unsigned long g_cjMarkBadMask;
 }
 
 namespace MapleRuntime {
+// OpenJDK zGenerationId.hpp:29-32.
+enum class ZGenerationId : uint8_t {
+    young,
+    old,
+};
+
 constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
 // Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
 constexpr unsigned TAG_ID_BITS =
