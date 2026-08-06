@@ -31,16 +31,21 @@ func AllocateEpochGarbage(seed: Int64, count: Int64): Int64 {
 
 func RunCreateExitWave(rounds: Int64): Int64 {
     var checksum: Int64 = 0
-    for (index in 0..rounds) {
-        let captured = index
-        let future = spawn {
-            =>
-                if (captured % 3 == 0) {
-                    sleep(Duration.millisecond)
-                }
-                captured
+    for (round in 0..rounds) {
+        let wave = ArrayList<Future<Int64>>()
+        for (index in 0..64) {
+            let captured = round * 64 + index
+            wave.add(spawn {
+                =>
+                    if (captured % 3 == 0) {
+                        sleep(Duration.millisecond)
+                    }
+                    captured
+            })
         }
-        checksum += future.get()
+        for (future in wave) {
+            checksum += future.get()
+        }
     }
     checksum
 }
@@ -65,8 +70,8 @@ main(): Int64 {
         })
     }
 
-    let creator = spawn { => RunCreateExitWave(4000) }
-    let allocator = spawn { => RunAllocationWave(32) }
+    let creator = spawn { => RunCreateExitWave(100) }
+    let allocator = spawn { => RunAllocationWave(64) }
     sleep(2 * Duration.millisecond)
 
     var lastEpoch = UInt64(0)
@@ -79,7 +84,9 @@ main(): Int64 {
         }
         lastEpoch = epoch
         explicitEpochs++
-        if (round % 8 == 0) {
+        if (round % 4 == 0) {
+            sleep(Duration.millisecond)
+        } else {
             sleep(Duration.Zero)
         }
     }
@@ -91,7 +98,7 @@ main(): Int64 {
         parkedChecksum += future.get()
     }
 
-    let expectedCreateExit: Int64 = 7998000
+    let expectedCreateExit: Int64 = 20476800
     let expectedParked: Int64 = 2016
     let passed = createExitChecksum == expectedCreateExit && parkedChecksum == expectedParked &&
         allocationChecksum > 0 && explicitEpochs == 1500
