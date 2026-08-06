@@ -66,8 +66,7 @@ struct WriteRec {
     void* returnAddr = nullptr;
 };
 
-constexpr size_t kRingCap = 65536;
-constexpr size_t kPerSlotCap = 4;
+constexpr size_t kPerSlotCap = 8;
 
 std::atomic<int> gEnabled{ -1 };
 std::atomic<size_t> gSeq{ 0 };
@@ -80,12 +79,9 @@ std::atomic<size_t> gInvalidEnqueueMiss{ 0 };
 std::atomic<size_t> gDumpsLeft{ 0 };
 
 std::mutex gMu;
-WriteRec gRing[kRingCap];
-std::atomic<size_t> gRingNext{ 0 };
-// slot -> last few write indices into gRing (seq order, newest last).
-std::unordered_map<MAddress, std::vector<size_t>> gBySlot;
-// value -> last few write indices (for value-only correlation when slot missed).
-std::unordered_map<BaseObject*, std::vector<size_t>> gByValue;
+// Inline last-N records per slot/value (no ring-index indirection; avoids wrap stale).
+std::unordered_map<MAddress, std::vector<WriteRec>> gBySlot;
+std::unordered_map<BaseObject*, std::vector<WriteRec>> gByValue;
 
 uint32_t PathTag(const char* path)
 {
@@ -139,12 +135,12 @@ const char* PathName(uint32_t tag)
     }
 }
 
-void PushIndex(std::vector<size_t>& vec, size_t idx)
+void PushRec(std::vector<WriteRec>& vec, const WriteRec& rec)
 {
     if (vec.size() >= kPerSlotCap) {
         vec.erase(vec.begin());
     }
-    vec.push_back(idx);
+    vec.push_back(rec);
 }
 
 bool ValueLooksValid(BaseObject* value, bool* outYoung, bool* outFree, bool* outGarbage)
@@ -180,7 +176,7 @@ bool SlotWriterProbe::Enabled()
     gEnabled.store(on ? 1 : 0, std::memory_order_release);
     if (on) {
         gDumpsLeft.store(EnvSizeT("MRT_GCV2_SLOTWRITER_DUMP_MAX", 32), std::memory_order_relaxed);
-        SW_LOG("ENABLED dump_max=%zu ring=%zu", EnvSizeT("MRT_GCV2_SLOTWRITER_DUMP_MAX", 32), kRingCap);
+        SW_LOG("ENABLED dump_max=%zu per_slot=%zu", EnvSizeT("MRT_GCV2_SLOTWRITER_DUMP_MAX", 32), kPerSlotCap);
     }
     return on;
 }
@@ -215,7 +211,6 @@ void SlotWriterProbe::NoteRefWrite(BaseObject* holder, MAddress slot, BaseObject
     const bool holderHeap = holder != nullptr && Heap::IsHeapAddress(holder);
     const bool holderValid = holderHeap && holder->IsValidObject();
     const size_t seq = gSeq.fetch_add(1, std::memory_order_relaxed) + 1;
-    const size_t ringIdx = gRingNext.fetch_add(1, std::memory_order_relaxed) % kRingCap;
 
     WriteRec rec;
     rec.slot = slot;
@@ -235,10 +230,9 @@ void SlotWriterProbe::NoteRefWrite(BaseObject* holder, MAddress slot, BaseObject
 
     {
         std::lock_guard<std::mutex> lock(gMu);
-        gRing[ringIdx] = rec;
-        PushIndex(gBySlot[slot], ringIdx);
+        PushRec(gBySlot[slot], rec);
         if (value != nullptr) {
-            PushIndex(gByValue[value], ringIdx);
+            PushRec(gByValue[value], rec);
         }
     }
 
@@ -265,40 +259,49 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
     }
 
     std::vector<WriteRec> slotHits;
-    std::vector<WriteRec> valueHits;
+    std::vector<WriteRec> valueHitsExact;
     {
         std::lock_guard<std::mutex> lock(gMu);
         auto sit = gBySlot.find(slot);
         if (sit != gBySlot.end()) {
-            for (size_t idx : sit->second) {
-                slotHits.push_back(gRing[idx % kRingCap]);
-            }
+            slotHits = sit->second;
         }
         auto vit = gByValue.find(object);
         if (vit != gByValue.end()) {
-            for (size_t idx : vit->second) {
-                valueHits.push_back(gRing[idx % kRingCap]);
+            for (const WriteRec& r : vit->second) {
+                // Exact value match only (map key is the pointer identity at write time).
+                if (r.value == object) {
+                    valueHitsExact.push_back(r);
+                }
             }
         }
     }
 
-    if (slotHits.empty() && valueHits.empty()) {
+    const ssize_t offset =
+        (holder != nullptr && slot != 0)
+            ? static_cast<ssize_t>(slot - reinterpret_cast<MAddress>(holder))
+            : static_cast<ssize_t>(-1);
+
+    if (slotHits.empty() && valueHitsExact.empty()) {
         gInvalidEnqueueMiss.fetch_add(1, std::memory_order_relaxed);
-        SW_LOG("ENQUEUE_INVALID_NO_WRITE object=%p holder=%p slot=%#zx raw=%#zx origin=%s "
+        SW_LOG("ENQUEUE_INVALID_NO_WRITE object=%p holder=%p slot=%#zx offset=%zd raw=%#zx origin=%s "
                "writes_total=%zu valid=%zu invalid=%zu null=%zu "
-               "HINT=no_barrier_write_seen_for_slot_or_value",
-               object, holder, static_cast<size_t>(slot), static_cast<size_t>(raw),
+               "HINT=no_barrier_write_seen_for_this_slot_or_exact_value",
+               object, holder, static_cast<size_t>(slot), offset, static_cast<size_t>(raw),
                origin == nullptr ? "null" : origin, gWriteTotal.load(std::memory_order_relaxed),
                gWriteValid.load(std::memory_order_relaxed), gWriteInvalid.load(std::memory_order_relaxed),
                gWriteNull.load(std::memory_order_relaxed));
+        // Critical T1 signal: slot never seen by barrier write path.
+        SW_LOG("T1_VERDICT=NO_BARRIER_WRITE_FOR_SLOT object=%p holder=%p slot=%#zx offset=%zd origin=%s",
+               object, holder, static_cast<size_t>(slot), offset, origin == nullptr ? "null" : origin);
         return;
     }
 
     gInvalidEnqueueHits.fetch_add(1, std::memory_order_relaxed);
-    SW_LOG("ENQUEUE_INVALID_MATCH object=%p holder=%p slot=%#zx raw=%#zx origin=%s "
-           "slotHits=%zu valueHits=%zu",
-           object, holder, static_cast<size_t>(slot), static_cast<size_t>(raw),
-           origin == nullptr ? "null" : origin, slotHits.size(), valueHits.size());
+    SW_LOG("ENQUEUE_INVALID_MATCH object=%p holder=%p slot=%#zx offset=%zd raw=%#zx origin=%s "
+           "slotHits=%zu valueHitsExact=%zu",
+           object, holder, static_cast<size_t>(slot), offset, static_cast<size_t>(raw),
+           origin == nullptr ? "null" : origin, slotHits.size(), valueHitsExact.size());
 
     auto dump = [](const char* kind, const WriteRec& r) {
         SW_LOG("LAST_WRITE kind=%s seq=%zu path=%s phase=%u holder=%p holderValid=%u slot=%#zx value=%p "
@@ -312,40 +315,46 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
     for (const WriteRec& r : slotHits) {
         dump("slot", r);
     }
-    for (const WriteRec& r : valueHits) {
+    for (const WriteRec& r : valueHitsExact) {
         dump("value", r);
     }
 
-    // T1 bit: if any last write for this slot had validAtWrite=1, the value went
-    // stale after the store; if all had validAtWrite=0, the store itself was bad.
+    // Prefer slot history for T1: was THIS slot's last write(s) valid?
     bool anyValid = false;
     bool anyInvalid = false;
-    for (const WriteRec& r : slotHits) {
-        if (r.value == object || r.slot == slot) {
-            if (r.validAtWrite) {
-                anyValid = true;
-            } else if (r.value != nullptr) {
-                anyInvalid = true;
-            }
+    bool anyExactValueOnSlot = false;
+    const std::vector<WriteRec>& primary = !slotHits.empty() ? slotHits : valueHitsExact;
+    for (const WriteRec& r : primary) {
+        if (!slotHits.empty() && r.value == object) {
+            anyExactValueOnSlot = true;
+        }
+        if (r.value == nullptr) {
+            continue;
+        }
+        if (r.validAtWrite) {
+            anyValid = true;
+        } else {
+            anyInvalid = true;
         }
     }
-    if (slotHits.empty()) {
-        for (const WriteRec& r : valueHits) {
-            if (r.validAtWrite) {
-                anyValid = true;
-            } else if (r.value != nullptr) {
-                anyInvalid = true;
-            }
-        }
-    }
-    if (anyValid && !anyInvalid) {
-        SW_LOG("T1_VERDICT=VALID_AT_WRITE_THEN_STALE object=%p slot=%#zx", object, static_cast<size_t>(slot));
+    if (!slotHits.empty() && !anyExactValueOnSlot) {
+        // Slot was written, but never with this exact value — value arrived another way
+        // (struct bulk / plain store / GC cas install) or was last-N evicted.
+        SW_LOG("T1_VERDICT=SLOT_WRITTEN_BUT_NOT_THIS_VALUE object=%p slot=%#zx offset=%zd "
+               "slotHits=%zu (last slot writes did not store this object pointer)",
+               object, static_cast<size_t>(slot), offset, slotHits.size());
+    } else if (anyValid && !anyInvalid) {
+        SW_LOG("T1_VERDICT=VALID_AT_WRITE_THEN_STALE object=%p slot=%#zx offset=%zd", object,
+               static_cast<size_t>(slot), offset);
     } else if (!anyValid && anyInvalid) {
-        SW_LOG("T1_VERDICT=INVALID_AT_WRITE object=%p slot=%#zx", object, static_cast<size_t>(slot));
+        SW_LOG("T1_VERDICT=INVALID_AT_WRITE object=%p slot=%#zx offset=%zd", object,
+               static_cast<size_t>(slot), offset);
     } else if (anyValid && anyInvalid) {
-        SW_LOG("T1_VERDICT=MIXED_WRITES object=%p slot=%#zx", object, static_cast<size_t>(slot));
+        SW_LOG("T1_VERDICT=MIXED_WRITES object=%p slot=%#zx offset=%zd", object, static_cast<size_t>(slot),
+               offset);
     } else {
-        SW_LOG("T1_VERDICT=NO_CLASSIFY object=%p slot=%#zx", object, static_cast<size_t>(slot));
+        SW_LOG("T1_VERDICT=NO_CLASSIFY object=%p slot=%#zx offset=%zd", object, static_cast<size_t>(slot),
+               offset);
     }
 }
 
