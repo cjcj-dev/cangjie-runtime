@@ -185,3 +185,8 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
 // Starts with colour A good; WCollector::FlipRemapColour swaps it at a phase boundary.
 extern "C" unsigned long g_cjLoadBadMask =
     MapleRuntime::TAGGED_BITS_MASK | MapleRuntime::REMAP_COLOUR_B;
+
+// Mark-good includes load-good plus the current young and old mark epochs. The initial current
+// epochs are *_0, so their *_1 bits are bad (OpenJDK zAddress.cpp:78-87,120-127).
+extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = MapleRuntime::TAGGED_BITS_MASK |
+    MapleRuntime::REMAP_COLOUR_B | MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;
