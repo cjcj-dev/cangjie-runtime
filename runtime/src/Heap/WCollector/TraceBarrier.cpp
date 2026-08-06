@@ -28,28 +28,24 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
 }
 } // namespace
 
-// Because gc thread will also have impact on tagged pointer in enum and trace phase,
-// so we don't expect reading barrier have the ability to modify the referent field.
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
-        return tmpField.GetTargetObject();
-    }
-    if (theCollector.IsCurrentPointer(tmpField)) {
-        return tmpField.GetTargetObject();
-    } else if (theCollector.IsOldPointer(tmpField)) {
-        BaseObject* fromVersion = tmpField.GetTargetObject();
-        BaseObject* toVersion = theCollector.FindToVersion(fromVersion);
-        BaseObject* target = nullptr;
-        if (toVersion != nullptr) {
-            target = toVersion;
-        } else {
-            target = fromVersion;
+    for (;;) {
+        RefField<> oldField(field);
+        BaseObject* oldTarget = oldField.GetTargetObject();
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
         }
-        return target;
+
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
+        // the CAS expected value. A concurrent GC update therefore wins rather than being
+        // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
+        }
     }
-    return tmpField.GetTargetObject();
 }
 
 BaseObject* TraceBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
