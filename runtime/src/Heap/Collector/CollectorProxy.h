@@ -51,9 +51,9 @@ public:
     {
         return currentCollector->remap_generation(ref);
     }
-    BaseObject* relocate_or_remap(BaseObject* obj, ZGenerationId generation) const override
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
-        return currentCollector->relocate_or_remap(obj, generation);
+        return currentCollector->relocate_or_remap_object(obj, generation);
     }
     bool IsFromObject(BaseObject* obj) const override { return currentCollector->IsFromObject(obj); }
     bool IsGhostFromObject(BaseObject* obj) const override { return currentCollector->IsGhostFromObject(obj); }

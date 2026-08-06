@@ -119,7 +119,7 @@ public:
     }
 
     virtual ZGenerationId remap_generation(RefField<>&) const { std::abort(); }
-    virtual BaseObject* relocate_or_remap(BaseObject*, ZGenerationId) const { std::abort(); }
+    virtual BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const { std::abort(); }
 
     BaseObject* make_load_good(RefField<>& ref) const
     {
@@ -127,7 +127,7 @@ public:
         if (target == nullptr || is_load_good(ref)) {
             return target;
         }
-        return relocate_or_remap(target, remap_generation(ref));
+        return relocate_or_remap_object(target, remap_generation(ref));
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,

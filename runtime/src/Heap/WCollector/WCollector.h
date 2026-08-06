@@ -206,7 +206,7 @@ public:
     // outside the selected generation's forwarding table is already safe; a matching entry routes
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
-    BaseObject* relocate_or_remap(BaseObject* obj, ZGenerationId generation) const override
+    BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         if (!Heap::IsHeapAddress(obj)) {
             return obj;
