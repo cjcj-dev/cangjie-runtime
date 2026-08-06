@@ -878,7 +878,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);
-            if (IsCurrentPointer(oldField)) {
+            if (IsMarkGood(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
                 if (IsMarkedObject(targetObj)) {
                     return;

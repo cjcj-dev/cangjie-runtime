@@ -110,6 +110,13 @@ public:
         return (ref.GetFieldValue() & ::g_cjLoadBadMask) != 0;
     }
 
+    // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
+    // the current young mark epoch, and the current old mark epoch; raw null is not mark-good.
+    bool IsMarkGood(RefField<>& ref) const
+    {
+        return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0;
+    }
+
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
     virtual void AddRawPointerObject(BaseObject*) { std::abort(); }
