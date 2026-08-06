@@ -20,7 +20,8 @@
 namespace MapleRuntime {
 BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    for (;;) {
+    // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -39,6 +40,9 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -82,7 +86,7 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
 
 BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    for (;;) {
+    for (int attempts = 0;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -103,6 +107,9 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         CHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -138,8 +145,8 @@ bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tr
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
-    while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }

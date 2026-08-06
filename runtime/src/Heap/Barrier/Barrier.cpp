@@ -194,7 +194,8 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
     // Colour-era atomic read (matches Forward/Preforward AtomicRead shape):
     // load-good/null fast path; load-bad → make_load_good + coloured exact-CAS self-heal.
     // Compare uses decoded identity only on CAS sites; heal uses observed raw bits.
-    for (;;) {
+    // Bound: no colour monotonicity ⇒ abandon heal after kSelfHealAttempts (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<false> tmpField(field.GetFieldValue(order));
         BaseObject* target = tmpField.GetTargetObject();
         if (target == nullptr || LIKELY(theCollector.is_load_good(tmpField))) {
@@ -206,6 +207,9 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         RefField<> healed = theCollector.GetAndTryTagRefField(loadGood);
         if (field.CompareExchange(tmpField.GetFieldValue(), healed.GetFieldValue())) {
             DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -227,12 +231,14 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
     // Compare on decoded object identity; CAS on observed raw bits (colour-aware).
     // Shape matches EnumBarrier.cpp:259-280 / IdleBarrier.cpp:121-138. Plain expected vs
     // coloured slot bits always fail (COLOUR_WRITEBACK_AUDIT R1).
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+    // Bound kCasAttempts: main c3179214; stage/zcolor-int had dropped it (merge of pre-bound
+    // colour CAS). Exhaustion returns false — callers already handle CAS fail.
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    while (oldVersion == oldRef) {
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
                  oldFieldValue, oldVersion, oldRef, newRef);

@@ -125,8 +125,9 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    // oldRef and newRef must be the latest versions.
-    while (oldVersion == oldRef) {
+    // oldRef and newRef must be the latest versions. Bound kCasAttempts: colour self-heal
+    // can keep the raw expected bits moving while identity stays oldRef (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
             return true;
