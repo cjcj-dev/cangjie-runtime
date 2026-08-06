@@ -112,7 +112,7 @@ public:
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
     // the current young mark epoch, and the current old mark epoch; raw null is not mark-good.
-    bool IsMarkGood(RefField<>& ref) const
+    bool is_mark_good(RefField<>& ref) const
     {
         return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0;
     }
