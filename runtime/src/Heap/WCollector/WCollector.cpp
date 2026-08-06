@@ -640,9 +640,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 {
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
-    // Colour-era E invariant (was: !IsOldPointer): raw-root entry is not remap-stale.
-    // Dual encoding: plain (!IsLoadBad) legal; load-bad must be load-good.
-    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField),
+    // E-class = !IsOldPointer (same dual restoration as ForwardUpdateRawRef; zcolor9
+    // !IsLoadBad||is_load_good was strictly stronger than the pre-colour assert).
+    CHECK_DETAIL(!IsOldPointer(oldField),
                  "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
@@ -793,11 +793,58 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     RefField<> oldField(refField);
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    // Colour-era E invariant (was: !IsOldPointer). After relocate-start flip, mid-evac from
-    // objects are load-bad and not load-good yet; they remain legal iff still in this cycle's
-    // ghost/from set (side table). Plain / load-good always legal; remap-stale non-ghost forbidden.
-    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField) || IsGhostFromObject(oldObj),
-                 "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
+    // E-class entry invariant = !IsOldPointer (predclass E / pre-zcolor9).
+    // zcolor9 rewrote this as !IsLoadBad || is_load_good || ghost, claiming colour dual
+    // encoding equivalence. That is strictly stronger: after flip_*_relocate_start, a
+    // non-tagged (or current-tag) reference carrying a just-staled remap colour is
+    // IsLoadBad && !is_load_good && !ghost, yet !IsOldPointer still holds because
+    // IsOldPointer still requires tagID != currentTagID (WCollector.h). Such refs are
+    // legal raw-root inputs (fall through / return target); the old assert never forbade
+    // them. Restore the true dual of !IsOldPointer; keep per-disjunct fire counters for
+    // zc9fix Q2 (env MRT_GCV2_ZC9FIX_ASSERT=1).
+    {
+        const bool t1 = !IsLoadBad(oldField);
+        const bool t2 = is_load_good(oldField);
+        const bool t3 = IsGhostFromObject(oldObj);
+        const bool oldInv = !IsOldPointer(oldField);
+        if (!(t1 || t2 || t3)) {
+            static std::atomic<size_t> fireCount{ 0 };
+            static std::atomic<size_t> t1True{ 0 };
+            static std::atomic<size_t> t2True{ 0 };
+            static std::atomic<size_t> t3True{ 0 };
+            static std::atomic<size_t> oldInvTrue{ 0 };
+            const size_t n = fireCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (t1) {
+                t1True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (t2) {
+                t2True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (t3) {
+                t3True.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (oldInv) {
+                oldInvTrue.fetch_add(1, std::memory_order_relaxed);
+            }
+            static const bool logFire = []() {
+                const char* v = std::getenv("MRT_GCV2_ZC9FIX_ASSERT");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (logFire && n <= 20) {
+                LOG(RTLOG_ERROR,
+                    "[ZC9FIX][fwd-assert] n=%zu val=%zx t1_notLoadBad=%d t2_loadGood=%d t3_ghost=%d "
+                    "old_notOldPtr=%d tagID=%u curTag=%u",
+                    n, oldField.GetFieldValue(), static_cast<int>(t1), static_cast<int>(t2),
+                    static_cast<int>(t3), static_cast<int>(oldInv),
+                    static_cast<unsigned>(oldField.GetTagID()),
+                    static_cast<unsigned>(currentTagID));
+            }
+        }
+        // Restored invariant: !IsOldPointer. Equiv. colour dual:
+        // !IsLoadBad || tagID == currentTagID (ghost is redundant under that dual).
+        CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
+                     oldField.GetFieldValue());
+    }
     if (IsCurrentPointer(oldField)) {
         if (IsGhostFromObject(oldObj)) {
             BaseObject* toVersion = TryForwardObject(oldObj);
