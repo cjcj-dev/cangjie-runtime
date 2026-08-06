@@ -775,49 +775,47 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
-    if (IsCurrentPointer(oldField)) {
-        if (IsGhostFromObject(oldObj)) {
-            BaseObject* toVersion = TryForwardObject(oldObj);
-            CHECK(toVersion != nullptr);
-            RefField<> newField(toVersion);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-                return toVersion;
+    if (IsGhostFromObject(oldObj)) {
+        BaseObject* toVersion = TryForwardObject(oldObj);
+        CHECK(toVersion != nullptr);
+        RefField<> newField(toVersion);
+        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
+        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
+            return toVersion;
+        }
+        // The CAS lost, so someone else wrote the slot. The old assertion said the winner
+        // cannot be a still-to-forward reference, which held only because "needs forwarding"
+        // and "carries the current tag" were the same thing. Once a good colour is non-zero
+        // (phase C) a mutator may legally store a reference to a from-object here, so that
+        // premise dies -- and an assertion whose premise is gone fires on legal states until
+        // someone stops reading it. Assert what still holds: the winning value must resolve
+        // to a live object. Count the case that becomes legal instead of asserting on it.
+        {
+            size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1) {
+                // Print on the first occurrence rather than at exit: this site lives in a run
+                // that usually dies on a signal, so an exit-time report never executes and a
+                // zero would mean "never wired up" as easily as "never happened".
+                VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
             }
-            // The CAS lost, so someone else wrote the slot. The old assertion said the winner
-            // cannot be a still-to-forward reference, which held only because "needs forwarding"
-            // and "carries the current tag" were the same thing. Once a good colour is non-zero
-            // (phase C) a mutator may legally store a reference to a from-object here, so that
-            // premise dies -- and an assertion whose premise is gone fires on legal states until
-            // someone stops reading it. Assert what still holds: the winning value must resolve
-            // to a live object. Count the case that becomes legal instead of asserting on it.
-            {
-                size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (n == 1) {
-                    // Print on the first occurrence rather than at exit: this site lives in a run
-                    // that usually dies on a signal, so an exit-time report never executes and a
-                    // zero would mean "never wired up" as easily as "never happened".
-                    VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
-                }
+        }
+        RefField<> raced(refField);
+        BaseObject* racedObj = raced.GetTargetObject();
+        CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
+                     "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
+        if (IsLoadBad(raced)) {
+            size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n == 1) {
+                VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
             }
-            RefField<> raced(refField);
-            BaseObject* racedObj = raced.GetTargetObject();
-            CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
-                         "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
-            if (IsLoadBad(raced)) {
-                size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (n == 1) {
-                    VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
-                }
-            }
-        } else {
-            RefField<> newField(oldObj);
-            // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-            if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
-                return oldObj;
-            }
+        }
+    } else {
+        RefField<> newField(oldObj);
+        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
+        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
+            return oldObj;
         }
     }
 
