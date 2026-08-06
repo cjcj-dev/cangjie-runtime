@@ -881,19 +881,18 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             if (is_mark_good(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
                 if (!Collector::MarkGoodHeapGate("DFSTraceExportObject", targetObj)) {
-                    // fall through to slow path (same as load-good arm)
-                } else {
-                    if (IsMarkedObject(targetObj)) {
-                        return;
-                    }
-                    if (targetObj->GetTypeInfo()->IsForeignType()) {
-                        workStack.push_back(targetObj);
-                        externObjs.push_back(targetObj);
-                    } else if (!MarkObject(targetObj)) {
-                        workStack.push_back(targetObj);
-                    }
                     return;
                 }
+                if (IsMarkedObject(targetObj)) {
+                    return;
+                }
+                if (targetObj->GetTypeInfo()->IsForeignType()) {
+                    workStack.push_back(targetObj);
+                    externObjs.push_back(targetObj);
+                } else if (!MarkObject(targetObj)) {
+                    workStack.push_back(targetObj);
+                }
+                return;
             }
 
             BaseObject* latest = nullptr;
