@@ -136,6 +136,8 @@ public:
     RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid, MAddress colour)
         : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid),
           remapColour((colour >> REMAP_COLOUR_SHIFT) & ((MAddress(1) << REMAP_COLOUR_BITS) - 1)),
+          markedYoung((colour >> MARKED_YOUNG_SHIFT) & ((MAddress(1) << MARKED_YOUNG_BITS) - 1)),
+          markedOld((colour >> MARKED_OLD_SHIFT) & ((MAddress(1) << MARKED_OLD_BITS) - 1)),
           padding(0)
     {
         CHECK(tagid < TAG_ID_COUNT);
@@ -143,7 +145,7 @@ public:
 
     RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid)
         : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid), remapColour(0),
-          padding(0)
+          markedYoung(0), markedOld(0), padding(0)
     {
         // Was a silent bitfield truncate when tagID was 1 bit; diagnose out-of-range writes.
         CHECK(tagid < TAG_ID_COUNT);
@@ -180,11 +182,15 @@ private:
             // Phase C: one-hot remap colour (TypeDef.h). address stays at bits 0..47, so the
             // compiler -- which only ANDs against a mask -- is unaffected by the encoding.
             MAddress remapColour : REMAP_COLOUR_BITS;
+            MAddress markedYoung : MARKED_YOUNG_BITS;
+            MAddress markedOld : MARKED_OLD_BITS;
             MAddress padding : TAG_ID_PADDING_BITS;
         };
         RefFieldValue fieldVal;
     };
-    static_assert(48 + 1 + TAG_ID_BITS + REMAP_COLOUR_BITS + TAG_ID_PADDING_BITS == 64,
+    static_assert(48 + 1 + TAG_ID_BITS + REMAP_COLOUR_BITS + MARKED_YOUNG_BITS + MARKED_OLD_BITS +
+                          TAG_ID_PADDING_BITS ==
+                      64,
                   "RefField tag layout must fill 64 bits");
     static_assert(TAG_ID_COUNT > 1 && TAG_ID_COUNT <= (1u << TAG_ID_BITS), "TAG_ID_COUNT out of bit width");
 #endif
