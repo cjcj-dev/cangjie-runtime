@@ -51,6 +51,8 @@
 #endif
 
 namespace MapleRuntime {
+static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
+
 // Phase A (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6): races in ForwardUpdateRawRef.
 // Total counts every lost CAS -- it is the positive control, proving the site is reached at all,
 // so a zero in StillBad means "did not happen" rather than "never wired up". StillBad counts the
