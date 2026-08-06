@@ -42,10 +42,11 @@ bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
         return true;
     }
     size_t n = g_markGoodHeapGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Always count; samples use RTLOG_ERROR so they survive default log level and abrupt exit.
     if (MarkGoodHeapGateAccountOn()) {
         size_t s = g_markGoodHeapGateSample.fetch_add(1, std::memory_order_relaxed);
         if (s < 8) {
-            VLOG(REPORT, "[GCV2][markgood-heap-gate] REJECT site=%s target=%p n=%zu", site, target, n);
+            LOG(RTLOG_ERROR, "[GCV2][markgood-heap-gate] REJECT site=%s target=%p n=%zu", site, target, n);
         }
     }
     return false;
@@ -56,8 +57,8 @@ void Collector::ReportMarkGoodHeapGateCounts()
     if (!MarkGoodHeapGateAccountOn()) {
         return;
     }
-    VLOG(REPORT, "[GCV2][markgood-heap-gate] reject=%zu env=MRT_GCV2_MARKGOOD_HEAP_GATE=1",
-         g_markGoodHeapGateReject.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[GCV2][markgood-heap-gate] reject=%zu env=MRT_GCV2_MARKGOOD_HEAP_GATE=1",
+        g_markGoodHeapGateReject.load(std::memory_order_relaxed));
 }
 
 // F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.
