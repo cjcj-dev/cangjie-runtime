@@ -102,12 +102,45 @@ public:
     // The colour currently handed out. Flipping a phase swaps it and updates the mask the
     // compiler tests, which is what replaces walking the heap to strip stale colours.
     Uptr currentRemapColour = REMAP_COLOUR_A;
+    Uptr currentMarkedYoung = MARKED_YOUNG_0;
+    Uptr currentMarkedOld = MARKED_OLD_0;
+    size_t youngMarkFlipCount = 0;
+    size_t oldMarkFlipCount = 0;
+
+    // Mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94): mark-good is
+    // load-good plus the current epoch from each independent mark family.
+    void set_good_masks()
+    {
+        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK & ~currentRemapColour);
+        ::g_cjMarkBadMask = ::g_cjLoadBadMask | (MARKED_YOUNG_MASK & ~currentMarkedYoung) |
+            (MARKED_OLD_MASK & ~currentMarkedOld);
+    }
 
     void FlipRemapColour()
     {
         currentRemapColour = (currentRemapColour == REMAP_COLOUR_A) ? REMAP_COLOUR_B : REMAP_COLOUR_A;
-        // Bad = tagged, or carrying any colour other than the one being handed out now.
-        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK & ~currentRemapColour);
+        set_good_masks();
+    }
+
+    // OpenJDK zAddress.cpp:132-146 flips each mark family only at that generation's mark start.
+    void flip_young_mark_start()
+    {
+        currentMarkedYoung ^= MARKED_YOUNG_MASK;
+        set_good_masks();
+        if (++youngMarkFlipCount == 1) {
+            LOG(RTLOG_INFO, "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx",
+                youngMarkFlipCount, ::g_cjMarkBadMask);
+        }
+    }
+
+    void flip_old_mark_start()
+    {
+        currentMarkedOld ^= MARKED_OLD_MASK;
+        set_good_masks();
+        if (++oldMarkFlipCount == 1) {
+            LOG(RTLOG_INFO, "[ZCOLOR2][mark-mask-flip] generation=old count=%zu g_cjMarkBadMask=%#lx",
+                oldMarkFlipCount, ::g_cjMarkBadMask);
+        }
     }
 
     // note this api is not atomic, caller should take care of this.
@@ -196,9 +229,10 @@ protected:
         // asking anything. Handing out the current colour instead means a later phase flip turns
         // this reference bad on its own, and the reader finds out by testing the value it holds.
         if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID, currentRemapColour);
+            return RefField<>(target, 1, currentTagID,
+                currentRemapColour | currentMarkedYoung | currentMarkedOld);
         }
-        return RefField<>(target, 0, 0, currentRemapColour);
+        return RefField<>(target, 0, 0, currentRemapColour | currentMarkedYoung | currentMarkedOld);
     }
 
     void CollectLargeGarbage()

@@ -920,6 +920,11 @@ void WCollector::TraceHeap()
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
+    // Full collection starts young and old marking in the same pause, as
+    // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:547-566).
+    flip_young_mark_start();
+    flip_old_mark_start();
+
     {
         MRT_PHASE_TIMER("enum roots & update old pointers within");
         TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
@@ -978,7 +983,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     // survive the next flip's test, and writing a bare pointer would put back the very trust state
     // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
     // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
-    RefField<> newField(latest, 0, 0, currentRemapColour);
+    RefField<> newField(latest, 0, 0, currentRemapColour | currentMarkedYoung | currentMarkedOld);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
@@ -3156,6 +3161,8 @@ void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
     ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    // This STW entry is the young-only mark start; old marking does not participate in a minor.
+    flip_young_mark_start();
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
