@@ -96,7 +96,7 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
 
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
-        CHECK(!theCollector.is_load_good(goodField)); // ZCOLOR9_INJECT
+        DCHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
             return loadGood;
