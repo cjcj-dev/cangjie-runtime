@@ -37,6 +37,7 @@ uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
+std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
 

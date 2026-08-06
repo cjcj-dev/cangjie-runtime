@@ -1279,10 +1279,44 @@ private:
     ALWAYS_INLINE void CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {
+        // Always-on TypeInfo range check: same predicate as CheckTypeInfoRegion rule 3
+        // (VerifyHeap.cpp:105-108) — tip ∈ heap address range is a defect.
+        // Default: count + one-shot dump (no abort). Fatal: MRT_GCV2_TIPINHEAP_FATAL=1.
+        TypeInfo* tip = obj->GetTypeInfo();
+        if (UNLIKELY(Heap::IsHeapAddress(tip))) {
+            ReportTypeInfoInHeap(obj, tip, objSize, regionStart, regionEnd);
+        }
         MAddress objAddr = reinterpret_cast<MAddress>(obj);
         // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
         if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
             ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd);
+        }
+    }
+
+    // Cold path for tip ∈ heap. Reuses Heap::IsHeapAddress (CheckTypeInfoRegion rule 3 body);
+    // does not reimplement the full VERIFY_HEAP channel (stats / misaligned / ContainsAddress).
+    ATTR_COLD ATTR_NO_INLINE void ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
+                                                       MAddress regionStart, MAddress regionEnd) const
+    {
+        size_t n = tipInHeapHits.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipguard][TYPEINFO_IN_HEAP] obj=%p tip=%p objSize=%zu region=%p regionStart=%#zx "
+                "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u "
+                "(default=count; fatal=MRT_GCV2_TIPINHEAP_FATAL=1)",
+                obj, tip, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(),
+                static_cast<unsigned>(GetRegionType()), static_cast<unsigned>(IsYoungRegion()),
+                static_cast<unsigned>(phase));
+        } else if ((n & 0x3ffU) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
+        }
+        const char* fatal = std::getenv("MRT_GCV2_TIPINHEAP_FATAL");
+        if (fatal != nullptr && fatal[0] == '1' && fatal[1] == '\0') {
+            LOG(RTLOG_FATAL,
+                "[GCV2][tipguard][TYPEINFO_IN_HEAP_FATAL] obj=%p tip=%p objSize=%zu hits=%zu",
+                obj, tip, objSize, n);
+            std::abort();
         }
     }
 
@@ -1302,6 +1336,8 @@ private:
             kMarkedBytesPerBit);
         std::abort();
     }
+
+    static std::atomic<size_t> tipInHeapHits;
 
     static std::atomic<size_t> youngRegionCount;
     static std::mutex youngRegionFlagMutex;
