@@ -97,20 +97,22 @@ void IdleBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
 void IdleBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                        MemoryOrder order) const
 {
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %p", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
              newRef);
     } else {
         DLOG(BARRIER, "atomic write static ref@%p: %p", &field, newRef);
     }
-    field.SetTargetObject(newRef, order);
+    field.SetFieldValue(coloured.GetFieldValue(), order);
 }
 
 BaseObject* IdleBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
-    // newRef must be the latest versions.
-    MAddress oldValue = field.Exchange(newRef, order);
+    // newRef must be the latest versions; colour it so the slot never holds plain.
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -121,13 +123,15 @@ BaseObject* IdleBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>
 bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
+    // R8：expected 已是 observed-raw；新值上规范色（模板 EnumBarrier.cpp:262-269）。
+    // ⛔ R1 base CAS 假失配由 casfix 独占，本处不碰 Barrier.cpp:217-229。
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
     // oldRef and newRef must be the latest versions.
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
             return true;
         }
@@ -141,7 +145,9 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
-    field.SetTargetObject(ref);
+    // R3 人口最大：Idle 墙钟写一律规范色。
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    field.SetFieldValue(newField.GetFieldValue());
 }
 
 void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const

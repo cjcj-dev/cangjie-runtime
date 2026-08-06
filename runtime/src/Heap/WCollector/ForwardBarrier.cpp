@@ -129,7 +129,7 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
 void ForwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                           MemoryOrder order) const
 {
-    RefField<> newField(newRef);
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(FBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
@@ -142,7 +142,8 @@ void ForwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& f
 BaseObject* ForwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                 MemoryOrder order) const
 {
-    MAddress oldValue = field.Exchange(newRef, order);
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -153,11 +154,11 @@ BaseObject* ForwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<tr
 bool ForwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                              BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     while (oldVersion == oldRef) {
-        RefField<> newField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }

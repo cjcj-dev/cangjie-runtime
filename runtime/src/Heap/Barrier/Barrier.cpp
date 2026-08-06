@@ -76,7 +76,9 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
-    field.SetTargetObject(ref);
+    // COLOUR_WRITEBACK_AUDIT R3/批 A：规范色写回，禁 plain 灌堆。
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    field.SetFieldValue(newField.GetFieldValue());
 }
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -99,7 +101,8 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
-    field.SetTargetObject(ref);
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
+    field.SetFieldValue(newField.GetFieldValue());
     // Static/global slots are visited and fixed as roots in every minor collection.
     // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
@@ -160,6 +163,7 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
              &field, field.GetFieldValue(), ref);
@@ -167,7 +171,7 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
         DLOG(BARRIER, "atomic write static ref@%p: %#zx -> %p", &field, field.GetFieldValue(), ref);
     }
 
-    field.SetTargetObject(ref, order);
+    field.SetFieldValue(newField.GetFieldValue(), order);
 }
 
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -181,7 +185,8 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
 BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
-    MAddress oldValue = field.Exchange(newRef, order);
+    RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
+    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
@@ -194,7 +199,9 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
     RefField<false> tmpField(field.GetFieldValue(order));
     if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* toVersion = ReadReference(nullptr, tmpField);
-        field.SetTargetObject(toVersion);
+        // R10：治愈写也必须带规范色，禁 plain SetTargetObject。
+        RefField<> healed = theCollector.GetAndTryTagRefField(toVersion);
+        field.SetFieldValue(healed.GetFieldValue());
         DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toVersion);
         return toVersion;
     }

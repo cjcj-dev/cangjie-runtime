@@ -13,6 +13,7 @@
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
+#include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }

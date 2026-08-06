@@ -26,6 +26,10 @@ namespace MapleRuntime {
 #endif
 class BaseObject;
 
+// COLOUR_WRITEBACK_AUDIT §六 判据 1：堆内非 null 写必须带色。定义在 RefField.inline.h /
+// BaseObject.cpp；默认关（MRT_GCV2_ASSERT_COLOURED_WRITES=1 打开）。
+void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
+
 /* there are several similar terms about object address:
     1. address: the start position of any virtual memory block.
     2. object-ref: an address pointing to some object, RawRoot and RawRef are object-ref.
@@ -68,6 +72,7 @@ public:
                          std::memory_order failOrder = std::memory_order_relaxed)
     {
         CHECK(std::numeric_limits<MAddress>::max() > newValue);
+        AssertColouredWriteIfEnabled(this, newValue);
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedValue, newValue, succOrder, failOrder);
@@ -88,6 +93,7 @@ public:
     MAddress Exchange(MAddress newRef, std::memory_order order = std::memory_order_relaxed)
     {
         CHECK(fieldVal < std::numeric_limits<RefFieldValue>::max());
+        AssertColouredWriteIfEnabled(this, newRef);
         MAddress ret = 0;
 #if defined(CANGJIE_TSAN_SUPPORT)
         ret = Sanitizer::TsanAtomicExchange(&fieldVal, newRef, order);
