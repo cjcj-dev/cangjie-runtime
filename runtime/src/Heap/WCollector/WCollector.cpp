@@ -936,7 +936,9 @@ void WCollector::TraceHeap()
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 {
     RefField<> oldField(field);
-    if (!IsOldPointer(oldField)) {
+    // C-class extinction gate: colour-side "expired" = IsLoadBad (predclass C /
+    // ZGC_COLOUR_MIGRATION §三⑥). Not retired until load/root/atomic/bulk all self-heal.
+    if (!IsLoadBad(oldField)) {
         return;
     }
     BaseObject* fromObj = oldField.GetTargetObject();
@@ -1067,7 +1069,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         return [this, trackFixed, acc](ObjectRef& root) {
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = trackFixed && IsLoadBad(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
                 if (oldTagged) {
@@ -1083,7 +1085,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
         return [this, trackFixed, acc](RefField<>& field) {
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = trackFixed && IsLoadBad(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
                 if (oldTagged) {
@@ -1140,9 +1142,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
-                              &acc](RefField<>& field) {
+                               &acc](RefField<>& field) {
             uintptr_t oldValue = field.GetFieldValue();
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            bool oldTagged = trackFixed && IsLoadBad(field);
             if (trackFixed) {
                 ++acc.fields;
                 if (forwardHolder) {
