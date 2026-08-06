@@ -202,6 +202,12 @@ public:
 
     BaseObject* FindToVersion(BaseObject* obj) const override
     {
+        // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
+        // check, so null / non-heap (incl. colour-only null after flip) aborts as
+        // "GetUnitIdxAt OOB addr=0". FixOldTaggedRefField then nulls the slot.
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return nullptr;
+        }
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (fromRegionInfo == nullptr) {
             return nullptr;
