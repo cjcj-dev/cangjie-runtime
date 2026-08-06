@@ -3429,7 +3429,31 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER("young.post_evac_finish");
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        // b4evacfix: still under ScopedStopTheWorld — mutators not resumed.
+        // Subdivide post-evacuate → next stw-enter: after IDLE phase handshake.
+        {
+            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+                VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-idle-transition run=%zu",
+                     minorTotalRuns + 1);
+                VerifyHeapObjects("post-idle-transition", true);
+                VLOG(REPORT, "[GCV2][verify][post-evac] point=post-idle-transition run=%zu",
+                     minorTotalRuns + 1);
+            }
+        }
         MergeResurrectExportObjects();
+        // After set-merge only (no ref-slot writes). Last STW-side sample before
+        // ~ScopedStopTheWorld → StartTheWorld resumes mutators.
+        {
+            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+                VLOG(REPORT, "[GCV2][verify][post-evac] enter point=pre-stw-exit run=%zu",
+                     minorTotalRuns + 1);
+                VerifyHeapObjects("pre-stw-exit", true);
+                VLOG(REPORT, "[GCV2][verify][post-evac] point=pre-stw-exit run=%zu",
+                     minorTotalRuns + 1);
+            }
+        }
     }
     ++minorTotalRuns;
     uint64_t pauseUs = (TimeUtil::NanoSeconds() - start) / NS_PER_US;
