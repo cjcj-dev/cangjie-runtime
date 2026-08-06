@@ -137,6 +137,11 @@ public:
         return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0;
     }
 
+    // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.
+    // Gate before IsValidObject/IsMarkedObject. Count rejects under MRT_GCV2_MARKGOOD_HEAP_GATE=1.
+    static bool MarkGoodHeapGate(const char* site, BaseObject* target);
+    static void ReportMarkGoodHeapGateCounts();
+
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
     virtual void AddRawPointerObject(BaseObject*) { std::abort(); }

@@ -599,9 +599,14 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (is_mark_good(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = oldField.GetTargetObject();
-        CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
-        rootSet.push_back(target);
-        return;
+        // Plain/uncoloured non-null is mark-good under g_cjMarkBadMask; mirror the slow path.
+        if (!Collector::MarkGoodHeapGate("EnumRefFieldRoot", target)) {
+            // fall through to make_load_good
+        } else {
+            CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
+            rootSet.push_back(target);
+            return;
+        }
     }
 
     BaseObject* latest = make_load_good(oldField);
@@ -639,9 +644,13 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
-        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-        rootSet.push_back(root);
-        return;
+        if (!Collector::MarkGoodHeapGate("EnumAndTagRawRoot", root)) {
+            // fall through to make_load_good
+        } else {
+            CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+            rootSet.push_back(root);
+            return;
+        }
     }
     BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
@@ -672,14 +681,19 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> oldField(field);
     if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
-        CHECK_DETAIL(targetObj->IsValidObject(),
-                     "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
-                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-        if (!IsMarkedObject(targetObj)) {
-            workStack.push_back(targetObj);
+        // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
+        if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
+            // fall through to make_load_good
+        } else {
+            // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+            CHECK_DETAIL(targetObj->IsValidObject(),
+                         "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
+                         obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+            if (!IsMarkedObject(targetObj)) {
+                workStack.push_back(targetObj);
+            }
+            return;
         }
-        return;
     }
 
     BaseObject* latest = make_load_good(oldField);
@@ -746,10 +760,15 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     BaseObject* latest = nullptr;
     if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
-        // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
-        CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
-                     targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-        return targetObj;
+        if (!Collector::MarkGoodHeapGate("GetAndTryTagObj", targetObj)) {
+            // fall through to make_load_good
+        } else {
+            // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
+            CHECK_DETAIL(targetObj->IsValidObject(),
+                         "Invalid object %p is referenced by %s object %p: %s and offset %zd", targetObj, sourceKind,
+                         obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+            return targetObj;
+        }
     }
     latest = make_load_good(oldField);
     // target object could be null or non-heap for some static variable.
@@ -3499,6 +3518,7 @@ void WCollector::DoGarbageCollection()
 {
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
+        Collector::ReportMarkGoodHeapGateCounts();
         return;
     }
     TraceHeap();
@@ -3546,6 +3566,7 @@ void WCollector::DoGarbageCollection()
     // FYS=0 SKIP_PINNED=1 512MB. Retained-liveness still applies on residual and
     // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
+    Collector::ReportMarkGoodHeapGateCounts();
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
