@@ -41,6 +41,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/SlotWriterProbe.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -364,6 +365,9 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         }
         RefField<> tmpField(toObj);
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), toObj, "TryUpdateRef");
+            }
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, oldRef.GetFieldValue(),
@@ -552,6 +556,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), target, "UntagRef");
+            }
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
                      &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
@@ -602,6 +609,9 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
              latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), latest, "EnumTag");
+        }
         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(),
              newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     } else {
@@ -636,6 +646,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
             DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
         } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), root, "EnumTag");
+            }
             DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(),
                  newField.GetFieldValue(), root, root->GetTypeInfo(), root->GetSize());
         } else {
@@ -653,6 +666,11 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (IsCurrentPointer(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+        if (SlotWriterProbe::Enabled() && targetObj != nullptr && !targetObj->IsValidObject()) {
+            SlotWriterProbe::OnInvalidEnqueue(targetObj, obj, reinterpret_cast<MAddress>(&field),
+                                              oldField.GetFieldValue(), "trace_current");
+            SlotWriterProbe::FlushSummary("trace_current_invalid");
+        }
         CHECK_DETAIL(targetObj->IsValidObject(),
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
@@ -674,12 +692,20 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (!Heap::IsHeapAddress(latest)) {
         return;
     }
+    if (SlotWriterProbe::Enabled() && !latest->IsValidObject()) {
+        SlotWriterProbe::OnInvalidEnqueue(latest, obj, reinterpret_cast<MAddress>(&field), oldField.GetFieldValue(),
+                                          "trace_latest");
+        SlotWriterProbe::FlushSummary("trace_latest_invalid");
+    }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), latest, "TraceTag");
+        }
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
              newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -753,6 +779,9 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), latest, "TraceTag");
+        }
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -773,6 +802,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             RefField<> newField(toVersion);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), toVersion,
+                                                  "ForwardRoot");
+                }
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
                 return toVersion;
             }
@@ -781,6 +814,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             RefField<> newField(oldObj);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), oldObj,
+                                                  "ForwardRoot");
+                }
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
                 return oldObj;
             }
@@ -918,7 +955,11 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                  holder, &field, fromObj, latest);
         }
         RefField<> nullField(nullptr);
-        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+        if (field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(holder, reinterpret_cast<MAddress>(&field), nullptr, "FixOldTag");
+            }
+        }
         return;
     }
     // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
@@ -928,6 +969,9 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         return;
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(holder, reinterpret_cast<MAddress>(&field), latest, "FixOldTag");
+        }
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
              oldField.GetFieldValue(), newField.GetFieldValue(), latest);
     }
@@ -1612,6 +1656,11 @@ bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* pla
     }
     if (field.CompareExchange(expected, desiredVal)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        // casprobe: GC plain install path (was unhooked → slotHits=0 blind spot).
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), plainTarget,
+                                          "CasInstallPlain");
+        }
         return true;
     }
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
@@ -1740,6 +1789,13 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
     VisitMinorValueRoots(visitor);
 }
 
+// slotwriter: TLS edge context for PushYoungObject so invalid enqueue can
+// attribute (holder, slot) without threading them through every call site.
+namespace {
+thread_local BaseObject* gSlotWriterHolder = nullptr;
+thread_local RefField<>* gSlotWriterSlot = nullptr;
+} // namespace
+
 void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin) const
 {
     if (!Heap::IsHeapAddress(object)) {
@@ -1760,6 +1816,16 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             } else if (src == nullptr) {
                 src = "unknown";
             }
+        }
+        if (SlotWriterProbe::Enabled()) {
+            MAddress slotAddr = reinterpret_cast<MAddress>(gSlotWriterSlot);
+            MAddress raw = 0;
+            if (gSlotWriterSlot != nullptr) {
+                RefField<> snap(*gSlotWriterSlot);
+                raw = snap.GetFieldValue();
+            }
+            SlotWriterProbe::OnInvalidEnqueue(object, gSlotWriterHolder, slotAddr, raw, src);
+            SlotWriterProbe::FlushSummary("push_invalid");
         }
         if (n < 8) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
@@ -1837,15 +1903,25 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
     // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
     const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
-    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
+    BaseObject* currentHolder = nullptr;
+    auto pushTarget = [this, fullYoungScan, &workStack, &currentHolder](RefField<>& field) {
         BaseObject* target = ResolveMinorReference(field);
+        gSlotWriterHolder = currentHolder;
+        gSlotWriterSlot = &field;
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(target)) {
+                if (SlotWriterProbe::Enabled() && target != nullptr && !target->IsValidObject()) {
+                    SlotWriterProbe::OnInvalidEnqueue(target, currentHolder, reinterpret_cast<MAddress>(&field),
+                                                      field.GetFieldValue(), "closure_edge");
+                    SlotWriterProbe::FlushSummary("fys_enqueue_invalid");
+                }
                 workStack.push_back(target);
             }
         } else {
             PushYoungObject(target, workStack, "closure_edge");
         }
+        gSlotWriterHolder = nullptr;
+        gSlotWriterSlot = nullptr;
     };
     while (!workStack.empty()) {
         BaseObject* object = workStack.back();
@@ -1853,7 +1929,14 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
-        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+        if (!object->IsValidObject()) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::OnInvalidEnqueue(object, nullptr, 0, 0, "closure_dequeue");
+                SlotWriterProbe::FlushSummary("dequeue_invalid");
+            }
+            CHECK_DETAIL(false, "minor closure reached invalid object %p", object);
+        }
+        currentHolder = object;
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
 
@@ -1984,6 +2067,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         });
     }
     for (MAddress slot : rememberedSlots) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRemsetConsume(slot, "rescan");
+        }
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedNotHeap;
@@ -2210,6 +2296,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     if (field.CompareExchange(oldVal, newVal)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), current, "FixMinorSlot");
+        }
         return true;
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).
@@ -2246,7 +2335,13 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
-    object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+    const bool swOn = SlotWriterProbe::Enabled();
+    object->ForEachRefField([this, swOn](RefField<>& field) {
+        if (swOn) {
+            SlotWriterProbe::NoteRemsetConsume(reinterpret_cast<MAddress>(&field), "reffix_obj");
+        }
+        (void)FixMinorEvacuatedSlot(field);
+    });
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -2328,6 +2423,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRemsetConsume(slot, "reffix_remset");
+                }
                 (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
             }
         }
@@ -2342,6 +2440,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRemsetConsume(slot, "reffix_remset");
+                }
                 (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
             }
         }
@@ -3167,6 +3268,11 @@ void WCollector::DoYoungGarbageCollection()
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
         }
         Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
+        if (SlotWriterProbe::Enabled()) {
+            for (MAddress slot : rememberedSlots) {
+                SlotWriterProbe::NoteRemsetConsume(slot, "drain");
+            }
+        }
     }
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
@@ -3229,6 +3335,9 @@ void WCollector::DoYoungGarbageCollection()
             (!fullYoungScan ||
              LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
             liveRememberedSlots.insert(slot);
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRemsetConsume(slot, "live");
+            }
         }
     }
     // Remset consume-vs-recorded (G1SummarizeRSetStats analog) + optional dual-closure

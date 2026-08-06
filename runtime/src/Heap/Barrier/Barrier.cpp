@@ -10,6 +10,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/Verify/SlotWriterProbe.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -70,6 +71,8 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     WriteReferenceImpl(obj, field, ref);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "WriteReference");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
@@ -82,6 +85,8 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
+    // Do not walk GCTib (mid-construct SEGV@tip). Word-scan heap-looking pointers only.
+    SlotWriterProbe::NoteStructWords(obj, dst, dstLen);
     RecordCrossGenEdgesInStruct(obj, dst, dstLen);
 }
 
@@ -100,6 +105,8 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     field.SetTargetObject(ref);
+    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "WriteStatic");
     // Static/global slots are visited and fixed as roots in every minor collection.
     // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
@@ -155,6 +162,8 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     AtomicWriteReferenceImpl(obj, field, ref, order);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "AtomicWrite");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
 }
 
@@ -174,6 +183,8 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
                                          MemoryOrder order) const
 {
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
+    SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(),
+                                  "AtomicSwap");
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     return oldRef;
 }
@@ -209,6 +220,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 {
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
+        SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject(), "CAS");
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
     }
     return success;
@@ -363,22 +375,33 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
 {
     using namespace RemsetPhaseProbe;
     const bool probeOn = Enabled();
+    const bool swOn = SlotWriterProbe::Enabled();
     const bool forceRecord = ForceRecordEnabled();
     GCPhase phase = GCPhase::GC_PHASE_UNDEF;
     if (probeOn) {
         phase = Heap::GetHeap().GetGCPhase();
     }
 
+    auto noteSw = [swOn, obj, fieldAddress, ref](SkipReason reason, bool recorded, bool holderYoung,
+                                                 bool valueYoung) {
+        if (swOn) {
+            SlotWriterProbe::NoteRemsetDecision(fieldAddress, obj, ref, static_cast<uint8_t>(reason), recorded,
+                                                holderYoung, valueYoung);
+        }
+    };
+
     if (!HasYoungRegionsForRecording() && !forceRecord) {
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_NO_YOUNG, false);
         }
+        noteSw(REASON_NO_YOUNG, false, false, false);
         return;
     }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NULL_OR_NONHEAP, false);
         }
+        noteSw(REASON_REF_NULL_OR_NONHEAP, false, false, false);
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
@@ -386,6 +409,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NOT_YOUNG, false);
         }
+        noteSw(REASON_REF_NOT_YOUNG, false, false, false);
         return;
     }
     // Heap holder: only record old→young (source not young).
@@ -394,6 +418,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (probeOn) {
                 NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
             }
+            noteSw(REASON_HOLDER_NULL_OR_NONHEAP, false, false, true);
             return;
         }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
@@ -401,12 +426,14 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (probeOn) {
                 NoteWrite(fieldAddress, phase, REASON_HOLDER_YOUNG, false);
             }
+            noteSw(REASON_HOLDER_YOUNG, false, true, true);
             return;
         }
         theRememberedSet.Record(fieldAddress);
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
         }
+        noteSw(REASON_RECORDED, true, false, true);
         return;
     }
     // Non-heap field (static/global/value temporary): it cannot consume a
@@ -421,6 +448,8 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     if (probeOn) {
         NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
     }
+    // External remset path: still "recorded" into external buffer; reason name is historical.
+    noteSw(REASON_HOLDER_NULL_OR_NONHEAP, true, false, true);
 }
 
 void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
