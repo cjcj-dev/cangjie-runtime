@@ -40,36 +40,23 @@ public:
 
     BaseObject* GetTargetObject(std::memory_order order = std::memory_order_relaxed) const
     {
-        if (isAtomic) {
+        // Always atomic: mutator plain path races with concurrent GC mark/CAS (R1/R3).
+        // relaxed keeps cost near a plain load on x86_64/aarch64 while establishing HB.
 #if defined(CANGJIE_TSAN_SUPPORT)
-            MAddress value = static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order));
+        MAddress value = static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order));
 #else
-            MAddress value = __atomic_load_n(&fieldVal, order);
+        MAddress value = __atomic_load_n(&fieldVal, order);
 #endif
-            return reinterpret_cast<BaseObject*>(RefField<>(value).GetAddress());
-        } else {
-#if defined(CANGJIE_TSAN_SUPPORT)
-            Sanitizer::TsanReadMemory(&fieldVal, GetSize());
-#endif
-            return reinterpret_cast<BaseObject*>(this->GetAddress());
-        }
+        return reinterpret_cast<BaseObject*>(RefField<>(value).GetAddress());
     }
 
     MAddress GetFieldValue(std::memory_order order = std::memory_order_relaxed) const
     {
-        if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
-            MAddress value = static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order));
+        return static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order));
 #else
-            MAddress value = __atomic_load_n(&fieldVal, order);
+        return __atomic_load_n(&fieldVal, order);
 #endif
-            return value;
-        } else {
-#if defined(CANGJIE_TSAN_SUPPORT)
-            Sanitizer::TsanReadMemory(&fieldVal, GetSize());
-#endif
-            return fieldVal;
-        }
     }
 
     void SetTargetObject(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed);
