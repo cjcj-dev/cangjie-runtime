@@ -399,6 +399,7 @@ bool MRT_NewForeignCJThread()
     if (ThreadLocal::IsCJProcessor() || ThreadLocal::GetMutator() != nullptr) {
         return false;
     }
+    MutatorManager::Instance().RecordEpochHandshakeCreateAttempt();
     TRACE_START("CJRT_INVOKE_CJTASK");
     ScheduleHandle scheduler = nullptr;
     if (ThreadLocal::GetForeignCJThread() == nullptr) {
