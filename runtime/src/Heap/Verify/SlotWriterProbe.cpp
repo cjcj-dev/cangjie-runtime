@@ -83,53 +83,121 @@ std::mutex gMu;
 std::unordered_map<MAddress, std::vector<WriteRec>> gBySlot;
 std::unordered_map<BaseObject*, std::vector<WriteRec>> gByValue;
 
+// Path tags 1..16 — keep stable; SUMMARY dumps hit counts for positive control.
+enum PathTagId : uint32_t {
+    PT_WriteReference = 1,
+    PT_AtomicWrite = 2,
+    PT_AtomicSwap = 3,
+    PT_CAS = 4,
+    PT_WriteStruct = 5,
+    PT_gc_cas = 6, // legacy alias
+    PT_WriteStatic = 7,
+    PT_CasInstallPlain = 8,
+    PT_FixMinorSlot = 9,
+    PT_TryUpdateRef = 10,
+    PT_TraceTag = 11,
+    PT_FixOldTag = 12,
+    PT_ForwardRoot = 13,
+    PT_EnumTag = 14,
+    PT_UntagRef = 15,
+    PT_WriteStructWord = 16,
+    PT_other = 99,
+};
+
+constexpr size_t kPathHitSlots = 17; // index by tag 1..16
+std::atomic<size_t> gPathHits[kPathHitSlots];
+
 uint32_t PathTag(const char* path)
 {
     if (path == nullptr) {
         return 0;
     }
-    // Stable small tags for log compactness.
     if (std::strcmp(path, "WriteReference") == 0) {
-        return 1;
+        return PT_WriteReference;
     }
     if (std::strcmp(path, "AtomicWrite") == 0) {
-        return 2;
+        return PT_AtomicWrite;
     }
     if (std::strcmp(path, "AtomicSwap") == 0) {
-        return 3;
+        return PT_AtomicSwap;
     }
     if (std::strcmp(path, "CAS") == 0) {
-        return 4;
+        return PT_CAS;
     }
     if (std::strcmp(path, "WriteStruct") == 0) {
-        return 5;
+        return PT_WriteStruct;
     }
     if (std::strcmp(path, "gc_cas") == 0) {
-        return 6;
+        return PT_gc_cas;
     }
     if (std::strcmp(path, "WriteStatic") == 0) {
-        return 7;
+        return PT_WriteStatic;
     }
-    return 99;
+    if (std::strcmp(path, "CasInstallPlain") == 0) {
+        return PT_CasInstallPlain;
+    }
+    if (std::strcmp(path, "FixMinorSlot") == 0) {
+        return PT_FixMinorSlot;
+    }
+    if (std::strcmp(path, "TryUpdateRef") == 0) {
+        return PT_TryUpdateRef;
+    }
+    if (std::strcmp(path, "TraceTag") == 0) {
+        return PT_TraceTag;
+    }
+    if (std::strcmp(path, "FixOldTag") == 0) {
+        return PT_FixOldTag;
+    }
+    if (std::strcmp(path, "ForwardRoot") == 0) {
+        return PT_ForwardRoot;
+    }
+    if (std::strcmp(path, "EnumTag") == 0) {
+        return PT_EnumTag;
+    }
+    if (std::strcmp(path, "UntagRef") == 0) {
+        return PT_UntagRef;
+    }
+    if (std::strcmp(path, "WriteStructWord") == 0) {
+        return PT_WriteStructWord;
+    }
+    return PT_other;
 }
 
 const char* PathName(uint32_t tag)
 {
     switch (tag) {
-        case 1:
+        case PT_WriteReference:
             return "WriteReference";
-        case 2:
+        case PT_AtomicWrite:
             return "AtomicWrite";
-        case 3:
+        case PT_AtomicSwap:
             return "AtomicSwap";
-        case 4:
+        case PT_CAS:
             return "CAS";
-        case 5:
+        case PT_WriteStruct:
             return "WriteStruct";
-        case 6:
+        case PT_gc_cas:
             return "gc_cas";
-        case 7:
+        case PT_WriteStatic:
             return "WriteStatic";
+        case PT_CasInstallPlain:
+            return "CasInstallPlain";
+        case PT_FixMinorSlot:
+            return "FixMinorSlot";
+        case PT_TryUpdateRef:
+            return "TryUpdateRef";
+        case PT_TraceTag:
+            return "TraceTag";
+        case PT_FixOldTag:
+            return "FixOldTag";
+        case PT_ForwardRoot:
+            return "ForwardRoot";
+        case PT_EnumTag:
+            return "EnumTag";
+        case PT_UntagRef:
+            return "UntagRef";
+        case PT_WriteStructWord:
+            return "WriteStructWord";
         default:
             return "other";
     }
@@ -191,6 +259,12 @@ void SlotWriterProbe::NoteRefWrite(BaseObject* holder, MAddress slot, BaseObject
     }
 
     gWriteTotal.fetch_add(1, std::memory_order_relaxed);
+    {
+        uint32_t tag = PathTag(path);
+        if (tag > 0 && tag < kPathHitSlots) {
+            gPathHits[tag].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
     if (value == nullptr) {
         gWriteNull.fetch_add(1, std::memory_order_relaxed);
     }
@@ -358,6 +432,32 @@ void SlotWriterProbe::OnInvalidEnqueue(BaseObject* object, BaseObject* holder, M
     }
 }
 
+void SlotWriterProbe::NoteStructWords(BaseObject* holder, MAddress dst, size_t dstLen)
+{
+    if (!Enabled()) {
+        return;
+    }
+    if (dst == 0 || dstLen < sizeof(MAddress)) {
+        return;
+    }
+    // Align up to pointer boundary; scan full words only.
+    MAddress start = (dst + (sizeof(MAddress) - 1)) & ~(static_cast<MAddress>(sizeof(MAddress) - 1));
+    MAddress end = dst + dstLen;
+    for (MAddress p = start; p + sizeof(MAddress) <= end; p += sizeof(MAddress)) {
+        MAddress word = 0;
+        std::memcpy(&word, reinterpret_cast<void*>(p), sizeof(word));
+        if (word == 0) {
+            continue;
+        }
+        BaseObject* val = reinterpret_cast<BaseObject*>(word);
+        // Only record heap-looking words (drops immediates / code ptrs noise).
+        if (!Heap::IsHeapAddress(val)) {
+            continue;
+        }
+        NoteRefWrite(holder, p, val, "WriteStructWord");
+    }
+}
+
 void SlotWriterProbe::FlushSummary(const char* site)
 {
     if (!Enabled()) {
@@ -369,6 +469,26 @@ void SlotWriterProbe::FlushSummary(const char* site)
            gWriteValid.load(std::memory_order_relaxed), gWriteInvalid.load(std::memory_order_relaxed),
            gWriteNull.load(std::memory_order_relaxed), gInvalidEnqueueHits.load(std::memory_order_relaxed),
            gInvalidEnqueueMiss.load(std::memory_order_relaxed));
+    // Positive-control path hits (T0 self-proof): new hooks must be non-zero in a live run.
+    SW_LOG("PATH_HITS WriteReference=%zu AtomicWrite=%zu AtomicSwap=%zu CAS=%zu "
+           "WriteStruct=%zu WriteStatic=%zu CasInstallPlain=%zu FixMinorSlot=%zu "
+           "TryUpdateRef=%zu TraceTag=%zu FixOldTag=%zu ForwardRoot=%zu EnumTag=%zu "
+           "UntagRef=%zu WriteStructWord=%zu",
+           gPathHits[PT_WriteReference].load(std::memory_order_relaxed),
+           gPathHits[PT_AtomicWrite].load(std::memory_order_relaxed),
+           gPathHits[PT_AtomicSwap].load(std::memory_order_relaxed),
+           gPathHits[PT_CAS].load(std::memory_order_relaxed),
+           gPathHits[PT_WriteStruct].load(std::memory_order_relaxed),
+           gPathHits[PT_WriteStatic].load(std::memory_order_relaxed),
+           gPathHits[PT_CasInstallPlain].load(std::memory_order_relaxed),
+           gPathHits[PT_FixMinorSlot].load(std::memory_order_relaxed),
+           gPathHits[PT_TryUpdateRef].load(std::memory_order_relaxed),
+           gPathHits[PT_TraceTag].load(std::memory_order_relaxed),
+           gPathHits[PT_FixOldTag].load(std::memory_order_relaxed),
+           gPathHits[PT_ForwardRoot].load(std::memory_order_relaxed),
+           gPathHits[PT_EnumTag].load(std::memory_order_relaxed),
+           gPathHits[PT_UntagRef].load(std::memory_order_relaxed),
+           gPathHits[PT_WriteStructWord].load(std::memory_order_relaxed));
 }
 
 } // namespace MapleRuntime

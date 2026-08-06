@@ -365,6 +365,9 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         }
         RefField<> tmpField(toObj);
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), toObj, "TryUpdateRef");
+            }
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, oldRef.GetFieldValue(),
@@ -553,6 +556,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      &field);
         RefField<> newRef(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), target, "UntagRef");
+            }
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
                      &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
@@ -603,6 +609,9 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
              latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), latest, "EnumTag");
+        }
         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(),
              newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     } else {
@@ -637,6 +646,9 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
             DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
         } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), root, "EnumTag");
+            }
             DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(),
                  newField.GetFieldValue(), root, root->GetTypeInfo(), root->GetSize());
         } else {
@@ -691,6 +703,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), latest, "TraceTag");
+        }
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
              newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -764,6 +779,9 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(obj, reinterpret_cast<MAddress>(&field), latest, "TraceTag");
+        }
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -784,6 +802,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             RefField<> newField(toVersion);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), toVersion,
+                                                  "ForwardRoot");
+                }
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
                 return toVersion;
             }
@@ -792,6 +814,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             RefField<> newField(oldObj);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
             if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&refField), oldObj,
+                                                  "ForwardRoot");
+                }
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
                 return oldObj;
             }
@@ -929,7 +955,11 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                  holder, &field, fromObj, latest);
         }
         RefField<> nullField(nullptr);
-        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+        if (field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue())) {
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRefWrite(holder, reinterpret_cast<MAddress>(&field), nullptr, "FixOldTag");
+            }
+        }
         return;
     }
     // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
@@ -939,6 +969,9 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         return;
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(holder, reinterpret_cast<MAddress>(&field), latest, "FixOldTag");
+        }
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
              oldField.GetFieldValue(), newField.GetFieldValue(), latest);
     }
@@ -1623,6 +1656,11 @@ bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* pla
     }
     if (field.CompareExchange(expected, desiredVal)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        // casprobe: GC plain install path (was unhooked → slotHits=0 blind spot).
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), plainTarget,
+                                          "CasInstallPlain");
+        }
         return true;
     }
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
@@ -2255,6 +2293,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     if (field.CompareExchange(oldVal, newVal)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRefWrite(nullptr, reinterpret_cast<MAddress>(&field), current, "FixMinorSlot");
+        }
         return true;
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).

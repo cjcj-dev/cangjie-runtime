@@ -85,10 +85,8 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
-    // Note: do not walk GCTib here under SLOTWRITER — WriteStruct can run while
-    // the destination object header is still mid-construction (SEGV@tip).
-    // Slot history for bulk stores is still covered when the same words are later
-    // written via WriteReference/Atomic*, or shows as NO_BARRIER_WRITE_FOR_SLOT.
+    // Do not walk GCTib (mid-construct SEGV@tip). Word-scan heap-looking pointers only.
+    SlotWriterProbe::NoteStructWords(obj, dst, dstLen);
     RecordCrossGenEdgesInStruct(obj, dst, dstLen);
 }
 

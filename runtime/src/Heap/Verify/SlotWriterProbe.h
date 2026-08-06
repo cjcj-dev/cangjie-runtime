@@ -25,9 +25,16 @@ class SlotWriterProbe {
 public:
     static bool Enabled();
 
-    // Called from Barrier write entry points after the store is visible.
-    // path: "WriteReference" | "AtomicWrite" | "AtomicSwap" | "CAS" | "WriteStruct" | "gc_cas"
+    // Called from Barrier / GC install paths after the store is visible.
+    // path tags (see SlotWriterProbe.cpp PathTag):
+    //   WriteReference | AtomicWrite | AtomicSwap | CAS | WriteStruct | WriteStructWord
+    //   WriteStatic | CasInstallPlain | FixMinorSlot | TryUpdateRef | TraceTag
+    //   FixOldTag | ForwardRoot | EnumTag | UntagRef
     static void NoteRefWrite(BaseObject* holder, MAddress slot, BaseObject* value, const char* path);
+
+    // After WriteStruct memcpy: scan 8-byte words in [dst,dst+len) for heap-looking values.
+    // Avoids GCTib mid-construct SEGV (slotwriter 1262c912).
+    static void NoteStructWords(BaseObject* holder, MAddress dst, size_t dstLen);
 
     // Called when minor enqueue sees an invalid object from a known slot.
     static void OnInvalidEnqueue(BaseObject* object, BaseObject* holder, MAddress slot, MAddress raw,
