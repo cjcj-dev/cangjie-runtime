@@ -837,12 +837,19 @@ extern "C" ThreadSnapshot MCC_GetCurrentThreadSnapshotImpl(const TypeInfo* array
     return snapshot;
 }
 
+// Strip ZGC colour / tag bits (bits 48+) so IsHeapAddress / Pin / C payload see a plain VA.
+// RefField address field is bits 0..47 (RefField.h); same mask as the compiler load-good AND.
+static ArrayRef PlainArrayRef(const ArrayRef array)
+{
+    return reinterpret_cast<ArrayRef>(RefField<>(reinterpret_cast<MAddress>(array)).GetAddress());
+}
+
 static ArrayRef PinArray(const ArrayRef array)
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
-    // forbid gc thread to move this region.
+    // forbid gc thread to move this region. array must already be plain (see PlainArrayRef).
     Heap::GetHeap().GetCollector().AddRawPointerObject(array);
     return static_cast<ArrayRef>(array);
 }
@@ -853,8 +860,10 @@ static ArrayRef PinArray(const ArrayRef array)
 // but can't return until GC finish current work.
 extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 {
-    if (!Heap::IsHeapAddress(array)) {
-        return array->ConvertToCArray();
+    // Coloured refs fail the heap-range check and skip pin; strip first (ffibound / acqstrip).
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
+        return plain == nullptr ? nullptr : plain->ConvertToCArray();
     }
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
@@ -862,18 +871,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr)) {
+    if (UNLIKELY(plain == nullptr)) {
         return nullptr;
     }
-    if (UNLIKELY(array->GetContentSize() == 0)) {
+    if (UNLIKELY(plain->GetContentSize() == 0)) {
         return unreadablePage;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_AcquireRawData");
     if (isCopy != nullptr) {
         *isCopy = false;
     }
     (void)CJThreadPreemptOffCntAdd();
-    ArrayRef pArray = PinArray(array);
+    ArrayRef pArray = PinArray(plain);
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     auto* rawPtr = pArray->ConvertToCArray();
     std::vector<uint64_t> frame;
@@ -901,17 +910,18 @@ extern "C" void* MCC_AcquireRawData(const ArrayRef array, bool* isCopy)
 // Release the raw pointer
 extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
 {
-    if (!Heap::IsHeapAddress(array)) {
+    ArrayRef plain = PlainArrayRef(array);
+    if (!Heap::IsHeapAddress(plain)) {
         return;
     }
-    MRT_ASSERT(array->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
+    MRT_ASSERT(plain->IsPrimitiveArray(), "Expect primitive array in MCC_ReleaseRawData");
 #ifdef _WIN64
     static void* unreadablePage = reinterpret_cast<void*>(0x1234);
 #else
     static void* unreadablePage = MutatorManager::Instance().GetSafepointPageManager()->GetUnreadablePage();
 #endif
     MRT_ASSERT(unreadablePage != nullptr, "runtime is not initialized\n");
-    if (UNLIKELY(array == nullptr || rawPtr == nullptr)) {
+    if (UNLIKELY(plain == nullptr || rawPtr == nullptr)) {
         return;
     }
     if (rawPtr == unreadablePage) {
@@ -919,7 +929,7 @@ extern "C" void MCC_ReleaseRawData(ArrayRef array, void* rawPtr)
     }
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE) || defined(CANGJIE_GWPASAN_SUPPORT)
     // sanitizer will convert alias/colorized pointer to real pointer for runtime
-    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(array, rawPtr, array->GetContentSize());
+    rawPtr = Sanitizer::ArrayReleaseMemoryRegion(plain, rawPtr, plain->GetContentSize());
 #endif
 #if defined(GENERAL_ASAN_SUPPORT_INTERFACE)
     std::vector<uint64_t> frame;
