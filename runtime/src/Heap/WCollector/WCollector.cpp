@@ -969,9 +969,16 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
     }
-    // Always write a plain pointer (not GetAndTryTagRefField). Re-tagging a still-from
-    // survivor as current recreates the next generation of one-gen-stale after Flip.
-    RefField<> newField(latest);
+    // Phase C: write the current colour back, not a bare pointer.
+    //
+    // The old comment here read "Always write a plain pointer... Re-tagging a still-from survivor
+    // as current recreates the next generation of one-gen-stale after Flip". That was true while a
+    // tag meant "mid-evacuation": re-tagging did manufacture a stale reference for the next cycle.
+    // With a colour it is the opposite -- writing the current colour is what makes this reference
+    // survive the next flip's test, and writing a bare pointer would put back the very trust state
+    // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
+    // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
+    RefField<> newField(latest, 0, 0, currentRemapColour);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
@@ -3517,10 +3524,25 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
+    // Phase C: swapping the colour is what makes every reference written before this point read
+    // as stale. It is one store, where the walk below is a full-heap stop-the-world pass.
+    FlipRemapColour();
     // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
     // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
     // after Forward, live holders are in to-space without mark bits at the new addr.
-    InvalidateOldTaggedRefs(false);
+    //
+    // This walk exists because a reference could not say for itself that its colour was stale, so
+    // someone had to strip the old tag off every one of them before the tag was reused. Once the
+    // read barrier heals a stale colour on the way past (FixOldTaggedRefField), the walk has
+    // nothing left to do -- but that claim needs measuring before the walk goes away for good, so
+    // it is a switch rather than a deletion. Nobody has measured what this pass costs.
+    static const bool skipPostflipWalk = []() {
+        const char* v = std::getenv("MRT_GCV2_SKIP_POSTFLIP_WALK");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (!skipPostflipWalk) {
+        InvalidateOldTaggedRefs(false);
+    }
 
     CollectSmallSpace();
     // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.

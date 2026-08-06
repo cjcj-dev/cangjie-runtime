@@ -4,6 +4,7 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include "Common/ColourMask.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/FinalizerProcessor.h"
@@ -180,4 +181,7 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
 
 // Phase B: the read-barrier mask the compiler tests against (see TypeDef.h for why).
 // "All colour bits set" keeps the predicate identical to the shift form it replaces.
-extern "C" unsigned long g_cjLoadBadMask = 0xFFFF000000000000UL;
+// Phase C: bad = mid-evacuation, or carrying a colour other than the one being handed out.
+// Starts with colour A good; WCollector::FlipRemapColour swaps it at a phase boundary.
+extern "C" unsigned long g_cjLoadBadMask =
+    MapleRuntime::TAGGED_BITS_MASK | MapleRuntime::REMAP_COLOUR_B;

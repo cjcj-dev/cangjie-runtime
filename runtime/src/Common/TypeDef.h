@@ -12,6 +12,7 @@
 #include <climits>
 
 #include "Base/Macros.h"
+#include "Common/ColourMask.h"  // reference bit layout + g_cjLoadBadMask
 #include "Base/Types.h"
 
 // commonly agreed type interfaces for a managed runtime:
@@ -22,37 +23,7 @@ namespace MapleRuntime {
 using MAddress = Uptr; // Managed address
 constexpr Uptr NULL_ADDRESS = 0;
 
-// Tag-ID generation count for WCollector phase tags (RefField tagID field).
-// Default 2 preserves upstream N=2 behaviour; rebuild with -DMRT_TAG_ID_COUNT=N to widen.
-#ifndef MRT_TAG_ID_COUNT
-#define MRT_TAG_ID_COUNT 2
-#endif
-constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
-} // namespace MapleRuntime
 
-// Phase B of the ZGC-style colouring work (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6).
-//
-// The compiler's read-barrier fast path asks "does this reference need the barrier?" and today
-// answers it by testing whether the top 16 bits are zero (lshr 48 + icmp eq 0). That hard-codes
-// "good == 0", which is why a good colour can never be flipped lazily and why the extermination
-// walk exists. Route the test through a mask the runtime owns instead, so phase C can make good
-// non-zero and flip it at a phase boundary -- the same move as ZGC's ZPointerLoadBadMask
-// (jdk zAddress.cpp:52,85; zBarrier.inline.hpp:626-628).
-//
-// Phase B keeps the value at "all colour bits", so the predicate is bit-identical to the shift
-// form and only the instruction shape changes. extern "C" because CJBarrierLowering emits a
-// reference to this symbol by name, and a mangled name would drift between compiler versions.
-extern "C" {
-// Bits 48..63: any of them set means the reference still needs the barrier.
-extern unsigned long g_cjLoadBadMask;
-}
-
-namespace MapleRuntime {
-// Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
-constexpr unsigned TAG_ID_BITS =
-    (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
-// address:48 + isTagged:1 + tagID:TAG_ID_BITS + padding:TAG_ID_PADDING_BITS == 64
-constexpr unsigned TAG_ID_PADDING_BITS = 15u - TAG_ID_BITS;
 
 // object model related types
 class BaseObject;

@@ -8,6 +8,7 @@
 #ifndef MRT_COLLECTOR_H
 #define MRT_COLLECTOR_H
 
+#include "Common/ColourMask.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -95,7 +96,19 @@ public:
     // being evacuated, so the answer is exactly IsTagged(); phase C of the colouring work
     // (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6) makes it a mask test. Non-virtual and phase
     // independent: the encoding is a property of RefField, not of the collector's phase.
-    bool IsLoadBad(RefField<>& ref) const { return ref.IsTagged(); }
+    // Phase C: the value now says whether it may be stale. A reference is good when it carries
+    // the colour the collector is currently handing out and is not mid-evacuation; anything else
+    // -- an older colour, or a tagged reference -- has to go through the barrier. One AND, matching
+    // what the compiler emits (CJBarrierLowering.cpp:641) and what ZGC does
+    // (jdk zBarrier.inline.hpp:626-628).
+    //
+    // A zero field passes, as it does in ZGC: null carries no colour, and every stored reference
+    // is coloured on the way in, so the only uncoloured values are the ones that were never
+    // written (jdk zAddress.inline.hpp:635-643 makes the same trade deliberately).
+    bool IsLoadBad(RefField<>& ref) const
+    {
+        return (ref.GetFieldValue() & ::g_cjLoadBadMask) != 0;
+    }
 
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }

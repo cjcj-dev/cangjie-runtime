@@ -7,6 +7,7 @@
 
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
+#include "Common/ColourMask.h"
 #include <unordered_map>
 #include <unordered_set>
 
@@ -98,6 +99,17 @@ public:
     // Collector&, can spell it. Phase C changes that one body -- as in ZGC's
     // ZPointer::is_load_bad, zAddress.inline.hpp:626-628 -- instead of ~90 call sites.
 
+    // The colour currently handed out. Flipping a phase swaps it and updates the mask the
+    // compiler tests, which is what replaces walking the heap to strip stale colours.
+    Uptr currentRemapColour = REMAP_COLOUR_A;
+
+    void FlipRemapColour()
+    {
+        currentRemapColour = (currentRemapColour == REMAP_COLOUR_A) ? REMAP_COLOUR_B : REMAP_COLOUR_A;
+        // Bad = tagged, or carrying any colour other than the one being handed out now.
+        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK & ~currentRemapColour);
+    }
+
     // note this api is not atomic, caller should take care of this.
     // N>2: any non-current tagged ref is "old" (not only previous); else older tags are dropped.
     bool IsOldPointer(RefField<>& ref) const override
@@ -178,11 +190,15 @@ protected:
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
+        // Phase C: colour every reference, not only the ones being evacuated. The else branch used
+        // to hand back a bare pointer, and that bare pointer was the trust state -- a value that
+        // neither IsOldPointer nor IsCurrentPointer recognised, so readers dereferenced it without
+        // asking anything. Handing out the current colour instead means a later phase flip turns
+        // this reference bad on its own, and the reader finds out by testing the value it holds.
         if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID);
-        } else {
-            return RefField<>(target);
+            return RefField<>(target, 1, currentTagID, currentRemapColour);
         }
+        return RefField<>(target, 0, 0, currentRemapColour);
     }
 
     void CollectLargeGarbage()
