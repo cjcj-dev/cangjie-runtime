@@ -17,6 +17,9 @@
 #include "Common/Runtime.h"
 #include "Common/StackType.h"
 #include "Concurrency/Concurrency.h"
+#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -532,6 +535,78 @@ void* FirstBSlot(const Hit& bStack, const Hit& bStatic, const Hit& bTls)
     return nullptr;
 }
 
+// b3origin T0/T1: reverse in-edges to holder (heap fields that currently hold holder).
+// Answers: last materialisation source = HEAP_FIELD vs no heap field (REG_SPILL/ALLOC/OTHER).
+// Also remset Contains on each sample edge for B3O_REMSET_GAP vs IN_REMSET.
+struct InEdgeSample {
+    size_t edgeN = 0;
+    size_t oldReferrerN = 0;
+    size_t youngReferrerN = 0;
+    size_t markedReferrerN = 0;
+    size_t remsetHitN = 0;
+    size_t remsetMissN = 0;
+    BaseObject* sampleReferrer = nullptr;
+    void* sampleSlot = nullptr;
+    int sampleYoung = -1;
+    int sampleMarked = -1;
+    int sampleRemset = -1;
+    size_t sampleSlotOff = 0;
+};
+
+void ScanHeapInEdges(InEdgeSample& out, BaseObject* holderObj)
+{
+    if (holderObj == nullptr) {
+        return;
+    }
+    RememberedSet& rs = Heap::GetHeap().GetRememberedSet();
+    Heap::GetHeap().ForEachObj(
+        [holderObj, &out, &rs](BaseObject* cand) {
+            if (cand == nullptr || cand == holderObj) {
+                return;
+            }
+            if (!cand->IsValidObject() || !cand->HasRefField()) {
+                return;
+            }
+            cand->ForEachRefField([holderObj, cand, &out, &rs](RefField<>& rf) {
+                BaseObject* tgt = rf.GetTargetObject();
+                if (tgt != holderObj) {
+                    return;
+                }
+                ++out.edgeN;
+                int young = -1;
+                RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(cand));
+                if (reg != nullptr) {
+                    young = reg->IsYoungRegion() ? 1 : 0;
+                    if (young == 1) {
+                        ++out.youngReferrerN;
+                    } else {
+                        ++out.oldReferrerN;
+                    }
+                }
+                int marked = RegionSpace::IsMarkedObject(cand) ? 1 : 0;
+                if (marked == 1) {
+                    ++out.markedReferrerN;
+                }
+                MAddress slot = reinterpret_cast<MAddress>(&rf);
+                int inRemset = rs.Contains(slot) ? 1 : 0;
+                if (inRemset == 1) {
+                    ++out.remsetHitN;
+                } else {
+                    ++out.remsetMissN;
+                }
+                if (out.sampleReferrer == nullptr) {
+                    out.sampleReferrer = cand;
+                    out.sampleSlot = reinterpret_cast<void*>(slot);
+                    out.sampleYoung = young;
+                    out.sampleMarked = marked;
+                    out.sampleRemset = inRemset;
+                    out.sampleSlotOff = static_cast<size_t>(slot - reinterpret_cast<MAddress>(cand));
+                }
+            });
+        },
+        false);
+}
+
 } // namespace
 
 bool B3Root::Enabled()
@@ -649,6 +724,36 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
              "[GCV2][B3ROOT][ENUM_MISS_DETAIL] family=STACK reason=precise_VisitMutatorRoots_miss_wide_cons_hit "
              "consSlot=%p consValue=%p A_stackN=%zu B_stackN=%zu t0=%s",
              bStack.sampleSlot, bStack.sampleValue, aStack.visitN, bStack.visitN, t0);
+        // b3origin T0/T1: reverse heap in-edges → source class + remset gap
+        InEdgeSample inEdges;
+        ScanHeapInEdges(inEdges, holderObj);
+        const char* srcClass = "B3O_SOURCE_OTHER";
+        if (inEdges.edgeN > 0) {
+            srcClass = "B3O_SOURCE_HEAP_FIELD";
+        } else if (bStack.found) {
+            srcClass = "B3O_SOURCE_REG_SPILL_OR_STACK_ONLY";
+        }
+        const char* remClass = "B3O_REMSET_NA";
+        if (inEdges.edgeN == 0) {
+            remClass = "B3O_REMSET_NA_no_inedge";
+        } else if (inEdges.oldReferrerN > 0 && inEdges.remsetMissN > 0 && inEdges.remsetHitN == 0) {
+            remClass = "B3O_REMSET_GAP";
+        } else if (inEdges.remsetHitN > 0) {
+            remClass = "B3O_IN_REMSET";
+        } else if (inEdges.youngReferrerN == inEdges.edgeN) {
+            remClass = "B3O_REMSET_NA_all_young_referrers";
+        } else {
+            remClass = "B3O_REMSET_MISS_or_drained";
+        }
+        VLOG(REPORT,
+             "[GCV2][B3O][ORIGIN] holder=%p B_slot=%p srcClass=%s remClass=%s "
+             "inEdgeN=%zu oldRefN=%zu youngRefN=%zu markedRefN=%zu remsetHitN=%zu remsetMissN=%zu "
+             "sampleReferrer=%p sampleSlot=%p sampleOff=%zu sampleYoung=%d sampleMarked=%d sampleRemset=%d "
+             "field=%p t0=%s",
+             holder, bStack.sampleSlot, srcClass, remClass, inEdges.edgeN, inEdges.oldReferrerN,
+             inEdges.youngReferrerN, inEdges.markedReferrerN, inEdges.remsetHitN, inEdges.remsetMissN,
+             inEdges.sampleReferrer, inEdges.sampleSlot, inEdges.sampleSlotOff, inEdges.sampleYoung,
+             inEdges.sampleMarked, inEdges.sampleRemset, fieldAddr, t0);
         // T1: which frame holds the cons slot + stackmap state (before other family scans that may SEGV)
         AttributeConsSlotToFrame(bStack.sampleSlot, holderObj);
         // continue remaining families for completeness when possible
