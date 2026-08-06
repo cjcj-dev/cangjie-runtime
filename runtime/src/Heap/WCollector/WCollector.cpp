@@ -640,7 +640,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 {
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
-    CHECK_DETAIL(!IsOldPointer(oldField), "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
+    // Colour-era E invariant (was: !IsOldPointer): raw-root entry is not remap-stale.
+    // Dual encoding: plain (!IsLoadBad) legal; load-bad must be load-good.
+    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField),
+                 "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
@@ -790,7 +793,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     RefField<> oldField(refField);
     BaseObject* oldObj = oldField.GetTargetObject();
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    CHECK_DETAIL(!IsOldPointer(oldField), "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
+    // Colour-era E invariant (was: !IsOldPointer). After relocate-start flip, mid-evac from
+    // objects are load-bad and not load-good yet; they remain legal iff still in this cycle's
+    // ghost/from set (side table). Plain / load-good always legal; remap-stale non-ghost forbidden.
+    CHECK_DETAIL(!IsLoadBad(oldField) || is_load_good(oldField) || IsGhostFromObject(oldObj),
+                 "ForwardUpdateRawRef failed: Invalid object: %zx", oldField.GetFieldValue());
     if (IsCurrentPointer(oldField)) {
         if (IsGhostFromObject(oldObj)) {
             BaseObject* toVersion = TryForwardObject(oldObj);
@@ -1546,6 +1553,10 @@ void WCollector::Preforward()
     MRT_PHASE_TIMER("Preforward");
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        // This collector relocates both generations in one full-GC relocation set. Match the two
+        // generation relocate-start flips while mutators are stopped, before any root is forwarded.
+        flip_young_relocate_start();
+        flip_old_relocate_start();
     }
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -3536,11 +3547,8 @@ void WCollector::DoGarbageCollection()
     PostResolveCycleTask();
     FlipTagID();
     ForwardDataManager::GetForwardDataManager().SetTagID(currentTagID);
-    // Phase C: swapping the colour is what makes every reference written before this point read
-    // as stale. It is one store, where the walk below is a full-heap stop-the-world pass.
-    FlipRemapColour();
-    // Flip just turned this cycle's current-tags into IsOldPointer. F3 pre-Flip only
-    // saw the previous generation. Post-Flip pass must NOT filter IsSurvivedObject:
+    // FlipTagID just turned this cycle's current-tags into IsOldPointer. F3 pre-flip only
+    // saw the previous tag generation. This pass must NOT filter IsSurvivedObject:
     // after Forward, live holders are in to-space without mark bits at the new addr.
     //
     // This walk exists because a reference could not say for itself that its colour was stale, so
