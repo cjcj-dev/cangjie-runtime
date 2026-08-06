@@ -446,12 +446,9 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        // b3fix (甲): VALID maps can still omit live slots (B3_TRUE_MISS deep frames).
-        // Supplement with frame-local cons so mark set matches fix set.
-        if (STACKMAP_CONS_SUPPLEMENT) {
-            ConservativeScanMissFrame(visitor, frameAddress);
-        }
     } else {
+        // b3fix (甲): miss was silent skip → frame-local cons (mark+fix same set).
+        // VALID-map full-frame cons caused SEGV flood (smoke 15/15) — not product-safe.
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
         if (STACKMAP_CONS_SUPPLEMENT) {
             ConservativeScanMissFrame(visitor, frameAddress);
@@ -516,10 +513,6 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
         heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
-        // b3fix (甲): same supplement as mark path (VisitStackRoots).
-        if (STACKMAP_CONS_SUPPLEMENT) {
-            ConservativeScanMissFrame(slotRootVisitor, frameAddress);
-        }
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
         if (STACKMAP_CONS_SUPPLEMENT) {
