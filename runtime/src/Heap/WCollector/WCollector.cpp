@@ -744,19 +744,14 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> oldField(field);
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
-    if (IsCurrentPointer(oldField)) {
+    if (is_mark_good(oldField)) {
         BaseObject* targetObj = oldField.GetTargetObject();
         // Anchor main ced6b14fe41380fd2dfb94c91b7fe6973786a80e
         CHECK_DETAIL(targetObj->IsValidObject(), "Invalid object %p is referenced by %s object %p: %s and offset %zd",
                      targetObj, sourceKind, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         return targetObj;
     }
-    if (IsOldPointer(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
-        latest = FindLatestVersion(targetObj);
-    } else {
-        latest = field.GetTargetObject();
-    }
+    latest = make_load_good(oldField);
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
         return nullptr;
