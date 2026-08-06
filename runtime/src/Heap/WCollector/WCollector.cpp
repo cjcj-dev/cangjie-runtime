@@ -812,6 +812,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
         BaseObject* target = oldField.GetTargetObject();
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
+        B3Root::NoteEnumSlot(&field, target);
         rootSet.push_back(target);
         return;
     }
@@ -846,6 +847,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
              latest->GetTypeInfo(), latest->GetSize());
     }
+    B3Root::NoteEnumSlot(&field, latest);
     rootSet.push_back(latest);
 }
 
@@ -858,6 +860,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = oldField.GetTargetObject();
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+        B3Root::NoteEnumSlot(&ref, root);
         rootSet.push_back(root);
         return;
     }
@@ -880,6 +883,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(), root,
                  root->GetTypeInfo(), root->GetSize());
         }
+        B3Root::NoteEnumSlot(&ref, root);
         rootSet.push_back(root);
     }
 }

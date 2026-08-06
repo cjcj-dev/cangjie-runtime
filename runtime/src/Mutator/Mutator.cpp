@@ -15,6 +15,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Verify/B3Root.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
@@ -633,6 +634,8 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
     RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
         BaseObject* obj = refFieldAddr.GetTargetObject();
         if (Heap::IsHeapAddress(obj)) {
+            // b3fix T0: slot identity at concurrent enum (default off inside NoteEnumSlot)
+            B3Root::NoteEnumSlot(&refFieldAddr, obj);
             AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, obj);
@@ -644,6 +647,7 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
     RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor](ObjectRef& root) {
         BaseObject* obj = root.object;
         if (Heap::IsHeapAddress(obj)) {
+            B3Root::NoteEnumSlot(&root, obj);
             AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
             buffer->PushRoot(obj);
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);

@@ -13,6 +13,7 @@
 
 #include "Base/Log.h"
 #include "Collector/FinalizerProcessor.h"
+#include "Collector/GcStats.h"
 #include "Common/Runtime.h"
 #include "Common/StackType.h"
 #include "Concurrency/Concurrency.h"
@@ -32,6 +33,148 @@ bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
     return v != nullptr && std::strcmp(v, "1") == 0;
+}
+
+// Fixed open-addressing table: slot identity → value_then at concurrent enum.
+// Capacity power-of-two; overwrite on collision (lossy OK for forensics).
+constexpr size_t kEnumSlotCap = 1u << 18; // 262144
+constexpr size_t kEnumSlotMask = kEnumSlotCap - 1;
+
+struct EnumSlotRec {
+    std::atomic<uintptr_t> slot{0}; // 0 = empty
+    std::atomic<uintptr_t> valueThen{0};
+    std::atomic<size_t> gcIndex{0};
+};
+
+EnumSlotRec g_enumSlots[kEnumSlotCap];
+std::atomic<size_t> g_enumNoteN{0};
+std::atomic<size_t> g_enumCollideN{0};
+std::atomic<size_t> g_enumEpochGc{0};
+
+size_t SlotHash(uintptr_t s)
+{
+    // splitmix-ish mix for pointer addresses
+    s ^= s >> 33;
+    s *= 0xff51afd7ed558ccdULL;
+    s ^= s >> 33;
+    return static_cast<size_t>(s);
+}
+
+void MaybeRotateEpoch(size_t gc)
+{
+    size_t prev = g_enumEpochGc.load(std::memory_order_relaxed);
+    if (prev == gc) {
+        return;
+    }
+    if (g_enumEpochGc.compare_exchange_strong(prev, gc, std::memory_order_acq_rel)) {
+        // Soft clear: only bump epoch; stale records filtered by gcIndex at lookup.
+        g_enumNoteN.store(0, std::memory_order_relaxed);
+        g_enumCollideN.store(0, std::memory_order_relaxed);
+    }
+}
+
+void NoteEnumSlotImpl(void* slot, void* valueThen)
+{
+    if (slot == nullptr) {
+        return;
+    }
+    const size_t gc = g_gcCount;
+    MaybeRotateEpoch(gc);
+    const uintptr_t s = reinterpret_cast<uintptr_t>(slot);
+    const uintptr_t v = reinterpret_cast<uintptr_t>(valueThen);
+    size_t idx = SlotHash(s) & kEnumSlotMask;
+    for (size_t probe = 0; probe < 8; ++probe) {
+        size_t i = (idx + probe) & kEnumSlotMask;
+        uintptr_t cur = g_enumSlots[i].slot.load(std::memory_order_relaxed);
+        if (cur == 0 || cur == s) {
+            g_enumSlots[i].slot.store(s, std::memory_order_relaxed);
+            g_enumSlots[i].valueThen.store(v, std::memory_order_relaxed);
+            g_enumSlots[i].gcIndex.store(gc, std::memory_order_relaxed);
+            g_enumNoteN.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    // force overwrite primary slot on full probe
+    g_enumSlots[idx].slot.store(s, std::memory_order_relaxed);
+    g_enumSlots[idx].valueThen.store(v, std::memory_order_relaxed);
+    g_enumSlots[idx].gcIndex.store(gc, std::memory_order_relaxed);
+    g_enumCollideN.fetch_add(1, std::memory_order_relaxed);
+    g_enumNoteN.fetch_add(1, std::memory_order_relaxed);
+}
+
+struct SlotLookup {
+    int found = 0;
+    void* valueThen = nullptr;
+    size_t gcIndex = 0;
+};
+
+SlotLookup LookupEnumSlot(void* slot)
+{
+    SlotLookup out;
+    if (slot == nullptr) {
+        return out;
+    }
+    const uintptr_t s = reinterpret_cast<uintptr_t>(slot);
+    const size_t gc = g_gcCount;
+    size_t idx = SlotHash(s) & kEnumSlotMask;
+    for (size_t probe = 0; probe < 8; ++probe) {
+        size_t i = (idx + probe) & kEnumSlotMask;
+        if (g_enumSlots[i].slot.load(std::memory_order_relaxed) != s) {
+            continue;
+        }
+        size_t recGc = g_enumSlots[i].gcIndex.load(std::memory_order_relaxed);
+        // accept current or previous GC (F3 may fire after flip; enum recorded at g_gcCount)
+        if (recGc != gc && recGc + 1 != gc) {
+            continue;
+        }
+        out.found = 1;
+        out.valueThen = reinterpret_cast<void*>(g_enumSlots[i].valueThen.load(std::memory_order_relaxed));
+        out.gcIndex = recGc;
+        return out;
+    }
+    return out;
+}
+
+// Secondary: any recorded enum value equal to holder (value-only, not identity).
+int ValueSeenInEnum(void* holder, void** sampleSlotOut, void** sampleValueOut)
+{
+    if (holder == nullptr) {
+        return 0;
+    }
+    const uintptr_t h = reinterpret_cast<uintptr_t>(holder);
+    const size_t gc = g_gcCount;
+    for (size_t i = 0; i < kEnumSlotCap; ++i) {
+        uintptr_t s = g_enumSlots[i].slot.load(std::memory_order_relaxed);
+        if (s == 0) {
+            continue;
+        }
+        size_t recGc = g_enumSlots[i].gcIndex.load(std::memory_order_relaxed);
+        if (recGc != gc && recGc + 1 != gc) {
+            continue;
+        }
+        uintptr_t v = g_enumSlots[i].valueThen.load(std::memory_order_relaxed);
+        if (v == h) {
+            if (sampleSlotOut != nullptr) {
+                *sampleSlotOut = reinterpret_cast<void*>(s);
+            }
+            if (sampleValueOut != nullptr) {
+                *sampleValueOut = reinterpret_cast<void*>(v);
+            }
+            return 1;
+        }
+        // tagged low-48
+        RefField<> rf(static_cast<MAddress>(v));
+        if (rf.IsTagged() && reinterpret_cast<uintptr_t>(rf.GetTargetObject()) == h) {
+            if (sampleSlotOut != nullptr) {
+                *sampleSlotOut = reinterpret_cast<void*>(s);
+            }
+            if (sampleValueOut != nullptr) {
+                *sampleValueOut = reinterpret_cast<void*>(v);
+            }
+            return 1;
+        }
+    }
+    return 0;
 }
 
 struct Hit {
@@ -397,6 +540,14 @@ bool B3Root::Enabled()
     return on;
 }
 
+void B3Root::NoteEnumSlot(void* slot, void* valueThen)
+{
+    if (!Enabled()) {
+        return;
+    }
+    NoteEnumSlotImpl(slot, valueThen);
+}
+
 void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, void* fieldAddr, int loadFromHeapField,
                             void* /*collectorOpaque*/)
 {
@@ -417,6 +568,57 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
     VLOG(REPORT, "[GCV2][B3ROOT][STEP] holder=%p step=B_stack found=%d N=%zu slot=%p", holder, bStack.found,
          bStack.visitN, bStack.sampleSlot);
 
+    // ⭐ T0 identity: was B_slot / holder seen during concurrent enum?
+    //   ENUMERATED_AT_ENUM=YES + value_then!=value_now ⇒ B3_CASCADE
+    //   ENUMERATED_AT_ENUM=NO (slot absent) + B_stack hit ⇒ B3_TRUE_MISS
+    void* valueNowAtB = nullptr;
+    void* valueNowUntagged = nullptr;
+    if (bStack.found && bStack.sampleSlot != nullptr) {
+        valueNowAtB = *reinterpret_cast<void**>(bStack.sampleSlot);
+        // NoteEnumSlot stores GetTargetObject (untagged); normalize value_now the same way
+        RefField<> nowRf(reinterpret_cast<MAddress>(valueNowAtB));
+        valueNowUntagged = nowRf.IsTagged() ? static_cast<void*>(nowRf.GetTargetObject()) : valueNowAtB;
+    }
+    SlotLookup slotLk = LookupEnumSlot(bStack.sampleSlot);
+    void* valueSeenSlot = nullptr;
+    void* valueSeenVal = nullptr;
+    int valueSeen = ValueSeenInEnum(holder, &valueSeenSlot, &valueSeenVal);
+    int valueThenEqNow = 0;
+    int valueThenEqHolder = 0;
+    if (slotLk.found) {
+        valueThenEqNow = (slotLk.valueThen == valueNowUntagged || slotLk.valueThen == valueNowAtB) ? 1 : 0;
+        valueThenEqHolder =
+            (slotLk.valueThen == holder ||
+             (slotLk.valueThen != nullptr && WordMatchesHolder(slotLk.valueThen, holderObj)))
+                ? 1
+                : 0;
+    }
+    const char* t0 = "B3_T0_UNKNOWN";
+    if (bStack.found && slotLk.found && !valueThenEqHolder && !valueThenEqNow) {
+        t0 = "B3_CASCADE"; // slot was enumerated; value at enum ≠ holder now
+    } else if (bStack.found && slotLk.found && valueThenEqHolder) {
+        t0 = "B3_ENUM_SAW_HOLDER"; // precise enum saw this slot with holder value
+    } else if (bStack.found && !slotLk.found && !valueSeen) {
+        t0 = "B3_TRUE_MISS"; // cons slot never in enum ledger
+    } else if (bStack.found && !slotLk.found && valueSeen) {
+        t0 = "B3_VALUE_SEEN_OTHER_SLOT"; // holder value pushed from a different slot
+    } else if (!bStack.found && valueSeen) {
+        t0 = "B3_ENUM_VALUE_NO_CONS"; // enum saw value, cons miss (unexpected)
+    }
+    VLOG(REPORT,
+         "[GCV2][B3ROOT][T0] holder=%p B_slot=%p value_now=%p ENUMERATED_AT_ENUM=%d value_then=%p "
+         "value_then_eq_now=%d value_then_eq_holder=%d valueSeenOther=%d seenSlot=%p "
+         "enumNoteN=%zu enumCollideN=%zu gcIndex=%zu t0=%s",
+         holder, bStack.sampleSlot, valueNowAtB, slotLk.found, slotLk.valueThen, valueThenEqNow, valueThenEqHolder,
+         valueSeen, valueSeenSlot, g_enumNoteN.load(std::memory_order_relaxed),
+         g_enumCollideN.load(std::memory_order_relaxed), slotLk.gcIndex, t0);
+    if (std::strcmp(t0, "B3_CASCADE") == 0) {
+        VLOG(REPORT,
+             "[GCV2][B3ROOT][CASCADE] holder=%p slot=%p value_then=%p value_now=%p "
+             "reason=slot_enumerated_value_rewritten_after_enum",
+             holder, bStack.sampleSlot, slotLk.valueThen, valueNowAtB);
+    }
+
     ScanAStack(aStack, holderObj);
     VLOG(REPORT, "[GCV2][B3ROOT][STEP] holder=%p step=A_stack found=%d N=%zu slot=%p", holder, aStack.found,
          aStack.visitN, aStack.sampleSlot);
@@ -427,10 +629,11 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
              "[GCV2][B3ROOT] holder=%p holderValid=%d holderMarked=%d verdict=B3ROOT_A_FOUND_MARK_FAILED "
              "A_found=1 A_family=mutator_stack A_slot=%p B_found=%d B_family=%s B_slot=%p "
              "A_stack=1 A_static=-1 A_conc=-1 A_finR=-1 A_finQ=-1 A_export=-1 "
-             "B_stack=%d B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d partial=1",
+             "B_stack=%d B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d "
+             "t0=%s partial=1",
              holder, holderValid, holderMarked, aStack.sampleSlot, bStack.found,
              bStack.found ? "stack_cons" : "none", bStack.sampleSlot, bStack.found, aStack.visitN, bStack.visitN,
-             fieldAddr, loadFromHeapField);
+             fieldAddr, loadFromHeapField, t0);
         return;
     }
     if (bStack.found) {
@@ -438,13 +641,14 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
              "[GCV2][B3ROOT] holder=%p holderValid=%d holderMarked=%d verdict=B3ROOT_ENUM_MISSES_STACK "
              "A_found=0 A_family=none A_slot=(nil) B_found=1 B_family=stack_cons B_slot=%p "
              "A_stack=0 A_static=-1 A_conc=-1 A_finR=-1 A_finQ=-1 A_export=-1 "
-             "B_stack=1 B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d partial=1",
+             "B_stack=1 B_static=-1 B_tls=-1 A_stackN=%zu B_stackN=%zu field=%p loadFromHeapField=%d "
+             "t0=%s partial=1",
              holder, holderValid, holderMarked, bStack.sampleSlot, aStack.visitN, bStack.visitN, fieldAddr,
-             loadFromHeapField);
+             loadFromHeapField, t0);
         VLOG(REPORT,
              "[GCV2][B3ROOT][ENUM_MISS_DETAIL] family=STACK reason=precise_VisitMutatorRoots_miss_wide_cons_hit "
-             "consSlot=%p consValue=%p A_stackN=%zu B_stackN=%zu",
-             bStack.sampleSlot, bStack.sampleValue, aStack.visitN, bStack.visitN);
+             "consSlot=%p consValue=%p A_stackN=%zu B_stackN=%zu t0=%s",
+             bStack.sampleSlot, bStack.sampleValue, aStack.visitN, bStack.visitN, t0);
         // T1: which frame holds the cons slot + stackmap state (before other family scans that may SEGV)
         AttributeConsSlotToFrame(bStack.sampleSlot, holderObj);
         // continue remaining families for completeness when possible
@@ -487,12 +691,12 @@ void B3Root::ClassifyHolder(void* holder, int holderValid, int holderMarked, voi
          "A_stackN=%zu A_staticN=%zu A_concN=%zu A_finRN=%zu A_finQN=%zu A_exportN=%zu "
          "B_found=%d B_family=%s B_slot=%p "
          "B_stack=%d B_static=%d B_tls=%d "
-         "B_stackN=%zu B_staticN=%zu B_tlsN=%zu "
-         "field=%p loadFromHeapField=%d partial=0",
-         holder, holderValid, holderMarked, verdict, aAny, aFamily, aSlot, aStack.found, aStatic.found, aConc.found,
-         aFinR.found, aFinQ.found, aExport.found, aStack.visitN, aStatic.visitN, aConc.visitN, aFinR.visitN,
-         aFinQ.visitN, aExport.visitN, bAny, bFamily, bSlot, bStack.found, bStatic.found, bTls.found, bStack.visitN,
-         bStatic.visitN, bTls.visitN, fieldAddr, loadFromHeapField);
+          "B_stackN=%zu B_staticN=%zu B_tlsN=%zu "
+          "field=%p loadFromHeapField=%d t0=%s partial=0",
+          holder, holderValid, holderMarked, verdict, aAny, aFamily, aSlot, aStack.found, aStatic.found, aConc.found,
+          aFinR.found, aFinQ.found, aExport.found, aStack.visitN, aStatic.visitN, aConc.visitN, aFinR.visitN,
+          aFinQ.visitN, aExport.visitN, bAny, bFamily, bSlot, bStack.found, bStatic.found, bTls.found, bStack.visitN,
+          bStatic.visitN, bTls.visitN, fieldAddr, loadFromHeapField, t0);
 
     if (!aAny && bStack.found) {
         VLOG(REPORT,

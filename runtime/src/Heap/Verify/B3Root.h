@@ -16,11 +16,17 @@ namespace MapleRuntime {
 // Mode A = ENUM six families (same as InvalidateOldTaggedRefs / major root enum).
 // Mode B = wider: conservative mutator stack + static roots + concurrency (TLS proxy).
 //
+// T0 slot-identity ledger (same gate): during concurrent enum (GcPhaseEnum), record
+// (slot, value_then) so F3 abort can distinguish B3_TRUE_MISS vs B3_CASCADE.
+//
 // Gate (default off): MRT_GCV2_B3ROOT=1
 // Logs [GCV2][B3ROOT].
 class B3Root {
 public:
     static bool Enabled();
+
+    // Concurrent-enum hook (Mutator::GcPhaseEnum). Slot identity, not value-only.
+    static void NoteEnumSlot(void* slot, void* valueThen);
 
     // holder = F3 abort holder object. collector provides finalizer access.
     // fieldAddr / loadFromHeapField for T2 (mutator read site).
