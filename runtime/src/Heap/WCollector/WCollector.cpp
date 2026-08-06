@@ -2067,6 +2067,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         });
     }
     for (MAddress slot : rememberedSlots) {
+        if (SlotWriterProbe::Enabled()) {
+            SlotWriterProbe::NoteRemsetConsume(slot, "rescan");
+        }
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
                 ++statsOut->skippedNotHeap;
@@ -2332,7 +2335,13 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
-    object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+    const bool swOn = SlotWriterProbe::Enabled();
+    object->ForEachRefField([this, swOn](RefField<>& field) {
+        if (swOn) {
+            SlotWriterProbe::NoteRemsetConsume(reinterpret_cast<MAddress>(&field), "reffix_obj");
+        }
+        (void)FixMinorEvacuatedSlot(field);
+    });
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -2414,6 +2423,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRemsetConsume(slot, "reffix_remset");
+                }
                 (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
             }
         }
@@ -2428,6 +2440,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
+                if (SlotWriterProbe::Enabled()) {
+                    SlotWriterProbe::NoteRemsetConsume(slot, "reffix_remset");
+                }
                 (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
             }
         }
@@ -3253,6 +3268,11 @@ void WCollector::DoYoungGarbageCollection()
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
         }
         Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
+        if (SlotWriterProbe::Enabled()) {
+            for (MAddress slot : rememberedSlots) {
+                SlotWriterProbe::NoteRemsetConsume(slot, "drain");
+            }
+        }
     }
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
@@ -3315,6 +3335,9 @@ void WCollector::DoYoungGarbageCollection()
             (!fullYoungScan ||
              LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
             liveRememberedSlots.insert(slot);
+            if (SlotWriterProbe::Enabled()) {
+                SlotWriterProbe::NoteRemsetConsume(slot, "live");
+            }
         }
     }
     // Remset consume-vs-recorded (G1SummarizeRSetStats analog) + optional dual-closure

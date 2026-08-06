@@ -40,6 +40,15 @@ public:
     static void OnInvalidEnqueue(BaseObject* object, BaseObject* holder, MAddress slot, MAddress raw,
                                  const char* origin);
 
+    // T0: RecordCrossGenEdge decision for this slot (reason codes match RemsetPhaseProbe::SkipReason).
+    // recorded=1 ⇒ entered remset; holderYoung/valueYoung are post-write region facts.
+    static void NoteRemsetDecision(MAddress slot, BaseObject* holder, BaseObject* value, uint8_t reason,
+                                   bool recorded, bool holderYoung, bool valueYoung);
+
+    // T1 consume side: remset drain / live filter / rescan / ref_fix visits of a slot.
+    // stage: "drain" | "live" | "rescan" | "reffix_remset" | "reffix_obj"
+    static void NoteRemsetConsume(MAddress slot, const char* stage);
+
     // Optional: dump ring stats at process end / abort site.
     static void FlushSummary(const char* site);
 };
