@@ -223,10 +223,20 @@ bool ValueLooksValid(BaseObject* value, bool* outYoung, bool* outFree, bool* out
         return false;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(value));
-    if (region != nullptr) {
-        *outYoung = region->IsYoungRegion();
-        *outFree = region->IsFreeRegion();
-        *outGarbage = region->IsGarbageRegion();
+    if (region == nullptr) {
+        return false;
+    }
+    *outYoung = region->IsYoungRegion();
+    *outFree = region->IsFreeRegion();
+    *outGarbage = region->IsGarbageRegion();
+    // Free/garbage/unallocated: tip may be zeroed or reused — do not touch object header.
+    if (*outFree || *outGarbage) {
+        return false;
+    }
+    // Align check: object base should sit inside region alloc range.
+    MAddress addr = reinterpret_cast<MAddress>(value);
+    if (addr < region->GetRegionStart() || addr >= region->GetRegionEnd()) {
+        return false;
     }
     // Same predicate minor uses: stateWord tip non-null.
     return value->IsValidObject();
@@ -441,6 +451,9 @@ void SlotWriterProbe::NoteStructWords(BaseObject* holder, MAddress dst, size_t d
         return;
     }
     // Align up to pointer boundary; scan full words only.
+    // Safety: bulk WriteStruct often runs mid-construct; words may be heap-shaped
+    // garbage. NoteRefWrite still runs ValueLooksValid which refuses free/garbage
+    // regions before touching tip (see ValueLooksValid).
     MAddress start = (dst + (sizeof(MAddress) - 1)) & ~(static_cast<MAddress>(sizeof(MAddress) - 1));
     MAddress end = dst + dstLen;
     for (MAddress p = start; p + sizeof(MAddress) <= end; p += sizeof(MAddress)) {
@@ -449,9 +462,17 @@ void SlotWriterProbe::NoteStructWords(BaseObject* holder, MAddress dst, size_t d
         if (word == 0) {
             continue;
         }
+        // Drop tagged/non-canonical noise: require plain low-bit clear for ref words.
+        if ((word & 0x7ULL) != 0) {
+            continue;
+        }
         BaseObject* val = reinterpret_cast<BaseObject*>(word);
-        // Only record heap-looking words (drops immediates / code ptrs noise).
         if (!Heap::IsHeapAddress(val)) {
+            continue;
+        }
+        // Region must exist and not be free — otherwise tip touch is unsafe.
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(val));
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
             continue;
         }
         NoteRefWrite(holder, p, val, "WriteStructWord");
