@@ -101,7 +101,9 @@ public:
 
     // The colour currently handed out. Flipping a phase swaps it and updates the mask the
     // compiler tests, which is what replaces walking the heap to strip stale colours.
-    Uptr currentRemapColour = REMAP_COLOUR_A;
+    Uptr ZPointerRemappedYoungMask = ZPointerRemapped10 | ZPointerRemapped00;
+    Uptr ZPointerRemappedOldMask = ZPointerRemapped01 | ZPointerRemapped00;
+    Uptr currentRemapColour = ZPointerRemapped00;
     Uptr currentMarkedYoung = MARKED_YOUNG_0;
     Uptr currentMarkedOld = MARKED_OLD_0;
     size_t youngMarkFlipCount = 0;
@@ -111,14 +113,16 @@ public:
     // load-good plus the current epoch from each independent mark family.
     void set_good_masks()
     {
-        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK & ~currentRemapColour);
+        currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
+        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ currentRemapColour);
         ::g_cjMarkBadMask = ::g_cjLoadBadMask | (MARKED_YOUNG_MASK & ~currentMarkedYoung) |
             (MARKED_OLD_MASK & ~currentMarkedOld);
     }
 
     void FlipRemapColour()
     {
-        currentRemapColour = (currentRemapColour == REMAP_COLOUR_A) ? REMAP_COLOUR_B : REMAP_COLOUR_A;
+        ZPointerRemappedYoungMask ^= REMAP_COLOUR_MASK;
+        ZPointerRemappedOldMask ^= REMAP_COLOUR_MASK;
         set_good_masks();
     }
 

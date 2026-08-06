@@ -41,15 +41,14 @@ constexpr unsigned TAG_ID_BITS =
     (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
 
 // A reference always carries a colour, so that "this value may be stale" is something the value
-// itself says rather than something the reader has to already know. The colours are one-hot
-// because the compiler's fast path is a single AND against a mask: with one-hot colours "is this
-// the current colour" becomes "are any of the other colours' bits set", which an AND can answer.
-// ZGC encodes Remapped the same way and for the same reason (jdk zAddress.hpp:169-170,
-// zAddress.cpp:120-121).
+// itself says rather than something the reader has to already know. ZGC uses one physical bit for
+// each RemappedYoung x RemappedOld state. A two-bit binary encoding cannot preserve the compiler's
+// single-AND fast path: when 11 is current, a stale 10 or 01 differs by a missing bit, which AND
+// cannot observe (OpenJDK zAddress.hpp:95-128,168-176).
 //
 // Flipping a phase is then one store to g_cjLoadBadMask, where today it is a full-heap
 // stop-the-world walk that strips the old tag off every reference (InvalidateOldTaggedRefs).
-constexpr unsigned REMAP_COLOUR_BITS = 2u;
+constexpr unsigned REMAP_COLOUR_BITS = 4u;
 // MarkedYoung[0,1] and MarkedOld[0,1] are independent one-hot epochs. Each family needs two
 // physical bits so that a mark-start flip makes the previous epoch bad without a zero-bit trust
 // state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
@@ -59,9 +58,12 @@ constexpr unsigned MARKED_OLD_BITS = 2u;
 constexpr unsigned TAG_ID_PADDING_BITS =
     15u - TAG_ID_BITS - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
 constexpr unsigned REMAP_COLOUR_SHIFT = 48u + 1u + TAG_ID_BITS;
-constexpr uintptr_t REMAP_COLOUR_A = uintptr_t(1) << REMAP_COLOUR_SHIFT;
-constexpr uintptr_t REMAP_COLOUR_B = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 1u);
-constexpr uintptr_t REMAP_COLOUR_MASK = REMAP_COLOUR_A | REMAP_COLOUR_B;
+constexpr uintptr_t ZPointerRemapped00 = uintptr_t(1) << REMAP_COLOUR_SHIFT;
+constexpr uintptr_t ZPointerRemapped01 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 1u);
+constexpr uintptr_t ZPointerRemapped10 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 2u);
+constexpr uintptr_t ZPointerRemapped11 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 3u);
+constexpr uintptr_t REMAP_COLOUR_MASK =
+    ZPointerRemapped00 | ZPointerRemapped01 | ZPointerRemapped10 | ZPointerRemapped11;
 constexpr unsigned MARKED_YOUNG_SHIFT = REMAP_COLOUR_SHIFT + REMAP_COLOUR_BITS;
 constexpr uintptr_t MARKED_YOUNG_0 = uintptr_t(1) << MARKED_YOUNG_SHIFT;
 constexpr uintptr_t MARKED_YOUNG_1 = uintptr_t(1) << (MARKED_YOUNG_SHIFT + 1u);
