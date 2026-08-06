@@ -132,10 +132,20 @@ public:
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
     // the current young mark epoch, and the current old mark epoch; raw null is not mark-good.
+    //
+    // Also require is_load_good (positive remap colour bits). Mask-only (value & mark_bad)==0
+    // admits plain uncoloured non-null (all colour bits 0), which ZGC never stores: every heap
+    // ref is coloured on write. During partial migration those plains exist and must take the
+    // slow path (make_load_good + IsHeapAddress), not the mark-good fast path.
     bool is_mark_good(RefField<>& ref) const
     {
-        return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0;
+        return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0 && is_load_good(ref);
     }
+
+    // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.
+    // Gate before IsValidObject/IsMarkedObject. Count rejects under MRT_GCV2_MARKGOOD_HEAP_GATE=1.
+    static bool MarkGoodHeapGate(const char* site, BaseObject* target);
+    static void ReportMarkGoodHeapGateCounts();
 
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }

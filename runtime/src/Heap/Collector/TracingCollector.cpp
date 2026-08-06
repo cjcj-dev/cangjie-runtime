@@ -881,6 +881,9 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             // mark-good fast path (zcolor2 @ 84a64e88): already passed this mark epoch.
             if (is_mark_good(oldField)) {
                 BaseObject* targetObj = oldField.GetTargetObject();
+                if (!Collector::MarkGoodHeapGate("DFSTraceExportObject", targetObj)) {
+                    return;
+                }
                 if (IsMarkedObject(targetObj)) {
                     return;
                 }

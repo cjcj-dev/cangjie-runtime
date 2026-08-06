@@ -7,7 +7,11 @@
 
 #include "Collector/Collector.h"
 
+#include <atomic>
+#include <cstring>
+
 #include "Base/Log.h"
+#include "Base/LogFile.h"
 #include "Common/BaseObject.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
@@ -16,6 +20,45 @@ namespace MapleRuntime {
 namespace {
 const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regional-Copying Collector",
                                        "Smooth Collector" };
+
+// zc7fix: is_mark_good fast path may admit plain non-heap slots (g_cjMarkBadMask all-zero on
+// uncoloured non-null). Count rejects before IsValidObject/IsMarkedObject.
+std::atomic<size_t> g_markGoodHeapGateReject{ 0 };
+std::atomic<size_t> g_markGoodHeapGateSample{ 0 };
+
+bool MarkGoodHeapGateAccountOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MARKGOOD_HEAP_GATE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+} // namespace
+
+bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
+{
+    if (Heap::IsHeapAddress(target)) {
+        return true;
+    }
+    size_t n = g_markGoodHeapGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Always count; samples use RTLOG_ERROR so they survive default log level and abrupt exit.
+    if (MarkGoodHeapGateAccountOn()) {
+        size_t s = g_markGoodHeapGateSample.fetch_add(1, std::memory_order_relaxed);
+        if (s < 8) {
+            LOG(RTLOG_ERROR, "[GCV2][markgood-heap-gate] REJECT site=%s target=%p n=%zu", site, target, n);
+        }
+    }
+    return false;
+}
+
+void Collector::ReportMarkGoodHeapGateCounts()
+{
+    if (!MarkGoodHeapGateAccountOn()) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[GCV2][markgood-heap-gate] reject=%zu env=MRT_GCV2_MARKGOOD_HEAP_GATE=1",
+        g_markGoodHeapGateReject.load(std::memory_order_relaxed));
 }
 
 // F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.
