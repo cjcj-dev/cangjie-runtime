@@ -170,6 +170,43 @@ public:
         return (ref.GetFieldValue() & ZPointerRemappedOldMask) != 0;
     }
 
+    // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
+    // bit identifies the other generation; a double-bad colour consults the forwarding side table.
+    ZGenerationId remap_generation(RefField<>& ref) const override
+    {
+        CHECK_DETAIL(!is_load_good(ref), "load-good reference does not need remap");
+        bool youngLoadGood = is_young_load_good(ref);
+        bool oldLoadGood = is_old_load_good(ref);
+        if (oldLoadGood && !youngLoadGood) {
+            return ZGenerationId::young;
+        }
+        if (youngLoadGood && !oldLoadGood) {
+            return ZGenerationId::old;
+        }
+
+        RegionInfo* forwarding =
+            RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref.GetTargetObject()));
+        if (forwarding != nullptr && forwarding->generation_id() == ZGenerationId::young) {
+            return ZGenerationId::young;
+        }
+        return ZGenerationId::old;
+    }
+
+    // OpenJDK ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140): an address
+    // outside the selected generation's forwarding table is already safe; a matching entry routes
+    // to the current object. The generation check prevents an address-reuse alias from selecting a
+    // route installed by the other generation.
+    BaseObject* relocate_or_remap(BaseObject* obj, ZGenerationId generation) const override
+    {
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (forwarding == nullptr || forwarding->generation_id() != generation) {
+            return obj;
+        }
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
+        return to == nullptr ? obj : to;
+    }
+
     void AddRawPointerObject(BaseObject* obj) override
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);

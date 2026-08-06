@@ -113,6 +113,14 @@ public:
     virtual bool is_young_load_good(RefField<>&) const { std::abort(); }
     virtual bool is_old_load_good(RefField<>&) const { std::abort(); }
 
+    bool is_load_good(RefField<>& ref) const
+    {
+        return ref.GetTargetObject() != nullptr && is_young_load_good(ref) && is_old_load_good(ref);
+    }
+
+    virtual ZGenerationId remap_generation(RefField<>&) const { std::abort(); }
+    virtual BaseObject* relocate_or_remap(BaseObject*, ZGenerationId) const { std::abort(); }
+
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,
     // the current young mark epoch, and the current old mark epoch; raw null is not mark-good.
     bool is_mark_good(RefField<>& ref) const
