@@ -139,6 +139,7 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
     }
     mutator->SetManagedContext(true);
     mutator->LeaveSaferegion();
+    mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_RUNNING);
 #ifdef _WIN64
     Runtime& runtime = Runtime::Current();
     WinModuleManager& winModuleManager = runtime.GetWinModuleManager();

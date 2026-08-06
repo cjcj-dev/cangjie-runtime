@@ -472,6 +472,7 @@ public:
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
         DoLeaveSaferegion();
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
         SetSafepointStatePtr(&tlData->safepointState);
         SetSafepointActive(false);
     }
@@ -479,6 +480,7 @@ public:
     void PreparedToPark(void* pc, void* fa)
     {
         SetSafepointStatePtr(nullptr);
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             return;
         }

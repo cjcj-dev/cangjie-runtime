@@ -153,6 +153,7 @@ void MutatorManager::TransitMutatorToExit()
 {
     Mutator* mutator = Mutator::GetMutator();
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
+    mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_EXITING);
     // Enter saferegion to avoid blocking gc stw
     mutator->MutatorLock();
     mutator->ResetMutator();
