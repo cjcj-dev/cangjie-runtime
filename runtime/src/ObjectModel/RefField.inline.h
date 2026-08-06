@@ -21,21 +21,19 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
 {
     RefField<> newField(obj);
     uintptr_t newVal = newField.GetFieldValue();
-    RefFieldValue oldVal = fieldVal;
+#if defined(CANGJIE_TSAN_SUPPORT)
+    RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
+#else
+    RefFieldValue oldVal = __atomic_load_n(&fieldVal, std::memory_order_relaxed);
+#endif
     (void)oldVal;
 
-    if (isAtomic) {
+    // Always atomic: see GetTargetObject — closes mutator↔GC races R1/R3.
 #if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanAtomicStore(&fieldVal, static_cast<RefFieldValue>(newVal), order);
+    Sanitizer::TsanAtomicStore(&fieldVal, static_cast<RefFieldValue>(newVal), order);
 #else
-        __atomic_store_n(&fieldVal, static_cast<RefFieldValue>(newVal), order);
+    __atomic_store_n(&fieldVal, static_cast<RefFieldValue>(newVal), order);
 #endif
-    } else {
-        fieldVal = static_cast<RefFieldValue>(newVal);
-#if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanWriteMemory(&fieldVal, GetSize());
-#endif
-    }
 
     DLOG(BARRIER, "write field @%p 0x%zx -> %p", this, oldVal, obj);
 }
@@ -43,21 +41,18 @@ void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_orde
 template<bool isAtomic>
 void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
 {
-    RefFieldValue oldVal = fieldVal;
+#if defined(CANGJIE_TSAN_SUPPORT)
+    RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
+#else
+    RefFieldValue oldVal = __atomic_load_n(&fieldVal, std::memory_order_relaxed);
+#endif
     (void)oldVal;
 
-    if (isAtomic) {
 #if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanAtomicStore(&fieldVal, static_cast<RefFieldValue>(newVal), order);
+    Sanitizer::TsanAtomicStore(&fieldVal, static_cast<RefFieldValue>(newVal), order);
 #else
-        __atomic_store_n(&fieldVal, static_cast<RefFieldValue>(newVal), order);
+    __atomic_store_n(&fieldVal, static_cast<RefFieldValue>(newVal), order);
 #endif
-    } else {
-        fieldVal = static_cast<RefFieldValue>(newVal);
-#if defined(CANGJIE_TSAN_SUPPORT)
-        Sanitizer::TsanWriteMemory(&fieldVal, GetSize());
-#endif
-    }
     DLOG(BARRIER, "write field @%p 0x%zx -> 0x%zx", this, oldVal, newVal);
 }
 } // namespace MapleRuntime
