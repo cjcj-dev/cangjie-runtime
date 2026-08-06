@@ -32,22 +32,17 @@ const bool STRICT_STACKMAP_ENABLED = []() {
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
-// b3fix product (甲): frame-local conservative root supplement.
-//   · stack-map miss: was silent skip → now always cons-scan the frame
-//   · stack-map valid: precise slots may omit live refs (B3_TRUE_MISS on deep frames)
-//     → after precise visit, cons-scan same window so mark/fix see the same set
-// Default ON. Opt out: MRT_GCV2_STACKMAP_CONS_SUPPLEMENT=0
-// Legacy diag flag MRT_GCV2_STACKMAP_CONS_ON_MISS=1 still forces on when supplement off.
+// Frame-local cons on stackmap miss. Default OFF (product (甲) rejected: SEGV flood).
+// Enable: MRT_GCV2_STACKMAP_CONS_SUPPLEMENT=1 or legacy MRT_GCV2_STACKMAP_CONS_ON_MISS=1.
+// mark+fix both call when on (same root set). See REPORT-b3fix.md.
 const bool STACKMAP_CONS_SUPPLEMENT = []() {
-    const char* off = std::getenv("MRT_GCV2_STACKMAP_CONS_SUPPLEMENT");
-    if (off != nullptr && std::strcmp(off, "0") == 0) {
-        const char* legacy = std::getenv("MRT_GCV2_STACKMAP_CONS_ON_MISS");
-        return legacy != nullptr && std::strcmp(legacy, "1") == 0;
+    const char* on = std::getenv("MRT_GCV2_STACKMAP_CONS_SUPPLEMENT");
+    if (on != nullptr && std::strcmp(on, "1") == 0) {
+        return true;
     }
-    return true; // product default on
+    const char* legacy = std::getenv("MRT_GCV2_STACKMAP_CONS_ON_MISS");
+    return legacy != nullptr && std::strcmp(legacy, "1") == 0;
 }();
-
-// Keep old name as alias for call sites / logs.
 const bool STACKMAP_CONS_ON_MISS = STACKMAP_CONS_SUPPLEMENT;
 
 size_t StackMapConsMaxBytes()
