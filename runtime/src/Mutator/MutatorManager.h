@@ -49,6 +49,21 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 
 using MutatorVisitor = std::function<void(Mutator&)>;
 
+struct EpochHandshakeStats {
+    uint64_t epoch = 0;
+    size_t requested = 0;
+    size_t acked = 0;
+    size_t ackedTwice = 0;
+    size_t selfAck = 0;
+    size_t gcAssistedAck = 0;
+    size_t startingAck = 0;
+    size_t runningAck = 0;
+    size_t parkedAck = 0;
+    size_t exitingAck = 0;
+    size_t stopTheWorldCalls = 0;
+    uint64_t managementLockNanos = 0;
+};
+
 class MutatorManager {
 public:
     MutatorManager() {}
@@ -195,6 +210,10 @@ public:
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToGCPhase(GCPhase phase);
 
+    static bool EpochHandshakeEnabled();
+    EpochHandshakeStats RunEpochHandshake(const char* source);
+    void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
+
     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
 
@@ -313,6 +332,20 @@ private:
     std::atomic<bool> worldStopped = { false };
     std::list<Mutator*> undoneLightSyncMutators;
     GCPhase lightSyncGCPhase;
+
+    std::atomic<uint64_t> epochHandshakeSequence = { 0 };
+    std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    std::atomic<size_t> epochHandshakeAcked = { 0 };
+    std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
+    std::atomic<size_t> epochHandshakeSelfAck = { 0 };
+    std::atomic<size_t> epochHandshakeGcAssistedAck = { 0 };
+    std::atomic<size_t> epochHandshakeStartingAck = { 0 };
+    std::atomic<size_t> epochHandshakeRunningAck = { 0 };
+    std::atomic<size_t> epochHandshakeParkedAck = { 0 };
+    std::atomic<size_t> epochHandshakeExitingAck = { 0 };
+    std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
+    std::mutex epochHandshakeLedgerMutex;
+    std::unordered_set<Mutator*> epochHandshakeAckedMutators;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

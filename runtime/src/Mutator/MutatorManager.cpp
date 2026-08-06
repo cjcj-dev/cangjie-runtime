@@ -9,6 +9,7 @@
 
 #include <thread>
 #include <cstdlib>
+#include <cstring>
 #include "Base/TimeUtils.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
@@ -20,6 +21,25 @@
 #include "CpuProfiler/CpuProfiler.h"
 
 namespace MapleRuntime {
+namespace {
+thread_local bool inEpochHandshake = false;
+
+uint64_t GetEpochHandshakeTimeoutMillis()
+{
+    static const uint64_t timeout = []() -> uint64_t {
+        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS");
+        if (value != nullptr) {
+            char* end = nullptr;
+            unsigned long long parsed = std::strtoull(value, &end, 10);
+            if (end != value && parsed > 0) {
+                return static_cast<uint64_t>(parsed);
+            }
+        }
+        return 30000;
+    }();
+    return timeout;
+}
+} // namespace
 // Mutator-list write-lock watchdog timeout (seconds). Read once from env
 // cjMutatorLockTimeout, falling back to WAIT_LOCK_TIMEOUT, so heavy CPU-oversubscribed
 // builds can raise it without a rebuild. A reader holding the list lock can be starved
@@ -231,6 +251,156 @@ void MutatorManager::Init()
 
 MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().GetMutatorManager(); }
 
+bool MutatorManager::EpochHandshakeEnabled()
+{
+    static const bool enabled = []() {
+        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return enabled;
+}
+
+void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf)
+{
+    std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+    if (epoch != epochHandshakeActive.load(std::memory_order_acquire) ||
+        !epochHandshakeAckedMutators.insert(&mutator).second) {
+        epochHandshakeAckedTwice.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+
+    epochHandshakeAcked.fetch_add(1, std::memory_order_relaxed);
+    if (bySelf) {
+        epochHandshakeSelfAck.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        epochHandshakeGcAssistedAck.fetch_add(1, std::memory_order_relaxed);
+    }
+    switch (mutator.GetEpochHandshakeLifecycle()) {
+        case Mutator::EPOCH_HANDSHAKE_STARTING:
+            epochHandshakeStartingAck.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case Mutator::EPOCH_HANDSHAKE_RUNNING:
+            epochHandshakeRunningAck.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case Mutator::EPOCH_HANDSHAKE_PARKED:
+            epochHandshakeParkedAck.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case Mutator::EPOCH_HANDSHAKE_EXITING:
+            epochHandshakeExitingAck.fetch_add(1, std::memory_order_relaxed);
+            break;
+        default:
+            CHECK_DETAIL(false, "unknown epoch handshake lifecycle state");
+    }
+}
+
+EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
+{
+    EpochHandshakeStats stats;
+    if (!EpochHandshakeEnabled()) {
+        return stats;
+    }
+
+    Mutator* caller = IsRuntimeThread() ? nullptr : Mutator::GetMutator();
+    bool callerEnteredSaferegion = caller != nullptr && caller->EnterSaferegion(true);
+    CHECK_DETAIL(!inEpochHandshake, "nested epoch handshake is not supported");
+    inEpochHandshake = true;
+    syncMutex.lock();
+    AcquireMutatorManagementWLock();
+    uint64_t managementLockStart = TimeUtil::NanoSeconds();
+    CHECK_DETAIL(!WorldStopped(), "epoch handshake must not run while worldStopped=true");
+
+    stats.epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
+    CHECK_DETAIL(stats.epoch != 0, "epoch handshake sequence overflow");
+    epochHandshakeAcked.store(0, std::memory_order_relaxed);
+    epochHandshakeAckedTwice.store(0, std::memory_order_relaxed);
+    epochHandshakeSelfAck.store(0, std::memory_order_relaxed);
+    epochHandshakeGcAssistedAck.store(0, std::memory_order_relaxed);
+    epochHandshakeStartingAck.store(0, std::memory_order_relaxed);
+    epochHandshakeRunningAck.store(0, std::memory_order_relaxed);
+    epochHandshakeParkedAck.store(0, std::memory_order_relaxed);
+    epochHandshakeExitingAck.store(0, std::memory_order_relaxed);
+    epochHandshakeStopTheWorldCalls.store(0, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeAckedMutators.clear();
+    }
+    epochHandshakeActive.store(stats.epoch, std::memory_order_release);
+
+    std::list<Mutator*> participants;
+    VisitAllMutators([&participants](Mutator& mutator) { participants.push_back(&mutator); });
+    stats.requested = participants.size();
+    for (Mutator* mutator : participants) {
+        mutator->RequestEpochHandshake(stats.epoch);
+    }
+
+    uint64_t waitStart = TimeUtil::MilliSeconds();
+    std::list<Mutator*> pending(participants);
+    while (!pending.empty()) {
+        for (auto it = pending.begin(); it != pending.end();) {
+            Mutator* mutator = *it;
+            if (mutator->FinishedEpochHandshake(stats.epoch)) {
+                it = pending.erase(it);
+                continue;
+            }
+            if (mutator->CanGcAssistEpochHandshake()) {
+                (void)mutator->AcknowledgeEpochHandshake(stats.epoch, false);
+            }
+            ++it;
+        }
+        if (UNLIKELY(TimeUtil::MilliSeconds() - waitStart > GetEpochHandshakeTimeoutMillis())) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
+                "missing=%zu timeout_ms=%llu",
+                source, static_cast<unsigned long long>(stats.epoch), stats.requested,
+                epochHandshakeAcked.load(std::memory_order_relaxed),
+                epochHandshakeAckedTwice.load(std::memory_order_relaxed), pending.size(),
+                static_cast<unsigned long long>(GetEpochHandshakeTimeoutMillis()));
+            CHECK_DETAIL(false, "epoch handshake timed out");
+        }
+        if (!pending.empty()) {
+            (void)sched_yield();
+        }
+    }
+
+    stats.acked = epochHandshakeAcked.load(std::memory_order_relaxed);
+    stats.ackedTwice = epochHandshakeAckedTwice.load(std::memory_order_relaxed);
+    stats.selfAck = epochHandshakeSelfAck.load(std::memory_order_relaxed);
+    stats.gcAssistedAck = epochHandshakeGcAssistedAck.load(std::memory_order_relaxed);
+    stats.startingAck = epochHandshakeStartingAck.load(std::memory_order_relaxed);
+    stats.runningAck = epochHandshakeRunningAck.load(std::memory_order_relaxed);
+    stats.parkedAck = epochHandshakeParkedAck.load(std::memory_order_relaxed);
+    stats.exitingAck = epochHandshakeExitingAck.load(std::memory_order_relaxed);
+    stats.stopTheWorldCalls = epochHandshakeStopTheWorldCalls.load(std::memory_order_relaxed);
+    CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
+                 "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
+                 stats.requested, stats.acked, stats.ackedTwice, stats.stopTheWorldCalls);
+    CHECK_DETAIL(!WorldStopped(), "epoch handshake changed worldStopped");
+
+    epochHandshakeActive.store(0, std::memory_order_release);
+    stats.managementLockNanos = TimeUtil::NanoSeconds() - managementLockStart;
+    MutatorManagementWUnlock();
+    syncMutex.unlock();
+    inEpochHandshake = false;
+    if (callerEnteredSaferegion) {
+        (void)caller->LeaveSaferegion();
+    }
+
+    VLOG(REPORT,
+         "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
+         "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu stw_calls=%zu "
+         "wlock_us=%llu env=MRT_GCV2_EPOCH_HANDSHAKE=1",
+         source, static_cast<unsigned long long>(stats.epoch), stats.requested, stats.acked, stats.ackedTwice,
+         stats.selfAck, stats.gcAssistedAck, stats.startingAck, stats.runningAck, stats.parkedAck,
+         stats.exitingAck, stats.stopTheWorldCalls,
+         static_cast<unsigned long long>(stats.managementLockNanos / 1000));
+    return stats;
+}
+
+extern "C" MRT_EXPORT uint64_t MRT_RunEpochHandshake()
+{
+    return MutatorManager::Instance().RunEpochHandshake("explicit").epoch;
+}
+
 void MutatorManager::AcquireMutatorManagementWLock()
 {
     // Announce the pending writer so readers back off (writer-preference), then spin on
@@ -289,6 +459,10 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 {
+    if (UNLIKELY(inEpochHandshake)) {
+        epochHandshakeStopTheWorldCalls.fetch_add(1, std::memory_order_relaxed);
+        CHECK_DETAIL(false, "epoch handshake path must not call StopTheWorld");
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     bool saferegionEntered = false;
     // Ensure an active mutator entered saferegion before STW (aka. stop all other mutators).
