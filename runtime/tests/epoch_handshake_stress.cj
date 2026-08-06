@@ -7,6 +7,8 @@
 import std.collection.ArrayList
 
 foreign func MRT_RunEpochHandshake(): UInt64
+foreign func MRT_StartEpochHandshakeForeignChurn(): Unit
+foreign func MRT_StopEpochHandshakeForeignChurn(): UInt64
 
 class EpochGarbageNode {
     let value: Int64
@@ -60,6 +62,7 @@ func RunAllocationWave(rounds: Int64): Int64 {
 }
 
 main(): Int64 {
+    unsafe { MRT_StartEpochHandshakeForeignChurn() }
     let parked = ArrayList<Future<Int64>>()
     for (index in 0..64) {
         let captured = index
@@ -90,6 +93,10 @@ main(): Int64 {
             sleep(Duration.Zero)
         }
     }
+    let foreignStats = unsafe { MRT_StopEpochHandshakeForeignChurn() }
+    let foreignScale = UInt64(4294967296)
+    let foreignAttempts = foreignStats % foreignScale
+    let foreignAttached = foreignStats / foreignScale
 
     let createExitChecksum = creator.get()
     let allocationChecksum = allocator.get()
@@ -101,8 +108,10 @@ main(): Int64 {
     let expectedCreateExit: Int64 = 20476800
     let expectedParked: Int64 = 2016
     let passed = createExitChecksum == expectedCreateExit && parkedChecksum == expectedParked &&
-        allocationChecksum > 0 && explicitEpochs == 1500
+        allocationChecksum > 0 && explicitEpochs == 1500 && foreignAttempts > UInt64(0) &&
+        foreignAttached > UInt64(0)
     println("EPOCHHS_STRESS_OK passed=${passed} explicit=${explicitEpochs} last_epoch=${lastEpoch} " +
-        "create_exit=${createExitChecksum} parked=${parkedChecksum} allocation=${allocationChecksum}")
+        "create_exit=${createExitChecksum} parked=${parkedChecksum} allocation=${allocationChecksum} " +
+        "foreign_attempts=${foreignAttempts} foreign_attached=${foreignAttached}")
     return if (passed) { 0 } else { 3 }
 }
