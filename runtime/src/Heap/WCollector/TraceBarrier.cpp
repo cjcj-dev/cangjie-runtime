@@ -33,7 +33,7 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (LIKELY(!tmpField.IsTagged())) {
+    if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
         return tmpField.GetTargetObject();
     }
     if (theCollector.IsCurrentPointer(tmpField)) {

@@ -51,6 +51,29 @@
 #endif
 
 namespace MapleRuntime {
+// Phase A (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6): races in ForwardUpdateRawRef.
+// Total counts every lost CAS -- it is the positive control, proving the site is reached at all,
+// so a zero in StillBad means "did not happen" rather than "never wired up". StillBad counts the
+// races whose winning value still needs the barrier: zero under today's two-state encoding, and
+// a legal (not defective) state once phase C gives good a non-zero colour.
+// Report with MRT_GCV2_FORWARD_RACE_ACCOUNT=1.
+std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
+std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
+
+void ReportForwardRaceCounts()
+{
+    static const bool account = []() {
+        const char* v = std::getenv("MRT_GCV2_FORWARD_RACE_ACCOUNT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (!account) {
+        return;
+    }
+    VLOG(REPORT, "[GCV2][fwdrace] total=%zu still_bad=%zu",
+         g_forwardRaceTotalCount.load(std::memory_order_relaxed),
+         g_forwardRaceStillBadCount.load(std::memory_order_relaxed));
+}
+
 namespace {
 // T1 ledger-cost probe (setbitmap O1③): default off.
 // MRT_GCV2_LEDGER_COST=1 → time+count every insert/lookup on objects/slots/weaks
@@ -776,7 +799,21 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
                 return toVersion;
             }
-            CHECK(!IsCurrentPointer(refField));
+            // The CAS lost, so someone else wrote the slot. The old assertion said the winner
+            // cannot be a still-to-forward reference, which held only because "needs forwarding"
+            // and "carries the current tag" were the same thing. Once a good colour is non-zero
+            // (phase C) a mutator may legally store a reference to a from-object here, so that
+            // premise dies -- and an assertion whose premise is gone fires on legal states until
+            // someone stops reading it. Assert what still holds: the winning value must resolve
+            // to a live object. Count the case that becomes legal instead of asserting on it.
+            g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed);
+            RefField<> raced(refField);
+            BaseObject* racedObj = raced.GetTargetObject();
+            CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
+                         "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
+            if (IsLoadBad(raced)) {
+                g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed);
+            }
         } else {
             RefField<> newField(oldObj);
             // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.

@@ -20,7 +20,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
 {
     do {
         RefField<> oldField(field);
-        if (LIKELY(!oldField.IsTagged())) {
+        if (LIKELY(!theCollector.IsLoadBad(oldField))) {
             return oldField.GetTargetObject();
         }
         BaseObject* toVersion = nullptr;

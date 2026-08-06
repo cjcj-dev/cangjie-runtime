@@ -24,7 +24,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     // Preforward is the prior phase; residual tagged + failed forward also livelocks.
     for (;;) {
         RefField<> tmpField(field);
-        if (LIKELY(!tmpField.IsTagged())) {
+        if (LIKELY(!theCollector.IsLoadBad(tmpField))) {
             return tmpField.GetTargetObject();
         }
         if (theCollector.IsOldPointer(tmpField)) {
