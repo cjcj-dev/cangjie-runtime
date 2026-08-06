@@ -217,14 +217,27 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    // Compare on decoded object identity; CAS on observed raw bits (colour-aware).
+    // Shape matches EnumBarrier.cpp:259-280 / IdleBarrier.cpp:121-138. Plain expected vs
+    // coloured slot bits always fail (COLOUR_WRITEBACK_AUDIT R1).
+    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
-    (void)oldVersion;
-    bool res = field.CompareExchange(oldRef, newRef, succOrder, failOrder);
-    DLOG(BARRIER, "cas %u for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", res, obj, &field, oldFieldValue,
+
+    while (oldVersion == oldRef) {
+        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+            DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
+                 oldFieldValue, oldVersion, oldRef, newRef);
+            return true;
+        }
+        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        RefField<false> tmp(oldFieldValue);
+        oldVersion = ReadReference(nullptr, tmp);
+    }
+    DLOG(BARRIER, "cas 0 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field, oldFieldValue,
          oldVersion, oldRef, newRef);
-    return res;
+    return false;
 }
 
 void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
