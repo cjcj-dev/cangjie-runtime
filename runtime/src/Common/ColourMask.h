@@ -25,7 +25,7 @@
 extern "C" {
 // Any bit set means the reference needs the barrier before use: it is mid-evacuation, or it
 // carries a colour other than the one being handed out now. The collector owns the value and
-// swaps it at a phase boundary; see WCollector::FlipRemapColour. The compiler emits a reference
+// swaps it at a phase boundary; see WCollector::set_good_masks. The compiler emits a reference
 // to this symbol by name (CJBarrierLowering.cpp:641), so it is extern "C": a mangled name would
 // drift between compiler versions.
 extern unsigned long g_cjLoadBadMask;
@@ -52,15 +52,15 @@ constexpr unsigned TAG_ID_BITS =
 // single-AND fast path: when 11 is current, a stale 10 or 01 differs by a missing bit, which AND
 // cannot observe (OpenJDK zAddress.hpp:95-128,168-176).
 //
-// Flipping a phase is then one store to g_cjLoadBadMask, where today it is a full-heap
-// stop-the-world walk that strips the old tag off every reference (InvalidateOldTaggedRefs).
+// A generation relocate-start flip changes the accepted one-hot subset and republishes
+// g_cjLoadBadMask; see WCollector::flip_young_relocate_start/flip_old_relocate_start.
 constexpr unsigned REMAP_COLOUR_BITS = 4u;
 // MarkedYoung[0,1] and MarkedOld[0,1] are independent one-hot epochs. Each family needs two
 // physical bits so that a mark-start flip makes the previous epoch bad without a zero-bit trust
 // state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
 constexpr unsigned MARKED_YOUNG_BITS = 2u;
 constexpr unsigned MARKED_OLD_BITS = 2u;
-// address:48 + isTagged:1 + tagID + remapColour:2 + markedYoung:2 + markedOld:2 + padding == 64
+// address:48 + isTagged:1 + tagID:1 + remapColour:4 + markedYoung:2 + markedOld:2 + padding:6 == 64
 constexpr unsigned TAG_ID_PADDING_BITS =
     15u - TAG_ID_BITS - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
 constexpr unsigned REMAP_COLOUR_SHIFT = 48u + 1u + TAG_ID_BITS;

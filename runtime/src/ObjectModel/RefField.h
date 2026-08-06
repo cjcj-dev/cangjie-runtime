@@ -179,8 +179,8 @@ private:
             MAddress address : 48;
             MAddress isTagged : 1;
             MAddress tagID : TAG_ID_BITS;
-            // Phase C: one-hot RemappedYoung x RemappedOld state. address stays at bits 0..47,
-            // so the compiler -- which only ANDs against a mask -- is unaffected by the encoding.
+            // Phase C: one-hot RemappedYoung x RemappedOld state. address stays at bits 0..47;
+            // a compiler fast path must strip bits 48..63 before exposing a load-good address.
             MAddress remapColour : REMAP_COLOUR_BITS;
             MAddress markedYoung : MARKED_YOUNG_BITS;
             MAddress markedOld : MARKED_OLD_BITS;
