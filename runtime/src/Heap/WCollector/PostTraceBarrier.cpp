@@ -18,9 +18,11 @@ namespace MapleRuntime {
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
-    }
+    // Colour-era E invariant (was: tagged ⇒ IsCurrentPointer).
+    // Dual encoding: plain (!IsLoadBad) remains legal; load-bad must already be load-good
+    // (current remap colour). Forbids only remap-stale / non-current old tags.
+    // Equiv. of !IsOldPointer under colour: !IsLoadBad || is_load_good.
+    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
     return tmpField.GetTargetObject();
 }
 
@@ -29,9 +31,8 @@ BaseObject* PostTraceBarrier::ReadStaticRef(RefField<false>& field) const { retu
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
     RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
-    }
+    // Colour-era E invariant (was: tagged ⇒ IsCurrentPointer): !IsLoadBad || is_load_good.
+    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
     BaseObject* referent = tmpField.GetTargetObject();
     if (referent == nullptr) {
         return nullptr;
@@ -96,7 +97,8 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     RefField<> tmpField(field);
-    CHECK(!theCollector.IsOldPointer(tmpField));
+    // Colour-era E invariant (was: !IsOldPointer): slot is not remap-stale before write.
+    CHECK(!theCollector.IsLoadBad(tmpField) || theCollector.is_load_good(tmpField));
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
