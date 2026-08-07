@@ -99,7 +99,7 @@ main(): Int64 {
                     }
                     sum
             }
-            (void)burst.get()
+            let _burstSum = burst.get()
         }
         if (round % 4 == 0) {
             sleep(Duration.millisecond)
