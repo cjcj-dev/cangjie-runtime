@@ -296,6 +296,9 @@ public:
 
     void RequestEpochHandshake(uint64_t epoch);
     bool AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf);
+    // dynjoin (乙): brand-new mutator is born-clean for the currently active epoch.
+    // Empty stack + current GC phase ⇒ no contribution to this epoch's root set.
+    void MarkBornCleanForEpoch(uint64_t epoch);
 
     bool FinishedEpochHandshake(uint64_t epoch) const
     {

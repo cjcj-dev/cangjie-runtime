@@ -242,8 +242,12 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "epoch handshake request must not use epoch zero");
     EpochHandshakeState state = epochHandshakeState.load(std::memory_order_acquire);
+    // Born-clean mutators (dynjoin 乙) already have completion==epoch and state
+    // ACKNOWLEDGED without ever receiving a request. Request must still be legal
+    // for the next epoch only; same-epoch re-request is forbidden.
     CHECK_DETAIL((state == EPOCH_HANDSHAKE_IDLE || state == EPOCH_HANDSHAKE_ACKNOWLEDGED) &&
-                     epochHandshakeRequest.load(std::memory_order_acquire) < epoch,
+                     epochHandshakeRequest.load(std::memory_order_acquire) < epoch &&
+                     epochHandshakeCompletion.load(std::memory_order_acquire) < epoch,
                  "overlapping epoch handshake request: mutator=%p epoch=%llu request=%llu completion=%llu state=%u",
                  this, static_cast<unsigned long long>(epoch),
                  static_cast<unsigned long long>(epochHandshakeRequest.load(std::memory_order_relaxed)),
@@ -253,6 +257,16 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
     epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
     SetSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(true);
+}
+
+void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
+{
+    CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
+    // Publish completion before state so a concurrent FinishedEpochHandshake
+    // observer that sees ACKNOWLEDGED also sees the matching completion.
+    epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
+    epochHandshakeCompletion.store(epoch, std::memory_order_release);
+    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
 }
 
 bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
