@@ -131,9 +131,9 @@ public:
         size_t prevCursor = cursorIndex.load(std::memory_order_acquire);
         size_t prevFrames = frameCount.load(std::memory_order_acquire);
         lastGrowOffset.store(stackOffset, std::memory_order_relaxed);
-        growCount.fetch_add(1, std::memory_order_relaxed);
+        size_t n = growCount.fetch_add(1, std::memory_order_relaxed) + 1;
         // Release so a reader that observes generation N+1 also sees cursor/offset.
-        stackGeneration.fetch_add(1, std::memory_order_release);
+        uint64_t gen = stackGeneration.fetch_add(1, std::memory_order_release) + 1;
         if (VerifyEnabled()) {
             size_t afterCursor = cursorIndex.load(std::memory_order_relaxed);
             size_t afterFrames = frameCount.load(std::memory_order_relaxed);
@@ -141,6 +141,12 @@ public:
                          "[GCV2][stack-watermark] GROW_CURSOR_MUTATED %zu -> %zu", prevCursor, afterCursor);
             CHECK_DETAIL(afterFrames == prevFrames,
                          "[GCV2][stack-watermark] GROW_FRAMECOUNT_MUTATED %zu -> %zu", prevFrames, afterFrames);
+            // Observable grow proof (stackgrow delivery gate): always log under verify.
+            LOG(RTLOG_ERROR,
+                "[GCV2][stack-watermark] GROW offset=%lld cursor=%zu frames=%zu gen=%llu count=%zu "
+                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
+                static_cast<long long>(stackOffset), afterCursor, afterFrames,
+                static_cast<unsigned long long>(gen), n);
         }
     }
 
