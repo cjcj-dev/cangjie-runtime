@@ -841,7 +841,8 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
-        RefField<> newField(toVersion);
+        // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
+        RefField<> newField = GetAndTryTagRefField(toVersion);
         // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
         if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
@@ -874,7 +875,8 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             }
         }
     } else {
-        RefField<> newField(oldObj);
+        // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
+        RefField<> newField = GetAndTryTagRefField(oldObj);
         // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
         if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
@@ -2317,7 +2319,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
-    RefField<> newField(current);
+    // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
+    // Plain RefField<>(current) was the trust-state install that AssertColouredWriteIfEnabled fires on.
+    RefField<> newField = GetAndTryTagRefField(current);
     MAddress oldVal = raw(oldField.GetFieldValue());
     MAddress newVal = raw(newField.GetFieldValue());
     if (oldVal == newVal) {
