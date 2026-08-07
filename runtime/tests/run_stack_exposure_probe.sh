@@ -21,12 +21,21 @@ src_root="$repo/runtime/src"
 compile_with_so()
 {
     local libdir=$1
+    # boundscheck may sit next to the runtime SO or under output/temp/lib/<cfg>.
+    local extra_lib=()
+    if [[ -f "$libdir/libboundscheck.so" ]]; then
+        : # same dir
+    elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Release/libboundscheck.so" ]]; then
+        extra_lib+=(-L"$repo/runtime/output/temp/lib/x86_64_Release")
+    elif [[ -f "$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo/libboundscheck.so" ]]; then
+        extra_lib+=(-L"$repo/runtime/output/temp/lib/x86_64_Relwithdebinfo")
+    fi
     taskset -c "$cpuset" clang++ -std=gnu++14 -O2 -pthread -fno-rtti -fno-exceptions \
         -I"$src_root" -I"$src_root/Heap" -I"$repo/runtime/include" \
         -I"$repo/runtime/output/temp/include" \
         -I"$repo/runtime/third_party/third_party_bounds_checking_function/include" \
         "$repo/runtime/tests/stack_exposure_harness.cpp" \
-        -L"$libdir" -Wl,-rpath,"$libdir" -lcangjie-runtime -lboundscheck \
+        -L"$libdir" "${extra_lib[@]}" -Wl,-rpath,"$libdir" -lcangjie-runtime -lboundscheck \
         -o "$probe_tmp/stack-exposure" 2>"$probe_tmp/compile.err"
 }
 
