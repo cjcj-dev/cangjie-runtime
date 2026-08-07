@@ -1907,6 +1907,10 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    // markfloor: interiors pass IsValidObject (tip=length≠null); reject before header walk.
+    if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
+        return;
+    }
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
