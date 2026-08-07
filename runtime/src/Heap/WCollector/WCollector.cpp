@@ -838,11 +838,23 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
         CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
                      raw(oldField.GetFieldValue()));
     }
+    // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
+    // are never evacuated. Colouring or CAS into those pages faults; skip write-back.
+    // Same heap gate as IsGhostFromObject / FindToVersion / FixMinorEvacuatedSlot resolve.
+    if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
+        return oldObj;
+    }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
         // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
         RefField<> newField = GetAndTryTagRefField(toVersion);
+        // Skip CAS when value already matches (sibling shape :781-783) — lock cmpxchg
+        // still writes the cache line and faults on RELRO even when expected==desired.
+        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+            DLOG(FIX, "raw-ref @%p already current: %p", &root, toVersion);
+            return toVersion;
+        }
         // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
         if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
@@ -877,6 +889,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     } else {
         // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
         RefField<> newField = GetAndTryTagRefField(oldObj);
+        // Skip CAS when value already matches (sibling shape :781-783).
+        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
+            DLOG(FIX, "raw-ref @%p already current: %p", &root, oldObj);
+            return oldObj;
+        }
         // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
         if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
@@ -2315,8 +2332,14 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
     BaseObject* target = ResolveMinorReference(field);
+    // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
+    // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
+    // Same heap gate as ForwardUpdateRawRef / FindToVersion.
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false;
+    }
     BaseObject* current = target;
-    if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
