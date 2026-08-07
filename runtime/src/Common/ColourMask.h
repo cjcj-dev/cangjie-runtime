@@ -80,6 +80,17 @@ constexpr uintptr_t MARKED_OLD_1 = uintptr_t(1) << (MARKED_OLD_SHIFT + 1u);
 constexpr uintptr_t MARKED_OLD_MASK = MARKED_OLD_0 | MARKED_OLD_1;
 // Tagged (mid-evacuation) needs the barrier whichever colour it carries.
 constexpr uintptr_t TAGGED_BITS_MASK = ((uintptr_t(1) << (1u + TAG_ID_BITS)) - 1u) << 48u;
+
+// Self-heal CAS bound for load barriers (ATOMIC_READ_PROTOCOL Q2). ZGC terminates
+// self-heal via colour monotonicity; our Forward-phase writers can re-tag the same
+// slot, so an unbounded heal loop is a livelock. After K failures the reader returns
+// the resolved payload without writing the slot (wait-free escape).
+constexpr int kSelfHealAttempts = 2;
+// Colour-aware identity CAS (CompareAndSwapReferenceImpl family). A concurrent reader
+// may self-heal the slot on every load so the raw expected bits keep moving while the
+// decoded identity stays oldRef; without a bound that is the 47-minute natural_wave spin
+// fixed on main by c3179214. Exhaustion returns false (callers already handle CAS fail).
+constexpr int kCasAttempts = 8;
 } // namespace MapleRuntime
 
 #endif // MRT_COLOUR_MASK_H

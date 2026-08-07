@@ -125,13 +125,14 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 {
     // R8：expected 已是 observed-raw；新值上规范色（模板 EnumBarrier.cpp:262-269）。
     // ⛔ R1 base CAS 假失配由 casfix 独占，本处不碰 Barrier.cpp:217-229。
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    // oldRef and newRef must be the latest versions.
-    while (oldVersion == oldRef) {
+    // oldRef and newRef must be the latest versions. Bound kCasAttempts: colour self-heal
+    // can keep the raw expected bits moving while identity stays oldRef (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
             return true;
         }

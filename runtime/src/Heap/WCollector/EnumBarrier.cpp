@@ -18,7 +18,8 @@
 namespace MapleRuntime {
 BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    for (;;) {
+    // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -31,6 +32,9 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -244,13 +248,13 @@ void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fiel
 bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
-    while (oldVersion == oldRef) {
+    // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
             Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);

@@ -20,7 +20,11 @@
 namespace MapleRuntime {
 BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    for (;;) {
+    // Soft-resolve every tagged outcome. A bare `do { ... } while (true)` with no
+    // progress path livelocks the mutator (no safepoint) and GC then spins forever in
+    // EnsurePhaseTransition(IDLE). Bound kSelfHealAttempts: colour writers can re-tag
+    // the same slot (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -39,6 +43,9 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -78,7 +85,8 @@ void ForwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, c
 
 BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    for (;;) {
+    // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -99,6 +107,9 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         DCHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -132,11 +143,12 @@ BaseObject* ForwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<tr
 bool ForwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                              BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
-    while (oldVersion == oldRef) {
+    // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }
