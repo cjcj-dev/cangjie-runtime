@@ -11,6 +11,7 @@
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
 #include "Interpreter/InterpreterSpecific.h"
+#include "UnwindStack/StackFrameCursor.h"
 
 namespace MapleRuntime {
 #ifdef __arm__
@@ -18,31 +19,7 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
 {
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                TracingCollector::VisitStackRoots(func, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::STACKGROW:
-                LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitStackRoots");
-                break;
-            case FrameType::SAFEPOINT:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2N_STUB:
-                TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::EXSLUSIVE:
-                TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
-                                                                 reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                break;
-            }
-        }
+        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 }
 
@@ -125,27 +102,7 @@ void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) con
 {
     RegSlotsMap regSlotsMap;
     for (const auto& frame : stack) {
-        switch (frame.GetFrameType()) {
-            case FrameType::MANAGED: {
-                TracingCollector::VisitStackRoots(func, regSlotsMap, frame, mutator);
-                break;
-            }
-            case FrameType::SAFEPOINT:
-            case FrameType::STACKGROW:
-                TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            case FrameType::C2R_STUB:
-            case FrameType::C2N_STUB:
-            case FrameType::EXSLUSIVE:
-#ifdef INTERPRETER_ENABLED
-            case FrameType::INTERPRETER_C2I:
-#endif
-                TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
-                break;
-            default: {
-                break;
-            }
-        }
+        StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 
 #ifdef INTERPRETER_ENABLED

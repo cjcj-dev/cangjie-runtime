@@ -8,6 +8,7 @@ set(SRC_LIST
     "StackInfo.cpp"
     "EhStackInfo.cpp"
     "GcStackInfo.cpp"
+    "StackFrameCursor.cpp"
     "StackGrowStackInfo.cpp"
     "PrintStackInfo.cpp"
     "PrintSignalStackInfo.cpp"
