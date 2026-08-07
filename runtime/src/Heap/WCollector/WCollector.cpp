@@ -3694,12 +3694,20 @@ void WCollector::ProcessFinalizers()
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
+    // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
+    // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
+    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        return obj;
+    }
     BaseObject* to = TryForwardObject(obj);
     return (to != nullptr) ? to : obj;
 }
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 {
+    if (!Collector::PlausibleManagedObjectGate("WCollector::TryForwardObject", obj)) {
+        return nullptr;
+    }
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
         return nullptr;
@@ -3749,6 +3757,11 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
+    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
+        // Caller locked for a real object; unlock without claiming FORWARDED.
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
