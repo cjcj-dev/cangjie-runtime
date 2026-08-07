@@ -169,12 +169,13 @@ public:
     // accepted bits in that generation's mask.
     bool is_young_load_good(RefField<>& ref) const override
     {
-        return (ref.GetFieldValue() & ZPointerRemappedYoungMask) != 0;
+        // 凭什么 raw: 掩码测位型，不解引用。
+        return (raw(ref.GetFieldValue()) & ZPointerRemappedYoungMask) != 0;
     }
 
     bool is_old_load_good(RefField<>& ref) const override
     {
-        return (ref.GetFieldValue() & ZPointerRemappedOldMask) != 0;
+        return (raw(ref.GetFieldValue()) & ZPointerRemappedOldMask) != 0;
     }
 
     // OpenJDK ZBarrier::remap_generation (zBarrier.inline.hpp:110-137): one generation-good
@@ -191,7 +192,7 @@ public:
             return ZGenerationId::old;
         }
 
-        BaseObject* target = ref.GetTargetObject();
+        BaseObject* target = to_object(ref.GetTargetObject());
         if (!Heap::IsHeapAddress(target)) {
             return ZGenerationId::old;
         }

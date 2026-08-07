@@ -203,7 +203,7 @@ bool BaseObject::IsInTraceRegion() const
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
     if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", oldRef.GetFieldValue(), newRef.GetFieldValue());
+        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }
     return false;

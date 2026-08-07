@@ -21,17 +21,17 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     do {
         RefField<> oldField(field);
         if (LIKELY(!theCollector.IsLoadBad(oldField))) {
-            return oldField.GetTargetObject();
+            return to_object(oldField.GetTargetObject());
         }
         BaseObject* toVersion = nullptr;
         if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-            DLOG(BARRIER, "update obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
+            DLOG(BARRIER, "update obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), toVersion);
             return toVersion;
         }
 
         BaseObject* target = nullptr;
         if (theCollector.TryUntagRefField(obj, field, target)) {
-            DLOG(BARRIER, "untag obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+            DLOG(BARRIER, "untag obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
             return target;
         }
     } while (true);
@@ -52,18 +52,18 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* toVersion = nullptr;
     // note TryUpdateRefField and TryUntagRefField are all atomic operations.
     if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
+        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), toVersion);
         return toVersion;
     }
 
     BaseObject* target = nullptr;
     if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
 
     target = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
     return target;
 }
 
@@ -112,11 +112,11 @@ BaseObject* IdleBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>
 {
     // newRef must be the latest versions; colour it so the slot never holds plain.
     RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(order), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue(order)), newRef);
     return oldRef;
 }
 
@@ -125,7 +125,7 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 {
     // R8：expected 已是 observed-raw；新值上规范色（模板 EnumBarrier.cpp:262-269）。
     // ⛔ R1 base CAS 假失配由 casfix 独占，本处不碰 Barrier.cpp:217-229。
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
@@ -133,10 +133,10 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
     // can keep the raw expected bits moving while identity stays oldRef (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
+        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), sOrder, fOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }
@@ -145,7 +145,7 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 
 void IdleBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
+    DLOG(BARRIER, "write obj %p ref@%p: %p => %p", obj, &field, to_object(field.GetTargetObject()), ref);
     // R3 人口最大：Idle 墙钟写一律规范色。
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
@@ -159,11 +159,11 @@ void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
-                MAddress oldValue = oldField.GetFieldValue();
+                MAddress oldValue = raw(oldField.GetFieldValue());
                 BaseObject* latest = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-                if (oldValue != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                if (oldValue != raw(newField.GetFieldValue())) {
+                    refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
                 }
             },
             dst, dst + dstLen);
@@ -187,11 +187,11 @@ void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
         RefField<> oldField(refField);
-        MAddress oldValue = oldField.GetFieldValue();
+        MAddress oldValue = raw(oldField.GetFieldValue());
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != newField.GetFieldValue()) {
-            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        if (oldValue != raw(newField.GetFieldValue())) {
+            refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
         }
     });
     RecordStaticCrossGenEdges(dst, gctib);
@@ -284,11 +284,11 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
     if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
         RefFieldVisitor recolour = [this](RefField<false>& field) {
             RefField<> oldField(field);
-            MAddress oldValue = oldField.GetFieldValue();
+            MAddress oldValue = raw(oldField.GetFieldValue());
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != newField.GetFieldValue()) {
-                field.CompareExchange(oldValue, newField.GetFieldValue());
+            if (oldValue != raw(newField.GetFieldValue())) {
+                field.CompareExchange(oldValue, raw(newField.GetFieldValue()));
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);

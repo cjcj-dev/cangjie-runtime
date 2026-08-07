@@ -551,7 +551,7 @@ void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
     RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
     std::vector<BaseObject*> elements(arrayLengthVal);
     for (MIndex i = 0; i < arrayLengthVal; ++i) {
-        elements[i] = arrayContent[i].GetTargetObject();
+        elements[i] = to_object(arrayContent[i].GetTargetObject());
     }
     AddU4(static_cast<u4>(arrayLengthVal));
     AddU4(obj->GetTypeInfo()->GetUUID());
@@ -577,7 +577,7 @@ void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
     std::vector<BaseObject*> elements;
 
     RefFieldVisitor visitor = [&elements, &num](RefField<>& arrayContent) {
-        elements.push_back(arrayContent.GetTargetObject());
+        elements.push_back(to_object(arrayContent.GetTargetObject()));
         num++;
     };
 
@@ -697,7 +697,7 @@ void CjHeapData::WriteInstance(BaseObject*& obj, const u1 tag)
     std::vector<BaseObject*> elements;
 
     RefFieldVisitor visitor = [&elements, &num](RefField<>& fieldAddr) {
-        elements.push_back(fieldAddr.GetTargetObject());
+        elements.push_back(to_object(fieldAddr.GetTargetObject()));
         num++;
     };
 

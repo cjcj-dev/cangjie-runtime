@@ -33,7 +33,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
     // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
     for (int attempts = 0;;) {
         RefField<> oldField(field);
-        BaseObject* oldTarget = oldField.GetTargetObject();
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             return oldTarget;
         }
@@ -110,10 +110,10 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
         if (theCollector.TryUpdateRefField(obj, tmpField, toVersion)) {
             rememberedObject = toVersion;
         } else {
-            rememberedObject = field.GetTargetObject();
+            rememberedObject = to_object(field.GetTargetObject());
         }
     } else {
-        rememberedObject = tmpField.GetTargetObject();
+        rememberedObject = to_object(tmpField.GetTargetObject());
     }
 
     Mutator* mutator = Mutator::GetMutator();
@@ -133,7 +133,7 @@ void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -164,11 +164,11 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
-                MAddress oldValue = oldField.GetFieldValue();
+                MAddress oldValue = raw(oldField.GetFieldValue());
                 BaseObject* latestVerison = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
-                if (oldValue != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                if (oldValue != raw(newField.GetFieldValue())) {
+                    refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
                 }
             },
             dst, dst + dstLen);
@@ -193,11 +193,11 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
 
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
         RefField<> oldField(refField);
-        MAddress oldValue = oldField.GetFieldValue();
+        MAddress oldValue = raw(oldField.GetFieldValue());
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != newField.GetFieldValue()) {
-            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        if (oldValue != raw(newField.GetFieldValue())) {
+            refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
         }
     });
     RecordStaticCrossGenEdges(dst, gctib);
@@ -214,13 +214,13 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = oldField.GetTargetObject();
-        DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+        target = to_object(oldField.GetTargetObject());
+        DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
 
     target = ReadReference(nullptr, oldField);
-    DLOG(TBARRIER, "katomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+    DLOG(TBARRIER, "katomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
     return target;
 }
 
@@ -228,7 +228,7 @@ void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fie
                                         MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
-    MAddress oldValue = oldField.GetFieldValue();
+    MAddress oldValue = raw(oldField.GetFieldValue());
     (void)oldValue;
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     Mutator* mutator = Mutator::GetMutator();
@@ -238,9 +238,9 @@ void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fie
     mutator->RememberObjectInSatbBuffer(oldRef);
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+             &field, oldValue, raw(newField.GetFieldValue()));
     } else {
-        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
+        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, raw(newField.GetFieldValue()));
     }
 }
 
@@ -250,19 +250,19 @@ BaseObject* TraceBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true
     Mutator* mutator = Mutator::GetMutator();
     RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(newField.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     mutator->RememberObjectInSatbBuffer(oldRef);
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
 }
 
 bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                            BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     Mutator* mutator = Mutator::GetMutator();
@@ -271,11 +271,11 @@ bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& 
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
             mutator->RememberObjectInSatbBuffer(oldRef);
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }

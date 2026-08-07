@@ -198,10 +198,10 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     auto it = finalizers.begin();
     while (it != finalizers.end() && countLimit != 0) {
         RefField<> tmpField(reinterpret_cast<MAddress>(*it));
-        BaseObject* obj = tmpField.GetTargetObject();
+        BaseObject* obj = to_object(tmpField.GetTargetObject());
         --countLimit;
         if (finalizable(obj)) {
-            finalizables.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+            finalizables.push_back(to_object(safe(uncolor_bits(tmpField.GetFieldValue()))) /* ctypeall: was reinterpret_cast from coloured bits */);
             it = finalizers.erase(it);
         } else {
             ++it;
@@ -315,7 +315,7 @@ void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
     RefField<> tmpField(nullptr);
     Heap::GetBarrier().WriteStaticRef(tmpField, obj);
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+    finalizers.push_back(to_object(safe(uncolor_bits(tmpField.GetFieldValue()))) /* ctypeall: was reinterpret_cast from coloured bits */);
 }
 
 void FinalizerProcessor::RegisterFinalizers(ManagedList<BaseObject*>& objs)

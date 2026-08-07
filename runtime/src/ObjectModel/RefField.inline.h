@@ -22,8 +22,8 @@ template<bool isAtomic>
 void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_order order)
 {
     RefField<> newField(obj);
-    uintptr_t newVal = newField.GetFieldValue();
-    AssertColouredWriteIfEnabled(this, static_cast<MAddress>(newVal));
+    MAddress newVal = raw(newField.GetFieldValue());
+    AssertColouredWriteIfEnabled(this, newVal);
 #if defined(CANGJIE_TSAN_SUPPORT)
     RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
 #else

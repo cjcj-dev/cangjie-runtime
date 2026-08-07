@@ -378,7 +378,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
 {
     RefField<> oldRef(field);
     if (oldRef.IsTagged()) {
-        fromObj = oldRef.GetTargetObject();
+        fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
@@ -391,10 +391,10 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
-                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, oldRef.GetFieldValue(),
+                     obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
                      tmpField.GetFieldValue());
             } else {
-                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, oldRef.GetFieldValue(), toObj);
+                DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
             }
             return true;
         } else {
@@ -402,9 +402,9 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
                 DLOG(TRACE,
                      "update obj %p<%p>(%zu)+%zu but cas failed ref-field@%p: %#zx(%#zx) -> %#zx but cas failed ", obj,
                      obj->GetTypeInfo(), obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field,
-                     oldRef.GetFieldValue(), field.GetFieldValue(), tmpField.GetFieldValue());
+                     raw(oldRef.GetFieldValue()), raw(field.GetFieldValue()), raw(tmpField.GetFieldValue()));
             } else {
-                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, oldRef.GetFieldValue(),
+                DLOG(TRACE, "update but cas failed ref@%p: 0x%zx(%zx) -> %p", &field, raw(oldRef.GetFieldValue()),
                      field.GetFieldValue(), toObj);
             }
             return true;
@@ -432,7 +432,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         if (!oldRef.IsTagged()) {
             return false;
         }
-        target = oldRef.GetTargetObject();
+        target = to_object(oldRef.GetTargetObject());
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
         untagRefFieldBreadcrumb.active = 0;
         untagRefFieldBreadcrumb.holder = obj;
@@ -579,9 +579,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-                     &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
+                     &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
             } else {
-                DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, oldRef.GetFieldValue(), newRef.GetFieldValue());
+                DLOG(FIX, "untag ref@%p: %#zx -> %#zx", &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
             }
             return true;
         }
@@ -598,7 +598,7 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     // (OpenJDK zAddress.inline.hpp:658-664).
     if (is_mark_good(oldField)) {
         // Anchor main 8cd248497dd8c251ca824d9f089d5e30125c80c9
-        BaseObject* target = oldField.GetTargetObject();
+        BaseObject* target = to_object(oldField.GetTargetObject());
         // Plain/uncoloured non-null is mark-good under g_cjMarkBadMask; mirror the slow path.
         // Reject non-heap: do not call make_load_good (remap would touch non-heap).
         if (!Collector::MarkGoodHeapGate("EnumRefFieldRoot", target)) {
@@ -624,13 +624,13 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
+        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(),
-             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+        DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
+             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     } else {
-        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, oldField.GetFieldValue(), latest,
+        DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
     }
     rootSet.push_back(latest);
@@ -642,10 +642,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<> oldField(refField);
     // E-class = !IsOldPointer (zc9fix). Fast path stays is_mark_good (zc7fix colour-era).
     CHECK_DETAIL(!IsOldPointer(oldField),
-                 "EnumAndTagRawRoot failed: Invalid root: %zx", oldField.GetFieldValue());
+                 "EnumAndTagRawRoot failed: Invalid root: %zx", raw(oldField.GetFieldValue()));
     if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
-        BaseObject* root = oldField.GetTargetObject();
+        BaseObject* root = to_object(oldField.GetTargetObject());
         if (!Collector::MarkGoodHeapGate("EnumAndTagRawRoot", root)) {
             return;
         }
@@ -666,10 +666,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
             DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
         } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(),
-                 newField.GetFieldValue(), root, root->GetTypeInfo(), root->GetSize());
+            DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()),
+                 raw(newField.GetFieldValue()), root, root->GetTypeInfo(), root->GetSize());
         } else {
-            DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, oldField.GetFieldValue(), root,
+            DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()), root,
                  root->GetTypeInfo(), root->GetSize());
         }
         rootSet.push_back(root);
@@ -681,7 +681,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 {
     RefField<> oldField(field);
     if (is_mark_good(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
+        BaseObject* targetObj = to_object(oldField.GetTargetObject());
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
         if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
@@ -709,8 +709,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-             newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
 
     if (!IsMarkedObject(latest)) {
@@ -760,7 +760,7 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     const char* sourceKind = kind == RefSlotKind::WEAK_REFERENT ? "weak" : "strong";
     BaseObject* latest = nullptr;
     if (is_mark_good(oldField)) {
-        BaseObject* targetObj = oldField.GetTargetObject();
+        BaseObject* targetObj = to_object(oldField.GetTargetObject());
         if (!Collector::MarkGoodHeapGate("GetAndTryTagObj", targetObj)) {
             return nullptr;
         }
@@ -781,8 +781,8 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
     } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-            newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+        DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+            raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
     return latest;
 }
@@ -791,7 +791,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
 {
     auto& refField = reinterpret_cast<RefField<>&>(root);
     RefField<> oldField(refField);
-    BaseObject* oldObj = oldField.GetTargetObject();
+    BaseObject* oldObj = to_object(oldField.GetTargetObject());
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
     // E-class entry invariant = !IsOldPointer (predclass E / pre-zcolor9).
     // zcolor9 dual !IsLoadBad||is_load_good(+ghost) was strictly stronger; restore !IsOldPointer.
@@ -829,14 +829,14 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 LOG(RTLOG_ERROR,
                     "[ZC9FIX][fwd-assert] n=%zu val=%zx t1_notLoadBad=%d t2_loadGood=%d t3_ghost=%d "
                     "old_notOldPtr=%d tagID=%u curTag=%u",
-                    n, oldField.GetFieldValue(), static_cast<int>(t1), static_cast<int>(t2),
+                    n, raw(oldField.GetFieldValue()), static_cast<int>(t1), static_cast<int>(t2),
                     static_cast<int>(t3), static_cast<int>(oldInv),
                     static_cast<unsigned>(oldField.GetTagID()),
                     static_cast<unsigned>(currentTagID));
             }
         }
         CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
-                     oldField.GetFieldValue());
+                     raw(oldField.GetFieldValue()));
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
@@ -864,13 +864,13 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             }
         }
         RefField<> raced(refField);
-        BaseObject* racedObj = raced.GetTargetObject();
+        BaseObject* racedObj = to_object(raced.GetTargetObject());
         CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
-                     "ForwardUpdateRawRef race lost to a non-object: %zx", raced.GetFieldValue());
+                     "ForwardUpdateRawRef race lost to a non-object: %zx", raw(raced.GetFieldValue()));
         if (IsLoadBad(raced)) {
             size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
             if (n == 1) {
-                VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raced.GetFieldValue());
+                VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raw(raced.GetFieldValue()));
             }
         }
     } else {
@@ -995,7 +995,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (!IsOldPointer(oldField)) {
         return;
     }
-    BaseObject* fromObj = oldField.GetTargetObject();
+    BaseObject* fromObj = to_object(oldField.GetTargetObject());
     BaseObject* latest = FindToVersion(fromObj);
     if (latest == nullptr) {
         latest = fromObj;
@@ -1036,7 +1036,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     }
     if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
-             oldField.GetFieldValue(), newField.GetFieldValue(), latest);
+             raw(oldField.GetFieldValue()), raw(newField.GetFieldValue()), latest);
     }
 }
 
@@ -1122,7 +1122,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
         return [this, trackFixed, acc](ObjectRef& root) {
             RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            uintptr_t oldValue = field.GetFieldValue();
+            uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
@@ -1131,14 +1131,14 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc->fixedRootSlots;
             }
         };
     };
     auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
         return [this, trackFixed, acc](RefField<>& field) {
-            uintptr_t oldValue = field.GetFieldValue();
+            uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
@@ -1147,7 +1147,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc->fixedRootSlots;
             }
         };
@@ -1197,7 +1197,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
                               &acc](RefField<>& field) {
-            uintptr_t oldValue = field.GetFieldValue();
+            uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed) {
                 ++acc.fields;
@@ -1209,13 +1209,13 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(obj, field);
-            if (oldTagged && field.GetFieldValue() != oldValue) {
+            if (oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc.fixedSlots;
             }
             if (!recordCrossGen) {
                 return;
             }
-            BaseObject* target = field.GetTargetObject();
+            BaseObject* target = to_object(field.GetTargetObject());
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
             }
@@ -1342,7 +1342,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             false);
         if (injectTarget != nullptr) {
             RefField<> planted(injectTarget, 1, GetPreviousTagID());
-            MAddress injectRootStorage = planted.GetFieldValue();
+            MAddress injectRootStorage = raw(planted.GetFieldValue());
             ObjectRef injectRoot{};
             *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
             RootVisitor fixRoot = makeRootVisitor(&injectAcc);
@@ -1717,7 +1717,7 @@ std::atomic<size_t> g_minorRefCasOk{ 0 };
 bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
 {
     RefField<> desired(plainTarget);
-    MAddress desiredVal = desired.GetFieldValue();
+    MAddress desiredVal = raw(desired.GetFieldValue());
     if (expected == desiredVal) {
         return true;
     }
@@ -1733,7 +1733,7 @@ bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* pla
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
-    BaseObject* object = value.GetTargetObject();
+    BaseObject* object = to_object(value.GetTargetObject());
     if (!IsOldPointer(value)) {
         return object;
     }
@@ -1744,7 +1744,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     //   unmoved valid from → plain from
     //   dead/stale → null the slot (caller drops the edge)
     // N2: plain SetTargetObject → CAS (FYS=1 multi-writer safe; product default FYS=1).
-    MAddress expected = value.GetFieldValue();
+    MAddress expected = raw(value.GetFieldValue());
     BaseObject* to = FindToVersion(object);
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
@@ -1774,7 +1774,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         VLOG(REPORT,
              "[GCV2][minor-stale-oldtag] field=%p raw=%#zx from=%p to=%p "
              "(drop; full-GC remset/root residue after Flip)",
-             &field, static_cast<size_t>(value.GetFieldValue()), object, to);
+             &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
     (void)CasInstallPlainTarget(field, expected, nullptr);
     return nullptr;
@@ -2224,7 +2224,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
         RefField<> peek(*field);
-        BaseObject* rawTarget = peek.GetTargetObject();
+        BaseObject* rawTarget = to_object(peek.GetTargetObject());
         // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
         // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
         if (IsOldPointer(peek)) {
@@ -2241,7 +2241,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
-                (void)CasInstallPlainTarget(*field, peek.GetFieldValue(), nullptr);
+                (void)CasInstallPlainTarget(*field, raw(peek.GetFieldValue()), nullptr);
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,
@@ -2318,13 +2318,13 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     RefField<> newField(current);
-    MAddress oldVal = oldField.GetFieldValue();
-    MAddress newVal = newField.GetFieldValue();
+    MAddress oldVal = raw(oldField.GetFieldValue());
+    MAddress newVal = raw(newField.GetFieldValue());
     if (oldVal == newVal) {
         return false;
     }
     // Re-read after resolve (resolve may have CAS-installed plain already).
-    oldVal = field.GetFieldValue();
+    oldVal = raw(field.GetFieldValue());
     if (oldVal == newVal) {
         return false;
     }
@@ -2334,7 +2334,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
-    MAddress cur = field.GetFieldValue();
+    MAddress cur = raw(field.GetFieldValue());
     if (cur == newVal) {
         return true;
     }
@@ -2799,13 +2799,13 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
         return RootVisitor([category, &inspectTarget](ObjectRef& root) {
             RefField<> value = reinterpret_cast<RefField<>&>(root);
             uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
-            inspectTarget(category, &root, nullptr, value.GetTargetObject(), tag);
+            inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
         });
     };
     auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
         RefField<> value(field);
         uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
-        inspectTarget(category, &field, holder, value.GetTargetObject(), tag);
+        inspectTarget(category, &field, holder, to_object(value.GetTargetObject()), tag);
     };
 
     RootVisitor stackVisitor = recordRawRoot(0);
@@ -3004,7 +3004,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
                     return;
                 }
                 holder->ForEachRefField([&](RefField<>& field) {
-                    BaseObject* target = field.GetTargetObject();
+                    BaseObject* target = to_object(field.GetTargetObject());
                     if (target != object) {
                         return;
                     }

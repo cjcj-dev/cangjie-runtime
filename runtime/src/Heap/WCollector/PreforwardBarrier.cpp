@@ -23,7 +23,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
     for (int attempts = 0;;) {
         RefField<> oldField(field);
-        BaseObject* oldTarget = oldField.GetTargetObject();
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             return oldTarget;
         }
@@ -80,7 +80,7 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
         RefField<> oldField(field);
         BaseObject* target = ReadReference(nullptr, field);
         (void)target;
-        DLOG(FIX, "read static ref-field(in struct)@%p: 0x%zx -> %p", &field, oldField.GetFieldValue(), target);
+        DLOG(FIX, "read static ref-field(in struct)@%p: 0x%zx -> %p", &field, raw(oldField.GetFieldValue()), target);
     });
 }
 
@@ -89,9 +89,9 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
     // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
     for (int attempts = 0;;) {
         RefField<false> oldField(field.GetFieldValue(order));
-        BaseObject* oldTarget = oldField.GetTargetObject();
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), oldTarget);
+            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             return oldTarget;
         }
 
@@ -107,7 +107,7 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         CHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
-            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
         if (++attempts >= kSelfHealAttempts) {
@@ -123,9 +123,9 @@ void PreforwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newField.GetFieldValue());
+             raw(newField.GetFieldValue()));
     } else {
-        DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, newField.GetFieldValue());
+        DLOG(PBARRIER, "atomic write static ref@%p: %#zx", &field, raw(newField.GetFieldValue()));
     }
 }
 
@@ -133,27 +133,27 @@ BaseObject* PreforwardBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField
                                                    MemoryOrder order) const
 {
     RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
 }
 
 bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                                 BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }
@@ -190,11 +190,11 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
     if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
         RefFieldVisitor recolour = [this](RefField<false>& field) {
             RefField<> oldField(field);
-            MAddress oldValue = oldField.GetFieldValue();
+            MAddress oldValue = raw(oldField.GetFieldValue());
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != newField.GetFieldValue()) {
-                field.CompareExchange(oldValue, newField.GetFieldValue());
+            if (oldValue != raw(newField.GetFieldValue())) {
+                field.CompareExchange(oldValue, raw(newField.GetFieldValue()));
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);

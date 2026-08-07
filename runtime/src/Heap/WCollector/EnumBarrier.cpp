@@ -21,7 +21,7 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
     for (int attempts = 0;;) {
         RefField<> oldField(field);
-        BaseObject* oldTarget = oldField.GetTargetObject();
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             return oldTarget;
         }
@@ -102,10 +102,10 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
         if (theCollector.TryUpdateRefField(obj, tmpField, toVersion)) {
             remeberedObject = toVersion;
         } else {
-            remeberedObject = field.GetTargetObject();
+            remeberedObject = to_object(field.GetTargetObject());
         }
     } else {
-        remeberedObject = tmpField.GetTargetObject();
+        remeberedObject = to_object(tmpField.GetTargetObject());
     }
     Mutator* mutator = Mutator::GetMutator();
     if (remeberedObject != nullptr) {
@@ -122,9 +122,9 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
 
 void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, field.GetTargetObject(), ref);
+    DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, to_object(field.GetTargetObject()), ref);
     WriteReferenceImpl(nullptr, field, ref);
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -200,13 +200,13 @@ BaseObject* EnumBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = oldField.GetTargetObject();
-        DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+        target = to_object(oldField.GetTargetObject());
+        DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }
 
     target = ReadReference(nullptr, oldField);
-    DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
+    DLOG(EBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
     return target;
 }
 
@@ -214,14 +214,14 @@ BaseObject* EnumBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>
                                              MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(newField.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     Mutator* mutator = Mutator::GetMutator();
     mutator->RememberObjectInSatbBuffer(oldRef);
     mutator->RememberObjectInSatbBuffer(newRef);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
 }
 
@@ -229,7 +229,7 @@ void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fiel
                                        MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
-    MAddress oldValue = oldField.GetFieldValue();
+    MAddress oldValue = raw(oldField.GetFieldValue());
     (void)oldValue;
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
@@ -239,29 +239,29 @@ void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fiel
     mutator->RememberObjectInSatbBuffer(newRef);
     if (obj != nullptr) {
         DLOG(EBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+             &field, oldValue, raw(newField.GetFieldValue()));
     } else {
-        DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
+        DLOG(EBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, raw(newField.GetFieldValue()));
     }
 }
 
 bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder sOrder, MemoryOrder fOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), sOrder, fOrder)) {
+        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), sOrder, fOrder)) {
             Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);
             mutator->RememberObjectInSatbBuffer(newRef);
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }

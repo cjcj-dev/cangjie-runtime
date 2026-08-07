@@ -461,7 +461,7 @@ public:
     {
         RefField<> tmpField(nullptr);
         Heap::GetBarrier().WriteStaticRef(tmpField, obj);
-        localFinalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+        localFinalizers.push_back(to_object(safe(uncolor_bits(tmpField.GetFieldValue()))) /* ctypeall: was reinterpret_cast from coloured bits */);
     }
 
     void MutatorLock() { mutatorLock.lock(); }

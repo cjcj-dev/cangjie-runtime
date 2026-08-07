@@ -447,7 +447,7 @@ void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& arrayContent) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(arrayContent.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(arrayContent.GetTargetObject()))));
         num++;
     };
     // take array length and content.
@@ -503,7 +503,7 @@ void CjHeapDataForIDE::SerializeStructArray(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& arrayContent) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(arrayContent.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(arrayContent.GetTargetObject()))));
         num++;
     };
     // take array length and content.
@@ -630,7 +630,7 @@ void CjHeapDataForIDE::SerializeInstance(BaseObject*& obj, const u1 tag)
     u4 num = 0;
     std::stack<u4> VAL;
     RefFieldVisitor visitor = [&VAL, &num, this](RefField<>& fieldAddr) {
-        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(fieldAddr.GetTargetObject())));
+        VAL.push(GetId(reinterpret_cast<CjHeapDataID>(to_object(fieldAddr.GetTargetObject()))));
         num++;
     };
     TypeInfo* currentClass = obj->GetTypeInfo();

@@ -79,7 +79,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         if (useLiveOnly && !survived) {
             if (fysGapProbe) {
                 object->ForEachRefField([&deadEdges](RefField<>& field) {
-                    BaseObject* target = field.GetTargetObject();
+                    BaseObject* target = to_object(field.GetTargetObject());
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         return;
                     }
@@ -93,7 +93,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         }
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
                                 hasObjectLiveness, survived](RefField<>& field) {
-            BaseObject* target = field.GetTargetObject();
+            BaseObject* target = to_object(field.GetTargetObject());
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 return;
             }
@@ -156,7 +156,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
                 return;
             }
             object->ForEachRefField([&rememberedSet, &recorded, object](RefField<>& field) {
-                BaseObject* target = field.GetTargetObject();
+                BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
                 }
@@ -1698,7 +1698,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // that CollectRegion is about to reclaim.
             if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
                 toObj->ForEachRefField([&rememberedSet, &promotedRecords](RefField<>& field) {
-                    BaseObject* target = field.GetTargetObject();
+                    BaseObject* target = to_object(field.GetTargetObject());
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         return;
                     }

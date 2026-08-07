@@ -111,7 +111,8 @@ public:
     // written (jdk zAddress.inline.hpp:635-643 makes the same trade deliberately).
     bool IsLoadBad(RefField<>& ref) const
     {
-        return (ref.GetFieldValue() & ::g_cjLoadBadMask) != 0;
+        // 凭什么 raw: 掩码测的是槽位位型，不是解引用。
+        return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
     }
 
     virtual bool is_young_load_good(RefField<>&) const { std::abort(); }
@@ -119,15 +120,18 @@ public:
 
     bool is_load_good(RefField<>& ref) const
     {
-        return ref.GetTargetObject() != nullptr && is_young_load_good(ref) && is_old_load_good(ref);
+        return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
     }
 
     virtual ZGenerationId remap_generation(RefField<>&) const { std::abort(); }
     virtual BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const { std::abort(); }
 
+    // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
+    // 新代码应经 to_object(zaddress) 出口。语义未改（任务边界）。
     BaseObject* make_load_good(RefField<>& ref) const
     {
-        BaseObject* target = ref.GetTargetObject();
+        // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
+        BaseObject* target = to_object(ref.GetTargetObject());
         if (target == nullptr || is_load_good(ref)) {
             return target;
         }
@@ -143,7 +147,8 @@ public:
     // slow path (make_load_good + IsHeapAddress), not the mark-good fast path.
     bool is_mark_good(RefField<>& ref) const
     {
-        return (ref.GetFieldValue() & ::g_cjMarkBadMask) == 0 && ref.GetFieldValue() != 0 && is_load_good(ref);
+        zpointer v = ref.GetFieldValue();
+        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) && is_load_good(ref);
     }
 
     // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.

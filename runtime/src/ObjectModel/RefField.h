@@ -43,7 +43,10 @@ public:
     // size in bytes
     static constexpr size_t GetSize() { return sizeof(fieldVal); }
 
-    BaseObject* GetTargetObject(std::memory_order order = std::memory_order_relaxed) const
+    // 剥色地址位。返回 zaddress：调用方把「槽值地址位」当可解引用对象基址使用。
+    // ⚠ 本函数不做读屏障；需要 load-good 的路径必须走 Collector::make_load_good。
+    // 类型纪律见 ops/design/COLOUR_TYPE_DISCIPLINE.md。
+    zaddress GetTargetObject(std::memory_order order = std::memory_order_relaxed) const
     {
         // Always atomic: mutator plain path races with concurrent GC mark/CAS (R1/R3).
         // relaxed keeps cost near a plain load on x86_64/aarch64 while establishing HB.
@@ -52,20 +55,25 @@ public:
 #else
         MAddress value = __atomic_load_n(&fieldVal, order);
 #endif
-        return reinterpret_cast<BaseObject*>(RefField<>(value).GetAddress());
+        return to_zaddress(RefField<>(value).GetAddress());
     }
 
-    MAddress GetFieldValue(std::memory_order order = std::memory_order_relaxed) const
+    // 带色原值。返回 zpointer：⛔ 不可解引用，只能进屏障 / CAS / 写回槽。
+    zpointer GetFieldValue(std::memory_order order = std::memory_order_relaxed) const
     {
 #if defined(CANGJIE_TSAN_SUPPORT)
-        return static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order));
+        return to_zpointer(static_cast<MAddress>(Sanitizer::TsanAtomicLoad(&fieldVal, order)));
 #else
-        return __atomic_load_n(&fieldVal, order);
+        return to_zpointer(static_cast<MAddress>(__atomic_load_n(&fieldVal, order)));
 #endif
     }
 
     void SetTargetObject(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed);
     void SetFieldValue(MAddress value, std::memory_order order = std::memory_order_relaxed);
+    void SetFieldValue(zpointer value, std::memory_order order = std::memory_order_relaxed)
+    {
+        SetFieldValue(raw(value), order);
+    }
 
     bool CompareExchange(MAddress expectedValue, MAddress newValue,
                          std::memory_order succOrder = std::memory_order_relaxed,
@@ -82,6 +90,13 @@ public:
 #endif
     }
 
+    bool CompareExchange(zpointer expectedValue, zpointer newValue,
+                         std::memory_order succOrder = std::memory_order_relaxed,
+                         std::memory_order failOrder = std::memory_order_relaxed)
+    {
+        return CompareExchange(raw(expectedValue), raw(newValue), succOrder, failOrder);
+    }
+
     bool CompareExchange(const BaseObject* expectedObj, const BaseObject* newObj,
                          std::memory_order succOrder = std::memory_order_relaxed,
                          std::memory_order failOrder = std::memory_order_relaxed)
@@ -90,7 +105,7 @@ public:
                                failOrder);
     }
 
-    MAddress Exchange(MAddress newRef, std::memory_order order = std::memory_order_relaxed)
+    zpointer Exchange(MAddress newRef, std::memory_order order = std::memory_order_relaxed)
     {
         CHECK(fieldVal < std::numeric_limits<RefFieldValue>::max());
         AssertColouredWriteIfEnabled(this, newRef);
@@ -100,14 +115,21 @@ public:
 #else
         __atomic_exchange(&fieldVal, &newRef, &ret, order);
 #endif
-        return static_cast<MAddress>(ret);
+        return to_zpointer(static_cast<MAddress>(ret));
     }
 
-    MAddress Exchange(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed)
+    zpointer Exchange(zpointer newRef, std::memory_order order = std::memory_order_relaxed)
+    {
+        return Exchange(raw(newRef), order);
+    }
+
+    zpointer Exchange(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed)
     {
         return Exchange(reinterpret_cast<MAddress>(obj), order);
     }
 
+    // 地址位（已剥 isTagged/colour）。返回裸 MAddress 供布局/偏移算术；
+    // 若要当对象指针，经 uncolor_bits(GetFieldValue()) 或 GetTargetObject()。
     MAddress GetAddress() const
     {
 #ifdef __arm__
@@ -122,6 +144,8 @@ public:
 
     ~RefField() = default;
     explicit RefField(MAddress val) : fieldVal(val) {}
+    // 凭什么: zpointer 就是槽里的带色位模式，与 MAddress 同宽。
+    explicit RefField(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
     RefField(const RefField& ref) : fieldVal(ref.fieldVal) {}
     explicit RefField(const BaseObject* obj) : fieldVal(0)
     {
