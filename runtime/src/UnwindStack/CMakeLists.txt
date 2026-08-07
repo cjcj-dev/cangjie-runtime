@@ -10,6 +10,7 @@ set(SRC_LIST
     "GcStackInfo.cpp"
     "StackFrameCursor.cpp"
     "StackWatermark.cpp"
+    "StackExposureHook.cpp"
     "StackGrowStackInfo.cpp"
     "PrintStackInfo.cpp"
     "PrintSignalStackInfo.cpp"

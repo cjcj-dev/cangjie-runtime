@@ -17,6 +17,7 @@
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
 #include "Mutator.inline.h"
+#include "UnwindStack/StackExposureHook.h"
 #include "schedule.h"
 #include "CpuProfiler/CpuProfiler.h"
 
@@ -481,6 +482,8 @@ void MutatorManager::VisitAllMutatorsExceptFinalizer(MutatorVisitor func)
 
 void MutatorManager::StopTheWorld(bool syncGCPhase, GCPhase phase)
 {
+    // stackwm #5: exposure-hook slow path must not introduce STW (assertion ④).
+    StackExposureHook::NoteStopTheWorldFromHook();
     if (UNLIKELY(inEpochHandshake)) {
         epochHandshakeStopTheWorldCalls.fetch_add(1, std::memory_order_relaxed);
         CHECK_DETAIL(false, "epoch handshake path must not call StopTheWorld");
