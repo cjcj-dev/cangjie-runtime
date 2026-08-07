@@ -14,6 +14,7 @@
 #include "Base/Macros.h"
 #include "Common/ColourMask.h"  // reference bit layout + g_cjLoadBadMask
 #include "Base/Types.h"
+#include "Common/ColourTypes.h"  // zpointer / zaddress / zaddress_unsafe
 
 // commonly agreed type interfaces for a managed runtime:
 //    they're opaque across modules, but we still want it provides a degree
