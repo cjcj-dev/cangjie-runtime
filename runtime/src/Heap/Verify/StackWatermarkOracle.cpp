@@ -121,8 +121,8 @@ void DriveAndCompare(const UnwindContext& topFrame, Mutator& mutator, size_t mid
     g_exerciseCount.fetch_add(1, std::memory_order_relaxed);
     if (match) {
         g_matchCount.fetch_add(1, std::memory_order_relaxed);
-        // INFO (not DLOG): verify arm must be observable at MRT_LOG_LEVEL=i.
-        LOG(RTLOG_INFO,
+        // ERROR (not DLOG/INFO): verify arm must be observable at default log level.
+        LOG(RTLOG_ERROR,
             "[GCV2][stack-watermark-oracle] MATCH mutator=%p roots=%zu frames=%zu mid=%zu bad=%d "
             "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
             &mutator, fullKeys.size(), n, midIndex, badResume ? 1 : 0);
@@ -173,6 +173,11 @@ void StackWatermarkOracle::Exercise(const UnwindContext& topFrame, Mutator& muta
     if (!Enabled()) {
         return;
     }
+    // Breadcrumb: prove the product VisitStackRoots path reached us (loglevel-independent).
+    LOG(RTLOG_ERROR,
+        "[GCV2][stack-watermark-oracle] ENTER mutator=%p world_stopped=%d inject=%s "
+        "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
+        &mutator, MutatorManager::Instance().WorldStopped() ? 1 : 0, InjectName());
     if (!MutatorManager::Instance().WorldStopped()) {
         LOG(RTLOG_ERROR,
             "[GCV2][stack-watermark-oracle] refused: world not stopped "
