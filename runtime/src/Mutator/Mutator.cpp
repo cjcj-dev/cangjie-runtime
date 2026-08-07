@@ -669,6 +669,9 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         std::set<BaseObject**> resSet;
         RecordStackPtrs(resSet);
 
+        // Serialize against VisitStackRoots / concurrent GC stack fill (stackwm #7 Q4):
+        // absolute-FA caches must not be built against a half-moved stack.
+        MutatorLock();
         // Fix All pointers recorded in resSet.
         intptr_t* newStackAddr;
         const int byteSize = 8;
@@ -678,6 +681,10 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         }
 
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
+
+        // stackwm #7: publish movable-stack generation. cursorIndex is logical — not rebased.
+        stackWatermark.OnStackGrow(stackOffset);
+        MutatorUnlock();
 
         return stackOffset;
     }

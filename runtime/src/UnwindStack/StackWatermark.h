@@ -25,12 +25,21 @@ namespace MapleRuntime {
 // Differences from OpenJDK: owned by Mutator/CJThread not JavaThread; no return-poll
 // fast path yet; cursor is frame-index not frame-pointer SP.
 //
+// Movable-stack (#7): CJThreadStackAdjust relocates the whole stack (new mmap +
+// memmove). Product grow (Mutator::FixExtendedStack) rewrites stack pointers and
+// anchorFA. Watermark resume state MUST NOT store absolute SP/FA — only logical
+// frame indices — so OnStackGrow does not renumber cursorIndex; it publishes a
+// stackGeneration so any in-flight StackFrameCursor (absolute FA cache) is known
+// stale and must be rebuilt.
+//
 // Invariants (asserted when MRT_GCV2_STACK_WATERMARK_VERIFY=1, or always for
 // structural CHECK on illegal transitions when verify is on):
 //   ① phase order: NOT_STARTED → SCANNING → DONE; no back-edge, no skip
 //   ② single owner while SCANNING
 //   ③ create/exit close to NOT_STARTED; park leaves a stable publishable state
 //   ④ cursorIndex is a valid resume token for StackFrameCursor::ResumeAt
+//   ⑤ after OnStackGrow, cursorIndex still names the same logical frame; stack
+//      generation has advanced (absolute-FA cursors must rebuild)
 class StackWatermark {
 public:
     enum Phase : uint32_t {
@@ -54,6 +63,9 @@ public:
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(0, std::memory_order_relaxed);
+        stackGeneration.store(0, std::memory_order_relaxed);
+        lastGrowOffset.store(0, std::memory_order_relaxed);
+        growCount.store(0, std::memory_order_relaxed);
     }
 
     // Create lifecycle: brand-new mutator starts NOT_STARTED with no owner.
@@ -93,6 +105,49 @@ public:
                          "[GCV2][stack-watermark] PARK_REGRESS phase became %u", static_cast<unsigned>(p));
         }
         // NOT_STARTED / DONE: no-op publish.
+    }
+
+    // Movable-stack grow (#7). Called from Mutator::FixExtendedStack after a successful
+    // CJThreadStackGrow with nonzero stackOffset (newBase - oldBase).
+    //
+    // Position-related fields (Q2):
+    //   cursorIndex  — logical exclusive frame index; address-independent; NOT rebased
+    //   frameCount   — logical total; address-independent; NOT rebased
+    //   epoch/phase/owner — not positions
+    // There is no absolute SP/FA stored in this object (by design vs OpenJDK _watermark SP).
+    //
+    // What OnStackGrow does:
+    //   ① record offset + bump growCount
+    //   ② advance stackGeneration (invalidates absolute-FA caches such as StackFrameCursor)
+    //   ③ leave cursorIndex/frameCount unchanged so ResumeAt still names the same frame
+    //
+    // Race (Q4): product path takes MutatorLock around pointer fix + this call so a
+    // concurrent VisitStackRoots cannot fill a cursor against a half-moved stack.
+    void OnStackGrow(intptr_t stackOffset)
+    {
+        if (stackOffset == 0) {
+            return;
+        }
+        size_t prevCursor = cursorIndex.load(std::memory_order_acquire);
+        size_t prevFrames = frameCount.load(std::memory_order_acquire);
+        lastGrowOffset.store(stackOffset, std::memory_order_relaxed);
+        size_t n = growCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        // Release so a reader that observes generation N+1 also sees cursor/offset.
+        uint64_t gen = stackGeneration.fetch_add(1, std::memory_order_release) + 1;
+        if (VerifyEnabled()) {
+            size_t afterCursor = cursorIndex.load(std::memory_order_relaxed);
+            size_t afterFrames = frameCount.load(std::memory_order_relaxed);
+            CHECK_DETAIL(afterCursor == prevCursor,
+                         "[GCV2][stack-watermark] GROW_CURSOR_MUTATED %zu -> %zu", prevCursor, afterCursor);
+            CHECK_DETAIL(afterFrames == prevFrames,
+                         "[GCV2][stack-watermark] GROW_FRAMECOUNT_MUTATED %zu -> %zu", prevFrames, afterFrames);
+            // Observable grow proof (stackgrow delivery gate): always log under verify.
+            LOG(RTLOG_ERROR,
+                "[GCV2][stack-watermark] GROW offset=%lld cursor=%zu frames=%zu gen=%llu count=%zu "
+                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
+                static_cast<long long>(stackOffset), afterCursor, afterFrames,
+                static_cast<unsigned long long>(gen), n);
+        }
     }
 
     // Begin a scan for `scanEpoch`. Exactly one owner may claim.
@@ -198,12 +253,23 @@ public:
     uint64_t GetEpoch() const { return epoch.load(std::memory_order_acquire); }
     size_t GetCursorIndex() const { return cursorIndex.load(std::memory_order_acquire); }
     size_t GetFrameCount() const { return frameCount.load(std::memory_order_acquire); }
+    uint64_t GetStackGeneration() const { return stackGeneration.load(std::memory_order_acquire); }
+    intptr_t GetLastGrowOffset() const { return lastGrowOffset.load(std::memory_order_acquire); }
+    size_t GetGrowCount() const { return growCount.load(std::memory_order_acquire); }
 
     bool IsNotStarted() const { return GetPhase() == WM_NOT_STARTED; }
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
     bool IsDone() const { return GetPhase() == WM_DONE; }
 
     static bool VerifyEnabled();
+
+    // Positive-control helper (harness only): pretend resume token was an absolute FA
+    // and "rebase" by adding offset to a synthetic address. Used to prove that treating
+    // watermark as SP would desync from logical frame identity after grow.
+    static uintptr_t InjectAbsoluteResumeToken(uintptr_t absoluteFa, intptr_t growOffset)
+    {
+        return static_cast<uintptr_t>(static_cast<intptr_t>(absoluteFa) + growOffset);
+    }
 
 private:
     void AssertClosedOrReset(const char* why)
@@ -235,6 +301,10 @@ private:
     std::atomic<Owner> owner;
     std::atomic<size_t> cursorIndex;
     std::atomic<size_t> frameCount;
+    // Movable-stack generation: advanced on every successful grow with nonzero offset.
+    std::atomic<uint64_t> stackGeneration;
+    std::atomic<intptr_t> lastGrowOffset;
+    std::atomic<size_t> growCount;
 };
 
 } // namespace MapleRuntime
