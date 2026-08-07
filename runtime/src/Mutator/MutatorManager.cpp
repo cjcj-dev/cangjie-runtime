@@ -139,6 +139,8 @@ Mutator* MutatorManager::CreateMutator()
         mutator->InitTid();
         BindMutator(*mutator);
         mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+        // dynjoin (乙): under active epoch, born-clean exclude (not wait-set join).
+        ExcludeNewMutatorFromActiveEpoch(*mutator);
         ConcurrencyModel::SetMutator(mutator);
     } else {
         MutatorManagementRLock();
@@ -146,6 +148,7 @@ Mutator* MutatorManager::CreateMutator()
         mutator->InitTid();
         BindMutator(*mutator);
         mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+        ExcludeNewMutatorFromActiveEpoch(*mutator);
     }
     MutatorManagementRUnlock();
     return mutator;
@@ -179,6 +182,16 @@ void MutatorManager::DestroyExpiredMutators()
 
 void MutatorManager::DestroyMutator(Mutator* mutator)
 {
+    // dynjoin: while an epoch handshake is active, never free a participant (or a
+    // racing create) under the old R-lock path — that used to be serialised by the
+    // full-handshake W-lock. Defer to expiringMutators; PostGC drains them.
+    if (EpochHandshakeActive()) {
+        epochHandshakeDestroyDeferred.fetch_add(1, std::memory_order_relaxed);
+        expiringMutatorListLock.lock();
+        expiringMutators.push_back(mutator);
+        expiringMutatorListLock.unlock();
+        return;
+    }
     if (TryAcquireMutatorManagementRLock()) {
         delete mutator; // call ~Mutator() under mutatorListLock
         MutatorManagementRUnlock();
@@ -304,6 +317,30 @@ void MutatorManager::RecordEpochHandshakeCreateAttempt()
     }
 }
 
+void MutatorManager::ExcludeNewMutatorFromActiveEpoch(Mutator& mutator)
+{
+    uint64_t active = epochHandshakeActive.load(std::memory_order_acquire);
+    if (active == 0) {
+        return;
+    }
+    // (乙) exclude + born-clean. Must serialise with the snapshot that fills
+    // epochHandshakeParticipants: if this mutator was already claimed as a
+    // participant, it must take the normal request/ack path (not overwrite).
+    std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+    active = epochHandshakeActive.load(std::memory_order_acquire);
+    if (active == 0) {
+        return;
+    }
+    if (epochHandshakeParticipants.find(&mutator) != epochHandshakeParticipants.end()) {
+        return;
+    }
+    if (mutator.FinishedEpochHandshake(active)) {
+        return;
+    }
+    mutator.MarkBornCleanForEpoch(active);
+    epochHandshakeBornCleanJoins.fetch_add(1, std::memory_order_relaxed);
+}
+
 void MutatorManager::RecordEpochHandshakeExitTransition()
 {
     if (epochHandshakeActive.load(std::memory_order_acquire) != 0) {
@@ -322,9 +359,11 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     bool callerEnteredSaferegion = caller != nullptr && caller->EnterSaferegion(true);
     CHECK_DETAIL(!inEpochHandshake, "nested epoch handshake is not supported");
     inEpochHandshake = true;
+    // Hold syncMutex so STW cannot interleave (StopTheWorld also takes it). Do NOT
+    // hold mutator-management W-lock across the wait: that serialised thread create
+    // (FIXED_ROSTER_IS_STEP0_ONLY). dynjoin replaces it with (乙) born-clean exclude
+    // + participant-set pin for DestroyMutator.
     syncMutex.lock();
-    AcquireMutatorManagementWLock();
-    uint64_t managementLockStart = TimeUtil::NanoSeconds();
     CHECK_DETAIL(!WorldStopped(), "epoch handshake must not run while worldStopped=true");
 
     stats.epoch = epochHandshakeSequence.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -338,23 +377,51 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     epochHandshakeParkedAck.store(0, std::memory_order_relaxed);
     epochHandshakeExitingAck.store(0, std::memory_order_relaxed);
     epochHandshakeDeferredCreates.store(0, std::memory_order_relaxed);
+    epochHandshakeBornCleanJoins.store(0, std::memory_order_relaxed);
     epochHandshakeExitTransitions.store(0, std::memory_order_relaxed);
+    epochHandshakeDestroyDeferred.store(0, std::memory_order_relaxed);
     epochHandshakeStopTheWorldCalls.store(0, std::memory_order_relaxed);
+
+    uint64_t residualLockStart = TimeUtil::NanoSeconds();
     {
         std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
         epochHandshakeAckedMutators.clear();
+        epochHandshakeParticipants.clear();
     }
+    // Publish active BEFORE snapshot so concurrent CreateMutator sees active and
+    // takes the born-clean path. Snapshot then only captures pre-existing mutators;
+    // anyone who raced past is either in the list or born-clean (not both in wait).
     epochHandshakeActive.store(stats.epoch, std::memory_order_release);
 
-    std::list<Mutator*> participants;
-    VisitAllMutators([&participants](Mutator& mutator) { participants.push_back(&mutator); });
-    stats.requested = participants.size();
-    for (Mutator* mutator : participants) {
+    std::list<Mutator*> snapshotted;
+    VisitAllMutators([&snapshotted](Mutator& mutator) { snapshotted.push_back(&mutator); });
+    std::list<Mutator*> pending;
+    {
+        // Claim participants under the same lock ExcludeNewMutatorFromActiveEpoch uses.
+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        for (Mutator* mutator : snapshotted) {
+            if (mutator->FinishedEpochHandshake(stats.epoch)) {
+                continue; // born-clean race: create already excluded this mutator
+            }
+            if (epochHandshakeParticipants.insert(mutator).second) {
+                pending.push_back(mutator);
+            }
+        }
+    }
+    stats.requested = pending.size();
+    stats.managementLockNanos = TimeUtil::NanoSeconds() - residualLockStart;
+    for (Mutator* mutator : pending) {
+        // Defensive: born-clean may still race in after claim if Exclude lost the
+        // participants check; Request must not fire on an already-finished epoch.
+        if (mutator->FinishedEpochHandshake(stats.epoch)) {
+            continue;
+        }
         mutator->RequestEpochHandshake(stats.epoch);
     }
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
-    std::list<Mutator*> pending(participants);
+    // K-bound: timeout is the exit condition (ForwardBarrier.cpp:23-24 discipline).
+    // Wait set is fixed at snapshot; born-clean joiners never enlarge it.
     while (!pending.empty()) {
         for (auto it = pending.begin(); it != pending.end();) {
             Mutator* mutator = *it;
@@ -391,16 +458,20 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     stats.parkedAck = epochHandshakeParkedAck.load(std::memory_order_relaxed);
     stats.exitingAck = epochHandshakeExitingAck.load(std::memory_order_relaxed);
     stats.deferredCreates = epochHandshakeDeferredCreates.load(std::memory_order_relaxed);
+    stats.bornCleanJoins = epochHandshakeBornCleanJoins.load(std::memory_order_relaxed);
     stats.exitTransitions = epochHandshakeExitTransitions.load(std::memory_order_relaxed);
+    stats.destroyDeferred = epochHandshakeDestroyDeferred.load(std::memory_order_relaxed);
     stats.stopTheWorldCalls = epochHandshakeStopTheWorldCalls.load(std::memory_order_relaxed);
     CHECK_DETAIL(stats.acked == stats.requested && stats.ackedTwice == 0 && stats.stopTheWorldCalls == 0,
                  "epoch handshake accounting failed: requested=%zu acked=%zu acked_twice=%zu stw_calls=%zu",
                  stats.requested, stats.acked, stats.ackedTwice, stats.stopTheWorldCalls);
     CHECK_DETAIL(!WorldStopped(), "epoch handshake changed worldStopped");
 
+    {
+        std::lock_guard<std::mutex> lock(epochHandshakeLedgerMutex);
+        epochHandshakeParticipants.clear();
+    }
     epochHandshakeActive.store(0, std::memory_order_release);
-    stats.managementLockNanos = TimeUtil::NanoSeconds() - managementLockStart;
-    MutatorManagementWUnlock();
     syncMutex.unlock();
     inEpochHandshake = false;
     if (callerEnteredSaferegion) {
@@ -410,11 +481,12 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     LOG(RTLOG_REPORT,
          "[GCV2][epoch-handshake] source=%s epoch=%llu requested=%zu acked=%zu acked_twice=%zu "
          "self=%zu gc_assisted=%zu starting=%zu running=%zu parked=%zu exiting=%zu "
-         "deferred_create=%zu exit_transition=%zu stw_calls=%zu "
+         "deferred_create=%zu born_clean=%zu exit_transition=%zu destroy_deferred=%zu stw_calls=%zu "
          "wlock_us=%llu env=MRT_GCV2_EPOCH_HANDSHAKE=1",
          source, static_cast<unsigned long long>(stats.epoch), stats.requested, stats.acked, stats.ackedTwice,
          stats.selfAck, stats.gcAssistedAck, stats.startingAck, stats.runningAck, stats.parkedAck,
-         stats.exitingAck, stats.deferredCreates, stats.exitTransitions, stats.stopTheWorldCalls,
+         stats.exitingAck, stats.deferredCreates, stats.bornCleanJoins, stats.exitTransitions,
+         stats.destroyDeferred, stats.stopTheWorldCalls,
          static_cast<unsigned long long>(stats.managementLockNanos / 1000));
     return stats;
 }

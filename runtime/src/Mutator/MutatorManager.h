@@ -61,8 +61,12 @@ struct EpochHandshakeStats {
     size_t parkedAck = 0;
     size_t exitingAck = 0;
     size_t deferredCreates = 0;
+    size_t bornCleanJoins = 0;
     size_t exitTransitions = 0;
+    size_t destroyDeferred = 0;
     size_t stopTheWorldCalls = 0;
+    // Residual mutex window only (ledger clear / stats gather). Handshake wait
+    // no longer holds mutator-management W-lock (dynjoin: exclude + born-clean).
     uint64_t managementLockNanos = 0;
 };
 
@@ -216,7 +220,15 @@ public:
     EpochHandshakeStats RunEpochHandshake(const char* source);
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
     void RecordEpochHandshakeCreateAttempt();
+    // dynjoin (乙): create during active epoch marks mutator born-clean for that
+    // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
+    // set. OpenJDK handshake.cpp:293-295: new ThreadsList members have no op.
+    void ExcludeNewMutatorFromActiveEpoch(Mutator& mutator);
     void RecordEpochHandshakeExitTransition();
+    bool EpochHandshakeActive() const
+    {
+        return epochHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
 
     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
@@ -348,10 +360,15 @@ private:
     std::atomic<size_t> epochHandshakeParkedAck = { 0 };
     std::atomic<size_t> epochHandshakeExitingAck = { 0 };
     std::atomic<size_t> epochHandshakeDeferredCreates = { 0 };
+    std::atomic<size_t> epochHandshakeBornCleanJoins = { 0 };
     std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
+    std::atomic<size_t> epochHandshakeDestroyDeferred = { 0 };
     std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
     std::mutex epochHandshakeLedgerMutex;
     std::unordered_set<Mutator*> epochHandshakeAckedMutators;
+    // Participants of the active epoch; DestroyMutator must not free these while
+    // active != 0 (replaces the old full-handshake W-lock serialisation).
+    std::unordered_set<Mutator*> epochHandshakeParticipants;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;

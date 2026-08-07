@@ -436,6 +436,8 @@ bool MRT_NewForeignCJThread()
     }
     mutator->InitForeignCJThread();
     mutator->SetMutatorPhase(Heap::GetHeap().GetGCPhase());
+    // dynjoin (乙): foreign attach during active epoch is born-clean exclude.
+    mutatorManager.ExcludeNewMutatorFromActiveEpoch(*mutator);
     mutatorManager.MutatorManagementRUnlock();
     // N2C stubs call MRT_LeaveSaferegion next (all N2CStub.S); mirror MRT_PreRunManagedCode.
     if (UNLIKELY(mutatorManager.SyncTriggered())) {
