@@ -73,7 +73,9 @@ main(): Int64 {
         })
     }
 
-    let creator = spawn { => RunCreateExitWave(100) }
+    // dynjoin: keep create/exit churn fully concurrent with every handshake so
+    // mid-handshake creates (deferred_create / born_clean) are forced live.
+    let creator = spawn { => RunCreateExitWave(400) }
     let allocator = spawn { => RunAllocationWave(64) }
     sleep(2 * Duration.millisecond)
 
@@ -87,6 +89,18 @@ main(): Int64 {
         }
         lastEpoch = epoch
         explicitEpochs++
+        // Spawn a short-lived wave on every 8th handshake so create races the wait.
+        if (round % 8 == 0) {
+            let burst = spawn {
+                =>
+                    var sum: Int64 = 0
+                    for (i in 0..16) {
+                        sum += (spawn { => i }).get()
+                    }
+                    sum
+            }
+            (void)burst.get()
+        }
         if (round % 4 == 0) {
             sleep(Duration.millisecond)
         } else {
