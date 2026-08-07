@@ -13,6 +13,7 @@
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
+#include "Common/StateWord.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
@@ -26,6 +27,11 @@ const char* const COLLECTOR_NAME[] = { "No Collector", "Proxy Collector", "Regio
 std::atomic<size_t> g_markGoodHeapGateReject{ 0 };
 std::atomic<size_t> g_markGoodHeapGateSample{ 0 };
 
+// markfloor: interiors pass IsHeapAddress + IsValidObject (tip word non-null) but tip is
+// not a TypeInfo*. 0x200 observed = MArray::length at RawArray+8.
+std::atomic<size_t> g_plausibleObjGateReject{ 0 };
+std::atomic<size_t> g_plausibleObjGateSample{ 0 };
+
 bool MarkGoodHeapGateAccountOn()
 {
     static const bool on = []() {
@@ -34,6 +40,19 @@ bool MarkGoodHeapGateAccountOn()
     }();
     return on;
 }
+
+bool PlausibleObjGateAccountOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MARKFLOOR_OBJ_GATE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+// Smallest plausible TypeInfo / binary address. Catches length/size/offset words
+// (e.g. 0x200) and null-page interiors without touching tip payload.
+constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x10000ULL;
 } // namespace
 
 bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
@@ -59,6 +78,60 @@ void Collector::ReportMarkGoodHeapGateCounts()
     }
     LOG(RTLOG_ERROR, "[GCV2][markgood-heap-gate] reject=%zu env=MRT_GCV2_MARKGOOD_HEAP_GATE=1",
         g_markGoodHeapGateReject.load(std::memory_order_relaxed));
+}
+
+bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
+{
+    if (obj == nullptr) {
+        return false;
+    }
+    if (!Heap::IsHeapAddress(obj)) {
+        size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (PlausibleObjGateAccountOn()) {
+            size_t s = g_plausibleObjGateSample.fetch_add(1, std::memory_order_relaxed);
+            if (s < 16) {
+                LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] REJECT site=%s obj=%p reason=non-heap n=%zu", site, obj,
+                    n);
+            }
+        }
+        return false;
+    }
+    // Read tip word only (StateWord load). Do not call IsVaildType / GetSize yet.
+    TypeInfo* tip = obj->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    const char* reason = nullptr;
+    if (tipAddr == 0) {
+        reason = "null-tip";
+    } else if (tipAddr < kMinPlausibleTypeInfoAddr) {
+        reason = "tip-small-int";
+    } else if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+        reason = "tip-misaligned";
+    } else if (Heap::IsHeapAddress(tipAddr)) {
+        // TypeInfo lives in binary / TypeInfoManager mmap, never in managed heap.
+        // Heap tip ⇒ interior into another object (classic B-4 shape).
+        reason = "tip-in-heap";
+    }
+    if (reason == nullptr) {
+        return true;
+    }
+    size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (PlausibleObjGateAccountOn()) {
+        size_t s = g_plausibleObjGateSample.fetch_add(1, std::memory_order_relaxed);
+        if (s < 16) {
+            LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] REJECT site=%s obj=%p tip=%p reason=%s n=%zu", site, obj,
+                tip, reason, n);
+        }
+    }
+    return false;
+}
+
+void Collector::ReportPlausibleManagedObjectGateCounts()
+{
+    if (!PlausibleObjGateAccountOn()) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
+        g_plausibleObjGateReject.load(std::memory_order_relaxed));
 }
 
 // F5: when FindToVersion returns null, never silently hand back a dead/zeroed from.

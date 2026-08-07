@@ -348,6 +348,11 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 
 bool WCollector::MarkObject(BaseObject* obj) const
 {
+    // markfloor: work stack may hold RawArray+8 interiors (tip word = length, e.g. 0x200).
+    // Return true ⇒ ConcurrentMarkingWork treats as already-marked and skips HasRefField.
+    if (!Collector::PlausibleManagedObjectGate("WCollector::MarkObject", obj)) {
+        return true;
+    }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
     bool marked = region->MarkObject(obj, objectSize);
@@ -606,6 +611,9 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         if (!Collector::MarkGoodHeapGate("EnumRefFieldRoot", target)) {
             return;
         }
+        if (!Collector::PlausibleManagedObjectGate("EnumRefFieldRoot", target)) {
+            return;
+        }
         CHECK_DETAIL(target->IsValidObject(), "Enum static root %p(%p) encounters invalid object", target, &field);
         rootSet.push_back(target);
         return;
@@ -615,6 +623,9 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
+        return;
+    }
+    if (!Collector::PlausibleManagedObjectGate("EnumRefFieldRoot.slow", latest)) {
         return;
     }
     if (VerifyRoots::Enabled()) {
@@ -651,12 +662,18 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         if (!Collector::MarkGoodHeapGate("EnumAndTagRawRoot", root)) {
             return;
         }
+        if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot", root)) {
+            return;
+        }
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
         rootSet.push_back(root);
         return;
     }
     BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
+        if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.slow", root)) {
+            return;
+        }
         if (VerifyRoots::Enabled()) {
             RootVerifyContext vctx;
             vctx.phase = "EnumAndTagRawRoot";
@@ -689,6 +706,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
             return;
         }
+        // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
+        if (!Collector::PlausibleManagedObjectGate("TraceRefField", targetObj)) {
+            return;
+        }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
         CHECK_DETAIL(targetObj->IsValidObject(),
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
@@ -703,6 +724,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
     // target object could be null or non-heap for some static variable.
     if (!Heap::IsHeapAddress(latest)) {
+        return;
+    }
+    if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
@@ -1883,6 +1907,10 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
+    // markfloor: interiors pass IsValidObject (tip=length≠null); reject before header walk.
+    if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
+        return;
+    }
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
         // but object header is not a valid managed object (stack-ish residue, stale
@@ -1989,6 +2017,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         BaseObject* object = workStack.back();
         workStack.pop_back();
         if (!Heap::IsHeapAddress(object)) {
+            continue;
+        }
+        // markfloor: RawArray+8 interiors pass IsValidObject (tip=length≠null) then
+        // HasRefField/GetSize SEGV. Skip before IsValidObject CHECK.
+        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
             continue;
         }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -3670,12 +3703,20 @@ void WCollector::ProcessFinalizers()
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
+    // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
+    // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
+    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        return obj;
+    }
     BaseObject* to = TryForwardObject(obj);
     return (to != nullptr) ? to : obj;
 }
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 {
+    if (!Collector::PlausibleManagedObjectGate("WCollector::TryForwardObject", obj)) {
+        return nullptr;
+    }
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
         return nullptr;
@@ -3725,6 +3766,11 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
+    if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
+        // Caller locked for a real object; unlock without claiming FORWARDED.
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
     CHECK_DETAIL(toObj != nullptr, "invalid object route");
