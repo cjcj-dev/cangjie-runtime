@@ -16,6 +16,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/StackExposureOracle.h"
 #include "Heap/Verify/StackFrameOracle.h"
 #include "Heap/Verify/StackWatermarkOracle.h"
 #include "Heap/WCollector/WCollector.h"
@@ -329,6 +330,17 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
             LOG(RTLOG_ERROR,
                 "[GCV2][stack-watermark-oracle] refused: world not stopped "
                 "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1");
+        }
+    }
+    // STW frame-exposure oracle (default off). Exercises OnBeforeUnwind + cursor process;
+    // no concurrent scan; does not replace the product visitor.
+    if (StackExposureOracle::Enabled()) {
+        if (MutatorManager::Instance().WorldStopped()) {
+            StackExposureOracle::Exercise(uwContext, *this);
+        } else {
+            LOG(RTLOG_ERROR,
+                "[GCV2][stack-exposure-oracle] refused: world not stopped "
+                "env=MRT_GCV2_STACK_EXPOSURE_VERIFY=1");
         }
     }
     StackManager::VisitStackRoots(uwContext, func, *this);

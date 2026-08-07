@@ -18,6 +18,7 @@ set(SRC_LIST
     "TagReuseProbe.cpp"
     "StackFrameOracle.cpp"
     "StackWatermarkOracle.cpp"
+    "StackExposureOracle.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
