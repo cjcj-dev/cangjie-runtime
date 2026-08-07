@@ -252,13 +252,12 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
     // Compare on decoded object identity; CAS on observed raw bits (colour-aware).
     // Shape matches EnumBarrier.cpp:259-280 / IdleBarrier.cpp:121-138. Plain expected vs
     // coloured slot bits always fail (COLOUR_WRITEBACK_AUDIT R1).
-    // Retries are bounded. ZGC terminates a self-healing retry because its colours form a
-    // monotone lattice; ours do not -- a reader may self-heal this very slot on every load,
-    // so the observed bits keep changing while the decoded identity stays oldRef, and an
-    // unbounded loop never lands the exchange. natural_wave span 47 minutes of user time in
-    // two spinning threads before this bound existed. Exhausting the budget reports failure,
-    // which compare-and-swap callers already have to handle.
-    constexpr int kCasAttempts = 8;
+    // Retries are bounded (kCasAttempts in ColourMask.h). ZGC terminates a self-healing
+    // retry because its colours form a monotone lattice; ours do not -- a reader may
+    // self-heal this very slot on every load, so the observed bits keep changing while the
+    // decoded identity stays oldRef, and an unbounded loop never lands the exchange.
+    // natural_wave spun 47 minutes of user time in two spinning threads before this bound
+    // existed. Exhausting the budget reports failure, which CAS callers already handle.
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);

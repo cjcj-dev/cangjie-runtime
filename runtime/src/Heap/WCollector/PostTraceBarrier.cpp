@@ -65,7 +65,8 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
     // Colour self-heal on the stack copy (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
     // PostTrace ReadReference is an E-class assertion-only entry and must not be used to heal.
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        for (;;) {
+        // Bound kSelfHealAttempts: no colour lattice (ATOMIC_READ_PROTOCOL Q2).
+        for (int attempts = 0;;) {
             RefField<> oldField(dstRef);
             BaseObject* oldTarget = oldField.GetTargetObject();
             if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -74,6 +75,9 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
             BaseObject* loadGood = theCollector.make_load_good(oldField);
             RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
             if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+                return;
+            }
+            if (++attempts >= kSelfHealAttempts) {
                 return;
             }
         }
@@ -94,7 +98,8 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
-        for (;;) {
+        // Bound kSelfHealAttempts: no colour lattice (ATOMIC_READ_PROTOCOL Q2).
+        for (int attempts = 0;;) {
             RefField<> oldField(dstRef);
             BaseObject* oldTarget = oldField.GetTargetObject();
             if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -103,6 +108,9 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
             BaseObject* loadGood = theCollector.make_load_good(oldField);
             RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
             if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+                return;
+            }
+            if (++attempts >= kSelfHealAttempts) {
                 return;
             }
         }
@@ -178,7 +186,8 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
 {
     // Colour self-heal on the real slot (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
     // Exact observed value is the CAS expected; concurrent updates win and force a reload.
-    for (;;) {
+    // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = oldField.GetTargetObject();
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -191,6 +200,9 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         DCHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
             return loadGood;
         }
     }
@@ -230,14 +242,15 @@ bool PostTraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tru
     MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    while (oldVersion == oldRef) {
+    // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
         if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }
         oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
-        RefField<false> oldField(oldFieldValue);
-        oldVersion = ReadReference(nullptr, oldField);
+        RefField<false> tmp(oldFieldValue);
+        oldVersion = ReadReference(nullptr, tmp);
     }
     return false;
 }
