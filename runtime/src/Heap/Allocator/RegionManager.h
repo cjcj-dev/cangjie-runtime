@@ -343,7 +343,7 @@ public:
                 if (residual > 0 && !region->IsLargeRegion()) {
                     uintptr_t pos = start;
                     while (pos < alloc) {
-                        BaseObject* o = reinterpret_cast<BaseObject*>(pos);
+                        BaseObject* o = from_region_addr(pos);
                         if (!o->IsValidObject()) {
                             break;
                         }

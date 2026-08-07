@@ -89,7 +89,7 @@ protected:
     // caller should ensure that address is valid (not doing null check here)
     static inline BaseObject* SetClassInfo(MAddress address, TypeInfo* klass)
     {
-        auto ref = reinterpret_cast<BaseObject*>(address);
+        auto ref = from_alloc_addr(address);
         ref->stateWord.SetTypeInfo(klass);
         return ref;
     }

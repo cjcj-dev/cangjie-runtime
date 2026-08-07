@@ -68,6 +68,8 @@ constexpr zaddress_unsafe uncolor_bits(zpointer p)
 
 // to_object: 凭什么: sole exit from the colour type system to a C++ object pointer.
 // Input must already be zaddress (load-good or proven).
+// ⭐ This is the ONLY production site allowed to write reinterpret_cast<BaseObject*>.
+// All other paths must go through a named constructor below (or this).
 inline BaseObject* to_object(zaddress a)
 {
     return reinterpret_cast<BaseObject*>(raw(a));
@@ -77,6 +79,45 @@ inline BaseObject* to_object(zaddress a)
 inline zaddress from_object(const BaseObject* obj)
 {
     return to_zaddress(reinterpret_cast<Uptr>(obj));
+}
+
+// ── non-RefField origins of BaseObject* (ctyperest exemption set) ─────────
+// Bare reinterpret_cast<BaseObject*> outside this header is forbidden
+// (tools/check_no_bare_baseobject_cast.sh). Every site picks one of these
+// and documents *why* the bits are an uncoloured object base.
+
+// from_region_addr: 凭什么: address computed from region metadata
+// (region start / unit / free-slot / route to-addr / walk position).
+// Allocator owns the layout; bits are never colour-tagged.
+inline BaseObject* from_region_addr(Uptr addr)
+{
+    return to_object(to_zaddress(addr));
+}
+
+// from_alloc_addr: 凭什么: address just returned by the allocator
+// (SetClassInfo / NewFinalizer / AllocPinned). Memory is committed and
+// about to be / just was initialised as a BaseObject; never coloured.
+inline BaseObject* from_alloc_addr(Uptr addr)
+{
+    return to_object(to_zaddress(addr));
+}
+
+// from_native_ref: 凭什么: MCC / Sync / scheduler entry holding a managed
+// object as void* / C layout view (CJFuture/CJMutex/…). Protocol: the
+// mutator published an uncoloured heap ref; not a RefField load.
+// ⚠ Bits are NOT run through a read barrier here — caller must not pass
+// a raw field load. Stack-map base pointers (BasePtrType) use this too.
+inline BaseObject* from_native_ref(const void* p)
+{
+    return to_object(to_zaddress(reinterpret_cast<Uptr>(p)));
+}
+
+// as_abi_ref_slot: 凭什么: stack buffer used as an ABI sret / arg-register
+// placeholder in ArgValue::AddReference. ⛔ NOT a heap object; ⛔ must not
+// be treated as a GC root. Exists only so the call stub sees a "ref" slot.
+inline BaseObject* as_abi_ref_slot(void* p)
+{
+    return to_object(to_zaddress(reinterpret_cast<Uptr>(p)));
 }
 
 // null checks (enum class does not compare to 0 without cast)

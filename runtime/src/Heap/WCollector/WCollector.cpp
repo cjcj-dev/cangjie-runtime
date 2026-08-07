@@ -2811,7 +2811,7 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
     RootVisitor stackVisitor = recordRawRoot(0);
     RootVisitor registerVisitor = recordRawRoot(1);
     DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        inspectTarget(2, &derivedPtr, nullptr, reinterpret_cast<BaseObject*>(basePtr),
+        inspectTarget(2, &derivedPtr, nullptr, from_native_ref(basePtr),
                       std::numeric_limits<uint16_t>::max());
     };
     RootVisitor exceptionVisitor = recordRawRoot(10);
