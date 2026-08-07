@@ -117,6 +117,25 @@ void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator)
     }
 }
 
+bool StackFrameCursor::ResumeAt(size_t resumeIndex, Mutator& mutator)
+{
+    if (resumeIndex > frames.size()) {
+        return false;
+    }
+    // Rebuild RegSlotsMap to match a sequential ProcessOne drain that stopped at
+    // resumeIndex. Replay every prior frame with a no-op root visitor so stub
+    // bookkeeping and any MANAGED register-map updates land, without re-emitting
+    // roots (those were already counted under the watermark).
+    regSlotsMap = RegSlotsMap();
+    index = 0;
+    RootVisitor noop = [](ObjectRef&) {};
+    while (index < resumeIndex) {
+        ProcessFrame(frames[index], regSlotsMap, noop, mutator);
+        ++index;
+    }
+    return true;
+}
+
 bool StackFrameCursor::SkipNextManagedFrame()
 {
     // Advance past the next MANAGED frame without visiting its roots.

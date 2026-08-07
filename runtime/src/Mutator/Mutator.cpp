@@ -17,6 +17,7 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackFrameOracle.h"
+#include "Heap/Verify/StackWatermarkOracle.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -187,6 +188,8 @@ void Mutator::ResetMutator()
         StackGuardRecover();
     }
     exceptionWrapper.ClearInfo();
+    // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
+    stackWatermark.OnExit();
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
@@ -310,6 +313,11 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
     // STW frame-cursor oracle (default off). Does not replace the product visitor.
     if (StackFrameOracle::Enabled() && MutatorManager::Instance().WorldStopped()) {
         StackFrameOracle::CompareWithLegacy(uwContext, *this);
+    }
+    // STW stack-watermark state oracle (default off). Exercises begin/advance/finish +
+    // ResumeAt alignment; no concurrent scan; does not replace the product visitor.
+    if (StackWatermarkOracle::Enabled() && MutatorManager::Instance().WorldStopped()) {
+        StackWatermarkOracle::Exercise(uwContext, *this);
     }
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(func);

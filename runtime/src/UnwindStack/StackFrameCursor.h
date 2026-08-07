@@ -41,6 +41,12 @@ public:
     // Drain remaining frames.
     void ProcessAll(const RootVisitor& visitor, Mutator& mutator);
 
+    // Resume from a watermark-published frame index (stackwm #1).
+    // Replays stub bookkeeping for frames [0, resumeIndex) so RegSlotsMap matches a
+    // ProcessOne drain that stopped at resumeIndex; then leaves index at resumeIndex.
+    // Returns false if resumeIndex is out of range.
+    bool ResumeAt(size_t resumeIndex, Mutator& mutator);
+
     // Skip the next MANAGED frame without visiting its roots (positive-control only).
     bool SkipNextManagedFrame();
 
