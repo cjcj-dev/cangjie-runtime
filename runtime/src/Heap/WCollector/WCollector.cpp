@@ -870,6 +870,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
         return oldObj;
     }
+    // arrayinit2 / markfloor Q2: stackmap may label RawArray+8 (&length) as a root.
+    // Colouring that interior makes the mutator load a non-canonical address (si_code=128).
+    // PlausibleManagedObjectGate rejects tip=length; leave the slot plain and untraced.
+    if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
+        return oldObj;
+    }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
