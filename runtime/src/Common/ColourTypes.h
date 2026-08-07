@@ -106,10 +106,15 @@ inline BaseObject* from_alloc_addr(Uptr addr)
 // object as void* / C layout view (CJFuture/CJMutex/…). Protocol: the
 // mutator published an uncoloured heap ref; not a RefField load.
 // ⚠ Bits are NOT run through a read barrier here — caller must not pass
-// a raw field load. Stack-map base pointers (BasePtrType) use this too.
+// a raw field load. Stack-map base pointers (BasePtrType = Uptr) use the
+// Uptr overload.
+inline BaseObject* from_native_ref(Uptr p)
+{
+    return to_object(to_zaddress(p));
+}
 inline BaseObject* from_native_ref(const void* p)
 {
-    return to_object(to_zaddress(reinterpret_cast<Uptr>(p)));
+    return from_native_ref(reinterpret_cast<Uptr>(p));
 }
 
 // as_abi_ref_slot: 凭什么: stack buffer used as an ABI sret / arg-register
