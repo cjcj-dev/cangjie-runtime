@@ -663,6 +663,11 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             return;
         }
         if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot", root)) {
+            // arrayinit2: interior may already carry colour from a prior write-back; strip to plain.
+            RefField<> plain(root);
+            if (oldField.GetFieldValue() != plain.GetFieldValue()) {
+                (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+            }
             return;
         }
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
@@ -672,6 +677,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
         if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.slow", root)) {
+            RefField<> plain(root);
+            if (oldField.GetFieldValue() != plain.GetFieldValue()) {
+                (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+            }
             return;
         }
         if (VerifyRoots::Enabled()) {
@@ -872,8 +881,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     }
     // arrayinit2 / markfloor Q2: stackmap may label RawArray+8 (&length) as a root.
     // Colouring that interior makes the mutator load a non-canonical address (si_code=128).
-    // PlausibleManagedObjectGate rejects tip=length; leave the slot plain and untraced.
+    // PlausibleManagedObjectGate rejects tip=length; strip any colour and leave untraced.
     if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
+        RefField<> plain(oldObj);
+        if (oldField.GetFieldValue() != plain.GetFieldValue()) {
+            (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+        }
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
