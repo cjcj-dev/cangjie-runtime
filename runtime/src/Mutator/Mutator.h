@@ -23,6 +23,7 @@
 #include "Interpreter/Options.h"
 #include "Interpreter/RTInterface.h"
 #include "ObjectModel/RefField.h"
+#include "UnwindStack/StackWatermark.h"
 
 
 namespace MapleRuntime {
@@ -87,6 +88,7 @@ public:
         epochHandshakeCompletion.store(0, std::memory_order_relaxed);
         epochHandshakeState.store(EPOCH_HANDSHAKE_IDLE, std::memory_order_relaxed);
         epochHandshakeLifecycle.store(EPOCH_HANDSHAKE_STARTING, std::memory_order_relaxed);
+        stackWatermark.OnCreate();
 
 #ifdef INTERPRETER_ENABLED
         InitInterpreterPart();
@@ -481,6 +483,7 @@ public:
     {
         SetSafepointStatePtr(nullptr);
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
+        stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
             return;
         }
@@ -633,7 +636,14 @@ private:
     std::atomic<EpochHandshakeState> epochHandshakeState = { EPOCH_HANDSHAKE_IDLE };
     std::atomic<EpochHandshakeLifecycle> epochHandshakeLifecycle = { EPOCH_HANDSHAKE_STARTING };
 
+    // stackwm #1: per-mutator stack scan watermark (state only; no concurrent scan).
+    // Layout-safe: after handshake fields, runtime-only, not compiler-hardcoded.
+    StackWatermark stackWatermark;
+
 public:
+    StackWatermark& GetStackWatermark() { return stackWatermark; }
+    const StackWatermark& GetStackWatermark() const { return stackWatermark; }
+
 #ifdef INTERPRETER_ENABLED
     void InitInterpreterPart();
     void DestroyInterpreterPart();

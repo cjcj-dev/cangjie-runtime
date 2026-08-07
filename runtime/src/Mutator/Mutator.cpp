@@ -17,6 +17,7 @@
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackFrameOracle.h"
+#include "Heap/Verify/StackWatermarkOracle.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -187,6 +188,8 @@ void Mutator::ResetMutator()
         StackGuardRecover();
     }
     exceptionWrapper.ClearInfo();
+    // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
+    stackWatermark.OnExit();
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
@@ -308,8 +311,25 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
     CreateCurrentGCInfo();
 #endif
     // STW frame-cursor oracle (default off). Does not replace the product visitor.
-    if (StackFrameOracle::Enabled() && MutatorManager::Instance().WorldStopped()) {
-        StackFrameOracle::CompareWithLegacy(uwContext, *this);
+    // Call Enabled() first so a non-STW refuse log is observable (minorconc A4).
+    if (StackFrameOracle::Enabled()) {
+        if (MutatorManager::Instance().WorldStopped()) {
+            StackFrameOracle::CompareWithLegacy(uwContext, *this);
+        } else {
+            LOG(RTLOG_ERROR,
+                "[GCV2][stack-frame-oracle] refused: world not stopped env=MRT_GCV2_STACK_FRAME_ORACLE=1");
+        }
+    }
+    // STW stack-watermark state oracle (default off). Exercises begin/advance/finish +
+    // ResumeAt alignment; no concurrent scan; does not replace the product visitor.
+    if (StackWatermarkOracle::Enabled()) {
+        if (MutatorManager::Instance().WorldStopped()) {
+            StackWatermarkOracle::Exercise(uwContext, *this);
+        } else {
+            LOG(RTLOG_ERROR,
+                "[GCV2][stack-watermark-oracle] refused: world not stopped "
+                "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1");
+        }
     }
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(func);
