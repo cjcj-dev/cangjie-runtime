@@ -387,12 +387,14 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         if (toObj == nullptr) {
             return false;
         }
-        RefField<> tmpField(toObj);
+        // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
+        // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
+        RefField<> tmpField = GetAndTryTagRefField(toObj);
         if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
-                     tmpField.GetFieldValue());
+                     raw(tmpField.GetFieldValue()));
             } else {
                 DLOG(TRACE, "update ref@%p: 0x%zx -> %p", &field, raw(oldRef.GetFieldValue()), toObj);
             }
