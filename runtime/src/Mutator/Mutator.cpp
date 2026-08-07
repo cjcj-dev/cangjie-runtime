@@ -725,29 +725,66 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
     }
 }
 
+// interiorsrc2: stack/reg root slots may hold coloured bits or RawArray+8 interiors.
+// Peel colour for range checks; reject interiors before PushRoot (work-stack poison).
+static BaseObject* PlainRootObject(BaseObject* maybeColoured)
+{
+    if (maybeColoured == nullptr) {
+        return nullptr;
+    }
+    return reinterpret_cast<BaseObject*>(
+        RefField<>(reinterpret_cast<MAddress>(maybeColoured)).GetAddress());
+}
+
+static void StripRootObjectColour(ObjectRef& root)
+{
+    BaseObject* plain = PlainRootObject(root.object);
+    if (plain != root.object) {
+        root.object = plain;
+    }
+}
+
+static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
+{
+    BaseObject* plain = PlainRootObject(obj);
+    if (!Heap::IsHeapAddress(plain)) {
+        return false;
+    }
+    // markfloor gate: tip-small-int (e.g. length at RawArray+8) must not enter work stack.
+    if (!Collector::PlausibleManagedObjectGate(site, plain)) {
+        return false;
+    }
+    AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
+    buffer->PushRoot(plain);
+    return true;
+}
+
 inline void Mutator::GcPhaseEnum(GCPhase newPhase)
 {
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
     RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
         BaseObject* obj = to_object(refFieldAddr.GetTargetObject());
-        if (Heap::IsHeapAddress(obj)) {
-            AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-            buffer->PushRoot(obj);
-            DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, obj);
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
-            CheckAndPush(obj, rootSet, rootStack);
+        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref")) {
+            DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, PlainRootObject(obj));
+        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(PlainRootObject(obj)))) {
+            CheckAndPush(PlainRootObject(obj), rootSet, rootStack);
         }
     };
 
     RootVisitor visitor = [&rootSet, &rootStack, this, &refVisitor](ObjectRef& root) {
+        // Peel colour so IsHeapAddress/gate see the real address; leave plain in the slot
+        // so mutator restore after STW does not reload a non-canonical pointer (si_code=128).
+        StripRootObjectColour(root);
         BaseObject* obj = root.object;
-        if (Heap::IsHeapAddress(obj)) {
-            AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
-            buffer->PushRoot(obj);
+        if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root")) {
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
             CheckAndPush(obj, rootSet, rootStack);
+        } else if (Heap::IsHeapAddress(obj) &&
+                   !Collector::PlausibleManagedObjectGate("GcPhaseEnum.interior", obj)) {
+            // Interior (RawArray+8): keep plain tip-length address out of work stack; slot already plain.
+            DLOG(ENUM, "skip interior stack root @%p: %p", &root, obj);
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
@@ -786,7 +823,15 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     };
 
     RootVisitor visitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this, &refVisitor](ObjectRef& root) {
+        // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
+        // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
+        StripRootObjectColour(root);
         BaseObject* oldObj = root.object;
+        if (Heap::IsHeapAddress(oldObj) &&
+            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.root", oldObj)) {
+            // Interior: leave plain, do not forward or push.
+            return;
+        }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
@@ -803,15 +848,31 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     };
 
     DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        BaseObject* fromVersion = from_native_ref(basePtr);
-        if (!Heap::IsHeapAddress(fromVersion) || !collector.IsGhostFromObject(fromVersion) ||
-            collector.IsUnmovableFromObject(fromVersion)) {
+        // Peel colour on base/derived before arithmetic; interiors must not be treated as bases.
+        BaseObject* fromVersion = PlainRootObject(from_native_ref(basePtr));
+        BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
+        if (Heap::IsHeapAddress(derivedObj) &&
+            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derived", derivedObj)) {
+            // Derived is itself an interior (e.g. RawArray+8 held as "root"): keep plain.
+            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+            return;
+        }
+        if (!Heap::IsHeapAddress(fromVersion) ||
+            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derivedBase", fromVersion) ||
+            !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
+            // Still strip colour from derived if present.
+            if (derivedObj != from_native_ref(derivedPtr)) {
+                derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+            }
             return;
         }
         BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
         if (fromVersion != toVersion) {
-            DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) + (derivedPtr - basePtr);
+            DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) +
+                (reinterpret_cast<DerivedPtrType>(derivedObj) - reinterpret_cast<BasePtrType>(fromVersion));
             derivedPtr = toDerived;
+        } else if (derivedObj != from_native_ref(derivedPtr)) {
+            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
         }
     };
     VisitHeapReferences(visitor, derivedPtrVisitor);
