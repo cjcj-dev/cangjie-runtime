@@ -690,15 +690,15 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     RootVisitor func = [&workStack, this](ObjectRef& ref) {
         RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
         RefField<> tmpField(refField);
-        BaseObject* finalizerObj = tmpField.GetTargetObject();
+        BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
         if (!IsMarkedObject(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             workStack.push_back(finalizerObj);
         }
         RefField<> newField = GetAndTryTagRefField(finalizerObj);
         if (tmpField.GetFieldValue() != newField.GetFieldValue() &&
-            refField.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, newField.GetFieldValue());
+            refField.CompareExchange(tmpField.GetFieldValue(), newFieldraw(.GetFieldValue()))) {
+            DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, raw(newField.GetFieldValue()));
         }
     };
     snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
@@ -808,7 +808,7 @@ void TracingCollector::DumpRoots(LogType logType)
     VisitFinalizerRoots(rootVisitor);
 
     RefFieldVisitor refFieldVisitor = [this, logType](RefField<>& ref) {
-        auto obj = ref.GetTargetObject();
+        auto obj = to_object(ref.GetTargetObject());
         if (obj == nullptr) {
             return;
         }
@@ -880,7 +880,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             RefField<> oldField(field);
             // mark-good fast path (zcolor2 @ 84a64e88): already passed this mark epoch.
             if (is_mark_good(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
+                BaseObject* targetObj = to_object(oldField.GetTargetObject());
                 if (!Collector::MarkGoodHeapGate("DFSTraceExportObject", targetObj)) {
                     return;
                 }
@@ -910,8 +910,8 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             if (oldField.GetFieldValue() == newField.GetFieldValue()) {
                 DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
                      latest->GetSize());
-            } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
+            } else if (field.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()))) {
+                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
                      newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
             }
 

@@ -99,7 +99,7 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                 MAddress slot = reinterpret_cast<MAddress>(&field);
                 fieldSlots.insert(slot);
 
-                BaseObject* target = field.GetTargetObject();
+                BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     if (remsetSnapshot.count(slot) != 0) {
                         ++stats.stale;

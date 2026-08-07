@@ -1693,7 +1693,7 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
             if (Heap::IsHeapAddress(obj)) {
                 curObj = Heap::GetBarrier().ReadReference(obj, obj->GetRefField(offset));
             } else {
-                curObj = obj->GetRefField(offset).GetTargetObject();
+                curObj = to_object(obj->GetRefField(offset).GetTargetObject());
             }
             TypeInfo* curti = curObj->GetTypeInfo();
             if (!curti->IsSubType(fieldTargetTI)) {

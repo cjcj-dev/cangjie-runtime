@@ -71,12 +71,12 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     WriteReferenceImpl(obj, field, ref);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, field.GetTargetObject(), ref);
+    DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, to_object(field.GetTargetObject()), ref);
     // COLOUR_WRITEBACK_AUDIT R3/批 A：规范色写回，禁 plain 灌堆。
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.SetFieldValue(newField.GetFieldValue());
@@ -97,11 +97,11 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
-                MAddress oldValue = oldField.GetFieldValue();
+                MAddress oldValue = raw(oldField.GetFieldValue());
                 BaseObject* latest = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-                if (oldValue != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                if (oldValue != raw(newField.GetFieldValue())) {
+                    refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
                 }
             },
             dst, dst + dstLen);
@@ -120,7 +120,7 @@ void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
     field.SetFieldValue(newField.GetFieldValue());
     // Static/global slots are visited and fixed as roots in every minor collection.
     // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
@@ -130,11 +130,11 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
                  "memcpy_s failed");
     gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
         RefField<> oldField(refField);
-        MAddress oldValue = oldField.GetFieldValue();
+        MAddress oldValue = raw(oldField.GetFieldValue());
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != newField.GetFieldValue()) {
-            refField.CompareExchange(oldValue, newField.GetFieldValue());
+        if (oldValue != raw(newField.GetFieldValue())) {
+            refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
         }
     });
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -151,7 +151,7 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
         return toVersion;
     } else {
-        BaseObject* target = field.GetTargetObject();
+        BaseObject* target = to_object(field.GetTargetObject());
         return target;
     }
 }
@@ -162,7 +162,7 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
         return toVersion;
     } else {
-        BaseObject* target = field.GetTargetObject();
+        BaseObject* target = to_object(field.GetTargetObject());
         return target;
     }
 }
@@ -171,10 +171,10 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 {
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(nullptr, field, toVersion)) {
-        DLOG(BARRIER, "read static ref@%p: 0x%zx -> %p", &field, field.GetFieldValue(), toVersion);
+        DLOG(BARRIER, "read static ref@%p: 0x%zx -> %p", &field, raw(field.GetFieldValue()), toVersion);
         return toVersion;
     } else {
-        BaseObject* target = field.GetTargetObject();
+        BaseObject* target = to_object(field.GetTargetObject());
         return target;
     }
 }
@@ -183,7 +183,7 @@ BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     AtomicWriteReferenceImpl(obj, field, ref, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
@@ -191,9 +191,9 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, field.GetFieldValue(), ref);
+             &field, raw(field.GetFieldValue()), ref);
     } else {
-        DLOG(BARRIER, "atomic write static ref@%p: %#zx -> %p", &field, field.GetFieldValue(), ref);
+        DLOG(BARRIER, "atomic write static ref@%p: %#zx -> %p", &field, raw(field.GetFieldValue()), ref);
     }
 
     field.SetFieldValue(newField.GetFieldValue(), order);
@@ -203,7 +203,7 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
                                          MemoryOrder order) const
 {
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     return oldRef;
 }
 
@@ -211,11 +211,11 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
                                              MemoryOrder order) const
 {
     RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(coloured.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(BARRIER, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
 }
 
@@ -227,12 +227,12 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         // R10：治愈写也必须带规范色，禁 plain SetTargetObject。
         RefField<> healed = theCollector.GetAndTryTagRefField(toVersion);
         field.SetFieldValue(healed.GetFieldValue());
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), toVersion);
+        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), toVersion);
         return toVersion;
     }
 
-    BaseObject* target = tmpField.GetTargetObject();
-    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), target);
+    BaseObject* target = to_object(tmpField.GetTargetObject());
+    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), target);
     return target;
 }
 
@@ -241,7 +241,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 {
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     }
     return success;
 }
@@ -258,7 +258,7 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
     // decoded identity stays oldRef, and an unbounded loop never lands the exchange.
     // natural_wave spun 47 minutes of user time in two spinning threads before this bound
     // existed. Exhausting the budget reports failure, which CAS callers already handle.
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
 
@@ -266,12 +266,12 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
         // Recolour per attempt: a phase may flip mid-retry, and writing last epoch's colour
         // would hand the next reader a value its mask calls bad.
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
             DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
                  oldFieldValue, oldVersion, oldRef, newRef);
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
         RefField<false> tmp(oldFieldValue);
         oldVersion = ReadReference(nullptr, tmp);
     }
@@ -301,11 +301,11 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
         for (MAddress cur = dstField; cur + sizeof(RefField<>) <= end; cur += sizeof(RefField<>)) {
             RefField<>& refField = *reinterpret_cast<RefField<>*>(cur);
             RefField<> oldField(refField);
-            MAddress oldValue = oldField.GetFieldValue();
+            MAddress oldValue = raw(oldField.GetFieldValue());
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != newField.GetFieldValue()) {
-                refField.CompareExchange(oldValue, newField.GetFieldValue());
+            if (oldValue != raw(newField.GetFieldValue())) {
+                refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
             }
         }
     }
@@ -334,11 +334,11 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
     if (dstObj != nullptr && dstObj->HasRefField() && Heap::IsHeapAddress(dstObj)) {
         RefFieldVisitor recolour = [this](RefField<false>& field) {
             RefField<> oldField(field);
-            MAddress oldValue = oldField.GetFieldValue();
+            MAddress oldValue = raw(oldField.GetFieldValue());
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
-            if (oldValue != newField.GetFieldValue()) {
-                field.CompareExchange(oldValue, newField.GetFieldValue());
+            if (oldValue != raw(newField.GetFieldValue())) {
+                field.CompareExchange(oldValue, raw(newField.GetFieldValue()));
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
@@ -359,7 +359,7 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
             [this, obj](RefField<false>& field) {
                 // MAddress bias = reinterpret_cast<MAddress>(&field) - reinterpret_cast<MAddress>(src);
                 // RefField<false>* dstField = reinterpret_cast<RefField<false>*>(dst + bias);
-                BaseObject* fromVersion = field.GetTargetObject();
+                BaseObject* fromVersion = to_object(field.GetTargetObject());
                 (void)fromVersion;
                 BaseObject* toVersion = nullptr;
                 theCollector.TryUpdateRefField(obj, field, toVersion);
@@ -516,7 +516,7 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
     }
     obj->ForEachRefInStruct(
         [this, obj](RefField<>& field) {
-            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
         },
         start, start + size);
 }
@@ -532,7 +532,7 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
     MAddress end = start + size;
     for (MAddress current = start; current + sizeof(RefField<>) <= end; current += sizeof(RefField<>)) {
         RefField<>* field = reinterpret_cast<RefField<>*>(current);
-        RecordCrossGenEdge(obj, current, field->GetTargetObject());
+        RecordCrossGenEdge(obj, current, to_object(field->GetTargetObject()));
     }
 }
 
@@ -542,7 +542,7 @@ void Barrier::RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const
         return;
     }
     gctib.ForEachBitmapWord(start, [this](RefField<>& field) {
-        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), field.GetTargetObject());
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     });
 }
 

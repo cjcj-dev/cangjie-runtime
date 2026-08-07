@@ -294,7 +294,7 @@ void VerifyHeapObjects(const char* point, bool force)
                 return;
             }
             obj->ForEachRefField([&stats, maxFailures, obj](RefField<>& field) {
-                BaseObject* target = field.GetTargetObject();
+                BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr) {
                     return;
                 }

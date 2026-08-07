@@ -191,7 +191,7 @@ public:
             return ZGenerationId::old;
         }
 
-        BaseObject* target = ref.GetTargetObject();
+        BaseObject* target = to_object(ref.GetTargetObject());
         if (!Heap::IsHeapAddress(target)) {
             return ZGenerationId::old;
         }

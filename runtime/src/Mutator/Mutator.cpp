@@ -495,7 +495,7 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
     // Ref trace on non-escaped heap pointers.
     RefFieldVisitor refVisitor = [&rootList, this](RefField<>& oldRefFieldAddr) {
         // Check whether the address is on the stack.
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(oldRefFieldAddr.GetTargetObject()))) {
+        if (IsStackAddr(reinterpret_cast<uintptr_t>(to_object(oldRefFieldAddr.GetTargetObject())))) {
             rootList.push(reinterpret_cast<BaseObject**>(&oldRefFieldAddr));
         }
     };
@@ -677,7 +677,7 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
     RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
-        BaseObject* obj = refFieldAddr.GetTargetObject();
+        BaseObject* obj = to_object(refFieldAddr.GetTargetObject());
         if (Heap::IsHeapAddress(obj)) {
             AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
             buffer->PushRoot(obj);
@@ -721,7 +721,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     std::stack<BaseObject*> rootStack;
     Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
     RefFieldVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](RefField<>& refFieldAddr) {
-        BaseObject* oldObj = refFieldAddr.GetTargetObject();
+        BaseObject* oldObj = to_object(refFieldAddr.GetTargetObject());
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
