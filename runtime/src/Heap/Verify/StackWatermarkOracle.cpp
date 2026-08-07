@@ -121,10 +121,11 @@ void DriveAndCompare(const UnwindContext& topFrame, Mutator& mutator, size_t mid
     g_exerciseCount.fetch_add(1, std::memory_order_relaxed);
     if (match) {
         g_matchCount.fetch_add(1, std::memory_order_relaxed);
-        DLOG(ENUM,
-             "[GCV2][stack-watermark-oracle] MATCH mutator=%p roots=%zu frames=%zu mid=%zu bad=%d "
-             "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
-             &mutator, fullKeys.size(), n, midIndex, badResume ? 1 : 0);
+        // INFO (not DLOG): verify arm must be observable at MRT_LOG_LEVEL=i.
+        LOG(RTLOG_INFO,
+            "[GCV2][stack-watermark-oracle] MATCH mutator=%p roots=%zu frames=%zu mid=%zu bad=%d "
+            "env=MRT_GCV2_STACK_WATERMARK_VERIFY=1",
+            &mutator, fullKeys.size(), n, midIndex, badResume ? 1 : 0);
         if (badResume && !fullKeys.empty() && n > 0) {
             // Wrong resume should have mismatched when there were roots/frames to lose.
             // If still match, positive control is silent — fail closed.
