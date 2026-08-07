@@ -16,6 +16,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Verify/VerifyRoots.h"
+#include "Heap/Verify/StackFrameOracle.h"
 #include "Heap/WCollector/WCollector.h"
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
@@ -306,6 +307,10 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     CreateCurrentGCInfo();
 #endif
+    // STW frame-cursor oracle (default off). Does not replace the product visitor.
+    if (StackFrameOracle::Enabled() && MutatorManager::Instance().WorldStopped()) {
+        StackFrameOracle::CompareWithLegacy(uwContext, *this);
+    }
     StackManager::VisitStackRoots(uwContext, func, *this);
     VisitRawObjects(func);
     DecObserver();
