@@ -89,16 +89,18 @@ void DriveAndCompare(const UnwindContext& topFrame, Mutator& mutator, size_t mid
 
     // Resume arm: ResumeAt(wm.cursor) then drain remainder.
     size_t resumeAt = wm.GetCursorIndex();
+    std::vector<RootKey> resumeKeys = firstHalf;
     if (badResume) {
-        // Positive control: feed a wrong position (skip one frame of work).
+        // Positive control: discard the first-half contribution and resume one past the
+        // watermark. Roots that lived only in [0, mid) are lost even when the sole root
+        // sits in the first half (the common managed-frame shape for hello.cj).
+        resumeKeys.clear();
         if (resumeAt < n) {
             resumeAt = resumeAt + 1;
         } else if (n > 0) {
-            resumeAt = 0; // force mismatch when stack non-empty
+            resumeAt = 0;
         }
     }
-
-    std::vector<RootKey> resumeKeys = firstHalf;
     {
         StackFrameCursor c(topFrame);
         if (!c.ResumeAt(resumeAt, mutator)) {
