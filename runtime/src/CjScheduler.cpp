@@ -377,7 +377,7 @@ void* MCC_NewCJThread(void* execute, void* future, void* scheduler)
     data.threadObject = nullptr;
     data.obj = nullptr;
     RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(future));
+    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, from_native_ref(future));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }
@@ -501,9 +501,9 @@ void* MCC_NewExclusiveCJThread(void* executeClosure, void* closurePtr, void* fut
     data.obj = nullptr;
     data.threadObject = futureTi;
     RefField<>* executeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*executeRootField, reinterpret_cast<BaseObject*>(closurePtr));
+    Heap::GetBarrier().WriteStaticRef(*executeRootField, from_native_ref(closurePtr));
     RefField<>* objRootField = reinterpret_cast<RefField<>*>(&data.execute);
-    Heap::GetBarrier().WriteStaticRef(*objRootField, reinterpret_cast<BaseObject*>(executeClosure));
+    Heap::GetBarrier().WriteStaticRef(*objRootField, from_native_ref(executeClosure));
     return ExclusiveCJThreadNew(WrapperExclusiveClosure, &data, sizeof(LWTData));
 }
 
@@ -640,7 +640,7 @@ void* MCC_NewCJThreadNoReturn(void* executeClosure, void* closurePtr, void* sche
     data.obj = nullptr;
     data.threadObject = futureTi; // used to pass TypeInfo of future
     RefField<>* runtimeRootField = reinterpret_cast<RefField<>*>(&data.obj);
-    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, reinterpret_cast<BaseObject*>(closurePtr));
+    Heap::GetBarrier().WriteStaticRef(*runtimeRootField, from_native_ref(closurePtr));
     if (!scheduler) {
         scheduler = MapleRuntime::Runtime::Current().GetConcurrencyModel().GetThreadScheduler();
     }

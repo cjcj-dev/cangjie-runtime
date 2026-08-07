@@ -142,7 +142,7 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -250,7 +250,7 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),

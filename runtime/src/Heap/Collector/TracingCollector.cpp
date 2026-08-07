@@ -252,7 +252,7 @@ public:
                         collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, *referentField);
                     if (referent != nullptr) {
                         DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
-                        collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(referent), workStack);
+                        collector.TraceObjectRefFields(referent, workStack);
                         WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
                     } // If referent is set to none, the corresponding weakref does not need to be recorded.
                 } else {

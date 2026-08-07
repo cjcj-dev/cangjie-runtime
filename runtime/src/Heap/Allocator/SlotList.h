@@ -42,7 +42,7 @@ private:
     friend struct FreePinnedSlotLists;
     uintptr_t PopFront(size_t size)
     {
-        if (head == nullptr || size != reinterpret_cast<BaseObject*>(head)->GetSize()) {
+        if (head == nullptr || size != from_region_addr(reinterpret_cast<Uptr>(head))->GetSize()) {
             return 0;
         }
         ObjectSlot* allocSlot = head;

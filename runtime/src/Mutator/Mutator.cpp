@@ -782,7 +782,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     };
 
     DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        BaseObject* fromVersion = reinterpret_cast<BaseObject*>(basePtr);
+        BaseObject* fromVersion = from_native_ref(basePtr);
         if (!Heap::IsHeapAddress(fromVersion) || !collector.IsGhostFromObject(fromVersion) ||
             collector.IsUnmovableFromObject(fromVersion)) {
             return;

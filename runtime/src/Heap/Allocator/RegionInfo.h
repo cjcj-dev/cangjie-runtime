@@ -720,7 +720,7 @@ public:
 #endif
     }
 
-    BaseObject* GetFirstObject() const { return reinterpret_cast<BaseObject*>(GetRegionStart()); }
+    BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 
     bool IsEmpty() const
     {
@@ -792,7 +792,7 @@ public:
         }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        return reinterpret_cast<BaseObject*>(toAddr);
+        return from_region_addr(toAddr);
     }
 
     ZGenerationId generation_id() const { return metadata._generation_id; }
@@ -890,7 +890,7 @@ public:
         size_t baseIdx = GetUnitIdx();
         for (size_t i = 1; i < nUnit; i++) {
             MAddress addr = GetUnitAddress(baseIdx + i);
-            CHECK(!InGhostFromRegion(reinterpret_cast<BaseObject*>(addr)));
+            CHECK(!InGhostFromRegion(from_region_addr(addr)));
         }
     }
 
