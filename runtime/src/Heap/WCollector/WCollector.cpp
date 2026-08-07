@@ -1131,7 +1131,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc->fixedRootSlots;
             }
         };
@@ -1147,7 +1147,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && field.GetFieldValue() != oldValue) {
+            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc->fixedRootSlots;
             }
         };
@@ -1209,7 +1209,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(obj, field);
-            if (oldTagged && field.GetFieldValue() != oldValue) {
+            if (oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc.fixedSlots;
             }
             if (!recordCrossGen) {
