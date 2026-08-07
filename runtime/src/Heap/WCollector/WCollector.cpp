@@ -2332,8 +2332,14 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
     BaseObject* target = ResolveMinorReference(field);
+    // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
+    // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
+    // Same heap gate as ForwardUpdateRawRef / FindToVersion.
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false;
+    }
     BaseObject* current = target;
-    if (Heap::IsHeapAddress(target) && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
