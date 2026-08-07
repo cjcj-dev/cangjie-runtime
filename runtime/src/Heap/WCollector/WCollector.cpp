@@ -2015,6 +2015,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
+        // markfloor: RawArray+8 interiors pass IsValidObject (tip=length≠null) then
+        // HasRefField/GetSize SEGV. Skip before IsValidObject CHECK.
+        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+            continue;
+        }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
