@@ -31,7 +31,7 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             return loadGood;
         }
         if (++attempts >= kSelfHealAttempts) {
@@ -153,7 +153,7 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
                 BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
                 RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
                 if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()));
+                    refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
                 }
             },
             dst, dst + dstLen);
@@ -184,7 +184,7 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
         BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            refField.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()));
+            refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
         }
     });
     RecordStaticCrossGenEdges(dst, gctib);
@@ -297,7 +297,7 @@ void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
         mutator->RememberObjectInSatbBuffer(target);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
-            field.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()));
+            field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);

@@ -131,7 +131,7 @@ public:
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
-        BaseObject* target = to_object(ref.GetTargetObject()));
+        BaseObject* target = to_object(ref.GetTargetObject());
         if (target == nullptr || is_load_good(ref)) {
             return target;
         }

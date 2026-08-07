@@ -697,7 +697,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         }
         RefField<> newField = GetAndTryTagRefField(finalizerObj);
         if (tmpField.GetFieldValue() != newField.GetFieldValue() &&
-            refField.CompareExchange(tmpField.GetFieldValue(), newFieldraw(.GetFieldValue()))) {
+            refField.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue())) {
             DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, raw(newField.GetFieldValue()));
         }
     };
@@ -910,9 +910,9 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             if (oldField.GetFieldValue() == newField.GetFieldValue()) {
                 DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
                      latest->GetSize());
-            } else if (field.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()))) {
+            } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
                 DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
-                     newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+                     raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
             }
 
             if (IsMarkedObject(latest)) {

@@ -74,7 +74,7 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
             }
             BaseObject* loadGood = theCollector.make_load_good(oldField);
             RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
                 return;
             }
             if (++attempts >= kSelfHealAttempts) {
@@ -107,7 +107,7 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
             }
             BaseObject* loadGood = theCollector.make_load_good(oldField);
             RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
                 return;
             }
             if (++attempts >= kSelfHealAttempts) {
@@ -198,7 +198,7 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         BaseObject* loadGood = theCollector.make_load_good(oldField);
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         DCHECK(theCollector.is_load_good(goodField));
-        if (field.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -275,7 +275,7 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
         BaseObject* target = ReadReference(nullptr, toBeUpdated);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
-            field.CompareExchange(oldField.GetFieldValue(), newFieldraw(.GetFieldValue()));
+            field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);

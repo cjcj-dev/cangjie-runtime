@@ -42,7 +42,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             return loadGood;
         }
         if (++attempts >= kSelfHealAttempts) {
@@ -105,7 +105,7 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         DCHECK(theCollector.is_load_good(goodField));
-        if (field.CompareExchange(oldField.GetFieldValue(), goodFieldraw(.GetFieldValue()))) {
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -122,7 +122,7 @@ void ForwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& f
     field.SetFieldValue(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(FBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
-             newField.GetFieldValue());
+             raw(newField.GetFieldValue()));
     } else {
         DLOG(FBARRIER, "atomic write static ref@%p: %#zx", &field, raw(newField.GetFieldValue()));
     }
