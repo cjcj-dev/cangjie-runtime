@@ -2392,9 +2392,30 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
+    // interiorsrc2: stack/reg may hold RawArray+8. GetAndTryTagRefField would re-colour
+    // that interior and mutator resumes with si_code=128. Strip any colour, do not tag.
+    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
+        RefField<> plain(target);
+        MAddress oldVal = raw(oldField.GetFieldValue());
+        MAddress plainVal = raw(plain.GetFieldValue());
+        if (oldVal != plainVal) {
+            (void)field.CompareExchange(oldVal, plainVal);
+        }
+        return false;
+    }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         current = const_cast<WCollector*>(this)->ForwardObject(target);
+    }
+    // ForwardObject may return the same interior if gated; re-check before colouring.
+    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
+        RefField<> plain(current);
+        MAddress oldVal = raw(field.GetFieldValue());
+        MAddress plainVal = raw(plain.GetFieldValue());
+        if (oldVal != plainVal) {
+            (void)field.CompareExchange(oldVal, plainVal);
+        }
+        return false;
     }
     // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
     // Plain RefField<>(current) was the trust-state install that AssertColouredWriteIfEnabled fires on.

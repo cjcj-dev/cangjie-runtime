@@ -848,15 +848,31 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     };
 
     DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        BaseObject* fromVersion = from_native_ref(basePtr);
-        if (!Heap::IsHeapAddress(fromVersion) || !collector.IsGhostFromObject(fromVersion) ||
-            collector.IsUnmovableFromObject(fromVersion)) {
+        // Peel colour on base/derived before arithmetic; interiors must not be treated as bases.
+        BaseObject* fromVersion = PlainRootObject(from_native_ref(basePtr));
+        BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
+        if (Heap::IsHeapAddress(derivedObj) &&
+            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derived", derivedObj)) {
+            // Derived is itself an interior (e.g. RawArray+8 held as "root"): keep plain.
+            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+            return;
+        }
+        if (!Heap::IsHeapAddress(fromVersion) ||
+            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derivedBase", fromVersion) ||
+            !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
+            // Still strip colour from derived if present.
+            if (derivedObj != from_native_ref(derivedPtr)) {
+                derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+            }
             return;
         }
         BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
         if (fromVersion != toVersion) {
-            DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) + (derivedPtr - basePtr);
+            DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) +
+                (reinterpret_cast<DerivedPtrType>(derivedObj) - reinterpret_cast<BasePtrType>(fromVersion));
             derivedPtr = toDerived;
+        } else if (derivedObj != from_native_ref(derivedPtr)) {
+            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
         }
     };
     VisitHeapReferences(visitor, derivedPtrVisitor);
