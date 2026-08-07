@@ -156,6 +156,12 @@ public:
     static bool MarkGoodHeapGate(const char* site, BaseObject* target);
     static void ReportMarkGoodHeapGateCounts();
 
+    // markfloor: reject heap interiors (e.g. RawArray+8 / &length) whose first word is a
+    // small integer or non-TypeInfo, before GetSize/HasRefField dereference the tip.
+    // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
+    static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
+    static void ReportPlausibleManagedObjectGateCounts();
+
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
     virtual void AddRawPointerObject(BaseObject*) { std::abort(); }
