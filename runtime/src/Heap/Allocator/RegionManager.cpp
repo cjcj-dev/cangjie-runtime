@@ -1629,42 +1629,27 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     bool youngRegion = region->IsYoungRegion();
     if (region->IsKnownEmpty()) {
-        // ClearLiveInfo arms LIVE_AUTHORITY with live=0 before mark. MarkObject is the only
-        // path that allocates the mark bitmap. If the region still has allocated payload but
-        // never got a mark bitmap, mark never examined it — bare IsKnownEmpty is not proof of
-        // emptiness on a young-only (minor) GC (B2: survivors reclaimed via CollectRegion →
-        // TakeRegion ClearUnits). Full GC marks from global roots; knownEmpty with no bitmap
-        // means nobody marked the region ⇒ reclaim (non-generational / A-arm behaviour).
-        // Keeping those regions across full GC leaves ~5MB pseudo-live from-space, forces
-        // immediate OOM full GC, and Enum static root aborts on invalid targets (fullgcfix).
+        // ClearLiveInfo arms LIVE_AUTHORITY|0 before mark. MarkObject is the only path that
+        // allocates the mark bitmap and raises live bytes. A region with allocated payload but
+        // no mark bitmap was never entered by MarkObject — under a correct mark that means
+        // nothing reachable points into it, so it is dead.
+        //
+        // hangfloor (0808): the young-only "fwd-empty-keep" arm (d6b77bc0) promoted every such
+        // region to unmovable-from instead of CollectRegion. Under PLAIN_ROOTS arm A' that was
+        // ~500 regions x 64KiB per minor with liveBytes~64 and reclaimedBytes~65KiB — young
+        // thrash (10/10 HANG, minor+major alternating, promoteReplay~420k). Full GC already
+        // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
+        // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
+        // young regions is what produces the hang.
         bool neverExamined = region->GetMarkBitmap() == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
-        bool youngOnlyGC =
-            Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
-        if (neverExamined && youngOnlyGC) {
-            VLOG(REPORT,
-                 "[GCRECLAIM][fwd-empty-keep] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%zu neverExamined=1 youngOnlyGC=1 — skip CollectRegion",
-                 region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
-            if (youngRegion) {
-                region->PreserveRetainedLiveInfo();
-                (void)RecordPromotedCrossGenEdges(region);
-                region->SetYoungRegionFlag(0);
-                region->SetYoungAge(0);
-            }
-            // ForwardTask already TakeHeadRegion'd this off fromRegionList as LONE_FROM;
-            // re-home to unmovable so survivors stay reachable and list-owned.
-            region->SetRouteState(RegionInfo::RouteState::NORMAL);
-            unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-            return;
-        }
-        if (neverExamined && !youngOnlyGC) {
+        if (neverExamined) {
             VLOG(REPORT,
                  "[GCRECLAIM][fwd-empty-collect] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%zu neverExamined=1 fullGC=1 — CollectRegion",
+                 "live=%zu neverExamined=1 reason=%d — CollectRegion",
                  region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount());
+                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount(),
+                 static_cast<int>(Heap::GetHeap().GetCollector().GetGCStats().reason));
         }
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.

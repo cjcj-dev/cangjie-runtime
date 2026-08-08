@@ -680,6 +680,42 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         rootSet.push_back(root);
         return;
     }
+    // hangfloor / ZGC ZUncoloredRoot: a plain stack/reg root carries no colour by design
+    // (RootSlotWriteback). is_mark_good/is_load_good are therefore structurally false —
+    // colour is a side parameter, not in the slot. Treat the address as authoritative:
+    // only route via ghost-from table; do not invent a remap generation from zero colour.
+    if (PlainRootsEnabled() && !Heap::IsHeapAddress(&refField)) {
+        BaseObject* root = to_object(oldField.GetTargetObject());
+        if (root != nullptr && Heap::IsHeapAddress(root)) {
+            if (IsGhostFromObject(root)) {
+                BaseObject* to = FindToVersion(root);
+                if (to != nullptr) {
+                    root = to;
+                }
+            }
+            if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.plain", root)) {
+                RefField<> plain(root);
+                if (oldField.GetFieldValue() != plain.GetFieldValue()) {
+                    (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+                }
+                return;
+            }
+            if (VerifyRoots::Enabled()) {
+                RootVerifyContext vctx;
+                vctx.phase = "EnumAndTagRawRoot.plain";
+                vctx.kind = RootKind::RUNTIME_ROOT;
+                VerifyRoots::VerifyRootPayload(vctx, &ref, root);
+            }
+            CHECK_DETAIL(root->IsValidObject(),
+                         "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+            RefField<> newField = RootSlotWriteback(root, &refField);
+            if (oldField.GetFieldValue() != newField.GetFieldValue()) {
+                (void)refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            }
+            rootSet.push_back(root);
+        }
+        return;
+    }
     BaseObject* root = make_load_good(oldField);
     if (Heap::IsHeapAddress(root)) {
         if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.slow", root)) {
@@ -1781,17 +1817,20 @@ void WCollector::PostResolveCycleTask()
 #endif
 }
 
-// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install plain target under multi-worker fix.
+// N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
 // Same-value concurrent writes converge; first writer wins. Counters for positive control.
 namespace {
 std::atomic<size_t> g_minorRefCasFail{ 0 };
 std::atomic<size_t> g_minorRefCasOk{ 0 };
 
-// Install plain (untagged) target into field. expected = observed tagged/old value.
+// Install resolved target into field. expected = observed stale/old value.
 // On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
-bool CasInstallPlainTarget(RefField<>& field, MAddress expected, BaseObject* plainTarget)
+// hangfloor: desired must already be RootSlotWriteback / null — heap slots stay coloured
+// (Phase C); only non-heap root slots may be plain. Writing plain into a heap field
+// installs the trust state is_load_good rejects, and every subsequent barrier self-heal
+// turns young GC into thrash (arm A' 10/10 HANG under MRT_GCV2_PLAIN_ROOTS=1).
+bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, RefField<> desired)
 {
-    RefField<> desired(plainTarget);
     MAddress desiredVal = raw(desired.GetFieldValue());
     if (expected == desiredVal) {
         return true;
@@ -1810,22 +1849,36 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     RefField<> value(field);
     BaseObject* object = to_object(value.GetTargetObject());
     if (!IsOldPointer(value)) {
+        // hangfloor: plain stack/reg roots (and any load-good colour) make IsOldPointer
+        // structurally false — that predicate needs IsLoadBad, which plain never is.
+        // After young prepare, from-space still needs ghost routing; without it
+        // FixMinor/VisitMinor keep the from address and young GC thrash (10/10 HANG).
+        if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
+            !IsUnmovableFromObject(object)) {
+            BaseObject* to = FindToVersion(object);
+            if (to != nullptr && Heap::IsHeapAddress(to)) {
+                MAddress expected = raw(value.GetFieldValue());
+                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, &field));
+                return to;
+            }
+        }
         return object;
     }
     // Minor path must not call FindLatestVersion: after a full GC Flip, remset/root
     // slots can still hold one-gen-stale tags whose from-copy was reclaimed (ghost
     // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
-    //   routed to-version → plain to
-    //   unmoved valid from → plain from
+    //   routed to-version → RootSlotWriteback(to)
+    //   unmoved valid from → RootSlotWriteback(from)
     //   dead/stale → null the slot (caller drops the edge)
-    // N2: plain SetTargetObject → CAS (FYS=1 multi-writer safe; product default FYS=1).
+    // N2: CAS (FYS=1 multi-writer safe; product default FYS=1).
+    // hangfloor: use RootSlotWriteback so heap remset/fields keep Phase C colour.
     MAddress expected = raw(value.GetFieldValue());
     BaseObject* to = FindToVersion(object);
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            (void)CasInstallPlainTarget(field, expected, to);
+            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, &field));
             return to;
         }
     }
@@ -1833,7 +1886,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
-            (void)CasInstallPlainTarget(field, expected, object);
+            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(object, &field));
             return object;
         }
     }
@@ -1851,7 +1904,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              "(drop; full-GC remset/root residue after Flip)",
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
-    (void)CasInstallPlainTarget(field, expected, nullptr);
+    (void)CasInstallResolvedTarget(field, expected, RefField<>(nullptr));
     return nullptr;
 }
 
@@ -2342,7 +2395,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
-                (void)CasInstallPlainTarget(*field, raw(peek.GetFieldValue()), nullptr);
+                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), RefField<>(nullptr));
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,
