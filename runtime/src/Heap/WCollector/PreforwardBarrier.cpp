@@ -9,6 +9,7 @@
 
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
+#include "Heap/Verify/NullRouteCaller.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -32,6 +33,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
+                NullRouteCaller::ScopedTag _nrTag("PreforwardBarrier");
                 loadGood = theCollector.ForwardObject(loadGood);
             }
         }
@@ -104,6 +106,7 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
+                NullRouteCaller::ScopedTag _nrTag("PreforwardBarrier");
                 loadGood = theCollector.ForwardObject(loadGood);
             }
         }

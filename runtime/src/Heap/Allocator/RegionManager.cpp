@@ -25,6 +25,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/NullRouteCaller.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -1743,6 +1744,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     size_t promotedRecords = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
         [&collector, youngRegion, &rememberedSet, &promotedRecords](BaseObject* obj) {
+            NullRouteCaller::ScopedTag _nrTag("VisitLiveObjects");
             BaseObject* toObj = collector.ForwardObject(obj);
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
