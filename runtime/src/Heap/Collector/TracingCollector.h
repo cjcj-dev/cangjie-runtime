@@ -269,6 +269,11 @@ public:
     void DFSTraceExportObject(BaseObject* exportObj);
     virtual bool MarkObject(BaseObject* obj) const
     {
+        // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
+        // WCollector overrides this; keep the base arm safe for non-WCollector builds/tests.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::MarkObject", obj)) {
+            return true;
+        }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         
         bool marked = regionInfo->MarkObject(obj);
@@ -289,6 +294,10 @@ public:
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
+        // getsize7: same GetSize hazard as MarkObject on the unsized resurrect path.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::ResurrectObject", obj)) {
+            return true;
+        }
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();

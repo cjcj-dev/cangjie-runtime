@@ -199,6 +199,16 @@ unsigned SiteBucket(const char* site)
     if (std::strstr(site, "PushYoungObject") != nullptr) {
         return 9;
     }
+    // getsize7: dense region walks that call GetSize/GetAllocSize without a prior gate.
+    if (std::strstr(site, "VisitLiveObjects") != nullptr) {
+        return 10;
+    }
+    if (std::strstr(site, "VisitAllObjects") != nullptr) {
+        return 11;
+    }
+    if (std::strstr(site, "CompactRegion") != nullptr) {
+        return 12;
+    }
     return 14;
 }
 } // namespace
@@ -322,7 +332,8 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
     LOG(RTLOG_ERROR,
         "[GCV2][markfloor-obj-gate] bysite MarkObject=%zu TraceRefField=%zu EnumRefField=%zu "
         "EnumAndTagRawRoot=%zu ForwardUpdateRawRef=%zu ForwardObject=%zu TryForward=%zu "
-        "ForwardObjectExclusive=%zu TraceYoungClosure=%zu PushYoungObject=%zu other=%zu",
+        "ForwardObjectExclusive=%zu TraceYoungClosure=%zu PushYoungObject=%zu "
+        "VisitLiveObjects=%zu VisitAllObjects=%zu CompactRegion=%zu other=%zu",
         g_plausibleObjGateBySite[0].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[1].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[2].load(std::memory_order_relaxed),
@@ -333,6 +344,9 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
         g_plausibleObjGateBySite[7].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[8].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[9].load(std::memory_order_relaxed),
+        g_plausibleObjGateBySite[10].load(std::memory_order_relaxed),
+        g_plausibleObjGateBySite[11].load(std::memory_order_relaxed),
+        g_plausibleObjGateBySite[12].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[14].load(std::memory_order_relaxed));
 }
 

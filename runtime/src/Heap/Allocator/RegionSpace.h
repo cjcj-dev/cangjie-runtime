@@ -200,6 +200,8 @@ public:
 
     static bool MarkObject(const BaseObject* obj)
     {
+        // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
+        // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         return regionInfo->MarkObject(obj);
     }
