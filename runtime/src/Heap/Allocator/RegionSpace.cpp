@@ -176,7 +176,14 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
+        RegionInfo* reg = nullptr;
+        if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
+            reg = tlRegion;
+        } else {
+            reg = RegionInfo::TryGetRegionInfoAt(addr);
+        }
         // marklate: per-region last-alloc phase (NULLROUTE_DIAG only; no TLS).
+        // blackmark: also stamp isTraceRegion at alloc for H3.
         if (AllocPhaseDiag::Enabled()) {
             uint8_t mutP = static_cast<uint8_t>(GCPhase::GC_PHASE_UNDEF);
             Mutator* m = Mutator::GetMutator();
@@ -186,17 +193,40 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             uint8_t heapP = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
             uintptr_t regionStart = 0;
             uintptr_t regionEnd = 0;
-            RegionInfo* reg = nullptr;
-            if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
-                reg = tlRegion;
-            } else {
-                reg = RegionInfo::TryGetRegionInfoAt(addr);
-            }
+            uint8_t isTrace = 0;
             if (reg != nullptr) {
                 regionStart = reg->GetRegionStart();
                 regionEnd = reg->GetRegionEnd();
+                isTrace = reg->IsTraceRegion() ? 1 : 0;
             }
-            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP);
+            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
+        }
+        // blackmark 甲: allocation-black = truly set mark bits (not only skip enqueue).
+        // Ordinary MOVEABLE alloc never called MarkNewObject; pin reuse did MarkObject.
+        // Phases that may leave unmarked live objects reachable into fix/forward:
+        // ENUM/TRACE/CLEAR (trace-region skip path) + POST_TRACE/PREFORWARD/FORWARD
+        // (no trace flag, no mark). Mark with known totalSize — header not installed yet.
+        {
+            GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
+            Mutator* m = Mutator::GetMutator();
+            if (m != nullptr) {
+                mutP = m->GetMutatorPhase();
+            }
+            bool needBlack = mutP == GCPhase::GC_PHASE_ENUM || mutP == GCPhase::GC_PHASE_TRACE ||
+                mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || mutP == GCPhase::GC_PHASE_POST_TRACE ||
+                mutP == GCPhase::GC_PHASE_PREFORWARD || mutP == GCPhase::GC_PHASE_FORWARD;
+            if (needBlack && reg != nullptr && !reg->IsLargeRegion()) {
+                MAddress regionStart = reg->GetRegionStart();
+                MAddress regionEnd = reg->GetRegionEnd();
+                size_t offset = static_cast<size_t>(addr - regionStart);
+                size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
+                if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
+                    bool already = reg->GetOrAllocMarkBitmap()->MarkBits(offset, totalSize, regionSize);
+                    if (!already) {
+                        reg->AddLiveByteCount(totalSize);
+                    }
+                }
+            }
         }
         // MinorGCALot: every N mutator allocs force young GC (HotSpot ScavengeALot intent).
         // Safe: mutator path only; async RequestGC(YOUNG); same surface as TakeRegion heuristic.
