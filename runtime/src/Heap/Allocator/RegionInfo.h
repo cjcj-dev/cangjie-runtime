@@ -796,6 +796,61 @@ public:
         size_t offset = GetAddressOffset(fromAddress);
         LiveInfo* ghostLiveInfo = metadata.liveInfo0;
         if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
+            // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
+            // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
+            static const bool nullRouteDiag = []() {
+                const char* v = std::getenv("MRT_GCV2_NULLROUTE_DIAG");
+                return v != nullptr && v[0] == '1' && v[1] == '\0';
+            }();
+            if (nullRouteDiag) {
+                static std::atomic<size_t> g_nullRouteDiagN{ 0 };
+                size_t n = g_nullRouteDiagN.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (n <= 64) {
+                    size_t ghostSz = (metadata.regionEnd0 > GetRegionStart())
+                        ? static_cast<size_t>(metadata.regionEnd0 - GetRegionStart())
+                        : 0;
+                    size_t curSz = GetRegionSize();
+                    size_t bitCover = 0;
+                    size_t wordCnt = 0;
+                    bool markNull = true;
+                    bool resNull = true;
+                    bool liveMarked = false;
+                    bool live0Marked = false;
+                    bool regionMarked = false;
+                    if (ghostLiveInfo != nullptr) {
+                        RegionBitmap* mb = ghostLiveInfo->markBitmap;
+                        RegionBitmap* rb = ghostLiveInfo->resurrectBitmap;
+                        markNull = (mb == nullptr);
+                        resNull = (rb == nullptr);
+                        if (mb != nullptr) {
+                            wordCnt = mb->wordCnt.load(std::memory_order_acquire);
+                            bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
+                            live0Marked = mb->IsMarked(offset);
+                        }
+                        if (!live0Marked && rb != nullptr) {
+                            live0Marked = rb->IsMarked(offset);
+                        }
+                    }
+                    LiveInfo* curLive = GetLiveInfo();
+                    if (curLive != nullptr) {
+                        liveMarked = curLive->IsSurvivedObject(offset);
+                    }
+                    regionMarked = IsSurvivedObject(offset);
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
+                        "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
+                        "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
+                        "type=%u oob=%u",
+                        n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
+                        static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
+                        static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
+                        static_cast<unsigned>(regionMarked),
+                        static_cast<unsigned>(GetRouteState()), GetLiveByteCount(),
+                        static_cast<unsigned>(IsYoungRegion()),
+                        static_cast<unsigned>(GetRegionType()),
+                        static_cast<unsigned>(offset >= bitCover && bitCover > 0));
+                }
+            }
             return nullptr;
         }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
