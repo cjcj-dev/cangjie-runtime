@@ -165,49 +165,41 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         return AllocateRawPointerObject(totalSize);
     }
 
-    // posttrace 甲+乙: never bump into this cycle's route domain, and never keep
-    // bumping a pre-mark TL once TRACE..FORWARD has opened (that is the real
-    // TRACE-bucket hole: region born in IDLE has isTrace=0, mutator keeps
-    // allocating into it during concurrent TRACE, then PrepareYoung puts the
-    // whole region into from with live0Surv=0 for the late objects).
-    // Peer of AllocPinnedFromFreeList POST_TRACE refuse (:1821-1824).
+    // posttrace 甲+乙:
+    // 1) Never bump into from/ghost/routing (peer of pin free-list POST_TRACE refuse).
+    // 2) Once TRACE..FORWARD is open, stamp the current TL isTraceRegion in place.
+    //    IDLE-born regions kept receiving TRACE allocs; PrepareYoung then put them
+    //    in from with live0Surv=0 for late objects. Stamping excludes the *whole*
+    //    region from this cycle's route (floating garbage for pre-stamp objects —
+    //    same shape as ZGC not relocating post-mark pages). Do not retire/enlist
+    //    here (that path SEGV'd under concurrent mark).
     auto phaseNeedsTraceStamp = []() -> bool {
         GCPhase p = Heap::GetHeap().GetGCPhase();
         return p == GCPhase::GC_PHASE_TRACE || p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
             p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
             p == GCPhase::GC_PHASE_FORWARD;
     };
-    auto tlUnsafeForMutatorAlloc = [&phaseNeedsTraceStamp](RegionInfo* r) -> bool {
+    auto tlIsRouteDomain = [](RegionInfo* r) -> bool {
         if (r == nullptr || r == RegionInfo::NullRegion()) {
-            return true;
+            return false;
         }
         if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
             return true;
         }
         RegionInfo::RouteState rs = r->GetRouteState();
-        if (rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
             rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
-            rs == RegionInfo::RouteState::FORWARDED) {
-            return true;
-        }
-        // Phase opened mark/evacuate window but this TL was born earlier → retire it
-        // so AllocateImpl takes a newly stamped isTraceRegion.
-        if (phaseNeedsTraceStamp() && !r->IsTraceRegion()) {
-            return true;
-        }
-        return false;
+            rs == RegionInfo::RouteState::FORWARDED;
     };
 
-    if (LIKELY(tlRegion != RegionInfo::NullRegion()) && !tlUnsafeForMutatorAlloc(tlRegion)) {
-        addr = tlRegion->Alloc(totalSize);
-    } else if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && tlUnsafeForMutatorAlloc(tlRegion))) {
-        RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-        RegionManager& manager = theAllocator.GetRegionManager();
-        if (tlRegion->IsThreadLocalRegion()) {
-            manager.RemoveThreadLocalRegion(tlRegion);
-            manager.EnlistFullThreadLocalRegion(tlRegion);
-        }
+    if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && tlIsRouteDomain(tlRegion))) {
         tlRegion = RegionInfo::NullRegion();
+    }
+    if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
+        if (phaseNeedsTraceStamp() && !tlRegion->IsTraceRegion()) {
+            tlRegion->SetTraceRegionFlag(1);
+        }
+        addr = tlRegion->Alloc(totalSize);
     }
 
     if (UNLIKELY(addr == 0)) {
@@ -309,34 +301,27 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
             p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
             p == GCPhase::GC_PHASE_FORWARD;
     };
-    auto tlUnsafeForMutatorAlloc = [&phaseNeedsTraceStamp](RegionInfo* r) -> bool {
+    auto tlIsRouteDomain = [](RegionInfo* r) -> bool {
         if (r == nullptr || r == RegionInfo::NullRegion()) {
-            return true;
+            return false;
         }
         if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
             return true;
         }
         RegionInfo::RouteState rs = r->GetRouteState();
-        if (rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
             rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
-            rs == RegionInfo::RouteState::FORWARDED) {
-            return true;
-        }
-        if (phaseNeedsTraceStamp() && !r->IsTraceRegion()) {
-            return true;
-        }
-        return false;
+            rs == RegionInfo::RouteState::FORWARDED;
     };
 
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        if (tlUnsafeForMutatorAlloc(tlRegion)) {
-            if (tlRegion->IsThreadLocalRegion()) {
-                manager.RemoveThreadLocalRegion(tlRegion);
-                manager.EnlistFullThreadLocalRegion(tlRegion);
-            }
+        if (tlIsRouteDomain(tlRegion)) {
             tlRegion = RegionInfo::NullRegion();
         } else {
+            if (phaseNeedsTraceStamp() && !tlRegion->IsTraceRegion()) {
+                tlRegion->SetTraceRegionFlag(1);
+            }
             MAddress addr = tlRegion->Alloc(totalSize);
             if (addr != 0) {
                 return addr;
