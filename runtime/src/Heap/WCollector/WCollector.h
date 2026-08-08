@@ -314,13 +314,20 @@ protected:
     }
 
     // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back
-    // keeps Phase C colour. Gate MRT_GCV2_PLAIN_ROOTS (default on); =0 restores colour-on-root.
+    // keeps Phase C colour. Gate MRT_GCV2_PLAIN_ROOTS.
+    //
+    // Defaults to off at merge, not because the rule is wrong -- it is what
+    // ops/design/STACK_ROOTS_STAY_PLAIN.md rules and what ZGC does -- but because
+    // turning it on trades arm A's 10/10 SEGV for a 10/10 hang. A hang carries no
+    // si_code, no registers and no core, so it is a worse base to debug from than
+    // the crash it replaces, and neither state completes. Flip the default once a
+    // workload gets past the hang.
     static bool PlainRootsEnabled()
     {
         static const bool on = []() {
             const char* v = std::getenv("MRT_GCV2_PLAIN_ROOTS");
             if (v == nullptr) {
-                return true;
+                return false;
             }
             return !(v[0] == '0' && v[1] == '\0');
         }();
