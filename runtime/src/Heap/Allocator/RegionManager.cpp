@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
+#include <limits>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
@@ -939,9 +940,17 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         Collector& collector = Heap::GetHeap().GetCollector();
         size_t heapThreshold = collector.GetGCStats().GetThreshold();
         size_t youngRegionTriggerBytes = 32 * MB;
+        // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
+        // barriers/remset still run. Unset must match product path bit-for-bit.
+        const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
+        const bool disableMinor =
+            disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
+        if (disableMinor) {
+            youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
+        }
         const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
         const bool useJvmYoungTrigger =
-            jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
+            !disableMinor && jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
         size_t youngTriggerFloor = 0;
         size_t youngTriggerTarget = 0;
         size_t youngTriggerCeiling = 0;
