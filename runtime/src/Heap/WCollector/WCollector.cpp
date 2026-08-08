@@ -2500,7 +2500,10 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
 
 void WCollector::FixMinorRootSlots()
 {
-    RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
+        (void)FixMinorEvacuatedSlot(root);
+    };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
     // stack slots still holding from-copies become the next full's F5 input.
@@ -2517,7 +2520,11 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
-    object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+    object->ForEachRefField([this, object](RefField<>& field) {
+        NullRouteCaller::ScopedEdge _edge(
+            "liveobj", object, reinterpret_cast<uintptr_t>(&field));
+        (void)FixMinorEvacuatedSlot(field);
+    });
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -2527,25 +2534,29 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 {
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    auto rootFix = [this](ObjectRef& root) {
+        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
+        (void)FixMinorEvacuatedSlot(root);
+    };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         MutatorManager::Instance().VisitAllMutators(
             [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
     }));
 }
@@ -2588,6 +2599,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
+                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
@@ -2602,6 +2614,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
+                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }

@@ -846,11 +846,59 @@ public:
                             liveMarked = curLive->IsSurvivedObject(offset);
                         }
                         regionMarked = IsSurvivedObject(offset);
+                        // deadedge: slot provenance + host liveness (甲′ vs 乙′).
+                        BaseObject* hostObj =
+                            reinterpret_cast<BaseObject*>(NullRouteCaller::Host());
+                        uintptr_t slotAddr = NullRouteCaller::Slot();
+                        if (hostObj == nullptr && slotAddr != 0) {
+                            RegionInfo* hostReg = TryGetRegionInfoAt(slotAddr);
+                            if (hostReg != nullptr && !hostReg->IsFreeRegion() &&
+                                !hostReg->IsGarbageRegion()) {
+                                // Recover holder by scanning allocated objects once (diag only).
+                                hostReg->VisitAllObjects(
+                                    [&hostObj, slotAddr](BaseObject* holder) {
+                                        if (hostObj != nullptr || holder == nullptr ||
+                                            !holder->HasRefField()) {
+                                            return;
+                                        }
+                                        holder->ForEachRefField(
+                                            [holder, &hostObj, slotAddr](RefField<>& field) {
+                                                if (reinterpret_cast<uintptr_t>(&field) ==
+                                                    slotAddr) {
+                                                    hostObj = holder;
+                                                }
+                                            });
+                                    });
+                            }
+                        }
+                        unsigned hostKnown = 0;
+                        unsigned hostMarked = 0;
+                        unsigned hostYoung = 0;
+                        unsigned hostType = 0;
+                        unsigned hostFree = 0;
+                        unsigned hostGarbage = 0;
+                        unsigned hostGhost = 0;
+                        if (hostObj != nullptr &&
+                            Heap::IsHeapAddress(reinterpret_cast<MAddress>(hostObj))) {
+                            hostKnown = 1;
+                            RegionInfo* hr =
+                                TryGetRegionInfoAt(reinterpret_cast<MAddress>(hostObj));
+                            if (hr != nullptr) {
+                                hostYoung = static_cast<unsigned>(hr->IsYoungRegion());
+                                hostType = static_cast<unsigned>(hr->GetRegionType());
+                                hostFree = static_cast<unsigned>(hr->IsFreeRegion());
+                                hostGarbage = static_cast<unsigned>(hr->IsGarbageRegion());
+                                hostGhost = static_cast<unsigned>(hr->IsFromRegion());
+                                hostMarked = static_cast<unsigned>(hr->IsMarkedObject(hostObj));
+                            }
+                        }
                         LOG(RTLOG_ERROR,
                             "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
                             "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
-                            "type=%u oob=%u allocOff=%zu nearEnd=%u caller=%s",
+                            "type=%u oob=%u allocOff=%zu nearEnd=%u caller=%s edgeSrc=%s "
+                            "slot=%#zx host=%p hostKnown=%u hostMarked=%u hostYoung=%u "
+                            "hostType=%u hostFree=%u hostGarbage=%u hostGhost=%u",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
                             static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
                             static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
@@ -861,7 +909,9 @@ public:
                             static_cast<unsigned>(offset >= bitCover && bitCover > 0),
                             allocOff,
                             static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
-                            NullRouteCaller::Current());
+                            NullRouteCaller::Current(), NullRouteCaller::EdgeSrc(),
+                            static_cast<size_t>(slotAddr), hostObj, hostKnown, hostMarked,
+                            hostYoung, hostType, hostFree, hostGarbage, hostGhost);
                     }
                 }
             }
