@@ -1878,10 +1878,10 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
         mutator.VisitMutatorRoots(visitedRawRootVisitor);
     });
     if (stackScanEpoch != 0) {
-        VLOG(REPORT,
-             "[GCV2][stack-scan-fallback] epoch=%llu concurrent_done=%zu stw_fallback=%zu "
-             "env=MRT_GCV2_CONCURRENT_STACK_SCAN=1",
-             static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
+        LOG(RTLOG_ERROR,
+            "[GCV2][stack-scan-fallback] epoch=%llu concurrent_done=%zu stw_fallback=%zu "
+            "env=MRT_GCV2_CONCURRENT_STACK_SCAN=1",
+            static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
     }
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
