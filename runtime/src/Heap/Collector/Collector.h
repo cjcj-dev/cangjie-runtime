@@ -164,7 +164,9 @@ public:
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
     static void ReportPlausibleManagedObjectGateCounts();
     // introot: if obj is a heap interior (RawArray+8/...), return host object base; else nullptr.
-    static BaseObject* TryRecoverInteriorBase(BaseObject* obj);
+    // writeback2: when knownBase is non-null (derived channel already paired base↔derived),
+    // trust it over ClassifyInteriorOffset heuristics.
+    static BaseObject* TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase = nullptr);
 
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }

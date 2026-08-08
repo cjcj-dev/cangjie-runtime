@@ -118,7 +118,8 @@ unsigned ClassifyInteriorOffset(BaseObject* obj)
 }
 
 // introot: host object for a heap interior (RawArray+8/...). nullptr if not interior.
-BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
+// writeback2: knownBase from derived pairing wins over 8/16/24/32 tip scan.
+BaseObject* RecoverInteriorBaseImpl(BaseObject* obj, BaseObject* knownBase)
 {
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return nullptr;
@@ -126,6 +127,25 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(obj->GetTypeInfo());
     if (TipWordLooksLikeTypeInfo(tipAddr)) {
         return nullptr;
+    }
+    if (knownBase != nullptr && Heap::IsHeapAddress(knownBase) && knownBase != obj) {
+        uintptr_t hostTip = reinterpret_cast<uintptr_t>(knownBase->GetTypeInfo());
+        if (TipWordLooksLikeTypeInfo(hostTip)) {
+            uintptr_t o = reinterpret_cast<uintptr_t>(obj);
+            uintptr_t b = reinterpret_cast<uintptr_t>(knownBase);
+            if (o > b && (o - b) <= 4096u) {
+                if (PlausibleObjGateAccountOn()) {
+                    static std::atomic<size_t> g_recoverKnown{ 0 };
+                    size_t s = g_recoverKnown.fetch_add(1, std::memory_order_relaxed);
+                    if (s < 16) {
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][introot-recover] interior=%p off=%zu host=%p hostTip=%p src=derived-base",
+                            obj, static_cast<size_t>(o - b), knownBase, knownBase->GetTypeInfo());
+                    }
+                }
+                return knownBase;
+            }
+        }
     }
     unsigned off = ClassifyInteriorOffset(obj);
     if (off == 0) {
@@ -137,7 +157,7 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
         size_t s = g_recoverSample.fetch_add(1, std::memory_order_relaxed);
         if (s < 16) {
             LOG(RTLOG_ERROR,
-                "[GCV2][introot-recover] interior=%p off=%u host=%p hostTip=%p",
+                "[GCV2][introot-recover] interior=%p off=%u host=%p hostTip=%p src=heuristic",
                 obj, off, base, base->GetTypeInfo());
         }
     }
@@ -287,9 +307,9 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
     return false;
 }
 
-BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj)
+BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase)
 {
-    return RecoverInteriorBaseImpl(obj);
+    return RecoverInteriorBaseImpl(obj, knownBase);
 }
 
 void Collector::ReportPlausibleManagedObjectGateCounts()
