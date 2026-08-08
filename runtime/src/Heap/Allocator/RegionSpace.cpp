@@ -206,14 +206,13 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // GetRoute reads ghost liveInfo0 (PrepareForwardable snapshot). Marks written only to
         // current liveInfo after that snapshot are invisible to GetRoute — also mark ghost
         // when present. Use max(mutator,heap) phase so lagging mutator still covers.
-        // Default ON. MRT_GCV2_ALLOC_BLACK=0 disables for H3 A/B (diag-only arm).
+        // Default OFF: 甲 paints bits but young PrepareYoung ClearLiveInfo wipes them
+        // before mark; incomplete fix regressed default arm 3/10 (see REPORT-blackmark).
+        // MRT_GCV2_ALLOC_BLACK=1 enables experimental paint (+ ghost liveInfo0).
         {
             static const bool allocBlackOn = []() {
                 const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
-                if (v != nullptr && v[0] == '0' && v[1] == '\0') {
-                    return false;
-                }
-                return true;
+                return v != nullptr && v[0] == '1' && v[1] == '\0';
             }();
             if (allocBlackOn && reg != nullptr && !reg->IsLargeRegion()) {
                 GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
