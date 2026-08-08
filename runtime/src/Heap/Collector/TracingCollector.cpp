@@ -26,6 +26,7 @@ struct SkippedStackMapCounts {
 
 SkippedStackMapCounts g_skippedStackMapCounts;
 SkippedStackMapCounts g_rootMapMissCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
 
 const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
@@ -70,6 +71,7 @@ void ResetSkippedStackMapCounts()
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
                        const Mutator& mutator)
 {
+    ++g_currentThreadRootMapMissCount;
     if (!ROOTMAP_MISS_COUNT_ENABLED && !ROOTMAP_MISS_FATAL_ENABLED) {
         return;
     }
@@ -177,6 +179,11 @@ void ReportSkippedStackMapCounts()
     }
 }
 } // namespace
+
+size_t TracingCollector::CurrentThreadRootMapMissCount()
+{
+    return g_currentThreadRootMapMissCount;
+}
 
 const size_t TracingCollector::MAX_MARKING_WORK_SIZE = 16; // fork task if bigger
 const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller

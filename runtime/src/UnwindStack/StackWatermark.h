@@ -63,6 +63,7 @@ public:
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(0, std::memory_order_relaxed);
+        complete.store(false, std::memory_order_relaxed);
         stackGeneration.store(0, std::memory_order_relaxed);
         lastGrowOffset.store(0, std::memory_order_relaxed);
         growCount.store(0, std::memory_order_relaxed);
@@ -195,6 +196,7 @@ public:
         epoch.store(scanEpoch, std::memory_order_relaxed);
         cursorIndex.store(0, std::memory_order_relaxed);
         frameCount.store(totalFrames, std::memory_order_relaxed);
+        complete.store(false, std::memory_order_relaxed);
         phase.store(WM_SCANNING, std::memory_order_release);
         return true;
     }
@@ -225,6 +227,18 @@ public:
                          "[GCV2][stack-watermark] Finish with residual frames cursor=%zu total=%zu", idx, total);
         }
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
+        complete.store(true, std::memory_order_relaxed);
+        phase.store(WM_DONE, std::memory_order_release);
+    }
+
+    // Close a fully traversed cursor whose RootMap lookup was incomplete. The
+    // phase remains monotonic, but IsDone(epoch) must stay false so the STW
+    // consumer takes the legacy fallback for this mutator.
+    void FinishIncomplete(Owner claimOwner)
+    {
+        RequireOwnerScanning(claimOwner, "FinishIncomplete");
+        owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
+        complete.store(false, std::memory_order_relaxed);
         phase.store(WM_DONE, std::memory_order_release);
     }
 
@@ -262,7 +276,7 @@ public:
     bool IsDone() const { return GetPhase() == WM_DONE; }
     bool IsDone(uint64_t scanEpoch) const
     {
-        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch;
+        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch && complete.load(std::memory_order_acquire);
     }
 
     static bool VerifyEnabled();
@@ -305,6 +319,7 @@ private:
     std::atomic<Owner> owner;
     std::atomic<size_t> cursorIndex;
     std::atomic<size_t> frameCount;
+    std::atomic<bool> complete;
     // Movable-stack generation: advanced on every successful grow with nonzero offset.
     std::atomic<uint64_t> stackGeneration;
     std::atomic<intptr_t> lastGrowOffset;

@@ -183,6 +183,7 @@ public:
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
+    static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                            RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
