@@ -18,25 +18,37 @@
 namespace MapleRuntime {
 BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    do {
+    // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
+    // A bare `do { ... } while (true)` with no progress path livelocks the mutator
+    // (no safepoint) and GC then spins forever in EnsurePhaseTransition(IDLE) —
+    // deadlock2_gcfloor388_0010: mutator in IdleBarrier::ReadReference vs gc-main
+    // in EnsurePhaseTransition(GC_PHASE_IDLE). Sibling barriers already bounded
+    // (Enum/Trace/Forward/Preforward @ e0824f25); Idle was the leftover.
+    for (int attempts = 0;;) {
         RefField<> oldField(field);
-        if (LIKELY(!theCollector.IsLoadBad(oldField))) {
-            return to_object(oldField.GetTargetObject());
-        }
-        BaseObject* toVersion = nullptr;
-        if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
-            DLOG(BARRIER, "update obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), toVersion);
-            return toVersion;
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
         }
 
-        BaseObject* target = nullptr;
-        if (theCollector.TryUntagRefField(obj, field, target)) {
-            DLOG(BARRIER, "untag obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
-            return target;
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
+        // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
         }
-    } while (true);
-    // unreachable path.
-    return nullptr;
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
+        // the CAS expected value. A concurrent GC update therefore wins rather than being
+        // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
+            return loadGood;
+        }
+    }
 }
 
 BaseObject* IdleBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
