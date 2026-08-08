@@ -799,20 +799,14 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         oldRegion = next;
     }
 
-    // posttrace 乙: isTraceRegion ⇒ objects placed after mark opened for a cycle
-    // that will not paint route bits for them. Exclude from *this* CSet (peer of pin
-    // free-list POST_TRACE refuse). Drop sticky so the *next* PrepareYoung can admit
-    // and ClearLiveInfo+mark them. PrepareYoung itself is the start of a new young
-    // mark cycle (phase is often CLEAR_SATB, not IDLE) — always clear on skip.
+    // posttrace 乙: isTraceRegion ⇒ after-mark-window allocs with no route bits.
+    // Exclude from this minor CSet. Do NOT clear the bit here — clear-on-skip let
+    // the next minor re-admit with live0=0 (clearTraceCnt≥1 samples). Bit clears
+    // only in ClearLiveInfo (major AssembleSmall / selected candidate path).
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        if (region->IsTraceRegion()) {
-            region->SetTraceRegionFlag(0);
+        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
             region = next;
             continue;
         }
@@ -830,12 +824,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        if (region->IsTraceRegion()) {
-            region->SetTraceRegionFlag(0);
+        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
             region = next;
             continue;
         }

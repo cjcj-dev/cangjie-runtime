@@ -165,26 +165,8 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         return AllocateRawPointerObject(totalSize);
     }
 
-    // posttrace 乙: once TRACE..FORWARD is open, stop bumping unstamped TLs.
-    // Properly Remove+Enlist (leave orphan TL list entries causes later route holes).
-    // New region from AllocateThreadLocalRegion is stamped isTraceRegion.
-    // ⛔ Do not stamp existing region in place (ShouldEnqueue would hide pre-mark objs).
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        GCPhase heapP = Heap::GetHeap().GetGCPhase();
-        if ((heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-             heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-             heapP == GCPhase::GC_PHASE_FORWARD) &&
-            !tlRegion->IsTraceRegion()) {
-            RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
-            RegionManager& manager = theAllocator.GetRegionManager();
-            if (tlRegion->IsThreadLocalRegion()) {
-                manager.RemoveThreadLocalRegion(tlRegion);
-                manager.EnlistFullThreadLocalRegion(tlRegion);
-            }
-            tlRegion = RegionInfo::NullRegion();
-        } else {
-            addr = tlRegion->Alloc(totalSize);
-        }
+        addr = tlRegion->Alloc(totalSize);
     }
 
     if (UNLIKELY(addr == 0)) {
@@ -282,29 +264,17 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        GCPhase heapP = Heap::GetHeap().GetGCPhase();
-        if ((heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-             heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-             heapP == GCPhase::GC_PHASE_FORWARD) &&
-            !tlRegion->IsTraceRegion()) {
-            if (tlRegion->IsThreadLocalRegion()) {
-                manager.RemoveThreadLocalRegion(tlRegion);
-                manager.EnlistFullThreadLocalRegion(tlRegion);
-            }
-            tlRegion = RegionInfo::NullRegion();
-        } else {
-            MAddress addr = tlRegion->Alloc(totalSize);
-            if (addr != 0) {
-                return addr;
-            }
+        MAddress addr = tlRegion->Alloc(totalSize);
+        if (addr != 0) {
+            return addr;
+        }
 
-            // allocation failed because region is full.
-            CHECK(tlRegion->IsThreadLocalRegion());
-            {
-                manager.RemoveThreadLocalRegion(tlRegion);
-                manager.EnlistFullThreadLocalRegion(tlRegion);
-                tlRegion = RegionInfo::NullRegion();
-            }
+        // allocation failed because region is full.
+        CHECK(tlRegion->IsThreadLocalRegion());
+        {
+            manager.RemoveThreadLocalRegion(tlRegion);
+            manager.EnlistFullThreadLocalRegion(tlRegion);
+            tlRegion = RegionInfo::NullRegion();
         }
     }
 
@@ -313,15 +283,6 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     RegionInfo* r  = preparedRegion.load(std::memory_order_acquire);
     if (r != nullptr) {
         preparedRegion.store(nullptr, std::memory_order_release);
-        // posttrace: prepared region may have been taken before TRACE opened —
-        // stamp if needed so it cannot enter this cycle's route unmarked.
-        GCPhase heapP = Heap::GetHeap().GetGCPhase();
-        if ((heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-             heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-             heapP == GCPhase::GC_PHASE_FORWARD) &&
-            !r->IsTraceRegion()) {
-            r->SetTraceRegionFlag(1);
-        }
         tlRegion = r;
         if (theAllocator.IsAsyncAllocationEnable()) {
             theAllocator.AddHungryBuffer(*this);
