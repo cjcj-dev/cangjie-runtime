@@ -453,7 +453,7 @@ void CjHeapDataForIDE::SerializeObjectArray(BaseObject*& obj, const u1 tag)
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+    HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
     // for each object in array.
     for (MIndex i = 0; i < arrayLengthVal; ++i) {
         visitor(arrayContent[i]);

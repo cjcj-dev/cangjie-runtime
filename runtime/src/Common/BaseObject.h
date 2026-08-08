@@ -31,21 +31,21 @@ public:
 
     inline GCTib GetGCTib() const { return GetTypeInfo()->GetGCTib(); }
 
-    void ForEachRefField(const RefFieldVisitor& visitor);
+    void ForEachRefField(const HeapSlotVisitor& visitor);
 
-    void ForEachRefInStruct(const RefFieldVisitor& visitor, MAddress aggStart, MAddress aggEnd);
+    void ForEachRefInStruct(const HeapSlotVisitor& visitor, MAddress aggStart, MAddress aggEnd);
     // size in bytes
     size_t GetSize() const;
 
     size_t GetSize(TypeInfo* kls) const;
 
-    bool CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef);
+    bool CompareExchangeRefField(HeapSlot<>& field, const HeapSlot<> oldRef, const HeapSlot<> newRef);
 
     template<bool isVolatile = false>
-    RefField<isVolatile>& GetRefField(U32 offset) const
+    HeapSlot<isVolatile>& GetRefField(U32 offset) const
     {
         auto addr = reinterpret_cast<uintptr_t>(this) + offset;
-        return *reinterpret_cast<RefField<isVolatile>*>(addr);
+        return HeapSlotAt<isVolatile>(static_cast<MAddress>(addr));
     }
 
     template<typename T>
@@ -108,13 +108,11 @@ private:
 using ObjectPtr = BaseObject*;
 using ObjectVisitor = std::function<void(ObjectPtr)>;
 
-// ObjectRef aims to express a reference to object which is not a reference field and
-// can be modified by runtime/GC/mutators, i.e. current implementation of stack roots, runtime roots.
-struct ObjectRef {
-    BaseObject* object;
-};
+// Stack/runtime roots are uncoloured RootSlots. ObjectRef remains as an API
+// spelling only; unlike the old struct it cannot be reinterpreted as HeapSlot.
+using ObjectRef = RootSlot;
 
-using RawRefVisitor = std::function<void(ObjectRef&)>;
+using RawRefVisitor = RootSlotVisitor;
 using RootVisitor = RawRefVisitor;
 using StackPtrVisitor = RawRefVisitor;
 } // namespace MapleRuntime

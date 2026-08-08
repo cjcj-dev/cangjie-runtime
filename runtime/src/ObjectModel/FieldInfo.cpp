@@ -163,8 +163,7 @@ void* StaticFieldInfo::GetValue()
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        RefField<false>* refField = reinterpret_cast<RefField<false>*>(addr);
-        return Heap::GetBarrier().ReadStaticRef(*refField);
+        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(addr));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -206,8 +205,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        RefField<>* rootField = reinterpret_cast<RefField<>*>(addr);
-        Heap::GetBarrier().WriteStaticRef(*rootField, newValue);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(addr), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {
@@ -338,7 +336,7 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
     }
     U64 argCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
 
     for (U64 idx = 0; idx < argCnt; ++idx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));

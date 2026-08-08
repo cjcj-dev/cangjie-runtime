@@ -66,8 +66,8 @@ static ObjectPtr PlainObjectPtr(ObjectPtr maybeColoured)
 template<bool isAtomic>
 static RefField<isAtomic>* PlainRefFieldPtr(RefField<isAtomic>* maybeColoured)
 {
-    return reinterpret_cast<RefField<isAtomic>*>(
-        PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured));
+    return &HeapSlotAt<isAtomic>(address);
 }
 
 static bool IsGlobalStruct(const ObjectPtr basePtr, MAddress field)
@@ -321,12 +321,12 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     ObjectPtr plainRef = PlainObjectPtr(ref);
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(*plainField, plainRef);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(plainField), plainRef);
         return;
     }
     if (!Heap::IsHeapAddress(plainObj)) {
         // Non-heap holder (static/global): same remset duty as WriteStaticRef.
-        Heap::GetBarrier().WriteStaticRef(*plainField, plainRef);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(plainField), plainRef);
         return;
     }
     Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
@@ -351,9 +351,10 @@ extern "C" void MCC_WriteStructField(ObjectPtr obj, MAddress dst, size_t dstLen,
     Heap::GetBarrier().WriteStruct(plainObj, plainDst, dstLen, plainSrc, srcLen);
 }
 
-extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field)
+extern "C" void MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field)
 {
-    Heap::GetBarrier().WriteStaticRef(*PlainRefFieldPtr(field), PlainObjectPtr(ref));
+    MAddress address = PlainManagedAddr(reinterpret_cast<MAddress>(field));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(address), PlainObjectPtr(ref));
 }
 
 extern "C" void MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gcTib)
@@ -1641,7 +1642,7 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
     if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(*field);
+        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(field));
     }
     return Heap::GetBarrier().ReadReference(obj, *field);
 }
@@ -1666,7 +1667,7 @@ extern "C" void CJ_MCC_ReadStructField(MAddress dstPtr, ObjectPtr obj, MAddress 
     }
     Heap::GetBarrier().ReadStruct(dstPtr, obj, srcField, size);
 }
-extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RefField<false>* field)
+extern "C" ObjectPtr CJ_MCC_ReadStaticRef(RootSlot* field)
 {
     return Heap::GetBarrier().ReadStaticRef(*field);
 }

@@ -629,12 +629,11 @@ bool MCC_IsThreadObjectInited()
 void* MRT_GetCurrentCJThreadObject()
 {
     void* argStart = CJThreadGetArg();
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(
-        &reinterpret_cast<LWTData*>(argStart)->threadObject);
+    RootSlot& root = RootSlotAt(&reinterpret_cast<LWTData*>(argStart)->threadObject);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    auto res = Heap::GetBarrier().ReadStaticRef(*refField);
+    auto res = Heap::GetBarrier().ReadStaticRef(root);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
@@ -650,8 +649,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    Heap::GetBarrier().WriteStaticRef(*reinterpret_cast<RefField<false>*>(&data->threadObject),
-        from_native_ref(ptr));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(&data->threadObject), from_native_ref(ptr));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif

@@ -31,13 +31,13 @@ public:
     virtual void WriteF64(BaseObject* obj, Field<double>& field, double val) const;
 
     virtual BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
-    virtual BaseObject* ReadStaticRef(RefField<false>& field) const;
+    virtual BaseObject* ReadStaticRef(RootSlot& field) const;
     virtual BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
     virtual void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
     virtual void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
 
     void WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const;
-    virtual void WriteStaticRef(RefField<false>& field, BaseObject* ref) const;
+    virtual void WriteStaticRef(RootSlot& field, BaseObject* ref) const;
     void WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
     virtual void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;
 

@@ -364,7 +364,7 @@ void MethodInfo::PrepareCJMethodActualArgs(ArgValue* argValues, void* actualArgs
     CJRawArray* cjRawArray = static_cast<CJArray*>(actualArgsArray)->rawPtr;
     U64 actualArgCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
@@ -659,7 +659,7 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
     argValues.AddReference(instanceObj);
 
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCount; ++actualArgIdx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         argValues.AddReference(argObj);

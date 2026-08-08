@@ -77,14 +77,14 @@ private:
 class StaticRootTable {
 public:
     struct StaticRootArray {
-        RefField<>* content[0];
+        RootSlot* content[0];
     };
 
     StaticRootTable() { totalRootsCount = 0; }
     ~StaticRootTable() = default;
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const RefFieldVisitor& visitor);
+    void VisitRoots(const RootSlotVisitor& visitor);
 
 private:
     std::mutex gcRootsLock;                         // lock gcRootsBuckets
@@ -100,8 +100,8 @@ private:
 };
 
 struct ExportObjectInfo {
-    ExportObjectInfo(BaseObject* obj, bool state) : exportObj(static_cast<ExportObject*>(obj)), activeState(state) {}
-    ExportObject* exportObj = nullptr;
+    ExportObjectInfo(BaseObject* obj, bool state) : activeState(state) { StorePlain(exportObj, from_object(obj)); }
+    RootSlot exportObj;
     bool activeState = true;
 };
 class ExportRootTable {
@@ -115,7 +115,7 @@ public:
         }
         U64 id = accessableId.front();
         accessableId.pop_front();
-        exportRoots[id].exportObj = static_cast<ExportObject*>(exportObj);
+        StorePlain(exportRoots[id].exportObj, from_object(exportObj));
         exportRoots[id].activeState = true;
         return id;
     }
@@ -123,7 +123,7 @@ public:
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (id < exportRoots.size()) {
-            return Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<>&>(exportRoots[id].exportObj));
+            return Heap::GetBarrier().ReadStaticRef(exportRoots[id].exportObj);
         }
         return nullptr;
     }
@@ -131,7 +131,7 @@ public:
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (id < exportRoots.size()) {
-            exportRoots[id].exportObj = nullptr;
+            StorePlain(exportRoots[id].exportObj, zaddress::null);
             exportRoots[id].activeState = true;
             accessableId.push_back(id);
         }
@@ -149,7 +149,8 @@ public:
             return false;
         }
         auto info = exportRoots[id];
-        if (info.exportObj != obj) {
+        // tableMutex excludes GC visitation, so this retained root is live here.
+        if (to_object(safe(info.exportObj.LoadPlain())) != obj) {
             return false;
         }
         return info.activeState;
@@ -400,7 +401,7 @@ private:
     void EnumFinalizerProcessorRoots(RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
-    void VisitStaticRoots(const RefFieldVisitor& visitor) const;
+    void VisitStaticRoots(const RootSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const RootVisitor& visitor) const;
 };
 } // namespace MapleRuntime

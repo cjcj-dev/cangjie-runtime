@@ -17,7 +17,7 @@ public:
     ForwardBarrier(Collector& collector, RememberedSet& rememberedSet) : IdleBarrier(collector, rememberedSet) {}
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
-    BaseObject* ReadStaticRef(RefField<false>& field) const override;
+    BaseObject* ReadStaticRef(RootSlot& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;

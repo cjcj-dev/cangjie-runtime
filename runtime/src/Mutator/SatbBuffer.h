@@ -302,8 +302,8 @@ public:
     void ClearWeakRefBuffer()
     {
         for (BaseObject* obj : refObjBuffer) {
-            RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
-            Heap::GetBarrier().ReadWeakRef(obj, *referentField);
+            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+            Heap::GetBarrier().ReadWeakRef(obj, referentField);
         }
         refObjBuffer.clear();
     }

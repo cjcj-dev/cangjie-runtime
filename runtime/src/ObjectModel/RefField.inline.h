@@ -19,31 +19,9 @@ namespace MapleRuntime {
 // AssertColouredWriteIfEnabled: single definition in BaseObject.cpp (avoids weak multi-static).
 
 template<bool isAtomic>
-void RefField<isAtomic>::SetTargetObject(const BaseObject* obj, std::memory_order order)
+void HeapSlot<isAtomic>::StoreColoured(zpointer value, std::memory_order order)
 {
-    RefField<> newField(obj);
-    MAddress newVal = raw(newField.GetFieldValue());
-    AssertColouredWriteIfEnabled(this, newVal);
-#if defined(CANGJIE_TSAN_SUPPORT)
-    RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
-#else
-    RefFieldValue oldVal = __atomic_load_n(&fieldVal, std::memory_order_relaxed);
-#endif
-    (void)oldVal;
-
-    // Always atomic: see GetTargetObject — closes mutator↔GC races R1/R3.
-#if defined(CANGJIE_TSAN_SUPPORT)
-    Sanitizer::TsanAtomicStore(&fieldVal, static_cast<RefFieldValue>(newVal), order);
-#else
-    __atomic_store_n(&fieldVal, static_cast<RefFieldValue>(newVal), order);
-#endif
-
-    DLOG(BARRIER, "write field @%p 0x%zx -> %p", this, oldVal, obj);
-}
-
-template<bool isAtomic>
-void RefField<isAtomic>::SetFieldValue(MAddress newVal, std::memory_order order)
-{
+    MAddress newVal = raw(value);
     AssertColouredWriteIfEnabled(this, newVal);
 #if defined(CANGJIE_TSAN_SUPPORT)
     RefFieldValue oldVal = static_cast<RefFieldValue>(Sanitizer::TsanAtomicLoad(&fieldVal, std::memory_order_relaxed));
