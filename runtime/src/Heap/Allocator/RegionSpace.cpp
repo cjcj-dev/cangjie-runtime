@@ -206,24 +206,34 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // Phases that may leave unmarked live objects reachable into fix/forward:
         // ENUM/TRACE/CLEAR (trace-region skip path) + POST_TRACE/PREFORWARD/FORWARD
         // (no trace flag, no mark). Mark with known totalSize — header not installed yet.
+        // Default ON. MRT_GCV2_ALLOC_BLACK=0 disables for H3 A/B (diag-only arm).
         {
-            GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
-            Mutator* m = Mutator::GetMutator();
-            if (m != nullptr) {
-                mutP = m->GetMutatorPhase();
-            }
-            bool needBlack = mutP == GCPhase::GC_PHASE_ENUM || mutP == GCPhase::GC_PHASE_TRACE ||
-                mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || mutP == GCPhase::GC_PHASE_POST_TRACE ||
-                mutP == GCPhase::GC_PHASE_PREFORWARD || mutP == GCPhase::GC_PHASE_FORWARD;
-            if (needBlack && reg != nullptr && !reg->IsLargeRegion()) {
-                MAddress regionStart = reg->GetRegionStart();
-                MAddress regionEnd = reg->GetRegionEnd();
-                size_t offset = static_cast<size_t>(addr - regionStart);
-                size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
-                if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
-                    bool already = reg->GetOrAllocMarkBitmap()->MarkBits(offset, totalSize, regionSize);
-                    if (!already) {
-                        reg->AddLiveByteCount(totalSize);
+            static const bool allocBlackOn = []() {
+                const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
+                if (v != nullptr && v[0] == '0' && v[1] == '\0') {
+                    return false;
+                }
+                return true;
+            }();
+            if (allocBlackOn) {
+                GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
+                Mutator* m = Mutator::GetMutator();
+                if (m != nullptr) {
+                    mutP = m->GetMutatorPhase();
+                }
+                bool needBlack = mutP == GCPhase::GC_PHASE_ENUM || mutP == GCPhase::GC_PHASE_TRACE ||
+                    mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || mutP == GCPhase::GC_PHASE_POST_TRACE ||
+                    mutP == GCPhase::GC_PHASE_PREFORWARD || mutP == GCPhase::GC_PHASE_FORWARD;
+                if (needBlack && reg != nullptr && !reg->IsLargeRegion()) {
+                    MAddress regionStart = reg->GetRegionStart();
+                    MAddress regionEnd = reg->GetRegionEnd();
+                    size_t offset = static_cast<size_t>(addr - regionStart);
+                    size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
+                    if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
+                        bool already = reg->GetOrAllocMarkBitmap()->MarkBits(offset, totalSize, regionSize);
+                        if (!already) {
+                            reg->AddLiveByteCount(totalSize);
+                        }
                     }
                 }
             }
