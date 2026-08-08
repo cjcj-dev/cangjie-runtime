@@ -3549,6 +3549,64 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan));
+    // blackmark: fixpoint edges from already-reachable holders to unmarked young objects.
+    // PrepareYoung ClearLiveInfo drops any pre-mark allocation-black bits; objects allocated
+    // into candidate regions (or still living there) that are only reached from live holders
+    // after the root/remset wave can still be live0Surv=0 at GetRoute. Walk reachableVec
+    // fields once more and re-enter TraceYoungClosure for newly claimed young targets.
+    // Default OFF (same switch as alloc paint). Incomplete: ALOT still 10/10 route miss.
+    {
+        static const bool blackmarkFixOn = []() {
+            const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
+            return v != nullptr && v[0] == '1' && v[1] == '\0';
+        }();
+        if (blackmarkFixOn) {
+            WorkStack blackmarkExtra = NewWorkStack();
+            const size_t nHolders = reachableVec.size();
+            for (size_t i = 0; i < nHolders; ++i) {
+                BaseObject* object = reachableVec[i];
+                if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                    continue;
+                }
+                if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.holder", object)) {
+                    continue;
+                }
+                if (!object->HasRefField()) {
+                    continue;
+                }
+                object->ForEachRefField([this, &blackmarkExtra](RefField<>& field) {
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.target", target)) {
+                        BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                        if (host != nullptr && host != target) {
+                            target = host;
+                        } else {
+                            return;
+                        }
+                    }
+                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (region == nullptr || !region->IsYoungRegion()) {
+                        return;
+                    }
+                    if (region->IsMarkedObject(target)) {
+                        return;
+                    }
+                    // Candidate / from / recent-full young: any young that can enter GetRoute.
+                    blackmarkExtra.push_back(target);
+                });
+            }
+            if (!blackmarkExtra.empty()) {
+                size_t before = reachableVec.size();
+                TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                  weakSlots, useBitmapLedger);
+                VLOG(REPORT, "[GCV2][blackmark] fixpoint_extra_roots=%zu reachable_before=%zu after=%zu",
+                     blackmarkExtra.size(), before, reachableVec.size());
+            }
+        }
+    }
     // setbitmap2: optional closure equality probe (default off).
     // mode=1: dump product ptr-set hash; mode=2: in-process dual legacy set walk on same roots.
     ClosureHashProbe::ReportDump(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
