@@ -176,7 +176,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
     // gcvroot Z3: poison new object bytes before header install (MRT_GCV2_ZAP_ALLOC=1).
     if (addr != 0) {
         HeapZap::ZapAllocated(addr, totalSize);
-        // marklate: record mutator/heap phase at alloc (NULLROUTE_DIAG only; no TLS).
+        // marklate: per-region last-alloc phase (NULLROUTE_DIAG only; no TLS).
         if (AllocPhaseDiag::Enabled()) {
             uint8_t mutP = static_cast<uint8_t>(GCPhase::GC_PHASE_UNDEF);
             Mutator* m = Mutator::GetMutator();
@@ -184,7 +184,16 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                 mutP = static_cast<uint8_t>(m->GetMutatorPhase());
             }
             uint8_t heapP = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
-            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), mutP, heapP);
+            uintptr_t regionStart = 0;
+            if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
+                regionStart = tlRegion->GetRegionStart();
+            } else {
+                RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(addr);
+                if (reg != nullptr) {
+                    regionStart = reg->GetRegionStart();
+                }
+            }
+            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, mutP, heapP);
         }
         // MinorGCALot: every N mutator allocs force young GC (HotSpot ScavengeALot intent).
         // Safe: mutator path only; async RequestGC(YOUNG); same surface as TakeRegion heuristic.

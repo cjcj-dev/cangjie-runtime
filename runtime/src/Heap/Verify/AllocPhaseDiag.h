@@ -8,31 +8,34 @@
 #define MRT_ALLOC_PHASE_DIAG_H
 
 // marklate: record mutator GC phase at allocation for null-route samples.
-// Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). No TLS — open hash table only.
-// Lookup is best-effort (capacity-bounded; oldest entries may be overwritten).
+// Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). No TLS.
+//
+// Design: per-region *last allocation* stamp (not every object). Target shape from
+// deadedge is region-end last object — a full object table is thrased under ALOT.
 
 #include <atomic>
 #include <cstdint>
-#include <cstring>
+#include <cstdlib>
 
 #include "Heap/Collector/Collector.h"
 
 namespace MapleRuntime {
 namespace AllocPhaseDiag {
 
-// Fixed power-of-two capacity; overwrite on collision (diag only).
-constexpr size_t kCap = 1u << 16; // 65536 slots
+// ~16k region slots; overwrite on collision (diag only).
+constexpr size_t kCap = 1u << 14;
 constexpr size_t kMask = kCap - 1;
 
-struct Entry {
-    std::atomic<uintptr_t> addr; // 0 = empty
+struct RegionLast {
+    std::atomic<uintptr_t> regionStart; // 0 = empty
+    std::atomic<uintptr_t> lastObj;
     std::atomic<uint8_t> mutatorPhase;
     std::atomic<uint8_t> heapPhase;
+    std::atomic<uint32_t> seq; // monotonic bump per update
 };
 
-inline Entry g_table[kCap] = {};
+inline RegionLast g_table[kCap] = {};
 inline std::atomic<size_t> g_records{ 0 };
-inline std::atomic<size_t> g_overwrites{ 0 };
 
 inline bool Enabled()
 {
@@ -73,75 +76,81 @@ inline const char* PhaseName(uint8_t p)
     }
 }
 
-// True if phase is one of the three MarkNewObject arms.
 inline bool IsMarkNewPhase(uint8_t p)
 {
     return p == static_cast<uint8_t>(GC_PHASE_ENUM) || p == static_cast<uint8_t>(GC_PHASE_TRACE) ||
         p == static_cast<uint8_t>(GC_PHASE_CLEAR_SATB_BUFFER);
 }
 
-inline size_t Hash(uintptr_t addr)
+inline size_t HashRegion(uintptr_t regionStart)
 {
-    // Mix low bits; objects are 8/16-aligned.
-    uintptr_t x = addr >> 3;
+    uintptr_t x = regionStart >> 16; // region typically 64KiB
     x ^= x >> 17;
     x *= 0x9e3779b97f4a7c15ull;
     return static_cast<size_t>(x) & kMask;
 }
 
-inline void Record(void* obj, uint8_t mutatorPhase, uint8_t heapPhase)
+// regionStart: base of the region; obj: allocated object address.
+inline void Record(void* obj, uintptr_t regionStart, uint8_t mutatorPhase, uint8_t heapPhase)
 {
-    if (obj == nullptr || !Enabled()) {
+    if (obj == nullptr || regionStart == 0 || !Enabled()) {
         return;
     }
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
-    size_t i = Hash(addr);
+    size_t i = HashRegion(regionStart);
     for (size_t n = 0; n < 8; ++n) {
         size_t idx = (i + n) & kMask;
         uintptr_t expected = 0;
-        if (g_table[idx].addr.compare_exchange_strong(expected, addr, std::memory_order_release,
-                                                      std::memory_order_relaxed)) {
-            g_table[idx].mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-            g_table[idx].heapPhase.store(heapPhase, std::memory_order_relaxed);
+        RegionLast& e = g_table[idx];
+        if (e.regionStart.compare_exchange_strong(expected, regionStart, std::memory_order_release,
+                                                  std::memory_order_relaxed) ||
+            expected == regionStart) {
+            e.lastObj.store(addr, std::memory_order_release);
+            e.mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
+            e.heapPhase.store(heapPhase, std::memory_order_relaxed);
+            e.seq.fetch_add(1, std::memory_order_relaxed);
             g_records.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        if (expected == addr) {
-            g_table[idx].mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-            g_table[idx].heapPhase.store(heapPhase, std::memory_order_relaxed);
-            return;
-        }
     }
-    // Probe exhausted: overwrite home slot.
-    size_t idx = i;
-    g_table[idx].addr.store(addr, std::memory_order_release);
-    g_table[idx].mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-    g_table[idx].heapPhase.store(heapPhase, std::memory_order_relaxed);
-    g_overwrites.fetch_add(1, std::memory_order_relaxed);
+    // probe exhausted: overwrite home
+    RegionLast& e = g_table[i];
+    e.regionStart.store(regionStart, std::memory_order_release);
+    e.lastObj.store(addr, std::memory_order_release);
+    e.mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
+    e.heapPhase.store(heapPhase, std::memory_order_relaxed);
+    e.seq.fetch_add(1, std::memory_order_relaxed);
 }
 
 struct Lookup {
     bool found = false;
+    bool isRegionLast = false;
     uint8_t mutatorPhase = 0;
     uint8_t heapPhase = 0;
+    uintptr_t lastObj = 0;
 };
 
-inline Lookup Find(void* obj)
+// Prefer exact match against region's lastObj (target is region-end last alloc).
+inline Lookup Find(void* obj, uintptr_t regionStart)
 {
     Lookup r;
     if (obj == nullptr || !Enabled()) {
         return r;
     }
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
-    size_t i = Hash(addr);
+    size_t i = HashRegion(regionStart);
     for (size_t n = 0; n < 8; ++n) {
         size_t idx = (i + n) & kMask;
-        if (g_table[idx].addr.load(std::memory_order_acquire) == addr) {
-            r.found = true;
-            r.mutatorPhase = g_table[idx].mutatorPhase.load(std::memory_order_relaxed);
-            r.heapPhase = g_table[idx].heapPhase.load(std::memory_order_relaxed);
-            return r;
+        RegionLast& e = g_table[idx];
+        if (e.regionStart.load(std::memory_order_acquire) != regionStart) {
+            continue;
         }
+        r.lastObj = e.lastObj.load(std::memory_order_acquire);
+        r.mutatorPhase = e.mutatorPhase.load(std::memory_order_relaxed);
+        r.heapPhase = e.heapPhase.load(std::memory_order_relaxed);
+        r.found = true;
+        r.isRegionLast = (r.lastObj == addr);
+        return r;
     }
     return r;
 }
