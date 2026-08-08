@@ -342,9 +342,10 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
 
     BaseObject* ResolveMinorReference(RefField<>& field) const;
-    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor);
+    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor,
+                             uint64_t stackScanEpoch = 0);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
-    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor);
+    void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch = 0);
     // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;

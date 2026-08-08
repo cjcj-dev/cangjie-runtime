@@ -19,6 +19,7 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -1850,7 +1851,8 @@ namespace {
 thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
-void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor)
+void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor,
+                                     uint64_t stackScanEpoch)
 {
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
@@ -1863,8 +1865,24 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
     RootVisitor& visitedRawRootVisitor = rawRootVisitor;
 #endif
     gMinorRootOrigin = "mutator_stack";
-    MutatorManager::Instance().VisitAllMutators(
-        [&visitedRawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(visitedRawRootVisitor); });
+    size_t concurrentDone = 0;
+    size_t stwFallback = 0;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        if (stackScanEpoch != 0 && mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+            ++concurrentDone;
+            return;
+        }
+        if (stackScanEpoch != 0) {
+            ++stwFallback;
+        }
+        mutator.VisitMutatorRoots(visitedRawRootVisitor);
+    });
+    if (stackScanEpoch != 0) {
+        VLOG(REPORT,
+             "[GCV2][stack-scan-fallback] epoch=%llu concurrent_done=%zu stw_fallback=%zu "
+             "env=MRT_GCV2_CONCURRENT_STACK_SCAN=1",
+             static_cast<unsigned long long>(stackScanEpoch), concurrentDone, stwFallback);
+    }
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
@@ -1910,14 +1928,14 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
     gMinorRootOrigin = "unknown";
 }
 
-void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor)
+void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch)
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
         visitor(ResolveMinorReference(field));
     };
     RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
-    VisitMinorRootSlots(rawRootVisitor, fieldVisitor);
+    VisitMinorRootSlots(rawRootVisitor, fieldVisitor, stackScanEpoch);
     VisitMinorValueRoots(visitor);
 }
 
@@ -3322,10 +3340,16 @@ void WCollector::FlushAllocationRegions()
 void WCollector::DoYoungGarbageCollection()
 {
     uint64_t start = TimeUtil::NanoSeconds();
-    if (UNLIKELY(MutatorManager::EpochHandshakeEnabled())) {
+    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
+    if (UNLIKELY(!concurrentStackScan && MutatorManager::EpochHandshakeEnabled())) {
         (void)MutatorManager::Instance().RunEpochHandshake("pre-minor");
     }
-    ScopedStopTheWorld stw("young collection", true, GCPhase::GC_PHASE_ENUM);
+    std::unique_ptr<ScopedStopTheWorld> stw;
+    if (concurrentStackScan) {
+        stw = std::make_unique<ScopedStopTheWorld>("young prepare", false);
+    } else {
+        stw = std::make_unique<ScopedStopTheWorld>("young collection", true, GCPhase::GC_PHASE_ENUM);
+    }
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
@@ -3341,7 +3365,9 @@ void WCollector::DoYoungGarbageCollection()
             VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
         }
     }
-    TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    if (!concurrentStackScan) {
+        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    }
     {
         // minortime: ① FlushAllocationRegions
         MRT_PHASE_TIMER("young.flush_alloc");
@@ -3396,6 +3422,29 @@ void WCollector::DoYoungGarbageCollection()
         Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
     }
 
+    uint64_t stackScanEpoch = 0;
+    if (concurrentStackScan) {
+        // Publish S1/S3/S5 while every mutator is stopped. SetGCPhase is the
+        // release publication point; AcknowledgeEpochHandshake asserts ENUM
+        // before it is allowed to snapshot a single frame.
+        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_ENUM);
+        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+        stw.reset();
+
+        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack");
+        stackScanEpoch = handshake.epoch;
+        CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
+                     "minor concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
+                     "fallback=%zu",
+                     static_cast<unsigned long long>(stackScanEpoch), handshake.requested, handshake.stackScanned,
+                     handshake.stackFallback);
+
+        // CLEAR is the closing edge for ENUM writes: it flushes every mutator's
+        // SATB node before the root pass consumes retired objects below.
+        stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
+        TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+    }
+
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
@@ -3418,6 +3467,9 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+        if (stackScanEpoch != 0) {
+            SatbBuffer::Instance().GetRetiredObjects(enumRoots);
+        }
         while (!enumRoots.empty()) {
             BaseObject* object = enumRoots.back();
             enumRoots.pop_back();
@@ -3441,7 +3493,7 @@ void WCollector::DoYoungGarbageCollection()
                 // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
                 PushYoungObject(object, workStack, "minor_root");
             }
-        });
+        }, stackScanEpoch);
     }
     g_minorLedgerCost.Reset();
     {
