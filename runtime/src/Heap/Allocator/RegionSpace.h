@@ -17,6 +17,7 @@
 
 #include "AllocUtil.h"
 #include "Allocator.h"
+#include "Collector/Collector.h"
 #include "ExceptionManager.h"
 #include "Mutator/Mutator.h"
 #include "RegionManager.h"
@@ -200,6 +201,11 @@ public:
 
     static bool MarkObject(const BaseObject* obj)
     {
+        // getsize7: static path → unsized GetSize. Gate before MarkBits (reject ⇒ already-marked).
+        if (!Collector::PlausibleManagedObjectGate("RegionSpace::MarkObject",
+                                                   const_cast<BaseObject*>(obj))) {
+            return true;
+        }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         return regionInfo->MarkObject(obj);
     }

@@ -368,6 +368,10 @@ bool WCollector::MarkObject(BaseObject* obj) const
 
 bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* region)
 {
+    // getsize7: ResurrectObject → GetSize; finalizer work-stack should be gated but base path was not.
+    if (!Collector::PlausibleManagedObjectGate("WCollector::ResurrectObject", obj)) {
+        return true;
+    }
     bool resurrected = region->ResurrectObject(obj, offset);
         if (!resurrected) {
             region->AddLiveByteCount(obj->GetSize());

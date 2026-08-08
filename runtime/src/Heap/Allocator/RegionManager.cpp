@@ -298,14 +298,27 @@ const char* RegionInfo::GetTypeName() const
 void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 {
     if (IsLargeRegion()) {
-        func(from_region_addr(GetRegionStart()));
+        BaseObject* obj = from_region_addr(GetRegionStart());
+        // getsize7: dense walk steps via GetSize; reject bad headers instead of SEGV.
+        // On reject: stop the walk (cannot invent a step size). Caller sees partial visit.
+        if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
+            return;
+        }
+        func(obj);
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
         while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            // getsize7: GetAllocSize → GetSize reads TypeInfo; interiors/holes SEGV here
+            // (deadlock_enqfrontier: VisitLiveObjectsUntilFalse ← RouteRegion ← TryForward).
+            // Refuse: break without inventing size — remaining stream is unwalkable.
+            if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
+                break;
+            }
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
-            size_t size = RegionSpace::GetAllocSize(*from_region_addr(position));
-            func(from_region_addr(position));
+            size_t size = RegionSpace::GetAllocSize(*obj);
+            func(obj);
             position += size;
         }
     }
@@ -319,7 +332,12 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         return true;
     }
     if (IsLargeRegion()) {
-        return func(from_region_addr(GetRegionStart()));
+        BaseObject* obj = from_region_addr(GetRegionStart());
+        if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+            // Stop without calling func: same as "no more live objects we can name".
+            return true;
+        }
+        return func(obj);
     }
     if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
@@ -328,6 +346,12 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
+            // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
+            // On reject: stop walk (return true = "until false" not triggered by visitor).
+            // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
+            if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+                return true;
+            }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             position += allocSize;
             if (IsSurvivedObject(offset) && !func(obj)) { return false; }
@@ -1522,6 +1546,11 @@ void RegionManager::CompactRegion(RegionInfo* region)
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = from_region_addr(currentPtr);
+        // getsize7: dense compact walk — same GetSize hazard as VisitLiveObjects.
+        // On reject: stop; leave remaining bytes uncleared beyond current allocPtr rebuild.
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
         if (region->IsSurvivedObject(offset)) {
@@ -1570,6 +1599,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
@@ -1592,6 +1624,9 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         CHECK(currentPtr >= regionStart);
         size_t offset = currentPtr - regionStart;
         BaseObject* currentObj = from_region_addr(currentPtr);
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
