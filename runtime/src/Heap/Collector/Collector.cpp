@@ -94,6 +94,23 @@ unsigned ClassifyInteriorOffset(BaseObject* obj)
     return 0;
 }
 
+// introot: host object for a heap interior (RawArray+8/...). nullptr if not interior.
+BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return nullptr;
+    }
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(obj->GetTypeInfo());
+    if (TipWordLooksLikeTypeInfo(tipAddr)) {
+        return nullptr;
+    }
+    unsigned off = ClassifyInteriorOffset(obj);
+    if (off == 0) {
+        return nullptr;
+    }
+    return reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(obj) - off);
+}
+
 unsigned SiteBucket(const char* site)
 {
     if (site == nullptr) {
@@ -237,6 +254,11 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
         }
     }
     return false;
+}
+
+BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj)
+{
+    return RecoverInteriorBaseImpl(obj);
 }
 
 void Collector::ReportPlausibleManagedObjectGateCounts()

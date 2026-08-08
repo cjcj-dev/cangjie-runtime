@@ -862,8 +862,15 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             CheckAndPush(obj, rootSet, rootStack);
         } else if (Heap::IsHeapAddress(obj) &&
                    !Collector::PlausibleManagedObjectGate("GcPhaseEnum.interior", obj)) {
-            // Interior (RawArray+8): keep plain tip-length address out of work stack; slot already plain.
-            DLOG(ENUM, "skip interior stack root @%p: %p", &root, obj);
+            // introot: slot holds RawArray+8 (&length). Push the host object so mark
+            // closure reaches the live array; leave the slot plain (not object-head).
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr) {
+                (void)PushHeapRootIfPlausible(host, "GcPhaseEnum.interiorBase");
+                DLOG(ENUM, "enum interior stack root @%p: interior=%p host=%p", &root, obj, host);
+            } else {
+                DLOG(ENUM, "skip interior stack root @%p: %p", &root, obj);
+            }
         }
         while (!rootStack.empty()) {
             BaseObject* obj = rootStack.top();
@@ -871,8 +878,21 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
             obj->ForEachRefField(refVisitor);
         }
     };
+    // introot: Enum previously used VisitMutatorRoots → RootMap (reg/slot only), so
+    // base/derived pairs never entered. VisitHeapReferences builds HeapReferenceMap and
+    // visits derived; the derived visitor marks the base and keeps the derived slot plain.
+    DerivedPtrVisitor derivedVisitor = [](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+        BaseObject* base = PlainRootObject(from_native_ref(basePtr));
+        BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
+        if (derivedObj != from_native_ref(derivedPtr)) {
+            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+        }
+        if (base != nullptr && Heap::IsHeapAddress(base)) {
+            (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase");
+        }
+    };
     if (stackScanEpoch == 0) {
-        VisitMutatorRoots(visitor);
+        VisitHeapReferences(visitor, derivedVisitor);
         return true;
     }
     size_t frames = 0;
@@ -918,7 +938,19 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         BaseObject* oldObj = root.object;
         if (Heap::IsHeapAddress(oldObj) &&
             !Collector::PlausibleManagedObjectGate("GCPhasePreForward.root", oldObj)) {
-            // Interior: leave plain, do not forward or push.
+            // introot: interior root — forward host and rewrite slot to to+offset.
+            BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
+            if (host != nullptr && collector.IsGhostFromObject(host) &&
+                !collector.IsUnmovableFromObject(host)) {
+                if (rootFieldSet.insert((void*)(&root)).second) {
+                    BaseObject* toHost = collector.ForwardObject(host);
+                    if (toHost != nullptr && toHost != host) {
+                        root.object = reinterpret_cast<BaseObject*>(
+                            reinterpret_cast<uintptr_t>(toHost) +
+                            (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
+                    }
+                }
+            }
             return;
         }
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
@@ -940,23 +972,18 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         // Peel colour on base/derived before arithmetic; interiors must not be treated as bases.
         BaseObject* fromVersion = PlainRootObject(from_native_ref(basePtr));
         BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
-        if (Heap::IsHeapAddress(derivedObj) &&
-            !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derived", derivedObj)) {
-            // Derived is itself an interior (e.g. RawArray+8 held as "root"): keep plain.
-            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
-            return;
-        }
+        // introot: even when derived is an interior (RawArray+8), still relocate via base.
+        // Previous code returned early after plain-strip and left a stale interior if base moved.
         if (!Heap::IsHeapAddress(fromVersion) ||
             !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derivedBase", fromVersion) ||
             !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
-            // Still strip colour from derived if present.
             if (derivedObj != from_native_ref(derivedPtr)) {
                 derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
             }
             return;
         }
         BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
-        if (fromVersion != toVersion) {
+        if (fromVersion != toVersion && toVersion != nullptr) {
             DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) +
                 (reinterpret_cast<DerivedPtrType>(derivedObj) - reinterpret_cast<BasePtrType>(fromVersion));
             derivedPtr = toDerived;

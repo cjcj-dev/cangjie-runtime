@@ -367,7 +367,6 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    RootMap rootMap = builder.Build<RootMap>();
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     DLOG(ENUM, "visit frame 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     auto gcInfo = GCInfoNode::BuildNodeForTrace(startIP, frameIP, frame.mFrame.GetFA());
@@ -427,22 +426,44 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         regDebugFunc = verifyReg;
 #endif
     }
-    if (rootMap.IsValid()) {
-        rootMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!rootMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
+    // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
+    // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
+    if (heapMap.IsValid()) {
+        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForTrace(gcInfo);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
+        // Mark the base of each derived pair. Derived slot itself is not an object root;
+        // leave it for PreForward's derived visitor to rewrite after evacuation.
+        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+            (void)derivedPtr;
+            BaseObject* base = reinterpret_cast<BaseObject*>(basePtr);
+            if (base == nullptr) {
+                return;
+            }
+            // Peel colour if present so gate/PushRoot see the real address.
+            base = reinterpret_cast<BaseObject*>(
+                RefField<>(reinterpret_cast<MAddress>(base)).GetAddress());
+            if (base == nullptr) {
+                return;
+            }
+            ObjectRef baseRef;
+            baseRef.object = base;
+            visitor(baseRef);
+        };
+        heapMap.VisitDerivedPtr(derivedMark, nullptr, regSlotsMap);
     } else {
         RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
-    rootMap.RecordCalleeSaved(regSlotsMap);
+    heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
