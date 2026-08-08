@@ -140,11 +140,10 @@ public:
     CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC) const
     {
         StackMapTable stackMapTable(prologue.GetNextTable());
-        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
-        if (idxSet.slotIdx == 0 && idxSet.regIdx == 0 && idxSet.lineNumIdx == 0 &&
-                idxSet.stackRegIdx == 0 && idxSet.stackSlotIdx == 0) {
+        if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
         }
+        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
         RegTable regTable(stackMapTable.GetNextTable());
         SlotTable slotTable(regTable.GetNextTable(), slotFormat);
         LineNumTable lineTable(slotTable.GetNextTable());
