@@ -1653,12 +1653,33 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         bool neverExamined = region->GetMarkBitmap() == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
         if (neverExamined) {
-            VLOG(REPORT,
-                 "[GCRECLAIM][fwd-empty-collect] region=%p start=%#zx alloc=%#zx young=%u "
-                 "live=%zu neverExamined=1 reason=%d — CollectRegion",
-                 region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                 static_cast<unsigned>(youngRegion), region->GetLiveByteCount(),
-                 static_cast<int>(Heap::GetHeap().GetCollector().GetGCStats().reason));
+            // Volume control, not detail reduction. This line fired 50,282 times in a 60s run
+            // (nwdiag 0808) and every one of them said the same thing, which buried the gate
+            // samples that explain *why*. Print the first few of each GC cycle, then only at
+            // power-of-four milestones so the final magnitude is still on the record.
+            static std::atomic<size_t> emptyCollectGc{ std::numeric_limits<size_t>::max() };
+            static std::atomic<size_t> emptyCollectSeq{ 0 };
+            if (emptyCollectGc.load(std::memory_order_relaxed) != g_gcCount) {
+                emptyCollectGc.store(g_gcCount, std::memory_order_relaxed);
+                emptyCollectSeq.store(0, std::memory_order_relaxed);
+            }
+            size_t seq = emptyCollectSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+            bool milestone = (seq & (seq - 1)) == 0;   // 1,2,4,8,16,...
+            if (seq <= 8 || milestone) {
+                GCReason gcReason = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const char* reasonName =
+                    gcReason < GC_REASON_MAX ? g_gcRequests[gcReason].name : "invalid";
+                // markBitmap and allocPtr>start are the two inputs behind neverExamined; print
+                // them rather than only the verdict, and carry gc= so this stream can be joined
+                // against [GCV2][markfloor-obj-gate] REJECT lines from the same cycle.
+                VLOG(REPORT,
+                     "[GCRECLAIM][fwd-empty-collect] gc=%zu seq=%zu region=%p start=%#zx alloc=%#zx "
+                     "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
+                     g_gcCount, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                     region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
+                     region->GetLiveByteCount(), region->GetMarkBitmap(), reasonName,
+                     static_cast<int>(gcReason));
+            }
         }
         if (youngRegion) {
             // No live objects → no out-edges; still demote so young-count stays honest.
