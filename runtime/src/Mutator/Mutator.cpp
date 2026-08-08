@@ -296,10 +296,6 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         // the preceding InstallBarrier.
         CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
                      "concurrent stack scan ack before ENUM barrier publication");
-        auto& localFins = GetLocalFinalizers();
-        if (!localFins.empty()) {
-            Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
-        }
         size_t frames = 0;
         bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, epoch, bySelf, &frames);
         MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
@@ -838,8 +834,12 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
     return complete;
 }
 
-inline bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
+bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
+    auto& localFins = GetLocalFinalizers();
+    if (!localFins.empty()) {
+        Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
+    }
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
     RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
@@ -976,10 +976,6 @@ inline void Mutator::HandleGCPhase(GCPhase newPhase)
             satbNode->Clear();
         }
     } else if (newPhase == GCPhase::GC_PHASE_ENUM) {
-        auto& localFins = GetLocalFinalizers();
-        if (!localFins.empty()) {
-            Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
-        }
         GcPhaseEnum(newPhase);
     } else if (newPhase == GCPhase::GC_PHASE_PREFORWARD) {
         GCPhasePreForward(newPhase);

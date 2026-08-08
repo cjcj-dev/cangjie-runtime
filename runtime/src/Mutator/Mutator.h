@@ -355,8 +355,8 @@ public:
         }
     }
 
-    inline bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
-                            size_t* scannedFrames = nullptr);
+    bool GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch = 0, bool bySelf = false,
+                     size_t* scannedFrames = nullptr);
     bool DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
                              size_t& scannedFrames);
     inline void GCPhasePreForward(GCPhase newPhase);

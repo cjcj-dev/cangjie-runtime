@@ -3443,6 +3443,17 @@ void WCollector::DoYoungGarbageCollection()
         // SATB node before the root pass consumes retired objects below.
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+
+        // An incomplete concurrent cursor (RootMap miss or missing managed
+        // bounds) cannot replace the legacy phase-enum path: GcPhaseEnum also
+        // traverses stack-allocated objects through CheckAndPush, while the raw
+        // root pass below only sees direct heap roots. Re-run that exact path
+        // under the closing STW before alloc-buffer roots are merged.
+        MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+            if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
+            }
+        });
     }
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
