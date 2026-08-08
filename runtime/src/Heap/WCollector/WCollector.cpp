@@ -669,10 +669,14 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             return;
         }
         if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot", root)) {
-            // arrayinit2: interior may already carry colour from a prior write-back; strip to plain.
+            // arrayinit2 / introot: interior may carry colour; strip and mark host.
             RefField<> plain(root);
             if (oldField.GetFieldValue() != plain.GetFieldValue()) {
                 (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+            }
+            BaseObject* host = Collector::TryRecoverInteriorBase(root);
+            if (host != nullptr && host->IsValidObject()) {
+                rootSet.push_back(host);
             }
             return;
         }
@@ -694,9 +698,14 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
                 }
             }
             if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.plain", root)) {
+                // introot: stackmap may label RawArray+8 as a root. Strip colour, mark host.
                 RefField<> plain(root);
                 if (oldField.GetFieldValue() != plain.GetFieldValue()) {
                     (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+                }
+                BaseObject* host = Collector::TryRecoverInteriorBase(root);
+                if (host != nullptr && host->IsValidObject()) {
+                    rootSet.push_back(host);
                 }
                 return;
             }
@@ -722,6 +731,10 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             RefField<> plain(root);
             if (oldField.GetFieldValue() != plain.GetFieldValue()) {
                 (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+            }
+            BaseObject* host = Collector::TryRecoverInteriorBase(root);
+            if (host != nullptr && host->IsValidObject()) {
+                rootSet.push_back(host);
             }
             return;
         }
@@ -925,10 +938,24 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
         return oldObj;
     }
-    // arrayinit2 / markfloor Q2: stackmap may label RawArray+8 (&length) as a root.
+    // arrayinit2 / markfloor Q2 / introot: stackmap may label RawArray+8 (&length) as a root.
     // Colouring that interior makes the mutator load a non-canonical address (si_code=128).
-    // PlausibleManagedObjectGate rejects tip=length; strip any colour and leave untraced.
+    // Relocate via host object; write plain interior (toHost+offset) back.
     if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
+        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            BaseObject* toHost = TryForwardObject(host);
+            if (toHost != nullptr && toHost != host) {
+                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
+                    reinterpret_cast<uintptr_t>(toHost) +
+                    (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
+                RefField<> plain(toInterior);
+                if (oldField.GetFieldValue() != plain.GetFieldValue()) {
+                    (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
+                }
+                return toInterior;
+            }
+        }
         RefField<> plain(oldObj);
         if (oldField.GetFieldValue() != plain.GetFieldValue()) {
             (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
@@ -1995,7 +2022,16 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        visitor(ResolveMinorReference(field));
+        BaseObject* obj = ResolveMinorReference(field);
+        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
+            !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr) {
+                visitor(host);
+            }
+            return;
+        }
+        visitor(obj);
     };
     RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
     VisitMinorRootSlots(rawRootVisitor, fieldVisitor, stackScanEpoch);
@@ -2007,8 +2043,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    // markfloor: interiors pass IsValidObject (tip=length≠null); reject before header walk.
+    // markfloor / introot: interiors (RawArray+8) pass IsValidObject (tip=length≠null).
+    // Recover host object so the live array is marked; do not push the interior itself.
     if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(object);
+        if (host != nullptr && host != object) {
+            PushYoungObject(host, workStack, origin);
+        }
         return;
     }
     if (!object->IsValidObject()) {
@@ -2119,9 +2160,13 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
-        // markfloor: RawArray+8 interiors pass IsValidObject (tip=length≠null) then
-        // HasRefField/GetSize SEGV. Skip before IsValidObject CHECK.
+        // markfloor / introot: RawArray+8 interiors pass IsValidObject (tip=length≠null)
+        // then HasRefField/GetSize SEGV. Recover host; skip interior itself.
         if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object) {
+                workStack.push_back(host);
+            }
             continue;
         }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -2473,9 +2518,24 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    // interiorsrc2: stack/reg may hold RawArray+8. GetAndTryTagRefField would re-colour
-    // that interior and mutator resumes with si_code=128. Strip any colour, do not tag.
+    // interiorsrc2 / introot: stack/reg may hold RawArray+8. Relocate via host; write plain.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(target);
+        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
+            if (toHost != nullptr && toHost != host) {
+                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
+                    reinterpret_cast<uintptr_t>(toHost) +
+                    (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
+                RefField<> plain(toInterior);
+                MAddress oldVal = raw(oldField.GetFieldValue());
+                MAddress plainVal = raw(plain.GetFieldValue());
+                if (oldVal != plainVal) {
+                    (void)field.CompareExchange(oldVal, plainVal);
+                }
+                return true;
+            }
+        }
         RefField<> plain(target);
         MAddress oldVal = raw(oldField.GetFieldValue());
         MAddress plainVal = raw(plain.GetFieldValue());

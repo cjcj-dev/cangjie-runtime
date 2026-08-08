@@ -117,6 +117,33 @@ unsigned ClassifyInteriorOffset(BaseObject* obj)
     return 0;
 }
 
+// introot: host object for a heap interior (RawArray+8/...). nullptr if not interior.
+BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return nullptr;
+    }
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(obj->GetTypeInfo());
+    if (TipWordLooksLikeTypeInfo(tipAddr)) {
+        return nullptr;
+    }
+    unsigned off = ClassifyInteriorOffset(obj);
+    if (off == 0) {
+        return nullptr;
+    }
+    auto* base = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(obj) - off);
+    if (PlausibleObjGateAccountOn()) {
+        static std::atomic<size_t> g_recoverSample{ 0 };
+        size_t s = g_recoverSample.fetch_add(1, std::memory_order_relaxed);
+        if (s < 16) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][introot-recover] interior=%p off=%u host=%p hostTip=%p",
+                obj, off, base, base->GetTypeInfo());
+        }
+    }
+    return base;
+}
+
 unsigned SiteBucket(const char* site)
 {
     if (site == nullptr) {
@@ -258,6 +285,11 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
             __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
     }
     return false;
+}
+
+BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj)
+{
+    return RecoverInteriorBaseImpl(obj);
 }
 
 void Collector::ReportPlausibleManagedObjectGateCounts()

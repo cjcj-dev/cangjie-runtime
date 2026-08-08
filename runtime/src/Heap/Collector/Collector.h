@@ -163,6 +163,8 @@ public:
     // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
     static void ReportPlausibleManagedObjectGateCounts();
+    // introot: if obj is a heap interior (RawArray+8/...), return host object base; else nullptr.
+    static BaseObject* TryRecoverInteriorBase(BaseObject* obj);
 
     virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
     virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
