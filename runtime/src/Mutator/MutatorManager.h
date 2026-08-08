@@ -65,6 +65,9 @@ struct EpochHandshakeStats {
     size_t exitTransitions = 0;
     size_t destroyDeferred = 0;
     size_t stopTheWorldCalls = 0;
+    size_t stackScanned = 0;
+    size_t stackFallback = 0;
+    size_t stackFrames = 0;
     // Residual mutex window only (ledger clear / stats gather). Handshake wait
     // no longer holds mutator-management W-lock (dynjoin: exclude + born-clean).
     uint64_t managementLockNanos = 0;
@@ -217,8 +220,10 @@ public:
     void TransitionAllMutatorsToGCPhase(GCPhase phase);
 
     static bool EpochHandshakeEnabled();
+    static bool ConcurrentStackScanEnabled();
     EpochHandshakeStats RunEpochHandshake(const char* source);
     void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
+    void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
     void RecordEpochHandshakeCreateAttempt();
     // dynjoin (乙): create during active epoch marks mutator born-clean for that
     // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
@@ -364,6 +369,9 @@ private:
     std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
     std::atomic<size_t> epochHandshakeDestroyDeferred = { 0 };
     std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
+    std::atomic<size_t> epochHandshakeStackScanned = { 0 };
+    std::atomic<size_t> epochHandshakeStackFallback = { 0 };
+    std::atomic<size_t> epochHandshakeStackFrames = { 0 };
     std::mutex epochHandshakeLedgerMutex;
     std::unordered_set<Mutator*> epochHandshakeAckedMutators;
     // Participants of the active epoch; DestroyMutator must not free these while

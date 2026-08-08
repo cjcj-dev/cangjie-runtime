@@ -25,9 +25,21 @@ struct SkippedStackMapCounts {
 };
 
 SkippedStackMapCounts g_skippedStackMapCounts;
+SkippedStackMapCounts g_rootMapMissCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
 
 const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const bool ROOTMAP_MISS_COUNT_ENABLED = []() {
+    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const bool ROOTMAP_MISS_FATAL_ENABLED = []() {
+    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS_FATAL");
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
@@ -51,6 +63,38 @@ void ResetSkippedStackMapCounts()
     g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+}
+
+void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
+                       const Mutator& mutator)
+{
+    ++g_currentThreadRootMapMissCount;
+    if (!ROOTMAP_MISS_COUNT_ENABLED && !ROOTMAP_MISS_FATAL_ENABLED) {
+        return;
+    }
+    std::atomic<size_t>* missCount = &g_rootMapMissCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            missCount = &g_rootMapMissCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            missCount = &g_rootMapMissCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            break;
+    }
+    missCount->fetch_add(1, std::memory_order_relaxed);
+    if (ROOTMAP_MISS_FATAL_ENABLED) {
+        CString symbol = frame.GetFuncName();
+        LOG(RTLOG_FATAL,
+            "MRT_GCV2_ROOTMAP_MISS_FATAL=1: reason=%s symbol=%s start_ip=%p frame_ip=%p mutator=%p tid=%u",
+            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), &mutator, mutator.GetTid());
+    }
 }
 
 // Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
@@ -117,15 +161,29 @@ void ReportSkippedStackMapCounts()
     size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
     size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
     size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
-    if (zeroEntries == 0 && pcMiss == 0 && zeroRootIndices == 0) {
-        return;
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
     }
-    LOG(RTLOG_ERROR,
-        "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
-        "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
-        zeroEntries, pcMiss, zeroRootIndices);
+
+    if (ROOTMAP_MISS_COUNT_ENABLED) {
+        size_t rootZeroEntries = g_rootMapMissCounts.zeroEntries.load(std::memory_order_relaxed);
+        size_t rootPcMiss = g_rootMapMissCounts.pcMiss.load(std::memory_order_relaxed);
+        size_t rootOther = g_rootMapMissCounts.zeroRootIndices.load(std::memory_order_relaxed);
+        LOG(RTLOG_ERROR,
+            "[GCV2][rootmap-miss] zero_entries=%zu pc_miss=%zu other=%zu total=%zu "
+            "env=MRT_GCV2_ROOTMAP_MISS=1",
+            rootZeroEntries, rootPcMiss, rootOther, rootZeroEntries + rootPcMiss + rootOther);
+    }
 }
 } // namespace
+
+size_t TracingCollector::CurrentThreadRootMapMissCount()
+{
+    return g_currentThreadRootMapMissCount;
+}
 
 const size_t TracingCollector::MAX_MARKING_WORK_SIZE = 16; // fork task if bigger
 const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller
@@ -378,6 +436,8 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
+    } else {
+        RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
