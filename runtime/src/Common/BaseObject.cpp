@@ -214,6 +214,17 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
 // "All colour bits set" keeps the predicate identical to the shift form it replaces.
 // Phase C: bad = mid-evacuation, or carrying a colour other than the one being handed out.
 // The initial conceptual state is RemappedYoung0 x RemappedOld0, encoded by Remapped00.
+// ⭐⭐⭐ 0809：⭐ 让"⭐ 这枚 .so 是哪个 commit 建的"变成一条 `strings` 能答的问题。
+//   ⛔ 一晚三次：⭐ 修法在源码里，⭐ 而跑的是旧二进制（⭐ 信号死锁修法 · ⭐ opt · ⭐ cjc/std/runtime 三份）
+//   ⇒ ⭐ 而 `.so` 只有 GNU build-id ⇒ ⭐⭐ 能区分两枚，⛔ 说不出来自哪个 commit
+//   ⇒ ⭐ 于是只能靠目录日期猜 —— ⭐⭐ 而 `sdk-stageA2` 目录是 08-07、⭐ 里面的 runtime 更早
+//   ⭐ 判法：`strings <libcangjie-runtime.so> | grep CJRT-COMMIT:`
+#ifndef CJ_RUNTIME_COMMIT
+#define CJ_RUNTIME_COMMIT "unknown"
+#endif
+extern "C" __attribute__((used, visibility("default")))
+const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
+
 extern "C" unsigned long g_cjLoadBadMask =
     MapleRuntime::TAGGED_BITS_MASK |
     (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00);

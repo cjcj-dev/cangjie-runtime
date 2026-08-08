@@ -29,6 +29,10 @@ extern "C" {
 // to this symbol by name (CJBarrierLowering.cpp:641), so it is extern "C": a mangled name would
 // drift between compiler versions.
 extern unsigned long g_cjLoadBadMask;
+
+// ⭐ 构建溯源符号的**声明**；⭐ 定义在 `ColourMask.cpp`（⛔ 头里放定义会多重定义）
+extern "C" const char g_cjRuntimeProvenance[];
+
 // Mark barriers use the same dynamic-mask ABI as load barriers. The mark mask additionally rejects
 // references carrying the previous young or old mark epoch (OpenJDK zAddress.hpp:209-217).
 extern unsigned long g_cjMarkBadMask;
