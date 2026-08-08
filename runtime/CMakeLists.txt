@@ -258,6 +258,49 @@ if (CJ_SDK_VERSION)
     add_definitions(-DCJ_SDK_VERSION="${CJ_SDK_VERSION}")
 endif()
 
+# ⭐⭐⭐ 0809：把【源码 commit】烙进二进制。
+#   ⛔ 起因（同一晚三次）：⭐ 修法在源码里，⭐ 而我们跑的是旧二进制 ——
+#     ① `6e330098`（信号死锁）08-03 就在 main，⭐ 而现场 `sdk-stageA2` 的 runtime 早于它
+#        ⇒ ⭐⭐ 死锁又发生了一次，⭐ 我们查了两小时
+#     ② `opt` 的 uncolor base look-through 在 `bc65313a`，⭐ 活体 opt 是旧的
+#        ⇒ ⭐⭐ derived 配对丢失，⭐ 害整条 C1 归因
+#     ③ 更早：cjc / std / runtime 三份产物只换了一份
+#   ⇒ ⭐⭐⭐ **根因不是"忘了重建"，⭐ 是【看着一枚 .so 说不出它是哪个 commit】**
+#     ⭐ 它只有 GNU build-id（⭐ 能区分两枚，⛔ 说不出来自哪）
+#   ⇒ ⭐ 于是任何"⭐ 这枚 runtime 含不含某修法"的问题都只能靠日期猜 —— ⭐ 而目录日期会骗人
+#     （⭐ `sdk-stageA2` 目录是 08-07，⭐ 里面的 runtime 却更早）
+#   ⇒ ⭐⭐ 判法从此是一条命令：`strings <so> | grep CJRT-COMMIT:`
+# ⭐ 外部显式传入优先（`-DCJ_RUNTIME_COMMIT=<sha>`）——
+#   ⛔ 因为我们常把 `runtime/` 单独 tar 到构建箱，⭐ 那边没有 `.git`
+#   ⇒ ⭐ 没传且无 git ⇒ ⭐⭐ 记 `unknown`，⛔ 而不是悄悄记成某个像样的值
+# ⭐ 顺序：⭐ -D 传入 > ⭐ 环境变量 > ⭐ git > ⭐ unknown
+#   ⭐ 环境变量这一档是给"⭐ tar 过去、⭐ 那边没 .git"的常规做法用的
+if (NOT CJ_RUNTIME_COMMIT AND DEFINED ENV{CJ_RUNTIME_COMMIT})
+    set(CJ_RUNTIME_COMMIT "$ENV{CJ_RUNTIME_COMMIT}")
+endif()
+if (NOT CJ_RUNTIME_COMMIT)
+    execute_process(
+        COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. rev-parse HEAD
+        OUTPUT_VARIABLE CJ_RUNTIME_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET)
+endif()
+if (NOT CJ_RUNTIME_COMMIT)
+    set(CJ_RUNTIME_COMMIT "unknown")
+endif()
+execute_process(
+    COMMAND git -C ${CMAKE_CURRENT_SOURCE_DIR}/.. status --porcelain
+    OUTPUT_VARIABLE CJ_RUNTIME_DIRTY
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET)
+# ⭐ 无 git 时 status 为空 ⇒ ⛔ 不会误标 dirty；⭐ 而 commit 已是 unknown，⭐ 不会伪装
+if (CJ_RUNTIME_DIRTY)
+    # ⭐ 脏树必须显式标出来 —— ⛔ 否则"⭐ 我改了但没提交"的构建会伪装成某个干净 commit
+    set(CJ_RUNTIME_COMMIT "${CJ_RUNTIME_COMMIT}-dirty")
+endif()
+add_definitions(-DCJ_RUNTIME_COMMIT="${CJ_RUNTIME_COMMIT}")
+message(STATUS "CJ_RUNTIME_COMMIT=${CJ_RUNTIME_COMMIT}")
+
 if (DISABLE_VERSION_CHECK MATCHES 1)
     add_definitions(-DDISABLE_VERSION_CHECK)
 endif()
