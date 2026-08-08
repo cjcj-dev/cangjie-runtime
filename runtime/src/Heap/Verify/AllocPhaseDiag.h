@@ -36,16 +36,22 @@ struct Slot {
     std::atomic<uintptr_t> lastObj{ 0 };
     std::atomic<uint8_t> mutatorPhase{ 0 };
     std::atomic<uint8_t> heapPhase{ 0 };
+    std::atomic<uint8_t> isTraceAtLast{ 0 };
     std::atomic<uintptr_t> frozenLastObj{ 0 };
     std::atomic<uint8_t> frozenMut{ 0 };
     std::atomic<uint8_t> frozenHeap{ 0 };
+    std::atomic<uint8_t> frozenIsTrace{ 0 };
     std::atomic<uint8_t> frozenValid{ 0 };
+    // blackmark: SetTraceRegionFlag(1→0) count for this physical region generation.
+    std::atomic<uint32_t> clearTraceCnt{ 0 };
+    std::atomic<uint8_t> everWasTrace{ 0 };
 };
 
 struct NearEntry {
     std::atomic<uintptr_t> obj{ 0 };
     std::atomic<uint8_t> mutatorPhase{ 0 };
     std::atomic<uint8_t> heapPhase{ 0 };
+    std::atomic<uint8_t> isTraceAtAlloc{ 0 };
 };
 
 inline Slot g_table[kCap] = {};
@@ -136,7 +142,7 @@ inline Slot* FindSlot(uintptr_t regionStart, bool create)
     return &e;
 }
 
-inline void RecordNear(uintptr_t obj, uint8_t mutP, uint8_t heapP)
+inline void RecordNear(uintptr_t obj, uint8_t mutP, uint8_t heapP, uint8_t isTrace)
 {
     size_t i = HashObj(obj);
     for (size_t n = 0; n < 4; ++n) {
@@ -148,6 +154,7 @@ inline void RecordNear(uintptr_t obj, uint8_t mutP, uint8_t heapP)
             e.obj.store(obj, std::memory_order_release);
             e.mutatorPhase.store(mutP, std::memory_order_relaxed);
             e.heapPhase.store(heapP, std::memory_order_relaxed);
+            e.isTraceAtAlloc.store(isTrace, std::memory_order_relaxed);
             return;
         }
     }
@@ -155,10 +162,12 @@ inline void RecordNear(uintptr_t obj, uint8_t mutP, uint8_t heapP)
     e.obj.store(obj, std::memory_order_release);
     e.mutatorPhase.store(mutP, std::memory_order_relaxed);
     e.heapPhase.store(heapP, std::memory_order_relaxed);
+    e.isTraceAtAlloc.store(isTrace, std::memory_order_relaxed);
 }
 
 // regionEnd: exclusive end (regionStart + size). 0 if unknown.
-inline void Record(void* obj, uintptr_t regionStart, uintptr_t regionEnd, uint8_t mutatorPhase, uint8_t heapPhase)
+inline void Record(void* obj, uintptr_t regionStart, uintptr_t regionEnd, uint8_t mutatorPhase, uint8_t heapPhase,
+                   uint8_t isTraceRegion)
 {
     if (obj == nullptr || regionStart == 0 || !Enabled()) {
         return;
@@ -172,11 +181,40 @@ inline void Record(void* obj, uintptr_t regionStart, uintptr_t regionEnd, uint8_
             e->lastObj.store(addr, std::memory_order_release);
             e->mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
             e->heapPhase.store(heapPhase, std::memory_order_relaxed);
+            e->isTraceAtLast.store(isTraceRegion, std::memory_order_relaxed);
+        }
+        if (isTraceRegion != 0) {
+            e->everWasTrace.store(1, std::memory_order_relaxed);
         }
     }
     if (regionEnd != 0 && regionEnd > addr && (regionEnd - addr) <= kNearEndBytes) {
-        RecordNear(addr, mutatorPhase, heapPhase);
+        RecordNear(addr, mutatorPhase, heapPhase, isTraceRegion);
     }
+}
+
+inline void NoteTraceFlagCleared(uintptr_t regionStart)
+{
+    if (regionStart == 0 || !Enabled()) {
+        return;
+    }
+    Slot* e = FindSlot(regionStart, true);
+    if (e == nullptr) {
+        return;
+    }
+    e->clearTraceCnt.fetch_add(1, std::memory_order_relaxed);
+    e->everWasTrace.store(1, std::memory_order_relaxed);
+}
+
+inline void NoteTraceFlagSet(uintptr_t regionStart)
+{
+    if (regionStart == 0 || !Enabled()) {
+        return;
+    }
+    Slot* e = FindSlot(regionStart, true);
+    if (e == nullptr) {
+        return;
+    }
+    e->everWasTrace.store(1, std::memory_order_relaxed);
 }
 
 inline void FreezeRegion(uintptr_t regionStart)
@@ -191,11 +229,13 @@ inline void FreezeRegion(uintptr_t regionStart)
     e->frozenLastObj.store(e->lastObj.load(std::memory_order_acquire), std::memory_order_release);
     e->frozenMut.store(e->mutatorPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
     e->frozenHeap.store(e->heapPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    e->frozenIsTrace.store(e->isTraceAtLast.load(std::memory_order_relaxed), std::memory_order_relaxed);
     e->frozenValid.store(1, std::memory_order_release);
     // Clear live so next generation on this region starts clean.
     e->lastObj.store(0, std::memory_order_release);
     e->mutatorPhase.store(0, std::memory_order_relaxed);
     e->heapPhase.store(0, std::memory_order_relaxed);
+    e->isTraceAtLast.store(0, std::memory_order_relaxed);
 }
 
 struct Lookup {
@@ -205,6 +245,9 @@ struct Lookup {
     bool usedNear = false;
     uint8_t mutatorPhase = 0;
     uint8_t heapPhase = 0;
+    uint8_t isTraceAtAlloc = 0;
+    uint32_t clearTraceCnt = 0;
+    uint8_t everWasTrace = 0;
     uintptr_t lastObj = 0;
 };
 
@@ -221,6 +264,7 @@ inline Lookup FindNear(uintptr_t obj)
             r.isRegionLast = true; // exact near-end hit
             r.mutatorPhase = e.mutatorPhase.load(std::memory_order_relaxed);
             r.heapPhase = e.heapPhase.load(std::memory_order_relaxed);
+            r.isTraceAtAlloc = e.isTraceAtAlloc.load(std::memory_order_relaxed);
             r.lastObj = obj;
             return r;
         }
@@ -237,10 +281,16 @@ inline Lookup Find(void* obj, uintptr_t regionStart)
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
     // Prefer exact near-end table (survives freeze clear of live lastObj).
     Lookup near = FindNear(addr);
+    Slot* e = FindSlot(regionStart, false);
+    if (e != nullptr) {
+        r.clearTraceCnt = e->clearTraceCnt.load(std::memory_order_relaxed);
+        r.everWasTrace = e->everWasTrace.load(std::memory_order_relaxed);
+    }
     if (near.found) {
+        near.clearTraceCnt = r.clearTraceCnt;
+        near.everWasTrace = r.everWasTrace;
         return near;
     }
-    Slot* e = FindSlot(regionStart, false);
     if (e == nullptr) {
         return r;
     }
@@ -249,6 +299,7 @@ inline Lookup Find(void* obj, uintptr_t regionStart)
         r.lastObj = e->frozenLastObj.load(std::memory_order_acquire);
         r.mutatorPhase = e->frozenMut.load(std::memory_order_relaxed);
         r.heapPhase = e->frozenHeap.load(std::memory_order_relaxed);
+        r.isTraceAtAlloc = e->frozenIsTrace.load(std::memory_order_relaxed);
         r.found = (r.lastObj != 0);
         r.isRegionLast = (r.lastObj == addr);
         return r;
@@ -256,6 +307,7 @@ inline Lookup Find(void* obj, uintptr_t regionStart)
     r.lastObj = e->lastObj.load(std::memory_order_acquire);
     r.mutatorPhase = e->mutatorPhase.load(std::memory_order_relaxed);
     r.heapPhase = e->heapPhase.load(std::memory_order_relaxed);
+    r.isTraceAtAlloc = e->isTraceAtLast.load(std::memory_order_relaxed);
     r.found = (r.lastObj != 0);
     r.isRegionLast = (r.lastObj == addr);
     return r;

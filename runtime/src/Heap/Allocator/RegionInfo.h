@@ -847,8 +847,10 @@ public:
                         }
                         regionMarked = IsSurvivedObject(offset);
                         // marklate: per-region last-alloc phase (no TLS).
+                        // blackmark: isTraceAtAlloc + clearTraceCnt for H3.
                         AllocPhaseDiag::Lookup ap =
                             AllocPhaseDiag::Find(fromObj, GetRegionStart());
+                        unsigned curIsTrace = static_cast<unsigned>(IsTraceRegion());
                         LOG(RTLOG_ERROR,
                             "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
@@ -856,7 +858,8 @@ public:
                             "type=%u oob=%u allocOff=%zu nearEnd=%u "
                             "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u usedNear=%u "
                             "allocMutPhase=%u(%s) allocHeapPhase=%u(%s) allocInMarkNew=%u "
-                            "lastObj=%#zx",
+                            "lastObj=%#zx curIsTrace=%u isTraceAtAlloc=%u clearTraceCnt=%u "
+                            "everWasTrace=%u",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
                             static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
                             static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
@@ -877,7 +880,11 @@ public:
                             AllocPhaseDiag::PhaseName(ap.heapPhase),
                             static_cast<unsigned>(ap.found &&
                                 AllocPhaseDiag::IsMarkNewPhase(ap.mutatorPhase)),
-                            static_cast<size_t>(ap.lastObj));
+                            static_cast<size_t>(ap.lastObj),
+                            curIsTrace,
+                            static_cast<unsigned>(ap.isTraceAtAlloc),
+                            static_cast<unsigned>(ap.clearTraceCnt),
+                            static_cast<unsigned>(ap.everWasTrace));
                     }
                 }
             }
@@ -1107,7 +1114,16 @@ public:
     }
     void SetTraceRegionFlag(uint8_t flag)
     {
+        uint8_t prev = metadata.isTraceRegion;
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
+        // blackmark: track 1→0 clears (EnlistFullThreadLocalRegion / HandleTraceRegions).
+        if (AllocPhaseDiag::Enabled()) {
+            if (flag == 0 && prev != 0) {
+                AllocPhaseDiag::NoteTraceFlagCleared(GetRegionStart());
+            } else if (flag != 0) {
+                AllocPhaseDiag::NoteTraceFlagSet(GetRegionStart());
+            }
+        }
     }
     void SetInGhostRegion(uint8_t flag)
     {
