@@ -211,9 +211,12 @@ public:
         // another mutator may have installed a pinned region while the mutex was released.
         addr = AllocPinnedLocked(size);
         if (addr == 0) {
-            // If allocate pinned obj during tracing, set region to traced new region.
+            // posttrace 乙: TRACE..FORWARD new pinned regions are out of this cycle's
+            // route domain (peer to free-list POST_TRACE refuse at :1821-1824).
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
+            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER ||
+                phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
+                phase == GC_PHASE_FORWARD) {
                 region->SetTraceRegionFlag(1);
             }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
@@ -246,15 +249,17 @@ public:
              region->GetRegionSize(), region->GetRegionEnd(), region->GetUnitIdx(), region->GetRegionType());
         uintptr_t addr = region->Alloc(size);
 
+        // posttrace 乙: same sticky stamp as AllocateThreadLocalRegion (TRACE..FORWARD).
         GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
-        bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER);
+        bool shouldSetTraceRegion = (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER ||
+            phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD);
+        if (shouldSetTraceRegion) {
+            region->SetTraceRegionFlag(1);
+        }
         if (largeTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION)) {
-            if (shouldSetTraceRegion) {
-                region->SetTraceRegionFlag(1);
-            }
+            // in active large-trace cache
         } else {
             recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
-            region->SetTraceRegionFlag(0);
         }
 
         return addr;
@@ -264,10 +269,13 @@ public:
     {
         MRT_ASSERT(region->IsThreadLocalRegion(), "unexpected region type");
 
+        // posttrace 乙: keep isTraceRegion sticky when the active trace cache is off
+        // (POST_TRACE/FORWARD, or after DeactivateRegionCache). Clearing the flag here
+        // used to drop the only "not in this cycle's route domain" bit, then
+        // PrepareYoung/AssembleSmall pulled the region into from with live0Surv=0.
         if (region->IsTraceRegion()) {
             if (!fullTraceRegions.TryPrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION)) {
                 recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
-                region->SetTraceRegionFlag(0);
             }
             return;
         }
@@ -539,15 +547,16 @@ public:
 
     void HandleTraceRegions()
     {
-        fullTraceRegions.DeactivateRegionCache();
+        // posttrace 乙: merge trace caches into recent* but do NOT clear isTraceRegion.
+        // Flag stays until ClearLiveInfo at the next mark-cycle start so PrepareYoung /
+        // AssembleSmall can exclude these regions from the current route domain.
+        // DeactivateRegionCache previously cleared flags on every node — that was the
+        // hole that let TRACE-bucket objects enter from with live0Surv=0.
+        fullTraceRegions.DeactivateRegionCacheKeepTraceFlag();
         recentFullRegionList.MergeRegionList(fullTraceRegions, RegionInfo::RegionType::RECENT_FULL_REGION);
 
-        largeTraceRegions.DeactivateRegionCache();
+        largeTraceRegions.DeactivateRegionCacheKeepTraceFlag();
         recentLargeRegionList.MergeRegionList(largeTraceRegions, RegionInfo::RegionType::RECENT_LARGE_REGION);
-
-        tlRegionList.ClearTraceRegionFlag();
-        recentPinnedRegionList.ClearTraceRegionFlag();
-        oldPinnedRegionList.ClearTraceRegionFlag();
     }
 
     void PrepareTrace()

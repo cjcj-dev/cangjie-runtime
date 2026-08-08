@@ -239,6 +239,14 @@ public:
         }
         active = false;
     }
+
+    // posttrace 乙: close the cache without dropping isTraceRegion. Those regions must
+    // stay out of this cycle's from/route until ClearLiveInfo at the next mark start.
+    void DeactivateRegionCacheKeepTraceFlag()
+    {
+        std::lock_guard<std::mutex> lock(listMutex);
+        active = false;
+    }
 private:
     bool active = false;
 };
