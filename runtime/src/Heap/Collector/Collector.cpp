@@ -36,6 +36,15 @@ std::atomic<size_t> g_plausibleObjGateReject{ 0 };
 std::atomic<size_t> g_plausibleObjGateSample{ 0 };
 // interiorsrc2: per-site reject counters (always on when gate accounts).
 std::atomic<size_t> g_plausibleObjGateBySite[16]{ {} };
+// ⭐⭐⭐ 0809 00:5x：**按 interior offset 计数，⛔ 不经采样**。
+//   ⛔ 为什么必须加：⭐ `int_off` 原来只在**被采样的那几行日志**里出现
+//     ⇒ ⭐⭐ 而采样预算是**按 GC 轮**分的、⭐ 且被所有 reason 共享
+//     ⇒ ⭐⭐⭐ 于是 `int_off=8 REJECT=0` 有**两个**含义：⭐ 真的没有 · ⭐ 预算被别的 reason 用光了
+//   ⭐ 实账：⭐ `c1remeasure` 读到 **0**、⭐ `getsize7` 同判据读到 **12830** ⇒ ⭐ 两棒都没错，
+//     ⭐⭐ **是判据本身建在采样输出上** —— ⭐ 而 C1 的完成判据正是它。
+//   ⇒ ⭐ 只在诊断模式（`MRT_GCV2_MARKFLOOR_OBJ_GATE=1`）下计，⭐ 产品路径零代价。
+//   索引：0=非内点 · 1=off8 · 2=off16 · 3=off24 · 4=off32
+std::atomic<size_t> g_plausibleObjGateByIntOff[5]{ {} };
 
 // The sample budget is per GC cycle, not per process.
 //
@@ -298,8 +307,13 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
     }
     size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
     g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+    // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
+    unsigned off = 0;
+    if (PlausibleObjGateAccountOn()) {
+        off = ClassifyInteriorOffset(obj);
+        g_plausibleObjGateByIntOff[off / 8u < 5u ? off / 8u : 0u].fetch_add(1, std::memory_order_relaxed);
+    }
     if (PlausibleObjGateAccountOn() && PlausibleObjGateSampleAllowed(48)) {
-        unsigned off = ClassifyInteriorOffset(obj);
         GCPhase phase = Heap::GetHeap().GetGCPhase();
         // The region this obj sits in is the join key against [GCRECLAIM][fwd-empty-collect]:
         // if the dropped root's region is the one CollectRegion later frees, the "live array
@@ -329,6 +343,14 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
     }
     LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
         g_plausibleObjGateReject.load(std::memory_order_relaxed));
+    // ⭐⭐ 这一行才是 C1 判据该读的：⭐ 未经采样的按 offset 全量计数
+    LOG(RTLOG_ERROR,
+        "[GCV2][markfloor-obj-gate] byintoff none=%zu off8=%zu off16=%zu off24=%zu off32=%zu",
+        g_plausibleObjGateByIntOff[0].load(std::memory_order_relaxed),
+        g_plausibleObjGateByIntOff[1].load(std::memory_order_relaxed),
+        g_plausibleObjGateByIntOff[2].load(std::memory_order_relaxed),
+        g_plausibleObjGateByIntOff[3].load(std::memory_order_relaxed),
+        g_plausibleObjGateByIntOff[4].load(std::memory_order_relaxed));
     LOG(RTLOG_ERROR,
         "[GCV2][markfloor-obj-gate] bysite MarkObject=%zu TraceRefField=%zu EnumRefField=%zu "
         "EnumAndTagRawRoot=%zu ForwardUpdateRawRef=%zu ForwardObject=%zu TryForward=%zu "
