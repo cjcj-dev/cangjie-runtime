@@ -185,15 +185,18 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             }
             uint8_t heapP = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
             uintptr_t regionStart = 0;
+            uintptr_t regionEnd = 0;
+            RegionInfo* reg = nullptr;
             if (tlRegion != nullptr && tlRegion != RegionInfo::NullRegion()) {
-                regionStart = tlRegion->GetRegionStart();
+                reg = tlRegion;
             } else {
-                RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(addr);
-                if (reg != nullptr) {
-                    regionStart = reg->GetRegionStart();
-                }
+                reg = RegionInfo::TryGetRegionInfoAt(addr);
             }
-            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, mutP, heapP);
+            if (reg != nullptr) {
+                regionStart = reg->GetRegionStart();
+                regionEnd = reg->GetRegionEnd();
+            }
+            AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP);
         }
         // MinorGCALot: every N mutator allocs force young GC (HotSpot ScavengeALot intent).
         // Safe: mutator path only; async RequestGC(YOUNG); same surface as TakeRegion heuristic.

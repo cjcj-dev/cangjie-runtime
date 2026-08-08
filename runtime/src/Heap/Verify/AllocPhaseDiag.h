@@ -10,9 +10,10 @@
 // marklate: record mutator GC phase at allocation for null-route samples.
 // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). No TLS.
 //
-// Live stamp: per-region last allocation (monotonic).
-// Frozen stamp: snapshot at PrepareForwardableRegion — survives region reuse so
-// GetRoute on ghost FROM still sees the phase of the generation under evacuation.
+// Live stamp: monotonic last-obj within a region generation (addr only moves up).
+// Freeze at PrepareForwardableRegion snapshots live → frozen, then clears live so
+// the next generation on the same physical region starts clean.
+// Near-end ring: last ~32 near-end (offset high) objects keep exact (obj→phase).
 
 #include <atomic>
 #include <cstdint>
@@ -25,21 +26,30 @@ namespace AllocPhaseDiag {
 
 constexpr size_t kCap = 1u << 14;
 constexpr size_t kMask = kCap - 1;
+constexpr size_t kNearCap = 1u << 14;
+constexpr size_t kNearMask = kNearCap - 1;
+// Objects within this many bytes of region end are also keyed by exact address.
+constexpr size_t kNearEndBytes = 256;
 
 struct Slot {
     std::atomic<uintptr_t> regionStart{ 0 };
-    // live (mutator updates)
     std::atomic<uintptr_t> lastObj{ 0 };
     std::atomic<uint8_t> mutatorPhase{ 0 };
     std::atomic<uint8_t> heapPhase{ 0 };
-    // frozen at PrepareForwardableRegion
     std::atomic<uintptr_t> frozenLastObj{ 0 };
     std::atomic<uint8_t> frozenMut{ 0 };
     std::atomic<uint8_t> frozenHeap{ 0 };
     std::atomic<uint8_t> frozenValid{ 0 };
 };
 
+struct NearEntry {
+    std::atomic<uintptr_t> obj{ 0 };
+    std::atomic<uint8_t> mutatorPhase{ 0 };
+    std::atomic<uint8_t> heapPhase{ 0 };
+};
+
 inline Slot g_table[kCap] = {};
+inline NearEntry g_near[kNearCap] = {};
 
 inline bool Enabled()
 {
@@ -94,6 +104,14 @@ inline size_t HashRegion(uintptr_t regionStart)
     return static_cast<size_t>(x) & kMask;
 }
 
+inline size_t HashObj(uintptr_t obj)
+{
+    uintptr_t x = obj >> 3;
+    x ^= x >> 17;
+    x *= 0x9e3779b97f4a7c15ull;
+    return static_cast<size_t>(x) & kNearMask;
+}
+
 inline Slot* FindSlot(uintptr_t regionStart, bool create)
 {
     size_t i = HashRegion(regionStart);
@@ -118,70 +136,120 @@ inline Slot* FindSlot(uintptr_t regionStart, bool create)
     return &e;
 }
 
-inline void Record(void* obj, uintptr_t regionStart, uint8_t mutatorPhase, uint8_t heapPhase)
+inline void RecordNear(uintptr_t obj, uint8_t mutP, uint8_t heapP)
+{
+    size_t i = HashObj(obj);
+    for (size_t n = 0; n < 4; ++n) {
+        size_t idx = (i + n) & kNearMask;
+        NearEntry& e = g_near[idx];
+        uintptr_t expected = 0;
+        if (e.obj.compare_exchange_strong(expected, obj, std::memory_order_release, std::memory_order_relaxed) ||
+            expected == obj || e.obj.load(std::memory_order_acquire) == obj) {
+            e.obj.store(obj, std::memory_order_release);
+            e.mutatorPhase.store(mutP, std::memory_order_relaxed);
+            e.heapPhase.store(heapP, std::memory_order_relaxed);
+            return;
+        }
+    }
+    NearEntry& e = g_near[i];
+    e.obj.store(obj, std::memory_order_release);
+    e.mutatorPhase.store(mutP, std::memory_order_relaxed);
+    e.heapPhase.store(heapP, std::memory_order_relaxed);
+}
+
+// regionEnd: exclusive end (regionStart + size). 0 if unknown.
+inline void Record(void* obj, uintptr_t regionStart, uintptr_t regionEnd, uint8_t mutatorPhase, uint8_t heapPhase)
 {
     if (obj == nullptr || regionStart == 0 || !Enabled()) {
+        return;
+    }
+    uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+    Slot* e = FindSlot(regionStart, true);
+    if (e != nullptr) {
+        // Monotonic within generation: only advance lastObj forward.
+        uintptr_t prev = e->lastObj.load(std::memory_order_relaxed);
+        if (prev == 0 || addr >= prev) {
+            e->lastObj.store(addr, std::memory_order_release);
+            e->mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
+            e->heapPhase.store(heapPhase, std::memory_order_relaxed);
+        }
+    }
+    if (regionEnd != 0 && regionEnd > addr && (regionEnd - addr) <= kNearEndBytes) {
+        RecordNear(addr, mutatorPhase, heapPhase);
+    }
+}
+
+inline void FreezeRegion(uintptr_t regionStart)
+{
+    if (regionStart == 0 || !Enabled()) {
         return;
     }
     Slot* e = FindSlot(regionStart, true);
     if (e == nullptr) {
         return;
     }
-    uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
-    e->lastObj.store(addr, std::memory_order_release);
-    e->mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-    e->heapPhase.store(heapPhase, std::memory_order_relaxed);
-}
-
-// Call from PrepareForwardableRegion: freeze live stamp for this generation.
-inline void FreezeRegion(uintptr_t regionStart)
-{
-    if (regionStart == 0 || !Enabled()) {
-        return;
-    }
-    Slot* e = FindSlot(regionStart, false);
-    if (e == nullptr) {
-        // still create empty frozen so Find reports found=0 clearly
-        e = FindSlot(regionStart, true);
-        if (e == nullptr) {
-            return;
-        }
-        e->frozenValid.store(0, std::memory_order_release);
-        return;
-    }
     e->frozenLastObj.store(e->lastObj.load(std::memory_order_acquire), std::memory_order_release);
     e->frozenMut.store(e->mutatorPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
     e->frozenHeap.store(e->heapPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
     e->frozenValid.store(1, std::memory_order_release);
+    // Clear live so next generation on this region starts clean.
+    e->lastObj.store(0, std::memory_order_release);
+    e->mutatorPhase.store(0, std::memory_order_relaxed);
+    e->heapPhase.store(0, std::memory_order_relaxed);
 }
 
 struct Lookup {
     bool found = false;
     bool isRegionLast = false;
     bool usedFrozen = false;
+    bool usedNear = false;
     uint8_t mutatorPhase = 0;
     uint8_t heapPhase = 0;
     uintptr_t lastObj = 0;
 };
 
-// Prefer frozen stamp (ghost generation); fall back to live.
+inline Lookup FindNear(uintptr_t obj)
+{
+    Lookup r;
+    size_t i = HashObj(obj);
+    for (size_t n = 0; n < 4; ++n) {
+        size_t idx = (i + n) & kNearMask;
+        NearEntry& e = g_near[idx];
+        if (e.obj.load(std::memory_order_acquire) == obj) {
+            r.found = true;
+            r.usedNear = true;
+            r.isRegionLast = true; // exact near-end hit
+            r.mutatorPhase = e.mutatorPhase.load(std::memory_order_relaxed);
+            r.heapPhase = e.heapPhase.load(std::memory_order_relaxed);
+            r.lastObj = obj;
+            return r;
+        }
+    }
+    return r;
+}
+
 inline Lookup Find(void* obj, uintptr_t regionStart)
 {
     Lookup r;
     if (obj == nullptr || !Enabled()) {
         return r;
     }
+    uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
+    // Prefer exact near-end table (survives freeze clear of live lastObj).
+    Lookup near = FindNear(addr);
+    if (near.found) {
+        return near;
+    }
     Slot* e = FindSlot(regionStart, false);
     if (e == nullptr) {
         return r;
     }
-    uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
     if (e->frozenValid.load(std::memory_order_acquire) != 0) {
         r.usedFrozen = true;
         r.lastObj = e->frozenLastObj.load(std::memory_order_acquire);
         r.mutatorPhase = e->frozenMut.load(std::memory_order_relaxed);
         r.heapPhase = e->frozenHeap.load(std::memory_order_relaxed);
-        r.found = true;
+        r.found = (r.lastObj != 0);
         r.isRegionLast = (r.lastObj == addr);
         return r;
     }

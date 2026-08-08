@@ -854,7 +854,7 @@ public:
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
                             "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
                             "type=%u oob=%u allocOff=%zu nearEnd=%u "
-                            "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u "
+                            "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u usedNear=%u "
                             "allocMutPhase=%u(%s) allocHeapPhase=%u(%s) allocInMarkNew=%u "
                             "lastObj=%#zx",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
@@ -870,11 +870,12 @@ public:
                             static_cast<unsigned>(ap.found),
                             static_cast<unsigned>(ap.isRegionLast),
                             static_cast<unsigned>(ap.usedFrozen),
+                            static_cast<unsigned>(ap.usedNear),
                             static_cast<unsigned>(ap.mutatorPhase),
                             AllocPhaseDiag::PhaseName(ap.mutatorPhase),
                             static_cast<unsigned>(ap.heapPhase),
                             AllocPhaseDiag::PhaseName(ap.heapPhase),
-                            static_cast<unsigned>(ap.found && ap.isRegionLast &&
+                            static_cast<unsigned>(ap.found &&
                                 AllocPhaseDiag::IsMarkNewPhase(ap.mutatorPhase)),
                             static_cast<size_t>(ap.lastObj));
                     }
