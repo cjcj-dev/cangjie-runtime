@@ -3554,14 +3554,11 @@ void WCollector::DoYoungGarbageCollection()
     // into candidate regions (or still living there) that are only reached from live holders
     // after the root/remset wave can still be live0Surv=0 at GetRoute. Walk reachableVec
     // fields once more and re-enter TraceYoungClosure for newly claimed young targets.
-    // Default ON; MRT_GCV2_ALLOC_BLACK=0 also disables this (same A/B switch).
+    // Default OFF (same switch as alloc paint). Incomplete: ALOT still 10/10 route miss.
     {
         static const bool blackmarkFixOn = []() {
             const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
-            if (v != nullptr && v[0] == '0' && v[1] == '\0') {
-                return false;
-            }
-            return true;
+            return v != nullptr && v[0] == '1' && v[1] == '\0';
         }();
         if (blackmarkFixOn) {
             WorkStack blackmarkExtra = NewWorkStack();
