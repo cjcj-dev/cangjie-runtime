@@ -301,6 +301,13 @@ protected:
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
+        // Null carries no colour (ZGC zAddress: null is never load-bad). Colouring a null
+        // yields a colour-only word; after a phase flip IsLoadBad becomes true while
+        // tagID stays 0, so IsOldPointer can fire and ForwardUpdateRawRef's E-class
+        // CHECK (oldInv) aborts on a value that is not an object at all.
+        if (target == nullptr) {
+            return RefField<>(static_cast<BaseObject*>(nullptr));
+        }
         // Phase C: colour every reference, not only the ones being evacuated. The else branch used
         // to hand back a bare pointer, and that bare pointer was the trust state -- a value that
         // neither IsOldPointer nor IsCurrentPointer recognised, so readers dereferenced it without
