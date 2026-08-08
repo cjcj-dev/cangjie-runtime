@@ -390,8 +390,8 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
 
     BaseObject* ResolveMinorReference(RefField<>& field) const;
-    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor,
-                             uint64_t stackScanEpoch = 0);
+    BaseObject* ResolveMinorReference(RootSlot& root) const;
+    void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch = 0);
     // origin tags root source for invalid-minor-root diagnosis (gcbadroot).
@@ -405,6 +405,7 @@ private:
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field) const;
+    bool FixMinorEvacuatedSlot(RootSlot& root) const;
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);

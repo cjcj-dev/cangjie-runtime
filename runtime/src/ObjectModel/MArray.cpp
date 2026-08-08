@@ -22,7 +22,7 @@ void MArray::ForEachRefFieldInRange(const RefFieldVisitor& visitor, MAddress fie
             fieldStart += elementSize;
         }
     } else if (componentTi->IsObjectType() || componentTi->IsArrayType() || componentTi->IsInterface()) {
-        RefField<false>* arrayContent = reinterpret_cast<RefField<false>*>(fieldStart);
+        HeapSlot<false>* arrayContent = &HeapSlotAt<false>(fieldStart);
         MIndex upLimit = size / sizeof(RefField<>);
         for (MIndex i = 0; i < upLimit; ++i) {
             visitor(arrayContent[i]);

@@ -43,7 +43,7 @@ using RootKey = std::pair<uintptr_t, uintptr_t>;
 RootVisitor MakeCollector(std::vector<RootKey>& keys)
 {
     return [&keys](ObjectRef& root) {
-        keys.emplace_back(reinterpret_cast<uintptr_t>(&root), reinterpret_cast<uintptr_t>(root.object));
+        keys.emplace_back(reinterpret_cast<uintptr_t>(&root), raw(root.LoadPlain()));
     };
 }
 

@@ -53,7 +53,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     }
 }
 
-BaseObject* PreforwardBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* PreforwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -129,7 +129,7 @@ void PreforwardBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>
                                              MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(PBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx", obj, obj->GetTypeInfo(), obj->GetSize(), &field,
              raw(newField.GetFieldValue()));
@@ -159,7 +159,7 @@ bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tr
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
+        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }
         oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
@@ -203,7 +203,7 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                field.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+                field.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);

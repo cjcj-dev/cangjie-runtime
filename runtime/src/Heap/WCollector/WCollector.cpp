@@ -654,120 +654,44 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
 
 void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 {
-    RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
-    RefField<> oldField(refField);
-    // E-class = !IsOldPointer (zc9fix). Fast path stays is_mark_good (zc7fix colour-era).
-    // plainroots: non-heap root slots may still hold one-gen-stale colour until plain-heal below.
-    if (!(PlainRootsEnabled() && !Heap::IsHeapAddress(&refField))) {
-        CHECK_DETAIL(!IsOldPointer(oldField),
-                     "EnumAndTagRawRoot failed: Invalid root: %zx", raw(oldField.GetFieldValue()));
-    }
-    if (is_mark_good(oldField)) {
-        // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
-        BaseObject* root = to_object(oldField.GetTargetObject());
-        if (!Collector::MarkGoodHeapGate("EnumAndTagRawRoot", root)) {
-            return;
-        }
-        if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot", root)) {
-            // arrayinit2 / introot: interior may carry colour; strip and mark host.
-            RefField<> plain(root);
-            if (oldField.GetFieldValue() != plain.GetFieldValue()) {
-                (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
-            }
-            BaseObject* host = Collector::TryRecoverInteriorBase(root);
-            if (host != nullptr && host->IsValidObject()) {
-                rootSet.push_back(host);
-            }
-            return;
-        }
-        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-        // writeback2: mark-good fast path used to push-and-return without healing the slot.
-        // A coloured mark-good root then stayed in the register/stack slot (PLAIN_ROOTS=0
-        // signature, and residual colour under PLAIN_ROOTS=1 if any prior site painted it).
-        // Mirror the slow path: RootSlotWriteback → plain on non-heap, Phase-C colour on heap.
-        {
-            RefField<> newField = RootSlotWriteback(root, &refField);
-            if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-                (void)refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
-            }
-        }
-        rootSet.push_back(root);
+    zaddress_unsafe observed = ref.LoadPlain();
+    if (is_null(observed)) {
         return;
     }
-    // hangfloor / ZGC ZUncoloredRoot: a plain stack/reg root carries no colour by design
-    // (RootSlotWriteback). is_mark_good/is_load_good are therefore structurally false —
-    // colour is a side parameter, not in the slot. Treat the address as authoritative:
-    // only route via ghost-from table; do not invent a remap generation from zero colour.
-    if (PlainRootsEnabled() && !Heap::IsHeapAddress(&refField)) {
-        BaseObject* root = to_object(oldField.GetTargetObject());
-        if (root != nullptr && Heap::IsHeapAddress(root)) {
-            if (IsGhostFromObject(root)) {
-                BaseObject* to = FindToVersion(root);
-                if (to != nullptr) {
-                    root = to;
-                }
-            }
-            if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.plain", root)) {
-                // introot: stackmap may label RawArray+8 as a root. Strip colour, mark host.
-                RefField<> plain(root);
-                if (oldField.GetFieldValue() != plain.GetFieldValue()) {
-                    (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
-                }
-                BaseObject* host = Collector::TryRecoverInteriorBase(root);
-                if (host != nullptr && host->IsValidObject()) {
-                    rootSet.push_back(host);
-                }
-                return;
-            }
-            if (VerifyRoots::Enabled()) {
-                RootVerifyContext vctx;
-                vctx.phase = "EnumAndTagRawRoot.plain";
-                vctx.kind = RootKind::RUNTIME_ROOT;
-                VerifyRoots::VerifyRootPayload(vctx, &ref, root);
-            }
-            CHECK_DETAIL(root->IsValidObject(),
-                         "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-            RefField<> newField = RootSlotWriteback(root, &refField);
-            if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-                (void)refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
-            }
-            rootSet.push_back(root);
+
+    // RootSlot contains an uncoloured address. Constructing a local HeapSlot is
+    // only a bit-layout decoder for legacy coloured roots at external ABI edges;
+    // the root storage itself is never exposed as a HeapSlot.
+    HeapSlot<> observedBits(to_zpointer(raw(observed)));
+    BaseObject* root = to_object(observedBits.GetTargetObject());
+    if (root == nullptr || !Heap::IsHeapAddress(root)) {
+        return;
+    }
+    if (IsGhostFromObject(root)) {
+        BaseObject* to = FindToVersion(root);
+        if (to != nullptr) {
+            root = to;
+        }
+    }
+    if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.plain", root)) {
+        // introot: a raw-root stack-map entry may still identify RawArray+8.
+        // The paired derived path cannot reach this branch because it is a DerivedSlot.
+        BaseObject* host = Collector::TryRecoverInteriorBase(root);
+        if (host != nullptr && host->IsValidObject()) {
+            HealRoot(ref, from_object(root));
+            rootSet.push_back(host);
         }
         return;
     }
-    BaseObject* root = make_load_good(oldField);
-    if (Heap::IsHeapAddress(root)) {
-        if (!Collector::PlausibleManagedObjectGate("EnumAndTagRawRoot.slow", root)) {
-            RefField<> plain(root);
-            if (oldField.GetFieldValue() != plain.GetFieldValue()) {
-                (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
-            }
-            BaseObject* host = Collector::TryRecoverInteriorBase(root);
-            if (host != nullptr && host->IsValidObject()) {
-                rootSet.push_back(host);
-            }
-            return;
-        }
-        if (VerifyRoots::Enabled()) {
-            RootVerifyContext vctx;
-            vctx.phase = "EnumAndTagRawRoot";
-            vctx.kind = RootKind::RUNTIME_ROOT;
-            VerifyRoots::VerifyRootPayload(vctx, &ref, root);
-        }
-        CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-        // plainroots: heal stack/reg roots to uncoloured load-good (ZGC ZUncoloredRoot).
-        RefField<> newField = RootSlotWriteback(root, &refField);
-        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-            DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
-        } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()),
-                 raw(newField.GetFieldValue()), root, root->GetTypeInfo(), root->GetSize());
-        } else {
-            DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &refField, raw(oldField.GetFieldValue()), root,
-                 root->GetTypeInfo(), root->GetSize());
-        }
-        rootSet.push_back(root);
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext vctx;
+        vctx.phase = "EnumAndTagRawRoot.plain";
+        vctx.kind = RootKind::RUNTIME_ROOT;
+        VerifyRoots::VerifyRootPayload(vctx, &ref, root);
     }
+    CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+    HealRoot(ref, from_object(root));
+    rootSet.push_back(root);
 }
 
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
@@ -841,7 +765,7 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
             }
         } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                    componentTypeInfo->IsInterface()) {
-            RefField<>* arrayContent = reinterpret_cast<RefField<>*>(array->ConvertToCArray());
+            HeapSlot<>* arrayContent = &HeapSlotAt<>(array->ConvertToCArray());
             for (MIndex i = 0; i < arrayLength; ++i) {
                 visitor(arrayContent[i]);
             }
@@ -890,60 +814,12 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
 
 BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
 {
-    auto& refField = reinterpret_cast<RefField<>&>(root);
-    RefField<> oldField(refField);
-    BaseObject* oldObj = to_object(oldField.GetTargetObject());
+    zaddress_unsafe observed = root.LoadPlain();
+    HeapSlot<> observedBits(to_zpointer(raw(observed)));
+    BaseObject* oldObj = to_object(observedBits.GetTargetObject());
     DLOG(FIX, "visit raw-ref @%p: %p", &root, oldObj);
-    // E-class entry invariant = !IsOldPointer (predclass E / pre-zcolor9).
-    // zcolor9 dual !IsLoadBad||is_load_good(+ghost) was strictly stronger; restore !IsOldPointer.
-    // Optional per-disjunct fire counters (MRT_GCV2_ZC9FIX_ASSERT=1). Body keeps colour-era
-    // IsGhostFromObject dispatch (main/zcolor7), not pre-colour IsCurrentPointer gate.
-    {
-        const bool t1 = !IsLoadBad(oldField);
-        const bool t2 = is_load_good(oldField);
-        const bool t3 = IsGhostFromObject(oldObj);
-        const bool oldInv = !IsOldPointer(oldField);
-        if (!(t1 || t2 || t3)) {
-            static std::atomic<size_t> fireCount{ 0 };
-            static std::atomic<size_t> t1True{ 0 };
-            static std::atomic<size_t> t2True{ 0 };
-            static std::atomic<size_t> t3True{ 0 };
-            static std::atomic<size_t> oldInvTrue{ 0 };
-            const size_t n = fireCount.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (t1) {
-                t1True.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (t2) {
-                t2True.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (t3) {
-                t3True.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (oldInv) {
-                oldInvTrue.fetch_add(1, std::memory_order_relaxed);
-            }
-            static const bool logFire = []() {
-                const char* v = std::getenv("MRT_GCV2_ZC9FIX_ASSERT");
-                return v != nullptr && std::strcmp(v, "1") == 0;
-            }();
-            if (logFire && n <= 20) {
-                LOG(RTLOG_ERROR,
-                    "[ZC9FIX][fwd-assert] n=%zu val=%zx t1_notLoadBad=%d t2_loadGood=%d t3_ghost=%d "
-                    "old_notOldPtr=%d tagID=%u curTag=%u",
-                    n, raw(oldField.GetFieldValue()), static_cast<int>(t1), static_cast<int>(t2),
-                    static_cast<int>(t3), static_cast<int>(oldInv),
-                    static_cast<unsigned>(oldField.GetTagID()),
-                    static_cast<unsigned>(currentTagID));
-            }
-        }
-        // plainroots: allow old colour on non-heap roots; heal to plain below.
-        if (!(PlainRootsEnabled() && !Heap::IsHeapAddress(&refField))) {
-            CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
-                         raw(oldField.GetFieldValue()));
-        }
-    }
     // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
-    // are never evacuated. Colouring or CAS into those pages faults; skip write-back.
+    // are never evacuated. Keep their existing plain value and skip write-back.
     // Same heap gate as IsGhostFromObject / FindToVersion / FixMinorEvacuatedSlot resolve.
     if (oldObj == nullptr || !Heap::IsHeapAddress(oldObj)) {
         return oldObj;
@@ -959,74 +835,21 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
-                RefField<> plain(toInterior);
-                if (oldField.GetFieldValue() != plain.GetFieldValue()) {
-                    (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
-                }
+                HealRoot(root, from_object(toInterior));
                 return toInterior;
             }
         }
-        RefField<> plain(oldObj);
-        if (oldField.GetFieldValue() != plain.GetFieldValue()) {
-            (void)refField.CompareExchange(oldField.GetFieldValue(), plain.GetFieldValue());
-        }
+        HealRoot(root, from_object(oldObj));
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
-        // plainroots: non-heap root slots get plain toVersion; heap statics keep Phase C colour.
-        RefField<> newField = RootSlotWriteback(toVersion, &refField);
-        // Skip CAS when value already matches (sibling shape :781-783) — lock cmpxchg
-        // still writes the cache line and faults on RELRO even when expected==desired.
-        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-            DLOG(FIX, "raw-ref @%p already current: %p", &root, toVersion);
-            return toVersion;
-        }
-        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
-            return toVersion;
-        }
-        // The CAS lost, so someone else wrote the slot. The old assertion said the winner
-        // cannot be a still-to-forward reference, which held only because "needs forwarding"
-        // and "carries the current tag" were the same thing. Once a good colour is non-zero
-        // (phase C) a mutator may legally store a reference to a from-object here, so that
-        // premise dies -- and an assertion whose premise is gone fires on legal states until
-        // someone stops reading it. Assert what still holds: the winning value must resolve
-        // to a live object. Count the case that becomes legal instead of asserting on it.
-        {
-            size_t n = g_forwardRaceTotalCount.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n == 1) {
-                // Print on the first occurrence rather than at exit: this site lives in a run
-                // that usually dies on a signal, so an exit-time report never executes and a
-                // zero would mean "never wired up" as easily as "never happened".
-                VLOG(REPORT, "[GCV2][fwdrace] first race observed (positive control)");
-            }
-        }
-        RefField<> raced(refField);
-        BaseObject* racedObj = to_object(raced.GetTargetObject());
-        CHECK_DETAIL(racedObj != nullptr && Heap::IsHeapAddress(racedObj) && racedObj->IsValidObject(),
-                     "ForwardUpdateRawRef race lost to a non-object: %zx", raw(raced.GetFieldValue()));
-        if (IsLoadBad(raced)) {
-            size_t n = g_forwardRaceStillBadCount.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (n == 1) {
-                VLOG(REPORT, "[GCV2][fwdrace] first still-bad winner: %zx", raw(raced.GetFieldValue()));
-            }
-        }
+        HealRoot(root, from_object(toVersion));
+        DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
+        return toVersion;
     } else {
-        // plainroots: non-heap root slots get plain; heap statics keep Phase C colour.
-        RefField<> newField = RootSlotWriteback(oldObj, &refField);
-        // Skip CAS when value already matches (sibling shape :781-783).
-        if (oldField.GetFieldValue() == newField.GetFieldValue()) {
-            DLOG(FIX, "raw-ref @%p already current: %p", &root, oldObj);
-            return oldObj;
-        }
-        // CAS failure means some mutator or gc thread writes a new ref (must be a to-object), no need to retry.
-        if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, oldObj);
-            return oldObj;
-        }
+        HealRoot(root, from_object(oldObj));
     }
 
     return oldObj;
@@ -1038,9 +861,7 @@ void WCollector::PreforwardAllExportFromRoots()
 }
 void WCollector::PreforwardStaticRoots()
 {
-    RefFieldVisitor visitor = [this](RefField<>& field) {
-        ForwardUpdateRawRef(reinterpret_cast<ObjectRef&>(field));
-    };
+    RootSlotVisitor visitor = [this](RootSlot& root) { ForwardUpdateRawRef(root); };
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
@@ -1269,33 +1090,17 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 
     auto makeRootVisitor = [this, trackFixed](RootAccount* acc) -> RootVisitor {
         return [this, trackFixed, acc](ObjectRef& root) {
-            RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            uintptr_t oldValue = raw(field.GetFieldValue());
-            bool oldTagged = trackFixed && IsOldPointer(field);
+            uintptr_t oldValue = raw(root.LoadPlain());
+            HeapSlot<> observedBits(to_zpointer(oldValue));
+            bool oldTagged = trackFixed && IsOldPointer(observedBits);
             if (trackFixed && acc != nullptr) {
                 ++acc->rootSlots;
                 if (oldTagged) {
                     ++acc->oldTaggedRootSlots;
                 }
             }
-            FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
-                ++acc->fixedRootSlots;
-            }
-        };
-    };
-    auto makeRootFieldVisitor = [this, trackFixed](RootAccount* acc) -> RefFieldVisitor {
-        return [this, trackFixed, acc](RefField<>& field) {
-            uintptr_t oldValue = raw(field.GetFieldValue());
-            bool oldTagged = trackFixed && IsOldPointer(field);
-            if (trackFixed && acc != nullptr) {
-                ++acc->rootSlots;
-                if (oldTagged) {
-                    ++acc->oldTaggedRootSlots;
-                }
-            }
-            FixOldTaggedRefField(nullptr, field);
-            if (trackFixed && acc != nullptr && oldTagged && raw(field.GetFieldValue()) != oldValue) {
+            ForwardUpdateRawRef(root);
+            if (trackFixed && acc != nullptr && oldTagged && raw(root.LoadPlain()) != oldValue) {
                 ++acc->fixedRootSlots;
             }
         };
@@ -1526,10 +1331,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         {
             RootAccount acc;
             RootVisitor fixRoot = makeRootVisitor(&acc);
-            RefFieldVisitor fixRootField = makeRootFieldVisitor(&acc);
             MutatorManager::Instance().VisitAllMutators(
                 [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
-            Heap::GetHeap().VisitStaticRoots(fixRootField);
+            Heap::GetHeap().VisitStaticRoots(fixRoot);
             Runtime::Current().GetConcurrencyModel().VisitGCRoots(&fixRoot);
             collectorResources.GetFinalizerProcessor().VisitGCRoots(fixRoot);
             collectorResources.GetFinalizerProcessor().VisitFinalizers(fixRoot);
@@ -1578,9 +1382,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             MutatorManager::Instance().VisitAllMutators(
                 [&fixRoot](Mutator& mutator) { mutator.VisitMutatorRoots(fixRoot); });
         }));
-        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootFieldVisitor](size_t) {
-            RefFieldVisitor fixRootField = makeRootFieldVisitor(&rootAcc[1]);
-            Heap::GetHeap().VisitStaticRoots(fixRootField);
+        threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
+            RootVisitor fixRoot = makeRootVisitor(&rootAcc[1]);
+            Heap::GetHeap().VisitStaticRoots(fixRoot);
         }));
         threadPool->AddWork(new (std::nothrow) LambdaWork([this, &rootAcc, &makeRootVisitor](size_t) {
             RootVisitor fixRoot = makeRootVisitor(&rootAcc[2]);
@@ -1779,7 +1583,7 @@ public:
     CJFunc* GetCJFunc()
     {
         return static_cast<CJFunc*>(Heap::GetBarrier().ReadReference(this,
-            *reinterpret_cast<RefField<false>*>(&cjFunc)));
+            HeapSlotAt<false>(&cjFunc)));
     }
 private:
     CJFunc* cjFunc = nullptr;
@@ -1790,7 +1594,7 @@ public:
     CJInteropContext* GetCJInteropContext()
     {
         return static_cast<CJInteropContext*>(Heap::GetBarrier().ReadReference(this,
-            *reinterpret_cast<RefField<false>*>(&interopContext)));
+            HeapSlotAt<false>(&interopContext)));
     }
 private:
     CJInteropContext* interopContext = nullptr;
@@ -1872,7 +1676,7 @@ bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, RefField<> d
     if (expected == desiredVal) {
         return true;
     }
-    if (field.CompareExchange(expected, desiredVal)) {
+    if (field.CompareExchange(to_zpointer(expected), to_zpointer(desiredVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -1945,14 +1749,62 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     return nullptr;
 }
 
+BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
+{
+    zaddress_unsafe observed = root.LoadPlain();
+    HeapSlot<> observedBits(to_zpointer(raw(observed)));
+    BaseObject* object = to_object(observedBits.GetTargetObject());
+    if (!IsOldPointer(observedBits)) {
+        if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
+            !IsUnmovableFromObject(object)) {
+            BaseObject* to = FindToVersion(object);
+            if (to != nullptr && Heap::IsHeapAddress(to)) {
+                HealRoot(root, from_object(to));
+                return to;
+            }
+        }
+        return object;
+    }
+
+    BaseObject* to = FindToVersion(object);
+    if (to != nullptr && Heap::IsHeapAddress(to)) {
+        RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+            to->IsValidObject()) {
+            HealRoot(root, from_object(to));
+            return to;
+        }
+    }
+    if (Heap::IsHeapAddress(object)) {
+        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
+            object->IsValidObject()) {
+            HealRoot(root, from_object(object));
+            return object;
+        }
+    }
+    if (object != nullptr && !Heap::IsHeapAddress(object)) {
+        return object;
+    }
+    static std::atomic<size_t> g_staleOldRootLogged{ 0 };
+    size_t n = g_staleOldRootLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n < 16) {
+        VLOG(REPORT,
+             "[GCV2][minor-stale-oldtag] root=%p raw=%#zx from=%p to=%p "
+             "(drop; full-GC root residue after Flip)",
+             &root, static_cast<size_t>(raw(observed)), object, to);
+    }
+    HealRoot(root, zaddress::null);
+    return nullptr;
+}
+
 namespace {
 // gcbadroot: tag which root family is currently being walked so PushYoungObject
 // can attribute invalid headers without threading origin through every visitor.
 thread_local const char* gMinorRootOrigin = "unknown";
 } // namespace
 
-void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefFieldVisitor& fieldVisitor,
-                                     uint64_t stackScanEpoch)
+void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch)
 {
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RememberedSet& remset = Heap::GetHeap().GetRememberedSet();
@@ -1985,12 +1837,12 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, const RefField
     }
     gMinorRootOrigin = "static";
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
-    Heap::GetHeap().VisitStaticRoots([&remset, &fieldVisitor](RefField<>& field) {
-        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&field));
-        fieldVisitor(field);
+    Heap::GetHeap().VisitStaticRoots([&remset, &visitedRawRootVisitor](RootSlot& root) {
+        remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
+        visitedRawRootVisitor(root);
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
 #endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
@@ -2031,8 +1883,7 @@ void WCollector::VisitMinorValueRoots(const std::function<void(BaseObject*)>& vi
 void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch)
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
-        RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        BaseObject* obj = ResolveMinorReference(field);
+        BaseObject* obj = ResolveMinorReference(root);
         if (obj != nullptr && Heap::IsHeapAddress(obj) &&
             !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
@@ -2043,8 +1894,7 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
         }
         visitor(obj);
     };
-    RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
-    VisitMinorRootSlots(rawRootVisitor, fieldVisitor, stackScanEpoch);
+    VisitMinorRootSlots(rawRootVisitor, stackScanEpoch);
     VisitMinorValueRoots(visitor);
 }
 
@@ -2218,11 +2068,10 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
-            RefField<>* referentField = reinterpret_cast<RefField<>*>(
-                reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(referentField), g_minorLedgerCost.weakInsN,
+            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField), g_minorLedgerCost.weakInsN,
                                g_minorLedgerCost.weakInsNew, g_minorLedgerCost.weakInsNs);
-            BaseObject* referent = ResolveMinorReference(*referentField);
+            BaseObject* referent = ResolveMinorReference(referentField);
             if (!Heap::IsHeapAddress(referent)) {
                 continue;
             }
@@ -2429,7 +2278,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
-        RefField<>* field = reinterpret_cast<RefField<>*>(slot);
+        HeapSlot<>* field = &HeapSlotAt<>(slot);
         uint64_t rawSlot = 0;
         std::memcpy(&rawSlot, field, sizeof(rawSlot));
         RefField<> peek(*field);
@@ -2541,7 +2390,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
                 MAddress oldVal = raw(oldField.GetFieldValue());
                 MAddress plainVal = raw(plain.GetFieldValue());
                 if (oldVal != plainVal) {
-                    (void)field.CompareExchange(oldVal, plainVal);
+                    (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
                 }
                 return true;
             }
@@ -2550,7 +2399,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         MAddress oldVal = raw(oldField.GetFieldValue());
         MAddress plainVal = raw(plain.GetFieldValue());
         if (oldVal != plainVal) {
-            (void)field.CompareExchange(oldVal, plainVal);
+            (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
         }
         return false;
     }
@@ -2564,7 +2413,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         MAddress oldVal = raw(field.GetFieldValue());
         MAddress plainVal = raw(plain.GetFieldValue());
         if (oldVal != plainVal) {
-            (void)field.CompareExchange(oldVal, plainVal);
+            (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
         }
         return false;
     }
@@ -2581,7 +2430,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (oldVal == newVal) {
         return false;
     }
-    if (field.CompareExchange(oldVal, newVal)) {
+    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -2596,19 +2445,53 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     return true;
 }
 
+bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
+{
+    MAddress oldValue = raw(root.LoadPlain());
+    BaseObject* target = ResolveMinorReference(root);
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false;
+    }
+    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(target);
+        if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
+            if (toHost != nullptr && toHost != host) {
+                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
+                    reinterpret_cast<uintptr_t>(toHost) +
+                    (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
+                HealRoot(root, from_object(toInterior));
+                return true;
+            }
+        }
+        HealRoot(root, from_object(target));
+        return false;
+    }
+    BaseObject* current = target;
+    if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        current = const_cast<WCollector*>(this)->ForwardObject(target);
+    }
+    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
+        HealRoot(root, from_object(current));
+        return false;
+    }
+    MAddress newValue = reinterpret_cast<MAddress>(current);
+    if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
+        return false;
+    }
+    HealRoot(root, from_object(current));
+    return true;
+}
+
 void WCollector::FixMinorRootSlots()
 {
-    RootVisitor rawRootVisitor = [this](ObjectRef& root) {
-        RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        (void)FixMinorEvacuatedSlot(field);
-    };
-    RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
+    RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
     // stack slots still holding from-copies become the next full's F5 input.
     MutatorManager::Instance().VisitAllMutators(
         [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
-    Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+    Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
@@ -2630,36 +2513,24 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
-            RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            (void)FixMinorEvacuatedSlot(field);
-        };
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
         MutatorManager::Instance().VisitAllMutators(
             [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RefFieldVisitor fieldVisitor = [this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); };
-        Heap::GetHeap().VisitStaticRoots(fieldVisitor);
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+        Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
     }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
-            RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            (void)FixMinorEvacuatedSlot(field);
-        };
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
-            RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            (void)FixMinorEvacuatedSlot(field);
-        };
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
         collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) {
-            RefField<>& field = reinterpret_cast<RefField<>&>(root);
-            (void)FixMinorEvacuatedSlot(field);
-        };
+        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
         Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
     }));
 }
@@ -2701,7 +2572,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
-                (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
     };
@@ -2715,7 +2586,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
-                (void)FixMinorEvacuatedSlot(*reinterpret_cast<RefField<>*>(slot));
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
     };
@@ -3050,7 +2921,7 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
     };
     auto recordRawRoot = [&inspectTarget](size_t category) {
         return RootVisitor([category, &inspectTarget](ObjectRef& root) {
-            RefField<> value = reinterpret_cast<RefField<>&>(root);
+            HeapSlot<> value(to_zpointer(raw(root.LoadPlain())));
             uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
             inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
         });
@@ -3063,8 +2934,8 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
 
     RootVisitor stackVisitor = recordRawRoot(0);
     RootVisitor registerVisitor = recordRawRoot(1);
-    DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        inspectTarget(2, &derivedPtr, nullptr, from_native_ref(basePtr),
+    DerivedPtrVisitor derivedVisitor = [&inspectTarget](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        inspectTarget(2, &derivedPtr, nullptr, from_native_ref(raw(basePtr)),
                       std::numeric_limits<uint16_t>::max());
     };
     RootVisitor exceptionVisitor = recordRawRoot(10);
@@ -3075,8 +2946,7 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
                 registerVisitor, stackVisitor, derivedVisitor, exceptionVisitor, rawObjectVisitor);
         });
 
-    Heap::GetHeap().VisitStaticRoots(
-        [&recordField](RefField<>& field) { recordField(3, nullptr, field); });
+    Heap::GetHeap().VisitStaticRoots(recordRawRoot(3));
     collectorResources.GetFinalizerProcessor().VisitRawPointers(recordRawRoot(6));
     Heap::GetHeap().VisitAllExportRoots(recordRawRoot(7));
     RootVisitor concurrencyVisitor = recordRawRoot(8);
@@ -3211,9 +3081,9 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
-            RefField<>* referentField =
-                reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            BaseObject* referent = ResolveMinorReference(*referentField);
+            HeapSlot<>& referentField =
+                HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = ResolveMinorReference(referentField);
             if (Heap::IsHeapAddress(referent)) {
                 referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
             }
@@ -3393,9 +3263,9 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
                 continue;
             }
             if (UNLIKELY(object->IsWeakRef())) {
-                RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                HeapSlot<>& referentField = HeapSlotAt<>(
                     reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                BaseObject* referent = ResolveMinorReference(*referentField);
+                BaseObject* referent = ResolveMinorReference(referentField);
                 if (Heap::IsHeapAddress(referent)) {
                     referent->ForEachRefField([&pushField](RefField<>& field) { pushField(field); });
                 }
@@ -3721,8 +3591,8 @@ void WCollector::DoYoungGarbageCollection()
             }
             VisitMinorRoots([&dualPush, &dualStack](BaseObject* object) { dualPush(object, dualStack); });
             for (MAddress slot : rememberedSlots) {
-                RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-                dualPush(ResolveMinorReference(*field), dualStack);
+                HeapSlot<>& field = HeapSlotAt<>(slot);
+                dualPush(ResolveMinorReference(field), dualStack);
             }
             MinorObjectSet dualSeen;
             while (!dualStack.empty()) {
@@ -3743,9 +3613,9 @@ void WCollector::DoYoungGarbageCollection()
                     continue;
                 }
                 if (UNLIKELY(object->IsWeakRef())) {
-                    RefField<>* referentField = reinterpret_cast<RefField<>*>(
+                    HeapSlot<>& referentField = HeapSlotAt<>(
                         reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent = ResolveMinorReference(*referentField);
+                    BaseObject* referent = ResolveMinorReference(referentField);
                     if (Heap::IsHeapAddress(referent)) {
                         referent->ForEachRefField([this, &dualPush, &dualStack](RefField<>& field) {
                             dualPush(ResolveMinorReference(field), dualStack);

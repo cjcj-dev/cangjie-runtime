@@ -45,7 +45,7 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     }
 }
 
-BaseObject* EnumBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* EnumBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* EnumBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -70,7 +70,7 @@ void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
                 }
                 RefField<> oldField(field);
                 MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+                refFields.Push(&HeapSlotAt<>(dst + offset));
             },
             src, src + size);
     }
@@ -88,7 +88,7 @@ void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, cons
         src,
         [&refFields, dst, src](RefField<>& srcField) {
             MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-            refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+            refFields.Push(&HeapSlotAt<>(dst + offset));
         },
         src, src + size);
 
@@ -122,14 +122,23 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
     DLOG(BARRIER, "write obj %p ref@%p: 0x%zx -> %p", obj, &field, remeberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    field.StoreColoured(newField.GetFieldValue());
 }
 
-void EnumBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+void EnumBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, to_object(field.GetTargetObject()), ref);
-    WriteReferenceImpl(nullptr, field, ref);
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    BaseObject* rememberedObject = ReadStaticRef(field);
+    Mutator* mutator = Mutator::GetMutator();
+    if (rememberedObject != nullptr) {
+        mutator->RememberObjectInSatbBuffer(rememberedObject);
+    }
+    if (ref != nullptr) {
+        mutator->RememberObjectInSatbBuffer(ref);
+    }
+    DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, rememberedObject, ref);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    StorePlain(field, from_object(ref));
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
 }
 
 void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -141,8 +150,8 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
             [=](RefField<>& dstField) {
                 mutator->RememberObjectInSatbBuffer(ReadReference(obj, dstField));
                 MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
-                RefField<>* srcField = reinterpret_cast<RefField<>*>(src + offset);
-                mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, *srcField));
+                HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+                mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
             },
             dst, dst + srcLen);
     }
@@ -176,8 +185,8 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
         uint32_t offset = reinterpret_cast<MAddress>(&dstField) - dst;
-        RefField<>* srcField = reinterpret_cast<RefField<>*>(src + offset);
-        mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, *srcField));
+        HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+        mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
     });
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
@@ -238,7 +247,7 @@ void EnumBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fiel
     (void)oldValue;
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
     Mutator* mutator = Mutator::GetMutator();
     mutator->RememberObjectInSatbBuffer(oldRef);
     mutator->RememberObjectInSatbBuffer(newRef);
@@ -260,7 +269,7 @@ bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), sOrder, fOrder)) {
+        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), sOrder, fOrder)) {
             Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);
             mutator->RememberObjectInSatbBuffer(newRef);

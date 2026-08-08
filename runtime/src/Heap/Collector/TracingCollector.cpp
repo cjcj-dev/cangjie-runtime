@@ -222,16 +222,16 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
     gcRootsBuckets.erase(iter);
 }
 
-void StaticRootTable::VisitRoots(const RefFieldVisitor& visitor)
+void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     U32 gcRootsSize = 0;
-    std::unordered_set<RefField<>*> visitedSet;
+    std::unordered_set<RootSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
         gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            RefField<>* root = array->content[i];
+            RootSlot* root = array->content[i];
             // make sure to visit each static root only once time.
             if (!visitedSet.insert(root).second) {
                 continue;
@@ -245,7 +245,7 @@ void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(tableMutex);
     for (auto &rootInfo : exportRoots) {
-        visitor(reinterpret_cast<ObjectRef&>(rootInfo.exportObj));
+        visitor(rootInfo.exportObj);
     }
 }
 class ConcurrentMarkingWork : public HeapWork {
@@ -305,9 +305,10 @@ public:
                 }
                 // Skip marking the weakRef itself, but trace its children node
                 if (UNLIKELY(obj->IsWeakRef())) {
-                    RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
+                    HeapSlot<>& referentField =
+                        HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
                     BaseObject* referent =
-                        collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, *referentField);
+                        collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, referentField);
                     if (referent != nullptr) {
                         DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
                         collector.TraceObjectRefFields(referent, workStack);
@@ -440,20 +441,19 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         }
         // Mark the base of each derived pair. Derived slot itself is not an object root;
         // leave it for PreForward's derived visitor to rewrite after evacuation.
-        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedSlot& derivedPtr) {
             (void)derivedPtr;
-            BaseObject* base = reinterpret_cast<BaseObject*>(basePtr);
-            if (base == nullptr) {
+            if (is_null(basePtr)) {
                 return;
             }
             // Peel colour if present so gate/PushRoot see the real address.
-            base = reinterpret_cast<BaseObject*>(
-                RefField<>(reinterpret_cast<MAddress>(base)).GetAddress());
+            // The stack-map base remains committed until this root pass completes.
+            BaseObject* base = to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
             if (base == nullptr) {
                 return;
             }
             ObjectRef baseRef;
-            baseRef.object = base;
+            StorePlain(baseRef, from_object(base));
             visitor(baseRef);
         };
         heapMap.VisitDerivedPtr(derivedMark, nullptr, regSlotsMap);
@@ -558,7 +558,7 @@ void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RefFieldVisitor& visitor = [&rootSet, this](RefField<>& root) { EnumRefFieldRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
     VisitStaticRoots(visitor);
 }
 
@@ -769,17 +769,15 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
 {
     workStack.clear();
     RootVisitor func = [&workStack, this](ObjectRef& ref) {
-        RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
-        RefField<> tmpField(refField);
+        HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
         BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
         if (!IsMarkedObject(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             workStack.push_back(finalizerObj);
         }
-        RefField<> newField = GetAndTryTagRefField(finalizerObj);
-        if (tmpField.GetFieldValue() != newField.GetFieldValue() &&
-            refField.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, raw(newField.GetFieldValue()));
+        if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
+            HealRoot(ref, from_object(finalizerObj));
+            DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
     snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
@@ -872,10 +870,12 @@ ATTR_NO_SANITIZE_ADDRESS
 void TracingCollector::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
-        auto obj = ref.object;
-        if (obj == nullptr) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
             return;
         }
+        // DumpRoots is called while the root owner retains the target for inspection.
+        auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
              theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
              theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
@@ -888,8 +888,13 @@ void TracingCollector::DumpRoots(LogType logType)
     DLOG(logType, "finalizer processor roots");
     VisitFinalizerRoots(rootVisitor);
 
-    RefFieldVisitor refFieldVisitor = [this, logType](RefField<>& ref) {
-        auto obj = to_object(ref.GetTargetObject());
+    RootSlotVisitor rootSlotVisitor = [this, logType](RootSlot& ref) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
+            return;
+        }
+        // StaticRootTable keeps the referent live while DumpRoots inspects it.
+        auto obj = to_object(safe(value));
         if (obj == nullptr) {
             return;
         }
@@ -899,7 +904,7 @@ void TracingCollector::DumpRoots(LogType logType)
     };
 
     DLOG(logType, "static fields");
-    VisitStaticRoots(refFieldVisitor);
+    VisitStaticRoots(rootSlotVisitor);
 
     DLOG(logType, "Dump GCRoots end");
 }
@@ -1057,7 +1062,7 @@ void TracingCollector::EnumAllCommonRoots(GCThreadPool* threadPool, RootSet& roo
     delete[] dynamicRootSets;
 }
 
-void TracingCollector::VisitStaticRoots(const RefFieldVisitor& visitor) const
+void TracingCollector::VisitStaticRoots(const RootSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }

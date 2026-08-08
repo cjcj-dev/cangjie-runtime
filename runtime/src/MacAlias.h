@@ -14,7 +14,7 @@ __asm__(".global _CJ_MCC_WriteRefField\n\t.set _CJ_MCC_WriteRefField, _MCC_Write
 extern "C" MRT_EXPORT void CJ_MCC_WriteStructField(const ObjectPtr obj, MAddress dst, size_t dstLen, MAddress src,
                                                    size_t srcLen);
 __asm__(".global _CJ_MCC_WriteStructField\n\t.set _CJ_MCC_WriteStructField, _MCC_WriteStructField");
-extern "C" MRT_EXPORT void CJ_MCC_WriteStaticRef(const ObjectPtr ref, RefField<false>* field);
+extern "C" MRT_EXPORT void CJ_MCC_WriteStaticRef(const ObjectPtr ref, RootSlot* field);
 __asm__(".global _CJ_MCC_WriteStaticRef\n\t.set _CJ_MCC_WriteStaticRef, _MCC_WriteStaticRef");
 extern "C" MRT_EXPORT void CJ_MCC_WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen,
                                                     const GCTib gcTib);

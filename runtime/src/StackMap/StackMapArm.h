@@ -46,7 +46,7 @@ public:
         Uptr slotAddr = fp + calleeSavedAreaOffset;
         static constexpr RegisterId calleeSavedRegiser[] = { R4, R5, R6, R7, R8, R9, R10};
         for (auto reg : calleeSavedRegiser) {
-            regSlotsMap.Insert(reg, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(reg, &RootSlotAt(slotAddr));
             slotAddr += slotLength;
         }
     }
@@ -59,7 +59,7 @@ public:
         Uptr slotAddr = fp + calleeSavedAreaOffset;
         static constexpr RegisterId calleeSavedRegiser[] = { R4, R5, R6, R7, R8, R9, R10};
         for (auto reg : calleeSavedRegiser) {
-            regSlotsMap.Insert(reg, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(reg, &RootSlotAt(slotAddr));
             slotAddr += slotLength;
         }
     }
@@ -72,7 +72,7 @@ public:
         Uptr slotAddr = fp + calleeSavedAreaOffset;
         static constexpr RegisterId calleeSavedRegiser[] = { R4, R5, R6, R7, R8, R9, R10};
         for (auto reg : calleeSavedRegiser) {
-            regSlotsMap.Insert(reg, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(reg, &RootSlotAt(slotAddr));
             slotAddr += slotLength;
         }
     }
@@ -83,12 +83,12 @@ public:
         constexpr Uptr registersAreaOffset = 4 * 4;
         Uptr slotAddr = fp + registersAreaOffset;
         for (RegisterNum i = R4; i <= R10; ++i, slotAddr += slotLength) {
-            regSlotsMap.Insert(i, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(i, &RootSlotAt(slotAddr));
         }
     }
 
     bool VisitGCRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
-                      std::list<Uptr>* rootsList = nullptr) const
+                      std::list<BasePtrType>* rootsList = nullptr) const
     {
         RegBits bits = regBits;
         for (RegisterNum i = 0; bits != 0; ++i, bits >>= 1) {

@@ -38,7 +38,7 @@ void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
         ref-field is implemented in tagged-pointer.
 */
 template<bool isAtomic = false>
-class RefField {
+class HeapSlot {
 public:
     // size in bytes
     static constexpr size_t GetSize() { return sizeof(fieldVal); }
@@ -55,7 +55,7 @@ public:
 #else
         MAddress value = __atomic_load_n(&fieldVal, order);
 #endif
-        return to_zaddress(RefField<>(value).GetAddress());
+        return to_zaddress(HeapSlot<>(value).GetAddress());
     }
 
     // 带色原值。返回 zpointer：⛔ 不可解引用，只能进屏障 / CAS / 写回槽。
@@ -68,64 +68,37 @@ public:
 #endif
     }
 
-    void SetTargetObject(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed);
-    void SetFieldValue(MAddress value, std::memory_order order = std::memory_order_relaxed);
-    void SetFieldValue(zpointer value, std::memory_order order = std::memory_order_relaxed)
-    {
-        SetFieldValue(raw(value), order);
-    }
-
-    bool CompareExchange(MAddress expectedValue, MAddress newValue,
-                         std::memory_order succOrder = std::memory_order_relaxed,
-                         std::memory_order failOrder = std::memory_order_relaxed)
-    {
-        CHECK(std::numeric_limits<MAddress>::max() > newValue);
-        AssertColouredWriteIfEnabled(this, newValue);
-#if defined(CANGJIE_TSAN_SUPPORT)
-        // tsan will get expectedValue's address for us, just pass the real value
-        auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedValue, newValue, succOrder, failOrder);
-        return (ret == expectedValue);
-#else
-        return __atomic_compare_exchange(&fieldVal, &expectedValue, &newValue, false, succOrder, failOrder);
-#endif
-    }
+    void StoreColoured(zpointer value, std::memory_order order = std::memory_order_relaxed);
 
     bool CompareExchange(zpointer expectedValue, zpointer newValue,
                          std::memory_order succOrder = std::memory_order_relaxed,
                          std::memory_order failOrder = std::memory_order_relaxed)
     {
-        return CompareExchange(raw(expectedValue), raw(newValue), succOrder, failOrder);
-    }
-
-    bool CompareExchange(const BaseObject* expectedObj, const BaseObject* newObj,
-                         std::memory_order succOrder = std::memory_order_relaxed,
-                         std::memory_order failOrder = std::memory_order_relaxed)
-    {
-        return CompareExchange(reinterpret_cast<MAddress>(expectedObj), reinterpret_cast<MAddress>(newObj), succOrder,
-                               failOrder);
-    }
-
-    zpointer Exchange(MAddress newRef, std::memory_order order = std::memory_order_relaxed)
-    {
-        CHECK(fieldVal < std::numeric_limits<RefFieldValue>::max());
-        AssertColouredWriteIfEnabled(this, newRef);
-        MAddress ret = 0;
+        MAddress expectedRaw = raw(expectedValue);
+        MAddress newRaw = raw(newValue);
+        CHECK(std::numeric_limits<MAddress>::max() > newRaw);
+        AssertColouredWriteIfEnabled(this, newRaw);
 #if defined(CANGJIE_TSAN_SUPPORT)
-        ret = Sanitizer::TsanAtomicExchange(&fieldVal, newRef, order);
+        // tsan will get expectedValue's address for us, just pass the real value
+        auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedRaw, newRaw, succOrder, failOrder);
+        return (ret == expectedRaw);
 #else
-        __atomic_exchange(&fieldVal, &newRef, &ret, order);
+        return __atomic_compare_exchange(&fieldVal, &expectedRaw, &newRaw, false, succOrder, failOrder);
 #endif
-        return to_zpointer(static_cast<MAddress>(ret));
     }
 
     zpointer Exchange(zpointer newRef, std::memory_order order = std::memory_order_relaxed)
     {
-        return Exchange(raw(newRef), order);
-    }
-
-    zpointer Exchange(const BaseObject* obj, std::memory_order order = std::memory_order_relaxed)
-    {
-        return Exchange(reinterpret_cast<MAddress>(obj), order);
+        CHECK(fieldVal < std::numeric_limits<RefFieldValue>::max());
+        MAddress newRaw = raw(newRef);
+        AssertColouredWriteIfEnabled(this, newRaw);
+        MAddress ret = 0;
+#if defined(CANGJIE_TSAN_SUPPORT)
+        ret = Sanitizer::TsanAtomicExchange(&fieldVal, newRaw, order);
+#else
+        __atomic_exchange(&fieldVal, &newRaw, &ret, order);
+#endif
+        return to_zpointer(static_cast<MAddress>(ret));
     }
 
     // 地址位（已剥 isTagged/colour）。返回裸 MAddress 供布局/偏移算术；
@@ -142,12 +115,12 @@ public:
     bool IsTagged() const { return isTagged == 1; }
     uint16_t GetTagID() const { return tagID; }
 
-    ~RefField() = default;
-    explicit RefField(MAddress val) : fieldVal(val) {}
+    ~HeapSlot() = default;
+    explicit HeapSlot(MAddress val) : fieldVal(val) {}
     // 凭什么: zpointer 就是槽里的带色位模式，与 MAddress 同宽。
-    explicit RefField(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
-    RefField(const RefField& ref) : fieldVal(ref.fieldVal) {}
-    explicit RefField(const BaseObject* obj) : fieldVal(0)
+    explicit HeapSlot(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
+    HeapSlot(const HeapSlot& ref) : fieldVal(ref.fieldVal) {}
+    explicit HeapSlot(const BaseObject* obj) : fieldVal(0)
     {
 #ifdef __arm__
         address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
@@ -156,14 +129,14 @@ public:
 #endif
     }
 #ifdef __arm__
-    RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid) : isTagged(tagged), tagID(tagid)
+    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid) : isTagged(tagged), tagID(tagid)
     {
         address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
     }
 #else
     // Phase C: colour-carrying form. The three-argument form below keeps working and leaves the
     // colour clear, which reads as "never written" -- see Collector::IsLoadBad.
-    RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid, MAddress colour)
+    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid, MAddress colour)
         : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid),
           remapColour((colour >> REMAP_COLOUR_SHIFT) & ((MAddress(1) << REMAP_COLOUR_BITS) - 1)),
           markedYoung((colour >> MARKED_YOUNG_SHIFT) & ((MAddress(1) << MARKED_YOUNG_BITS) - 1)),
@@ -173,7 +146,7 @@ public:
         CHECK(tagid < TAG_ID_COUNT);
     }
 
-    RefField(const BaseObject* obj, uint16_t tagged, uint16_t tagid)
+    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid)
         : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid), remapColour(0),
           markedYoung(0), markedOld(0), padding(0)
     {
@@ -182,10 +155,10 @@ public:
     }
 #endif
 
-    RefField(RefField&& ref) : fieldVal(ref.fieldVal) {}
-    RefField() = delete;
-    RefField& operator=(const RefField&) = delete;
-    RefField& operator=(const RefField&&) = delete;
+    HeapSlot(HeapSlot&& ref) : fieldVal(ref.fieldVal) {}
+    HeapSlot() = delete;
+    HeapSlot& operator=(const HeapSlot&) = delete;
+    HeapSlot& operator=(const HeapSlot&&) = delete;
 
 private:
 #ifdef __arm__
@@ -221,11 +194,132 @@ private:
     static_assert(48 + 1 + TAG_ID_BITS + REMAP_COLOUR_BITS + MARKED_YOUNG_BITS + MARKED_OLD_BITS +
                           TAG_ID_PADDING_BITS ==
                       64,
-                  "RefField tag layout must fill 64 bits");
+                  "HeapSlot tag layout must fill 64 bits");
     static_assert(TAG_ID_COUNT > 1 && TAG_ID_COUNT <= (1u << TAG_ID_BITS), "TAG_ID_COUNT out of bit width");
 #endif
 };
 
-using RefFieldVisitor = std::function<void(RefField<>&)>;
+template<bool isAtomic = false>
+inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress colour,
+                          std::memory_order order = std::memory_order_relaxed)
+{
+    zpointer coloured = is_null(value) ? zpointer::null : to_zpointer(raw(value) | colour);
+    slot.StoreColoured(coloured, order);
+}
+
+// Compatibility spelling for code outside the runtime. It denotes HeapSlot only;
+// roots and derived locations are different, non-convertible types below.
+template<bool isAtomic = false>
+using RefField = HeapSlot<isAtomic>;
+
+// OpenJDK ZUncoloredRoot stores an unsafe, uncoloured address in the root and
+// carries colour metadata outside the slot (zUncoloredRoot.hpp:32-54).
+class RootSlot {
+public:
+    RootSlot() : rootValue(zaddress_unsafe::null) {}
+
+    zaddress_unsafe LoadPlain(std::memory_order order = std::memory_order_relaxed) const
+    {
+        zaddress_unsafe value;
+        __atomic_load(&rootValue, &value, order);
+        return value;
+    }
+
+private:
+    void StorePlain(zaddress value, std::memory_order order)
+    {
+        zaddress_unsafe unsafeValue = to_zaddress_unsafe(raw(value));
+        __atomic_store(&rootValue, &unsafeValue, order);
+    }
+
+    zaddress_unsafe rootValue;
+
+    friend void StorePlain(RootSlot&, zaddress, std::memory_order);
+    friend void HealRoot(RootSlot&, zaddress, std::memory_order);
+};
+
+inline void StorePlain(RootSlot& slot, zaddress value,
+                       std::memory_order order = std::memory_order_relaxed)
+{
+    slot.StorePlain(value, order);
+}
+
+inline void HealRoot(RootSlot& slot, zaddress good,
+                     std::memory_order order = std::memory_order_relaxed)
+{
+    slot.StorePlain(good, order);
+}
+
+// OpenJDK ProcessDerivedOop preserves the offset, processes the base, then
+// restores base+offset (oopMap.cpp:404-424). No raw-address store is public.
+class DerivedSlot {
+public:
+    zaddress_unsafe LoadDerived(std::memory_order order = std::memory_order_relaxed) const
+    {
+        zaddress_unsafe value;
+        __atomic_load(&derivedValue, &value, order);
+        return value;
+    }
+
+private:
+    void StoreDerived(const RootSlot& base, size_t offset, std::memory_order order)
+    {
+        zaddress_unsafe rebased = to_zaddress_unsafe(raw(base.LoadPlain(order)) + offset);
+        __atomic_store(&derivedValue, &rebased, order);
+    }
+
+    zaddress_unsafe derivedValue;
+
+    friend void RebaseDerived(DerivedSlot&, const RootSlot&, size_t, std::memory_order);
+};
+
+inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset,
+                          std::memory_order order = std::memory_order_relaxed)
+{
+    slot.StoreDerived(base, offset, order);
+}
+
+static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");
+static_assert(sizeof(RootSlot) == sizeof(MAddress), "RootSlot must remain one machine word");
+static_assert(sizeof(DerivedSlot) == sizeof(MAddress), "DerivedSlot must remain one machine word");
+
+// The compiler/stack-map/object-layout ABIs expose raw word addresses. Keep the
+// unavoidable representation escape in this single named layer; callers must
+// already know the slot category from metadata or the ABI being decoded.
+template<bool isAtomic = false>
+inline HeapSlot<isAtomic>& HeapSlotAt(void* address)
+{
+    return *reinterpret_cast<HeapSlot<isAtomic>*>(address);
+}
+
+template<bool isAtomic = false>
+inline HeapSlot<isAtomic>& HeapSlotAt(MAddress address)
+{
+    return HeapSlotAt<isAtomic>(reinterpret_cast<void*>(address));
+}
+
+inline RootSlot& RootSlotAt(void* address)
+{
+    return *reinterpret_cast<RootSlot*>(address);
+}
+
+inline RootSlot& RootSlotAt(MAddress address)
+{
+    return RootSlotAt(reinterpret_cast<void*>(address));
+}
+
+inline DerivedSlot& DerivedSlotAt(void* address)
+{
+    return *reinterpret_cast<DerivedSlot*>(address);
+}
+
+inline DerivedSlot& DerivedSlotAt(MAddress address)
+{
+    return DerivedSlotAt(reinterpret_cast<void*>(address));
+}
+
+using HeapSlotVisitor = std::function<void(HeapSlot<>&)>;
+using RootSlotVisitor = std::function<void(RootSlot&)>;
+using RefFieldVisitor = HeapSlotVisitor;
 } // namespace MapleRuntime
 #endif // MRT_REF_FIELD_H

@@ -165,9 +165,9 @@ void RunFullClosure(const std::function<void(const std::function<void(BaseObject
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
-            RefField<>* referentField =
-                reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            BaseObject* referent = resolveField(*referentField);
+            HeapSlot<>& referentField =
+                HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = resolveField(referentField);
             if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
                 referent->ForEachRefField([&](RefField<>& field) {
                     BaseObject* target = resolveField(field);
@@ -225,8 +225,8 @@ void RunYoungOnlyClosure(const std::function<void(const std::function<void(BaseO
         if (!Heap::IsHeapAddress(slot)) {
             continue;
         }
-        RefField<>* field = reinterpret_cast<RefField<>*>(slot);
-        BaseObject* target = resolveField(*field);
+        HeapSlot<>& field = HeapSlotAt<>(slot);
+        BaseObject* target = resolveField(field);
         ParentEdge e;
         e.holder = nullptr;
         e.slot = slot;
@@ -242,9 +242,9 @@ void RunYoungOnlyClosure(const std::function<void(const std::function<void(BaseO
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
-            RefField<>* referentField =
-                reinterpret_cast<RefField<>*>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
-            BaseObject* referent = resolveField(*referentField);
+            HeapSlot<>& referentField =
+                HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            BaseObject* referent = resolveField(referentField);
             if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
                 referent->ForEachRefField([&](RefField<>& field) {
                     BaseObject* target = resolveField(field);

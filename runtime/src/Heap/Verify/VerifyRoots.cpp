@@ -195,7 +195,7 @@ void VerifyRoots::BeforeCheckAndPush(BaseObject* obj)
 
 SlotDebugVisitor VerifyRoots::MakeSlotDebugVisitor(const RootVerifyContext& baseCtx)
 {
-    return [baseCtx](SlotBias bias, BaseObject* root) {
+    return [baseCtx](SlotBias bias, zaddress_unsafe root) {
         RootVerifyContext ctx = baseCtx;
         ctx.kind = RootKind::SLOT_STACK;
         ctx.slotBias = static_cast<intptr_t>(bias);
@@ -204,17 +204,20 @@ SlotDebugVisitor VerifyRoots::MakeSlotDebugVisitor(const RootVerifyContext& base
         if (ctx.frameFA != 0) {
             slotAddr = reinterpret_cast<void*>(static_cast<intptr_t>(ctx.frameFA) + static_cast<intptr_t>(bias));
         }
-        VerifyRootPayload(ctx, slotAddr, root);
+        // Stack-map roots are native, uncoloured references. The verifier keeps
+        // the historical pointer-shaped diagnostic boundary after classifying them.
+        VerifyRootPayload(ctx, slotAddr, from_native_ref(raw(root)));
     };
 }
 
 RegDebugVisitor VerifyRoots::MakeRegDebugVisitor(const RootVerifyContext& baseCtx)
 {
-    return [baseCtx](RegisterNum reg, const BaseObject* root) {
+    return [baseCtx](RegisterNum reg, zaddress_unsafe root) {
         RootVerifyContext ctx = baseCtx;
         ctx.kind = RootKind::REG_ROOT;
         ctx.regNum = static_cast<int>(reg);
-        VerifyRootPayload(ctx, nullptr, const_cast<BaseObject*>(root));
+        // Saved-register roots use the same native uncoloured ABI as stack slots.
+        VerifyRootPayload(ctx, nullptr, from_native_ref(raw(root)));
     };
 }
 

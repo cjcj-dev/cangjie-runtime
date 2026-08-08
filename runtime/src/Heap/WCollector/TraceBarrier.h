@@ -19,11 +19,11 @@ public:
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;
-    BaseObject* ReadStaticRef(RefField<false>& field) const override;
+    BaseObject* ReadStaticRef(RootSlot& field) const override;
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
     void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
 
-    void WriteStaticRef(RefField<false>& field, BaseObject* ref) const override;
+    void WriteStaticRef(RootSlot& field, BaseObject* ref) const override;
     void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const override;
 
     BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;

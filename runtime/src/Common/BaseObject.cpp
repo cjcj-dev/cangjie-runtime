@@ -103,7 +103,7 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
-        RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+        HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
         // for each object in array.
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             visitor(arrayContent[i]);

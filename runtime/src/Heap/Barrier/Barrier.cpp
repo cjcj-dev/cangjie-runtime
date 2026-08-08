@@ -79,7 +79,7 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
     DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, to_object(field.GetTargetObject()), ref);
     // COLOUR_WRITEBACK_AUDIT R3/批 A：规范色写回，禁 plain 灌堆。
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    field.StoreColoured(newField.GetFieldValue());
 }
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -101,7 +101,7 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
                 BaseObject* latest = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
                 if (oldValue != raw(newField.GetFieldValue())) {
-                    refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
                 }
             },
             dst, dst + dstLen);
@@ -113,14 +113,13 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 #endif
 }
 
-void Barrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
-    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    StorePlain(field, from_object(ref));
     // Static/global slots are visited and fixed as roots in every minor collection.
     // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
@@ -134,7 +133,7 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
         if (oldValue != raw(newField.GetFieldValue())) {
-            refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+            refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
         }
     });
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -167,16 +166,21 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     }
 }
 
-BaseObject* Barrier::ReadStaticRef(RefField<false>& field) const
+BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 {
-    BaseObject* toVersion = nullptr;
-    if (theCollector.TryUpdateRefField(nullptr, field, toVersion)) {
-        DLOG(BARRIER, "read static ref@%p: 0x%zx -> %p", &field, raw(field.GetFieldValue()), toVersion);
-        return toVersion;
-    } else {
-        BaseObject* target = to_object(field.GetTargetObject());
-        return target;
+    zaddress_unsafe observed = field.LoadPlain();
+    if (is_null(observed)) {
+        return nullptr;
     }
+    // Decode any legacy colour bits at an external ABI boundary without exposing
+    // the RootSlot storage as a HeapSlot.
+    HeapSlot<> observedBits(to_zpointer(raw(observed)));
+    BaseObject* target = to_object(observedBits.GetTargetObject());
+    if (target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target)) {
+        target = theCollector.FindLatestVersion(target);
+        HealRoot(field, from_object(target));
+    }
+    return target;
 }
 
 // barrier for atomic operation.
@@ -196,7 +200,7 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
         DLOG(BARRIER, "atomic write static ref@%p: %#zx -> %p", &field, raw(field.GetFieldValue()), ref);
     }
 
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
 }
 
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
@@ -226,7 +230,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         BaseObject* toVersion = ReadReference(nullptr, tmpField);
         // R10：治愈写也必须带规范色，禁 plain SetTargetObject。
         RefField<> healed = theCollector.GetAndTryTagRefField(toVersion);
-        field.SetFieldValue(healed.GetFieldValue());
+        field.StoreColoured(healed.GetFieldValue());
         DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), toVersion);
         return toVersion;
     }
@@ -266,7 +270,7 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
         // Recolour per attempt: a phase may flip mid-retry, and writing last epoch's colour
         // would hand the next reader a value its mask calls bad.
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
+        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
             DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
                  oldFieldValue, oldVersion, oldRef, newRef);
             return true;
@@ -298,14 +302,14 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
     // heap→heap 已有色时 GetAndTryTagRefField 幂等（Y6 不新增 plain，补色也无害）。
     if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
         MAddress end = dstField + dstSize;
-        for (MAddress cur = dstField; cur + sizeof(RefField<>) <= end; cur += sizeof(RefField<>)) {
-            RefField<>& refField = *reinterpret_cast<RefField<>*>(cur);
+        for (MAddress cur = dstField; cur + sizeof(HeapSlot<>) <= end; cur += sizeof(HeapSlot<>)) {
+            HeapSlot<>& refField = HeapSlotAt<>(cur);
             RefField<> oldField(refField);
             MAddress oldValue = raw(oldField.GetFieldValue());
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+                refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
             }
         }
     }
@@ -338,7 +342,7 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                field.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+                field.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
@@ -358,7 +362,7 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
                 // MAddress bias = reinterpret_cast<MAddress>(&field) - reinterpret_cast<MAddress>(src);
-                // RefField<false>* dstField = reinterpret_cast<RefField<false>*>(dst + bias);
+                // The destination reference slot starts at dst + bias.
                 BaseObject* fromVersion = to_object(field.GetTargetObject());
                 (void)fromVersion;
                 BaseObject* toVersion = nullptr;
@@ -530,9 +534,9 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
         return;
     }
     MAddress end = start + size;
-    for (MAddress current = start; current + sizeof(RefField<>) <= end; current += sizeof(RefField<>)) {
-        RefField<>* field = reinterpret_cast<RefField<>*>(current);
-        RecordCrossGenEdge(obj, current, to_object(field->GetTargetObject()));
+    for (MAddress current = start; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
+        HeapSlot<>& field = HeapSlotAt<>(current);
+        RecordCrossGenEdge(obj, current, to_object(field.GetTargetObject()));
     }
 }
 

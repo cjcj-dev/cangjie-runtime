@@ -57,7 +57,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
     }
 }
 
-BaseObject* TraceBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* TraceBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* TraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
@@ -81,7 +81,7 @@ void TraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_
                     return;
                 }
                 MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+                refFields.Push(&HeapSlotAt<>(dst + offset));
             },
             src, src + size);
     }
@@ -97,7 +97,7 @@ void TraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, con
     LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(src, [&refFields, dst, src](RefField<>& srcField) {
         MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-        refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
+        refFields.Push(&HeapSlotAt<>(dst + offset));
     }, src, src + size);
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
@@ -129,16 +129,15 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    field.StoreColoured(newField.GetFieldValue());
 }
 
-void TraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+void TraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
     RememberNewReference(Mutator::GetMutator(), ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
-    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    StorePlain(field, from_object(ref));
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
 }
 
 void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -157,7 +156,7 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 MAddress offset = reinterpret_cast<MAddress>(&refField) - dst;
-                RefField<> srcField(*reinterpret_cast<RefField<>*>(src + offset));
+                RefField<> srcField(HeapSlotAt<>(src + offset));
                 RememberNewReference(mutator, ReadReference(nullptr, srcField));
             },
             dst, dst + srcLen);
@@ -173,7 +172,7 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
                 BaseObject* latestVerison = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
                 if (oldValue != raw(newField.GetFieldValue())) {
-                    refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
                 }
             },
             dst, dst + dstLen);
@@ -190,7 +189,7 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
     Mutator* mutator = Mutator::GetMutator();
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
-        RefField<> srcField(*reinterpret_cast<RefField<>*>(src + offset));
+        RefField<> srcField(HeapSlotAt<>(src + offset));
         RememberNewReference(mutator, ReadReference(nullptr, srcField));
     });
     std::atomic_thread_fence(std::memory_order_seq_cst);
@@ -202,7 +201,7 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
         BaseObject* untagged = ReadReference(nullptr, oldField);
         RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
         if (oldValue != raw(newField.GetFieldValue())) {
-            refField.CompareExchange(oldValue, raw(newField.GetFieldValue()));
+            refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
         }
     });
     RecordStaticCrossGenEdges(dst, gctib);
@@ -239,7 +238,7 @@ void TraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& fie
     Mutator* mutator = Mutator::GetMutator();
     RememberNewReference(mutator, newRef);
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
     mutator->RememberObjectInSatbBuffer(oldRef);
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
@@ -276,7 +275,7 @@ bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& 
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(oldFieldValue, raw(newField.GetFieldValue()), succOrder, failOrder)) {
+        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
             mutator->RememberObjectInSatbBuffer(oldRef);
             return true;
         }

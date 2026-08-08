@@ -236,7 +236,7 @@ struct ShortGCTib {
         ArchUInt gcInfo = bitmap & (~SIGN_BIT);
         while (LIKELY(gcInfo != 0)) {
             U32 bitIndex = static_cast<U32>(__builtin_ctzll(static_cast<unsigned long long>(gcInfo)));
-            visitor(*reinterpret_cast<RefField<>*>(fieldAddr + bitIndex * sizeof(RefField<>)));
+            visitor(HeapSlotAt<>(fieldAddr + bitIndex * sizeof(HeapSlot<>)));
             gcInfo &= gcInfo - 1;
         }
     }
@@ -253,7 +253,7 @@ struct ShortGCTib {
                 return;
             }
             if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+                visitor(HeapSlotAt<>(fieldAddr));
             }
             gcInfo >>= BITS_FOR_REF;
             fieldAddr += sizeof(RefField<>);
@@ -274,7 +274,7 @@ struct StdGCTib {
     {
         U8 wordBits = bitmapWord & REF_BIT_MASK;
         if (wordBits != 0) {
-            visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+            visitor(HeapSlotAt<>(fieldAddr));
         }
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
@@ -282,7 +282,7 @@ struct StdGCTib {
     }
     void VisitAllField(U8 &bitmapWord, MAddress &fieldAddr, const RefFieldVisitor &visitor) const
     {
-        visitor(*reinterpret_cast<RefField<> *>(fieldAddr));
+        visitor(HeapSlotAt<>(fieldAddr));
 
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
@@ -308,7 +308,7 @@ struct StdGCTib {
                 MAddress wordBaseAddr = baseAddr + sizeof(RefField<>) * j * REFS_PER_BIT_WORD;
                 while (LIKELY(bitmapWord != 0)) {
                     U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
-                    visitor(*reinterpret_cast<RefField<>*>(wordBaseAddr + bitIndex * sizeof(RefField<>)));
+                    visitor(HeapSlotAt<>(wordBaseAddr + bitIndex * sizeof(HeapSlot<>)));
                     bitmapWord &= static_cast<U8>(bitmapWord - 1);
                 }
             }
@@ -318,7 +318,7 @@ struct StdGCTib {
             U8 bitmapWord = bitmaps[i];
             while (LIKELY(bitmapWord != 0)) {
                 U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
-                visitor(*reinterpret_cast<RefField<>*>(baseAddr + bitIndex * sizeof(RefField<>)));
+                visitor(HeapSlotAt<>(baseAddr + bitIndex * sizeof(HeapSlot<>)));
                 bitmapWord &= static_cast<U8>(bitmapWord - 1);
             }
             baseAddr += sizeof(RefField<>) * REFS_PER_BIT_WORD;

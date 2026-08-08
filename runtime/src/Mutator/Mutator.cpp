@@ -171,7 +171,7 @@ void Mutator::InitProtectStackAddr()
 
 void Mutator::ResetMutator()
 {
-    rawObject.object = nullptr;
+    StorePlain(rawObject, zaddress::null);
     SatbBuffer::Instance().FlushQueue(satbNode);
     if (!localFinalizers.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFinalizers);
@@ -386,12 +386,13 @@ void Mutator::VisitStackRoots(const RootVisitor& func)
 
 void Mutator::VisitExceptionRoots(const RootVisitor& func)
 {
-    func(reinterpret_cast<ObjectRef&>(exceptionWrapper.GetExceptionRef()));
+    // ExceptionRef is a legacy ABI word owned by ExceptionWrapper; metadata classifies it as a root.
+    func(RootSlotAt(&exceptionWrapper.GetExceptionRef()));
 }
 
 void Mutator::VisitRawObjects(const RootVisitor& func)
 {
-    if (rawObject.object != nullptr) {
+    if (!is_null(rawObject.LoadPlain())) {
         func(rawObject);
     }
 }
@@ -528,7 +529,8 @@ bool Mutator::IsStackAddr(uintptr_t addr)
     }
 }
 
-void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
+void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
+                              std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>>& derivedSlots)
 {
     // The pointer on the stack to be fixed has two sources:
     //     1. the non-escaped heap pointer (from heap stackmap), these pointer are assigned to the stack.
@@ -538,32 +540,37 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
     // The non-escaped heap pointer points to an object,
     //     so they need to be traced to ensure that all pointers are fixed.
     // These pointers will be collected in the <rootList>.
-    std::stack<BaseObject**, std::deque<BaseObject**, StdContainerAllocator<BaseObject**, STACK_PTR>>> rootList;
+    std::stack<RootSlot*, std::deque<RootSlot*, StdContainerAllocator<RootSlot*, STACK_PTR>>> rootList;
     StackPtrVisitor traceAndFixPtrVisitor = [&rootList, this](ObjectRef& oldStackAddr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
-            rootList.push(reinterpret_cast<BaseObject**>(&oldStackAddr));
+        if (IsStackAddr(raw(oldStackAddr.LoadPlain()))) {
+            rootList.push(&oldStackAddr);
         }
     };
     // The stack pointer does not require ref trace.
-    StackPtrVisitor fixPtrVisitor = [&resSet, this](ObjectRef& oldStackAddr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(oldStackAddr.object))) {
-            resSet.insert(reinterpret_cast<BaseObject**>(&oldStackAddr));
+    StackPtrVisitor fixPtrVisitor = [&rootSlots, this](ObjectRef& oldStackAddr) {
+        if (IsStackAddr(raw(oldStackAddr.LoadPlain()))) {
+            rootSlots.insert(&oldStackAddr);
         }
     };
-    // The Derived pointer does not require ref trace.
+    // Preserve the pair before stack movement; the only later write is RebaseDerived(newBase, offset).
     DerivedPtrVisitor derivedPtrVisitor =
-        [&resSet, this](BasePtrType basePtr __attribute__((unused)), DerivedPtrType& derivedPtr) {
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(reinterpret_cast<ObjectRef&>(derivedPtr).object))) {
-            resSet.insert(reinterpret_cast<BaseObject**>(&derivedPtr));
+        [&derivedSlots, this](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        const zaddress_unsafe derivedValue = derivedPtr.LoadDerived();
+        if (IsStackAddr(raw(derivedValue))) {
+            CHECK_DETAIL(!is_null(basePtr) && raw(derivedValue) >= raw(basePtr),
+                         "stack derived pointer must have a non-null base at or below it");
+            derivedSlots.emplace_back(&derivedPtr, basePtr, raw(derivedValue) - raw(basePtr));
         }
     };
     StackManager::VisitStackPtrMap(uwContext, traceAndFixPtrVisitor, fixPtrVisitor, derivedPtrVisitor, *this);
 
     // Ref trace on non-escaped heap pointers.
-    RefFieldVisitor refVisitor = [&rootList, this](RefField<>& oldRefFieldAddr) {
+    HeapSlotVisitor refVisitor = [&rootList, this](HeapSlot<>& oldRefFieldAddr) {
+        // A reference field in a stack-allocated object is a root slot, not a heap slot.
+        RootSlot& oldRootField = RootSlotAt(&oldRefFieldAddr);
         // Check whether the address is on the stack.
-        if (IsStackAddr(reinterpret_cast<uintptr_t>(to_object(oldRefFieldAddr.GetTargetObject())))) {
-            rootList.push(reinterpret_cast<BaseObject**>(&oldRefFieldAddr));
+        if (IsStackAddr(raw(oldRootField.LoadPlain()))) {
+            rootList.push(&oldRootField);
         }
     };
     for (;;) {
@@ -571,10 +578,11 @@ void Mutator::RecordStackPtrs(std::set<BaseObject**>& resSet)
             break;
         }
         // get next object from work stack.
-        BaseObject** objSlot = rootList.top();
+        RootSlot* objSlot = rootList.top();
         rootList.pop();
-        resSet.insert(objSlot);
-        BaseObject* obj = *objSlot;
+        rootSlots.insert(objSlot);
+        // StackPtrMap only records live stack addresses while the old stack is still mapped.
+        BaseObject* obj = to_object(safe(objSlot->LoadPlain()));
         if (!obj->IsValidObject()) {
             continue;
         }
@@ -701,18 +709,26 @@ intptr_t Mutator::FixExtendedStack(intptr_t frameBase, uint32_t adjustedSize, vo
         }
 
         // Visits the stackmap and records all pointers to be fixed to the resSet.
-        std::set<BaseObject**> resSet;
-        RecordStackPtrs(resSet);
+        std::set<RootSlot*> rootSlots;
+        std::vector<std::tuple<DerivedSlot*, BasePtrType, size_t>> derivedSlots;
+        RecordStackPtrs(rootSlots, derivedSlots);
 
         // Serialize against VisitStackRoots / concurrent GC stack fill (stackwm #7 Q4):
         // absolute-FA caches must not be built against a half-moved stack.
         MutatorLock();
         // Fix All pointers recorded in resSet.
-        intptr_t* newStackAddr;
-        const int byteSize = 8;
-        for (BaseObject** oldAddr : resSet) {
-            newStackAddr = reinterpret_cast<intptr_t*>(oldAddr + stackOffset / byteSize);
-            *newStackAddr += stackOffset;
+        for (RootSlot* oldSlot : rootSlots) {
+            RootSlot& newSlot = RootSlotAt(reinterpret_cast<MAddress>(oldSlot) + stackOffset);
+            // The copied value is a stack address; adding stackOffset yields a committed new-stack address.
+            StorePlain(newSlot, to_zaddress(raw(newSlot.LoadPlain()) + stackOffset));
+        }
+        for (auto& [oldDerivedSlot, oldBase, offset] : derivedSlots) {
+            DerivedSlot& newDerivedSlot =
+                DerivedSlotAt(reinterpret_cast<MAddress>(oldDerivedSlot) + stackOffset);
+            RootSlot newBase;
+            // Both the base and derived location moved by the same stack offset.
+            StorePlain(newBase, to_zaddress(raw(oldBase) + stackOffset));
+            RebaseDerived(newDerivedSlot, newBase, offset);
         }
 
         uwContext.anchorFA = reinterpret_cast<uint32_t*>(reinterpret_cast<uintptr_t>(uwContext.anchorFA) + stackOffset);
@@ -748,26 +764,27 @@ inline void CheckAndPush(BaseObject* obj, std::set<BaseObject*>& rootSet, std::s
 
 // interiorsrc2: stack/reg root slots may hold coloured bits or RawArray+8 interiors.
 // Peel colour for range checks; reject interiors before PushRoot (work-stack poison).
-static BaseObject* PlainRootObject(BaseObject* maybeColoured)
+static BaseObject* PlainRootObject(zaddress_unsafe maybeColoured)
 {
-    if (maybeColoured == nullptr) {
+    if (is_null(maybeColoured)) {
         return nullptr;
     }
-    return reinterpret_cast<BaseObject*>(
-        RefField<>(reinterpret_cast<MAddress>(maybeColoured)).GetAddress());
+    // Stack-map/FFI roots remain committed until this GC root pass heals them.
+    return to_object(safe(uncolor_bits(to_zpointer(raw(maybeColoured)))));
 }
 
 static void StripRootObjectColour(ObjectRef& root)
 {
-    BaseObject* plain = PlainRootObject(root.object);
-    if (plain != root.object) {
-        root.object = plain;
+    zaddress_unsafe oldValue = root.LoadPlain();
+    BaseObject* plain = PlainRootObject(oldValue);
+    if (reinterpret_cast<MAddress>(plain) != raw(oldValue)) {
+        HealRoot(root, from_object(plain));
     }
 }
 
 static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
 {
-    BaseObject* plain = PlainRootObject(obj);
+    BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
         return false;
     }
@@ -842,12 +859,14 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     }
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
-    RefFieldVisitor refVisitor = [&rootSet, &rootStack, this](RefField<>& refFieldAddr) {
-        BaseObject* obj = to_object(refFieldAddr.GetTargetObject());
+    HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this](HeapSlot<>& refFieldAddr) {
+        // The containing object is stack allocated, so metadata exposes this word as a root slot.
+        RootSlot& rootField = RootSlotAt(&refFieldAddr);
+        BaseObject* obj = PlainRootObject(rootField.LoadPlain());
         if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref")) {
-            DLOG(ENUM, "enum stack root RefField @%p: %p", &refFieldAddr, PlainRootObject(obj));
-        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(PlainRootObject(obj)))) {
-            CheckAndPush(PlainRootObject(obj), rootSet, rootStack);
+            DLOG(ENUM, "enum stack root HeapSlot @%p: %p", &refFieldAddr, obj);
+        } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
+            CheckAndPush(obj, rootSet, rootStack);
         }
     };
 
@@ -855,7 +874,7 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
         // Peel colour so IsHeapAddress/gate see the real address; leave plain in the slot
         // so mutator restore after STW does not reload a non-canonical pointer (si_code=128).
         StripRootObjectColour(root);
-        BaseObject* obj = root.object;
+        BaseObject* obj = PlainRootObject(root.LoadPlain());
         if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.root")) {
             DLOG(ENUM, "enum stack root @%p: %p", &root, obj);
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(obj))) {
@@ -881,11 +900,15 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     // introot: Enum previously used VisitMutatorRoots → RootMap (reg/slot only), so
     // base/derived pairs never entered. VisitHeapReferences builds HeapReferenceMap and
     // visits derived; the derived visitor marks the base and keeps the derived slot plain.
-    DerivedPtrVisitor derivedVisitor = [](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
-        BaseObject* base = PlainRootObject(from_native_ref(basePtr));
-        BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
-        if (derivedObj != from_native_ref(derivedPtr)) {
-            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+    DerivedPtrVisitor derivedVisitor = [](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        BaseObject* base = PlainRootObject(basePtr);
+        BaseObject* derivedObj = PlainRootObject(derivedPtr.LoadDerived());
+        if (base != nullptr && derivedObj != nullptr &&
+            reinterpret_cast<MAddress>(derivedObj) >= reinterpret_cast<MAddress>(base)) {
+            RootSlot plainBase;
+            StorePlain(plainBase, from_object(base));
+            RebaseDerived(derivedPtr, plainBase,
+                          reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(base));
         }
         if (base != nullptr && Heap::IsHeapAddress(base)) {
             (void)PushHeapRootIfPlausible(base, "GcPhaseEnum.derivedBase");
@@ -908,8 +931,8 @@ inline void Mutator::ForwardLocalFinalizers(Collector& collector)
 {
     WCollector& wcollector = reinterpret_cast<WCollector&>(collector);
     RootVisitor visitor = [&wcollector](ObjectRef& root) { wcollector.ForwardUpdateRawRef(root); };
-    for (BaseObject*& obj : localFinalizers) {
-        visitor(reinterpret_cast<ObjectRef&>(obj));
+    for (RootSlot& root : localFinalizers) {
+        visitor(root);
     }
 }
 
@@ -919,13 +942,15 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     std::set<void*> rootFieldSet;
     std::stack<BaseObject*> rootStack;
     Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
-    RefFieldVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](RefField<>& refFieldAddr) {
-        BaseObject* oldObj = to_object(refFieldAddr.GetTargetObject());
+    HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
+        // The containing object is stack allocated, so this metadata field is a RootSlot.
+        RootSlot& rootField = RootSlotAt(&refFieldAddr);
+        BaseObject* oldObj = PlainRootObject(rootField.LoadPlain());
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (oldObj != toObj) { refFieldAddr.SetTargetObject(toObj); }
+            if (oldObj != toObj) { HealRoot(rootField, from_object(toObj)); }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
         }
@@ -935,7 +960,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         // interiorsrc2: peel colour before ghost/forward checks; write plain back so mutator
         // does not resume with a coloured interior (si_code=128 in arrayInitByFunction).
         StripRootObjectColour(root);
-        BaseObject* oldObj = root.object;
+        BaseObject* oldObj = PlainRootObject(root.LoadPlain());
         if (Heap::IsHeapAddress(oldObj) &&
             !Collector::PlausibleManagedObjectGate("GCPhasePreForward.root", oldObj)) {
             // introot: interior root — forward host and rewrite slot to to+offset.
@@ -945,9 +970,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                 if (rootFieldSet.insert((void*)(&root)).second) {
                     BaseObject* toHost = collector.ForwardObject(host);
                     if (toHost != nullptr && toHost != host) {
-                        root.object = reinterpret_cast<BaseObject*>(
-                            reinterpret_cast<uintptr_t>(toHost) +
-                            (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
+                        HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
+                            (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))));
                     }
                 }
             }
@@ -957,7 +981,7 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (oldObj != toObj) { root.object = toObj; }
+            if (oldObj != toObj) { HealRoot(root, from_object(toObj)); }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
         }
@@ -968,27 +992,34 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         }
     };
 
-    DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedPtrType& derivedPtr) {
+    DerivedPtrVisitor derivedPtrVisitor = [&collector](BasePtrType basePtr, DerivedSlot& derivedPtr) {
         // Peel colour on base/derived before arithmetic; interiors must not be treated as bases.
-        BaseObject* fromVersion = PlainRootObject(from_native_ref(basePtr));
-        BaseObject* derivedObj = PlainRootObject(from_native_ref(derivedPtr));
+        BaseObject* fromVersion = PlainRootObject(basePtr);
+        BaseObject* derivedObj = PlainRootObject(derivedPtr.LoadDerived());
+        if (fromVersion == nullptr || derivedObj == nullptr ||
+            reinterpret_cast<MAddress>(derivedObj) < reinterpret_cast<MAddress>(fromVersion)) {
+            return;
+        }
+        const size_t offset = reinterpret_cast<MAddress>(derivedObj) - reinterpret_cast<MAddress>(fromVersion);
         // introot: even when derived is an interior (RawArray+8), still relocate via base.
         // Previous code returned early after plain-strip and left a stale interior if base moved.
         if (!Heap::IsHeapAddress(fromVersion) ||
             !Collector::PlausibleManagedObjectGate("GCPhasePreForward.derivedBase", fromVersion) ||
             !collector.IsGhostFromObject(fromVersion) || collector.IsUnmovableFromObject(fromVersion)) {
-            if (derivedObj != from_native_ref(derivedPtr)) {
-                derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
-            }
+            RootSlot base;
+            StorePlain(base, from_object(fromVersion));
+            RebaseDerived(derivedPtr, base, offset);
             return;
         }
         BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
         if (fromVersion != toVersion && toVersion != nullptr) {
-            DerivedPtrType toDerived = reinterpret_cast<BasePtrType>(toVersion) +
-                (reinterpret_cast<DerivedPtrType>(derivedObj) - reinterpret_cast<BasePtrType>(fromVersion));
-            derivedPtr = toDerived;
-        } else if (derivedObj != from_native_ref(derivedPtr)) {
-            derivedPtr = reinterpret_cast<DerivedPtrType>(derivedObj);
+            RootSlot toBase;
+            StorePlain(toBase, from_object(toVersion));
+            RebaseDerived(derivedPtr, toBase, offset);
+        } else {
+            RootSlot base;
+            StorePlain(base, from_object(fromVersion));
+            RebaseDerived(derivedPtr, base, offset);
         }
     };
     VisitHeapReferences(visitor, derivedPtrVisitor);
