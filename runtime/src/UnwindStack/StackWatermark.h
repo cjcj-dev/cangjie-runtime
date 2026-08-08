@@ -260,6 +260,10 @@ public:
     bool IsNotStarted() const { return GetPhase() == WM_NOT_STARTED; }
     bool IsScanning() const { return GetPhase() == WM_SCANNING; }
     bool IsDone() const { return GetPhase() == WM_DONE; }
+    bool IsDone(uint64_t scanEpoch) const
+    {
+        return GetPhase() == WM_DONE && GetEpoch() == scanEpoch;
+    }
 
     static bool VerifyEnabled();
 

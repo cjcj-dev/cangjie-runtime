@@ -23,6 +23,7 @@
 #include "ObjectModel/RefField.inline.h"
 #include "MutatorManager.h"
 #include "StackManager.h"
+#include "UnwindStack/StackFrameCursor.h"
 #include "ExceptionManager.h"
 #include "schedule.h"
 #ifdef _WIN64
@@ -262,6 +263,13 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
 void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
+    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+                     "concurrent stack-scan join before ENUM barrier publication");
+        bool began = stackWatermark.TryBegin(epoch, StackWatermark::WM_OWNER_SELF, 0);
+        CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
+        stackWatermark.Finish(StackWatermark::WM_OWNER_SELF);
+    }
     // Publish completion before state so a concurrent FinishedEpochHandshake
     // observer that sees ACKNOWLEDGED also sees the matching completion.
     epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
@@ -281,7 +289,24 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         return expected == EPOCH_HANDSHAKE_ACKNOWLEDGED && FinishedEpochHandshake(epoch);
     }
 
-    // Step 0 deliberately performs no stack/root work and changes no collector state.
+    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
+        // S1/S3/S5 publication order: the first short STW must publish the ENUM
+        // barrier before an ack can snapshot roots. The acquire phase read pairs
+        // with Collector::SetGCPhase's release store and therefore also observes
+        // the preceding InstallBarrier.
+        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
+                     "concurrent stack scan ack before ENUM barrier publication");
+        auto& localFins = GetLocalFinalizers();
+        if (!localFins.empty()) {
+            Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
+        }
+        size_t frames = 0;
+        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, epoch, bySelf, &frames);
+        MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
+        if (scanned) {
+            SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
+        }
+    }
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
@@ -759,7 +784,53 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
     return true;
 }
 
-inline void Mutator::GcPhaseEnum(GCPhase newPhase)
+bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
+                                  size_t& scannedFrames)
+{
+    scannedFrames = 0;
+    MutatorLock();
+    if (!IsManagedContext()) {
+        bool began = stackWatermark.TryBegin(epoch, owner, 0);
+        if (began) {
+            stackWatermark.Finish(owner);
+        }
+        MutatorUnlock();
+        if (began) {
+            VisitExceptionRoots(visitor);
+        }
+        return began;
+    }
+    // A managed stack without a usable address range cannot classify stack
+    // objects in CheckAndPush. Keep it NOT_STARTED so the second STW takes the
+    // exact legacy VisitMutatorRoots fallback instead of silently claiming DONE.
+    if (GetStackTopAddr() == 0 || GetStackSize() == 0) {
+        MutatorUnlock();
+        return false;
+    }
+
+    IncObserver();
+#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
+    CreateCurrentGCInfo();
+#endif
+    StackFrameCursor cursor(uwContext);
+    bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
+    if (began) {
+        while (cursor.ProcessOne(visitor, *this)) {
+            stackWatermark.AdvanceTo(cursor.Cursor(), owner);
+        }
+        VisitRawObjects(visitor);
+        stackWatermark.Finish(owner);
+        scannedFrames = cursor.FrameCount();
+    }
+    DecObserver();
+    MutatorUnlock();
+    if (began) {
+        VisitExceptionRoots(visitor);
+    }
+    return began;
+}
+
+inline bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
@@ -792,7 +863,17 @@ inline void Mutator::GcPhaseEnum(GCPhase newPhase)
             obj->ForEachRefField(refVisitor);
         }
     };
-    VisitMutatorRoots(visitor);
+    if (stackScanEpoch == 0) {
+        VisitMutatorRoots(visitor);
+        return true;
+    }
+    size_t frames = 0;
+    StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
+    bool scanned = DrainStackWatermark(visitor, stackScanEpoch, owner, frames);
+    if (scannedFrames != nullptr) {
+        *scannedFrames = frames;
+    }
+    return scanned;
 }
 
 inline void Mutator::ForwardLocalFinalizers(Collector& collector)
