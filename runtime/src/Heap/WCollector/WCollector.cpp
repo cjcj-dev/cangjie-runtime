@@ -681,6 +681,16 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             return;
         }
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
+        // writeback2: mark-good fast path used to push-and-return without healing the slot.
+        // A coloured mark-good root then stayed in the register/stack slot (PLAIN_ROOTS=0
+        // signature, and residual colour under PLAIN_ROOTS=1 if any prior site painted it).
+        // Mirror the slow path: RootSlotWriteback → plain on non-heap, Phase-C colour on heap.
+        {
+            RefField<> newField = RootSlotWriteback(root, &refField);
+            if (oldField.GetFieldValue() != newField.GetFieldValue()) {
+                (void)refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            }
+        }
         rootSet.push_back(root);
         return;
     }
