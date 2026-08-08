@@ -196,6 +196,10 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         DCHECK(theCollector.is_load_good(goodField));
         if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
