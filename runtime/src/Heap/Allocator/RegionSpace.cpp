@@ -165,38 +165,15 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         return AllocateRawPointerObject(totalSize);
     }
 
-    // posttrace 甲+乙:
-    // 1) Never bump into from/ghost/routing (peer of pin free-list POST_TRACE refuse).
-    // 2) Once TRACE..FORWARD is open, stamp the current TL isTraceRegion in place.
-    //    IDLE-born regions kept receiving TRACE allocs; PrepareYoung then put them
-    //    in from with live0Surv=0 for late objects. Stamping excludes the *whole*
-    //    region from this cycle's route (floating garbage for pre-stamp objects —
-    //    same shape as ZGC not relocating post-mark pages). Do not retire/enlist
-    //    here (that path SEGV'd under concurrent mark).
-    auto phaseNeedsTraceStamp = []() -> bool {
-        GCPhase p = Heap::GetHeap().GetGCPhase();
-        return p == GCPhase::GC_PHASE_TRACE || p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-            p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
-            p == GCPhase::GC_PHASE_FORWARD;
-    };
-    auto tlIsRouteDomain = [](RegionInfo* r) -> bool {
-        if (r == nullptr || r == RegionInfo::NullRegion()) {
-            return false;
-        }
-        if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
-            return true;
-        }
-        RegionInfo::RouteState rs = r->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
-            rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
-            rs == RegionInfo::RouteState::FORWARDED;
-    };
-
-    if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && tlIsRouteDomain(tlRegion))) {
-        tlRegion = RegionInfo::NullRegion();
-    }
+    // posttrace 乙: once TRACE..FORWARD is open, stamp current TL isTraceRegion so
+    // PrepareYoung/Assemble exclude it from this cycle's route domain (peer of pin
+    // free-list POST_TRACE refuse). In-place stamp only — no list surgery on hot path.
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        if (phaseNeedsTraceStamp() && !tlRegion->IsTraceRegion()) {
+        GCPhase heapP = Heap::GetHeap().GetGCPhase();
+        if ((heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+             heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
+             heapP == GCPhase::GC_PHASE_FORWARD) &&
+            !tlRegion->IsTraceRegion()) {
             tlRegion->SetTraceRegionFlag(1);
         }
         addr = tlRegion->Alloc(totalSize);
@@ -295,45 +272,26 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = theAllocator.GetRegionManager();
 
-    auto phaseNeedsTraceStamp = []() -> bool {
-        GCPhase p = Heap::GetHeap().GetGCPhase();
-        return p == GCPhase::GC_PHASE_TRACE || p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-            p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
-            p == GCPhase::GC_PHASE_FORWARD;
-    };
-    auto tlIsRouteDomain = [](RegionInfo* r) -> bool {
-        if (r == nullptr || r == RegionInfo::NullRegion()) {
-            return false;
-        }
-        if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
-            return true;
-        }
-        RegionInfo::RouteState rs = r->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
-            rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
-            rs == RegionInfo::RouteState::FORWARDED;
-    };
-
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        if (tlIsRouteDomain(tlRegion)) {
-            tlRegion = RegionInfo::NullRegion();
-        } else {
-            if (phaseNeedsTraceStamp() && !tlRegion->IsTraceRegion()) {
-                tlRegion->SetTraceRegionFlag(1);
-            }
-            MAddress addr = tlRegion->Alloc(totalSize);
-            if (addr != 0) {
-                return addr;
-            }
+        GCPhase heapP = Heap::GetHeap().GetGCPhase();
+        if ((heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+             heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
+             heapP == GCPhase::GC_PHASE_FORWARD) &&
+            !tlRegion->IsTraceRegion()) {
+            tlRegion->SetTraceRegionFlag(1);
+        }
+        MAddress addr = tlRegion->Alloc(totalSize);
+        if (addr != 0) {
+            return addr;
+        }
 
-            // allocation failed because region is full.
-            CHECK(tlRegion->IsThreadLocalRegion());
-            {
-                manager.RemoveThreadLocalRegion(tlRegion);
-                manager.EnlistFullThreadLocalRegion(tlRegion);
-                tlRegion = RegionInfo::NullRegion();
-            }
+        // allocation failed because region is full.
+        CHECK(tlRegion->IsThreadLocalRegion());
+        {
+            manager.RemoveThreadLocalRegion(tlRegion);
+            manager.EnlistFullThreadLocalRegion(tlRegion);
+            tlRegion = RegionInfo::NullRegion();
         }
     }
 
