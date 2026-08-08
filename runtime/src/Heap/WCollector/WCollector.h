@@ -8,6 +8,8 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include "Common/ColourMask.h"
+#include <cstdlib>
+#include <cstring>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -309,6 +311,28 @@ protected:
                 currentRemapColour | currentMarkedYoung | currentMarkedOld);
         }
         return RefField<>(target, 0, 0, currentRemapColour | currentMarkedYoung | currentMarkedOld);
+    }
+
+    // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back
+    // keeps Phase C colour. Gate MRT_GCV2_PLAIN_ROOTS (default on); =0 restores colour-on-root.
+    static bool PlainRootsEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_PLAIN_ROOTS");
+            if (v == nullptr) {
+                return true;
+            }
+            return !(v[0] == '0' && v[1] == '\0');
+        }();
+        return on;
+    }
+
+    RefField<> RootSlotWriteback(BaseObject* target, const void* slot) const
+    {
+        if (PlainRootsEnabled() && !Heap::IsHeapAddress(slot)) {
+            return RefField<>(target);
+        }
+        return GetAndTryTagRefField(target);
     }
 
     void CollectLargeGarbage()

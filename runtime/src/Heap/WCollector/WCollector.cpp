@@ -636,7 +636,8 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         VerifyRoots::VerifyRootPayload(vctx, &field, latest);
     }
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
-    RefField<> newField = GetAndTryTagRefField(latest);
+    // plainroots: static root slots are non-heap → plain heal; matches rostatic (no colour into RO).
+    RefField<> newField = RootSlotWriteback(latest, &field);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
@@ -691,7 +692,8 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
             VerifyRoots::VerifyRootPayload(vctx, &ref, root);
         }
         CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-        RefField<> newField = GetAndTryTagRefField(root);
+        // plainroots: heal stack/reg roots to uncoloured load-good (ZGC ZUncoloredRoot).
+        RefField<> newField = RootSlotWriteback(root, &refField);
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
             DLOG(ENUM, "enum raw root @%p: %p(%zu)", &ref, root, root->GetSize());
         } else if (refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
@@ -893,8 +895,8 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
-        // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
-        RefField<> newField = GetAndTryTagRefField(toVersion);
+        // plainroots: non-heap root slots get plain toVersion; heap statics keep Phase C colour.
+        RefField<> newField = RootSlotWriteback(toVersion, &refField);
         // Skip CAS when value already matches (sibling shape :781-783) — lock cmpxchg
         // still writes the cache line and faults on RELRO even when expected==desired.
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
@@ -933,8 +935,8 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
             }
         }
     } else {
-        // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
-        RefField<> newField = GetAndTryTagRefField(oldObj);
+        // plainroots: non-heap root slots get plain; heap statics keep Phase C colour.
+        RefField<> newField = RootSlotWriteback(oldObj, &refField);
         // Skip CAS when value already matches (sibling shape :781-783).
         if (oldField.GetFieldValue() == newField.GetFieldValue()) {
             DLOG(FIX, "raw-ref @%p already current: %p", &root, oldObj);
@@ -1086,7 +1088,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
     }
-    // Phase C: write the current colour back, not a bare pointer.
+    // Phase C heap: write the current colour back, not a bare pointer.
+    // plainroots non-heap root slots: write plain latest (ZGC uncolored root heal).
     //
     // The old comment here read "Always write a plain pointer... Re-tagging a still-from survivor
     // as current recreates the next generation of one-gen-stale after Flip". That was true while a
@@ -1095,7 +1098,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     // survive the next flip's test, and writing a bare pointer would put back the very trust state
     // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
     // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
-    RefField<> newField(latest, 0, 0, currentRemapColour | currentMarkedYoung | currentMarkedOld);
+    RefField<> newField = RootSlotWriteback(latest, &field);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
@@ -2435,9 +2438,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         }
         return false;
     }
-    // Phase C: colour the write-back (same shape as FixOldTaggedRefField / GetAndTryTagRefField).
-    // Plain RefField<>(current) was the trust-state install that AssertColouredWriteIfEnabled fires on.
-    RefField<> newField = GetAndTryTagRefField(current);
+    // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
+    // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
+    RefField<> newField = RootSlotWriteback(current, &field);
     MAddress oldVal = raw(oldField.GetFieldValue());
     MAddress newVal = raw(newField.GetFieldValue());
     if (oldVal == newVal) {
