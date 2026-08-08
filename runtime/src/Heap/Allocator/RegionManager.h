@@ -561,6 +561,17 @@ public:
 
     void PrepareTrace()
     {
+        // posttrace: new concurrent mark — sticky isTraceRegion from prior cycle is
+        // no longer "out of this mark's route domain". Clear everywhere so ShouldEnqueue
+        // and CSet selection start clean; regions allocated during this TRACE get restamped.
+        recentFullRegionList.ClearTraceRegionFlag();
+        tlRegionList.ClearTraceRegionFlag();
+        unmovableFromRegionList.ClearTraceRegionFlag();
+        recentPinnedRegionList.ClearTraceRegionFlag();
+        oldPinnedRegionList.ClearTraceRegionFlag();
+        rawPointerPinnedRegionList.ClearTraceRegionFlag();
+        recentLargeRegionList.ClearTraceRegionFlag();
+        oldLargeRegionList.ClearTraceRegionFlag();
         fullTraceRegions.ActivateRegionCache();
         largeTraceRegions.ActivateRegionCache();
     }
