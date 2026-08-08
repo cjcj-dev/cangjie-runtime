@@ -799,19 +799,16 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         oldRegion = next;
     }
 
-    // posttrace 乙: isTraceRegion sticky ⇒ born after a mark wave that will not
-    // re-scan them before this cycle's route/evacuate. Exclude from this CSet
-    // (peer of pin free-list POST_TRACE refuse). Drop the sticky bit so the *next*
-    // minor/major can ClearLiveInfo+mark them; do not leave them stranded forever.
+    // posttrace 乙: isTraceRegion sticky ⇒ born after mark opened for a cycle that
+    // will not re-scan them before route. Exclude from this CSet (peer of pin
+    // free-list POST_TRACE refuse). Keep the bit until ClearLiveInfo (mark-cycle
+    // start on the path that actually selects the region — major AssembleSmall
+    // or a future PrepareYoung after something else cleared the bit). Do NOT clear
+    // here: clearing-on-skip let the next minor pull them into from with live0=0.
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        if (region->IsTraceRegion()) {
-            region->SetTraceRegionFlag(0);
+        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
             region = next;
             continue;
         }
@@ -829,12 +826,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        if (region->IsTraceRegion()) {
-            region->SetTraceRegionFlag(0);
+        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
             region = next;
             continue;
         }

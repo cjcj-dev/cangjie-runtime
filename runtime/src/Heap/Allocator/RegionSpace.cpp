@@ -165,8 +165,35 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         return AllocateRawPointerObject(totalSize);
     }
 
-    if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
+    // posttrace 甲: never bump into a region that is (or is becoming) this cycle's
+    // route domain. Peer of AllocPinnedFromFreeList POST_TRACE refuse
+    // (RegionManager.cpp:1821-1824 "preventing missing mark"). Forward/route can
+    // rebind tlRegion to to-space; if that region is still from/ghost/routing,
+    // a plain Alloc would place live objects with no survivor bits → null route.
+    auto tlUnsafeForMutatorAlloc = [](RegionInfo* r) -> bool {
+        if (r == nullptr || r == RegionInfo::NullRegion()) {
+            return true;
+        }
+        if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
+            return true;
+        }
+        RegionInfo::RouteState rs = r->GetRouteState();
+        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+            rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
+            rs == RegionInfo::RouteState::FORWARDED;
+    };
+
+    if (LIKELY(tlRegion != RegionInfo::NullRegion()) && !tlUnsafeForMutatorAlloc(tlRegion)) {
         addr = tlRegion->Alloc(totalSize);
+    } else if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && tlUnsafeForMutatorAlloc(tlRegion))) {
+        // Drop unsafe tl; AllocateImpl will enlist/replace.
+        RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        RegionManager& manager = theAllocator.GetRegionManager();
+        if (tlRegion->IsThreadLocalRegion()) {
+            manager.RemoveThreadLocalRegion(tlRegion);
+            manager.EnlistFullThreadLocalRegion(tlRegion);
+        }
+        tlRegion = RegionInfo::NullRegion();
     }
 
     if (UNLIKELY(addr == 0)) {
@@ -262,19 +289,40 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     RegionManager& manager = theAllocator.GetRegionManager();
 
+    auto tlUnsafeForMutatorAlloc = [](RegionInfo* r) -> bool {
+        if (r == nullptr || r == RegionInfo::NullRegion()) {
+            return true;
+        }
+        if (r->IsFromRegion() || r->IsLoneFromRegion() || r->IsGhostFromRegion()) {
+            return true;
+        }
+        RegionInfo::RouteState rs = r->GetRouteState();
+        return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+            rs == RegionInfo::RouteState::ROUTED || rs == RegionInfo::RouteState::COMPACTED ||
+            rs == RegionInfo::RouteState::FORWARDED;
+    };
+
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        MAddress addr = tlRegion->Alloc(totalSize);
-        if (addr != 0) {
-            return addr;
-        }
-
-        // allocation failed because region is full.
-        CHECK(tlRegion->IsThreadLocalRegion());
-        {
-            manager.RemoveThreadLocalRegion(tlRegion);
-            manager.EnlistFullThreadLocalRegion(tlRegion);
+        if (tlUnsafeForMutatorAlloc(tlRegion)) {
+            if (tlRegion->IsThreadLocalRegion()) {
+                manager.RemoveThreadLocalRegion(tlRegion);
+                manager.EnlistFullThreadLocalRegion(tlRegion);
+            }
             tlRegion = RegionInfo::NullRegion();
+        } else {
+            MAddress addr = tlRegion->Alloc(totalSize);
+            if (addr != 0) {
+                return addr;
+            }
+
+            // allocation failed because region is full.
+            CHECK(tlRegion->IsThreadLocalRegion());
+            {
+                manager.RemoveThreadLocalRegion(tlRegion);
+                manager.EnlistFullThreadLocalRegion(tlRegion);
+                tlRegion = RegionInfo::NullRegion();
+            }
         }
     }
 
