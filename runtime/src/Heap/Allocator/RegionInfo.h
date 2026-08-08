@@ -30,6 +30,7 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "securec.h"
@@ -845,11 +846,15 @@ public:
                             liveMarked = curLive->IsSurvivedObject(offset);
                         }
                         regionMarked = IsSurvivedObject(offset);
+                        // marklate: allocation-phase side table (no TLS).
+                        AllocPhaseDiag::Lookup ap = AllocPhaseDiag::Find(fromObj);
                         LOG(RTLOG_ERROR,
                             "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
                             "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
-                            "type=%u oob=%u allocOff=%zu nearEnd=%u",
+                            "type=%u oob=%u allocOff=%zu nearEnd=%u "
+                            "allocPhaseFound=%u allocMutPhase=%u(%s) allocHeapPhase=%u(%s) "
+                            "allocInMarkNew=%u",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
                             static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
                             static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
@@ -859,7 +864,13 @@ public:
                             static_cast<unsigned>(GetRegionType()),
                             static_cast<unsigned>(offset >= bitCover && bitCover > 0),
                             allocOff,
-                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz));
+                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
+                            static_cast<unsigned>(ap.found),
+                            static_cast<unsigned>(ap.mutatorPhase),
+                            AllocPhaseDiag::PhaseName(ap.mutatorPhase),
+                            static_cast<unsigned>(ap.heapPhase),
+                            AllocPhaseDiag::PhaseName(ap.heapPhase),
+                            static_cast<unsigned>(ap.found && AllocPhaseDiag::IsMarkNewPhase(ap.mutatorPhase)));
                     }
                 }
             }
