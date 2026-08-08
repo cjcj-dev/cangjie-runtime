@@ -321,9 +321,9 @@ void MutatorManager::RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, b
 
 void MutatorManager::RecordEpochHandshakeStackScan(bool scanned, size_t frames)
 {
+    epochHandshakeStackFrames.fetch_add(frames, std::memory_order_relaxed);
     if (scanned) {
         epochHandshakeStackScanned.fetch_add(1, std::memory_order_relaxed);
-        epochHandshakeStackFrames.fetch_add(frames, std::memory_order_relaxed);
     } else {
         epochHandshakeStackFallback.fetch_add(1, std::memory_order_relaxed);
     }
@@ -442,6 +442,7 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
     }
 
     uint64_t waitStart = TimeUtil::MilliSeconds();
+    bool runningMutatorsHadSelfOpportunity = false;
     // K-bound: timeout is the exit condition (ForwardBarrier.cpp:23-24 discipline).
     // Wait set is fixed at snapshot; born-clean joiners never enlarge it.
     while (!pending.empty()) {
@@ -451,7 +452,8 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
                 it = pending.erase(it);
                 continue;
             }
-            if (mutator->CanGcAssistEpochHandshake()) {
+            bool running = mutator->GetEpochHandshakeLifecycle() == Mutator::EPOCH_HANDSHAKE_RUNNING;
+            if (mutator->CanGcAssistEpochHandshake() && (!running || runningMutatorsHadSelfOpportunity)) {
                 (void)mutator->AcknowledgeEpochHandshake(stats.epoch, false);
             }
             ++it;
@@ -467,6 +469,12 @@ EpochHandshakeStats MutatorManager::RunEpochHandshake(const char* source)
             CHECK_DETAIL(false, "epoch handshake timed out");
         }
         if (!pending.empty()) {
+            // A mutator released from the S1/S3/S5 pause is briefly still in a
+            // saferegion. Give RUNNING participants one scheduling opportunity
+            // to take the SELF claim before treating that transient state as a
+            // GC-assistable parked stack. Non-running lifecycle states remain
+            // immediately assistable above.
+            runningMutatorsHadSelfOpportunity = true;
             (void)sched_yield();
         }
     }
