@@ -754,10 +754,6 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 
 void RegionManager::AssembleSmallGarbageCandidates()
 {
-    // posttrace 乙: sticky isTraceRegion means "born after previous mark opened".
-    // Assemble runs at the *start* of a new mark cycle, so those regions are now
-    // ordinary candidates — drop the sticky bit via ClearLiveInfo after merge.
-    // (Mid-cycle exclusion is PrepareYoung + not clearing the bit on Enlist/HandleTrace.)
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
@@ -799,14 +795,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         oldRegion = next;
     }
 
-    // posttrace 乙: isTraceRegion ⇒ after-mark-window allocs with no route bits.
-    // Exclude from this minor CSet. Do NOT clear the bit here — clear-on-skip let
-    // the next minor re-admit with live0=0 (clearTraceCnt≥1 samples). Bit clears
-    // only in ClearLiveInfo (major AssembleSmall / selected candidate path).
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
+        if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
@@ -824,7 +816,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
+        if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
@@ -1420,16 +1412,8 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
-            // posttrace 乙: stamp isTraceRegion for every phase after mark has opened
-            // (TRACE..FORWARD). Sibling rule: AllocPinnedFromFreeList refuses POST_TRACE
-            // free-list reuse ("preventing missing mark", RegionManager.cpp:1821-1824).
-            // MOVEABLE bump had no peer guard — objects allocated here have no mark bits
-            // for this cycle's route domain (GetRoute/liveInfo0). Flag means "exclude from
-            // this cycle's from/route"; cleared only at next mark start (ClearLiveInfo).
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER ||
-                phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
+            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);

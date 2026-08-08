@@ -1046,10 +1046,6 @@ public:
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         metadata.retainedLiveInfoCoveredUpTo = 0;
-        // posttrace 乙: mark-cycle start is the only place that clears isTraceRegion.
-        // Region was excluded from the previous cycle's route domain; it is now a normal
-        // candidate for the cycle that ClearLiveInfo is opening.
-        SetTraceRegionFlag(0);
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
