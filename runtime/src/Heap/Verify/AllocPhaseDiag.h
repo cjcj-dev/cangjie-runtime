@@ -10,8 +10,9 @@
 // marklate: record mutator GC phase at allocation for null-route samples.
 // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). No TLS.
 //
-// Design: per-region *last allocation* stamp (not every object). Target shape from
-// deadedge is region-end last object — a full object table is thrased under ALOT.
+// Live stamp: per-region last allocation (monotonic).
+// Frozen stamp: snapshot at PrepareForwardableRegion — survives region reuse so
+// GetRoute on ghost FROM still sees the phase of the generation under evacuation.
 
 #include <atomic>
 #include <cstdint>
@@ -22,20 +23,23 @@
 namespace MapleRuntime {
 namespace AllocPhaseDiag {
 
-// ~16k region slots; overwrite on collision (diag only).
 constexpr size_t kCap = 1u << 14;
 constexpr size_t kMask = kCap - 1;
 
-struct RegionLast {
-    std::atomic<uintptr_t> regionStart; // 0 = empty
-    std::atomic<uintptr_t> lastObj;
-    std::atomic<uint8_t> mutatorPhase;
-    std::atomic<uint8_t> heapPhase;
-    std::atomic<uint32_t> seq; // monotonic bump per update
+struct Slot {
+    std::atomic<uintptr_t> regionStart{ 0 };
+    // live (mutator updates)
+    std::atomic<uintptr_t> lastObj{ 0 };
+    std::atomic<uint8_t> mutatorPhase{ 0 };
+    std::atomic<uint8_t> heapPhase{ 0 };
+    // frozen at PrepareForwardableRegion
+    std::atomic<uintptr_t> frozenLastObj{ 0 };
+    std::atomic<uint8_t> frozenMut{ 0 };
+    std::atomic<uint8_t> frozenHeap{ 0 };
+    std::atomic<uint8_t> frozenValid{ 0 };
 };
 
-inline RegionLast g_table[kCap] = {};
-inline std::atomic<size_t> g_records{ 0 };
+inline Slot g_table[kCap] = {};
 
 inline bool Enabled()
 {
@@ -84,74 +88,108 @@ inline bool IsMarkNewPhase(uint8_t p)
 
 inline size_t HashRegion(uintptr_t regionStart)
 {
-    uintptr_t x = regionStart >> 16; // region typically 64KiB
+    uintptr_t x = regionStart >> 16;
     x ^= x >> 17;
     x *= 0x9e3779b97f4a7c15ull;
     return static_cast<size_t>(x) & kMask;
 }
 
-// regionStart: base of the region; obj: allocated object address.
+inline Slot* FindSlot(uintptr_t regionStart, bool create)
+{
+    size_t i = HashRegion(regionStart);
+    for (size_t n = 0; n < 8; ++n) {
+        size_t idx = (i + n) & kMask;
+        Slot& e = g_table[idx];
+        uintptr_t expected = 0;
+        if (e.regionStart.compare_exchange_strong(expected, regionStart, std::memory_order_release,
+                                                  std::memory_order_relaxed) ||
+            expected == regionStart || e.regionStart.load(std::memory_order_acquire) == regionStart) {
+            return &e;
+        }
+        if (!create) {
+            continue;
+        }
+    }
+    if (!create) {
+        return nullptr;
+    }
+    Slot& e = g_table[i];
+    e.regionStart.store(regionStart, std::memory_order_release);
+    return &e;
+}
+
 inline void Record(void* obj, uintptr_t regionStart, uint8_t mutatorPhase, uint8_t heapPhase)
 {
     if (obj == nullptr || regionStart == 0 || !Enabled()) {
         return;
     }
+    Slot* e = FindSlot(regionStart, true);
+    if (e == nullptr) {
+        return;
+    }
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
-    size_t i = HashRegion(regionStart);
-    for (size_t n = 0; n < 8; ++n) {
-        size_t idx = (i + n) & kMask;
-        uintptr_t expected = 0;
-        RegionLast& e = g_table[idx];
-        if (e.regionStart.compare_exchange_strong(expected, regionStart, std::memory_order_release,
-                                                  std::memory_order_relaxed) ||
-            expected == regionStart) {
-            e.lastObj.store(addr, std::memory_order_release);
-            e.mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-            e.heapPhase.store(heapPhase, std::memory_order_relaxed);
-            e.seq.fetch_add(1, std::memory_order_relaxed);
-            g_records.fetch_add(1, std::memory_order_relaxed);
+    e->lastObj.store(addr, std::memory_order_release);
+    e->mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
+    e->heapPhase.store(heapPhase, std::memory_order_relaxed);
+}
+
+// Call from PrepareForwardableRegion: freeze live stamp for this generation.
+inline void FreezeRegion(uintptr_t regionStart)
+{
+    if (regionStart == 0 || !Enabled()) {
+        return;
+    }
+    Slot* e = FindSlot(regionStart, false);
+    if (e == nullptr) {
+        // still create empty frozen so Find reports found=0 clearly
+        e = FindSlot(regionStart, true);
+        if (e == nullptr) {
             return;
         }
+        e->frozenValid.store(0, std::memory_order_release);
+        return;
     }
-    // probe exhausted: overwrite home
-    RegionLast& e = g_table[i];
-    e.regionStart.store(regionStart, std::memory_order_release);
-    e.lastObj.store(addr, std::memory_order_release);
-    e.mutatorPhase.store(mutatorPhase, std::memory_order_relaxed);
-    e.heapPhase.store(heapPhase, std::memory_order_relaxed);
-    e.seq.fetch_add(1, std::memory_order_relaxed);
+    e->frozenLastObj.store(e->lastObj.load(std::memory_order_acquire), std::memory_order_release);
+    e->frozenMut.store(e->mutatorPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    e->frozenHeap.store(e->heapPhase.load(std::memory_order_relaxed), std::memory_order_relaxed);
+    e->frozenValid.store(1, std::memory_order_release);
 }
 
 struct Lookup {
     bool found = false;
     bool isRegionLast = false;
+    bool usedFrozen = false;
     uint8_t mutatorPhase = 0;
     uint8_t heapPhase = 0;
     uintptr_t lastObj = 0;
 };
 
-// Prefer exact match against region's lastObj (target is region-end last alloc).
+// Prefer frozen stamp (ghost generation); fall back to live.
 inline Lookup Find(void* obj, uintptr_t regionStart)
 {
     Lookup r;
     if (obj == nullptr || !Enabled()) {
         return r;
     }
+    Slot* e = FindSlot(regionStart, false);
+    if (e == nullptr) {
+        return r;
+    }
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
-    size_t i = HashRegion(regionStart);
-    for (size_t n = 0; n < 8; ++n) {
-        size_t idx = (i + n) & kMask;
-        RegionLast& e = g_table[idx];
-        if (e.regionStart.load(std::memory_order_acquire) != regionStart) {
-            continue;
-        }
-        r.lastObj = e.lastObj.load(std::memory_order_acquire);
-        r.mutatorPhase = e.mutatorPhase.load(std::memory_order_relaxed);
-        r.heapPhase = e.heapPhase.load(std::memory_order_relaxed);
+    if (e->frozenValid.load(std::memory_order_acquire) != 0) {
+        r.usedFrozen = true;
+        r.lastObj = e->frozenLastObj.load(std::memory_order_acquire);
+        r.mutatorPhase = e->frozenMut.load(std::memory_order_relaxed);
+        r.heapPhase = e->frozenHeap.load(std::memory_order_relaxed);
         r.found = true;
         r.isRegionLast = (r.lastObj == addr);
         return r;
     }
+    r.lastObj = e->lastObj.load(std::memory_order_acquire);
+    r.mutatorPhase = e->mutatorPhase.load(std::memory_order_relaxed);
+    r.heapPhase = e->heapPhase.load(std::memory_order_relaxed);
+    r.found = (r.lastObj != 0);
+    r.isRegionLast = (r.lastObj == addr);
     return r;
 }
 

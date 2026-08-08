@@ -854,8 +854,9 @@ public:
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
                             "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
                             "type=%u oob=%u allocOff=%zu nearEnd=%u "
-                            "allocPhaseFound=%u isRegionLast=%u allocMutPhase=%u(%s) "
-                            "allocHeapPhase=%u(%s) allocInMarkNew=%u lastObj=%#zx",
+                            "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u "
+                            "allocMutPhase=%u(%s) allocHeapPhase=%u(%s) allocInMarkNew=%u "
+                            "lastObj=%#zx",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
                             static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
                             static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
@@ -868,6 +869,7 @@ public:
                             static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
                             static_cast<unsigned>(ap.found),
                             static_cast<unsigned>(ap.isRegionLast),
+                            static_cast<unsigned>(ap.usedFrozen),
                             static_cast<unsigned>(ap.mutatorPhase),
                             AllocPhaseDiag::PhaseName(ap.mutatorPhase),
                             static_cast<unsigned>(ap.heapPhase),
@@ -892,6 +894,8 @@ public:
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
+        // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
+        AllocPhaseDiag::FreezeRegion(GetRegionStart());
         metadata.routeState = FORWARDABLE;
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
