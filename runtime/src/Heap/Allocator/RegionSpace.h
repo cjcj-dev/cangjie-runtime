@@ -215,15 +215,8 @@ public:
     static bool ShouldEnqueue(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        // posttrace: isTraceRegion is sticky across POST_TRACE for CSet exclude.
-        // Implicit-black (skip enqueue) is only valid while concurrent mark still
-        // runs (TRACE / CLEAR_SATB). After that, sticky flag must not hide objects
-        // from a later major's mark (would SEGV on unmarked live).
         if (regionInfo->IsTraceRegion()) {
-            GCPhase p = Heap::GetHeap().GetGCPhase();
-            if (p == GCPhase::GC_PHASE_TRACE || p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-                return false;
-            }
+            return false;
         }
         size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
         if (regionInfo->IsMarkedObject(offset)) {

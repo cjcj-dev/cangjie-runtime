@@ -561,12 +561,13 @@ public:
 
     void PrepareTrace()
     {
-        // posttrace: new concurrent mark — sticky isTraceRegion from prior cycle is
-        // no longer "out of this mark's route domain". Clear everywhere so ShouldEnqueue
-        // and CSet selection start clean; regions allocated during this TRACE get restamped.
+        // posttrace: drop sticky isTraceRegion before concurrent mark opens so
+        // ShouldEnqueue does not treat prior-cycle post-mark regions as implicit black.
+        // New TRACE allocs re-stamp via AllocateThreadLocalRegion / AllocLarge / pinned.
         recentFullRegionList.ClearTraceRegionFlag();
         tlRegionList.ClearTraceRegionFlag();
         unmovableFromRegionList.ClearTraceRegionFlag();
+        fromRegionList.ClearTraceRegionFlag();
         recentPinnedRegionList.ClearTraceRegionFlag();
         oldPinnedRegionList.ClearTraceRegionFlag();
         rawPointerPinnedRegionList.ClearTraceRegionFlag();
