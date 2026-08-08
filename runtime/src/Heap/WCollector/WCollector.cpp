@@ -636,8 +636,9 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         VerifyRoots::VerifyRootPayload(vctx, &field, latest);
     }
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
-    // plainroots: static root slots are non-heap → plain heal; matches rostatic (no colour into RO).
-    RefField<> newField = RootSlotWriteback(latest, &field);
+    // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
+    // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
+    RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
@@ -656,8 +657,11 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
     RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
     RefField<> oldField(refField);
     // E-class = !IsOldPointer (zc9fix). Fast path stays is_mark_good (zc7fix colour-era).
-    CHECK_DETAIL(!IsOldPointer(oldField),
-                 "EnumAndTagRawRoot failed: Invalid root: %zx", raw(oldField.GetFieldValue()));
+    // plainroots: non-heap root slots may still hold one-gen-stale colour until plain-heal below.
+    if (!(PlainRootsEnabled() && !Heap::IsHeapAddress(&refField))) {
+        CHECK_DETAIL(!IsOldPointer(oldField),
+                     "EnumAndTagRawRoot failed: Invalid root: %zx", raw(oldField.GetFieldValue()));
+    }
     if (is_mark_good(oldField)) {
         // Anchor main 921e890e67353a8425b5466342f4522bcca4f967
         BaseObject* root = to_object(oldField.GetTargetObject());
@@ -873,8 +877,11 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                     static_cast<unsigned>(currentTagID));
             }
         }
-        CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
-                     raw(oldField.GetFieldValue()));
+        // plainroots: allow old colour on non-heap roots; heal to plain below.
+        if (!(PlainRootsEnabled() && !Heap::IsHeapAddress(&refField))) {
+            CHECK_DETAIL(oldInv, "ForwardUpdateRawRef failed: Invalid object: %zx",
+                         raw(oldField.GetFieldValue()));
+        }
     }
     // Static / RO slots (e.g. .data.rel.ro under GNU_RELRO) hold non-heap objects that
     // are never evacuated. Colouring or CAS into those pages faults; skip write-back.
