@@ -799,16 +799,20 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
         oldRegion = next;
     }
 
-    // posttrace 乙: isTraceRegion sticky ⇒ born after mark opened for a cycle that
-    // will not re-scan them before route. Exclude from this CSet (peer of pin
-    // free-list POST_TRACE refuse). Keep the bit until ClearLiveInfo (mark-cycle
-    // start on the path that actually selects the region — major AssembleSmall
-    // or a future PrepareYoung after something else cleared the bit). Do NOT clear
-    // here: clearing-on-skip let the next minor pull them into from with live0=0.
+    // posttrace 乙: isTraceRegion ⇒ objects placed after mark opened for a cycle
+    // that will not paint route bits for them. Exclude from *this* CSet (peer of pin
+    // free-list POST_TRACE refuse). Drop sticky so the *next* PrepareYoung can admit
+    // and ClearLiveInfo+mark them. PrepareYoung itself is the start of a new young
+    // mark cycle (phase is often CLEAR_SATB, not IDLE) — always clear on skip.
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        if (region->IsTraceRegion()) {
+            region->SetTraceRegionFlag(0);
             region = next;
             continue;
         }
@@ -826,7 +830,12 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsTraceRegion()) {
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        if (region->IsTraceRegion()) {
+            region->SetTraceRegionFlag(0);
             region = next;
             continue;
         }
