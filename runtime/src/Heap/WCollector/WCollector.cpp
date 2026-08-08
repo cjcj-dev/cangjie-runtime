@@ -3879,7 +3879,26 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
+    // GetRoute survivor gate (14ebdb28 / RegionInfo.h:793-800): non-route-domain
+    // inputs return nullptr by design. That is not a corrupt route table — it is
+    // the observable negative for "not a survivor under ghost liveInfo0".
+    // Aborting here (CHECK toObj) converts a soft miss into SIGABRT under ALOT.
+    // Match the PlausibleManagedObjectGate arm above: unlock NORMAL, return null.
+    // Callers (ForwardObject / FixMinor / barriers) already treat null as miss.
+    if (toObj == nullptr) {
+        static std::atomic<size_t> g_nullRouteExclusive{ 0 };
+        size_t n = g_nullRouteExclusive.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            LOG(RTLOG_ERROR,
+                "[GCV2][null-route] exclusive obj=%p tip=%p size=%zu ghost=%p routeState=%u "
+                "n=%zu (unlock NORMAL; not FORWARDED)",
+                obj, obj->GetTypeInfo(), size, ghost,
+                ghost == nullptr ? 255U : static_cast<unsigned>(ghost->GetRouteState()), n);
+        }
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
