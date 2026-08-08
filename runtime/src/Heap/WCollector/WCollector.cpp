@@ -2022,7 +2022,16 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         RefField<>& field = reinterpret_cast<RefField<>&>(root);
-        visitor(ResolveMinorReference(field));
+        BaseObject* obj = ResolveMinorReference(field);
+        if (obj != nullptr && Heap::IsHeapAddress(obj) &&
+            !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr) {
+                visitor(host);
+            }
+            return;
+        }
+        visitor(obj);
     };
     RefFieldVisitor fieldVisitor = [this, &visitor](RefField<>& field) { visitor(ResolveMinorReference(field)); };
     VisitMinorRootSlots(rawRootVisitor, fieldVisitor, stackScanEpoch);
@@ -2034,8 +2043,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     if (!Heap::IsHeapAddress(object)) {
         return;
     }
-    // markfloor: interiors pass IsValidObject (tip=length≠null); reject before header walk.
+    // markfloor / introot: interiors (RawArray+8) pass IsValidObject (tip=length≠null).
+    // Recover host object so the live array is marked; do not push the interior itself.
     if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(object);
+        if (host != nullptr && host != object) {
+            PushYoungObject(host, workStack, origin);
+        }
         return;
     }
     if (!object->IsValidObject()) {
@@ -2146,9 +2160,13 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         if (!Heap::IsHeapAddress(object)) {
             continue;
         }
-        // markfloor: RawArray+8 interiors pass IsValidObject (tip=length≠null) then
-        // HasRefField/GetSize SEGV. Skip before IsValidObject CHECK.
+        // markfloor / introot: RawArray+8 interiors pass IsValidObject (tip=length≠null)
+        // then HasRefField/GetSize SEGV. Recover host; skip interior itself.
         if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object) {
+                workStack.push_back(host);
+            }
             continue;
         }
         CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);

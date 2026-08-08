@@ -108,7 +108,17 @@ BaseObject* RecoverInteriorBaseImpl(BaseObject* obj)
     if (off == 0) {
         return nullptr;
     }
-    return reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(obj) - off);
+    auto* base = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(obj) - off);
+    if (PlausibleObjGateAccountOn()) {
+        static std::atomic<size_t> g_recoverSample{ 0 };
+        size_t s = g_recoverSample.fetch_add(1, std::memory_order_relaxed);
+        if (s < 16) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][introot-recover] interior=%p off=%u host=%p hostTip=%p",
+                obj, off, base, base->GetTypeInfo());
+        }
+    }
+    return base;
 }
 
 unsigned SiteBucket(const char* site)
