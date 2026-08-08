@@ -14,6 +14,7 @@
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
 #include "Common/StateWord.h"
+#include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 
@@ -174,6 +175,30 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                     "ra0=%p ra1=%p ra2=%p",
                     site, obj, n, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
                     __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+            }
+        }
+        return false;
+    }
+    // sizeguard: work stack may hold a pointer into a FREE/GARBAGE region whose payload
+    // still looks like a valid object (stale tip ⇒ plausible GetSize, but obj+size crosses
+    // regionEnd). Reject before MarkObject/GetSize. Observed: regionType=0 allocPtr=start
+    // bitIdx=510/511 objSize=24 under concurrent stack scan.
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+        region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+        size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+        g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+        if (PlausibleObjGateAccountOn()) {
+            size_t s = g_plausibleObjGateSample.fetch_add(1, std::memory_order_relaxed);
+            if (s < 48) {
+                GCPhase phase = Heap::GetHeap().GetGCPhase();
+                unsigned rtype = region == nullptr ? 255U : static_cast<unsigned>(region->GetRegionType());
+                LOG(RTLOG_ERROR,
+                    "[GCV2][markfloor-obj-gate] REJECT site=%s obj=%p reason=dead-region n=%zu "
+                    "region=%p regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
+                    site, obj, n, region, rtype, Collector::GetGCPhaseName(phase),
+                    static_cast<unsigned>(phase), __builtin_return_address(0),
+                    __builtin_return_address(1), __builtin_return_address(2));
             }
         }
         return false;

@@ -158,6 +158,8 @@ public:
 
     // markfloor: reject heap interiors (e.g. RawArray+8 / &length) whose first word is a
     // small integer or non-TypeInfo, before GetSize/HasRefField dereference the tip.
+    // sizeguard: also reject addresses in FREE/GARBAGE regions (stale payload may still
+    // look like a TypeInfo tip and trip INVALID_OBJECT_SIZE at MarkObject).
     // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
     static void ReportPlausibleManagedObjectGateCounts();
