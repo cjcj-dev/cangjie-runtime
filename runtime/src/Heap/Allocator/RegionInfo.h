@@ -32,6 +32,7 @@
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
+#include "Heap/Verify/NullRouteCaller.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -849,7 +850,7 @@ public:
                             "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
                             "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
                             "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
-                            "type=%u oob=%u allocOff=%zu nearEnd=%u",
+                            "type=%u oob=%u allocOff=%zu nearEnd=%u caller=%s",
                             n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
                             static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
                             static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
@@ -859,7 +860,8 @@ public:
                             static_cast<unsigned>(GetRegionType()),
                             static_cast<unsigned>(offset >= bitCover && bitCover > 0),
                             allocOff,
-                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz));
+                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
+                            NullRouteCaller::Current());
                     }
                 }
             }

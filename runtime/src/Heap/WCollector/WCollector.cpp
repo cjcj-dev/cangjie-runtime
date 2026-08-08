@@ -43,6 +43,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/NullRouteCaller.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -390,6 +391,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
     if (oldRef.IsTagged()) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
+            NullRouteCaller::ScopedTag _nrTag("TryUpdateRefField");
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
             toObj = FindToVersion(fromObj);
@@ -834,6 +836,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     if (!Collector::PlausibleManagedObjectGate("ForwardUpdateRawRef", oldObj)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(oldObj);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            NullRouteCaller::ScopedTag _nrTag("ForwardUpdateRawRef");
             BaseObject* toHost = TryForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
@@ -847,6 +850,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
+        NullRouteCaller::ScopedTag _nrTag("ForwardUpdateRawRef");
         BaseObject* toVersion = TryForwardObject(oldObj);
         CHECK(toVersion != nullptr);
         HealRoot(root, from_object(toVersion));
@@ -890,10 +894,12 @@ void WCollector::PreforwardDiscoveredExternObjects()
         BaseObject* exportObj = it->first;
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
+            NullRouteCaller::ScopedTag _nrTag("PreforwardDiscoveredExtern");
             latest = ForwardObject(exportObj);
         }
         for (auto &externObj : it->second) {
             if (IsGhostFromObject(externObj) && !IsUnmovableFromObject(externObj)) {
+                NullRouteCaller::ScopedTag _nrTag("PreforwardDiscoveredExtern");
                 BaseObject* toObj = ForwardObject(externObj);
                 externObj = toObj;
             }
@@ -919,6 +925,7 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         BaseObject* exportObj = *it;
         BaseObject* latest = exportObj;
         if (IsGhostFromObject(exportObj) && !IsUnmovableFromObject(exportObj)) {
+            NullRouteCaller::ScopedTag _nrTag("PreforwardResurrectExport");
             latest = ForwardObject(exportObj);
         }
         if (latest != exportObj) {
@@ -2385,6 +2392,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
@@ -2409,6 +2417,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
@@ -2459,6 +2468,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
@@ -2473,6 +2483,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
@@ -2557,6 +2568,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     };
     auto currentObject = [this](BaseObject* object) {
         if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
+            NullRouteCaller::ScopedTag _nrTag("EvacuateYoungRegions");
             return ForwardObject(object);
         }
         return object;
