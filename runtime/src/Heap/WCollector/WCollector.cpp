@@ -3914,15 +3914,12 @@ void WCollector::DoYoungGarbageCollection()
         }, stackScanEpoch);
     }
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
-    // Default ON. MRT_GCV2_YOUNG_CONC_MARK=0 keeps mark_closure inside the existing STW
-    // (A/B arm). Reuses major TRACE barrier + SATB; no second barrier family.
-    // STW1 = prepare + remset drain + root enum; STW2 = post-mark verify + evacuate.
+    // Default OFF until STW2 remset/root fixpoint is checksum-clean (see REPORT-youngconc).
+    // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
+    // STW1 = prepare + remset drain + root enum; STW2 = concurrent remset drain + re-enum + evacuate.
     static const bool youngConcMark = []() {
         const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
-        if (v != nullptr && std::strcmp(v, "0") == 0) {
-            return false;
-        }
-        return true;
+        return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     if (youngConcMark && stw != nullptr) {
         // Publish TRACE while mutators are still stopped so resume sees TraceBarrier/SATB.
