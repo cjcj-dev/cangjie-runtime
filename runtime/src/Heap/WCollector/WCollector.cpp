@@ -3966,18 +3966,24 @@ void WCollector::DoYoungGarbageCollection()
                                          weakSlots, useBitmapLedger),
                      "young concurrent mark SATB not cleared");
         // STW2: freeze world for post-mark verify + evacuate (still STW today).
-        stw = std::make_unique<ScopedStopTheWorld>("young post-mark", false);
+        // youngmiss2 §1①: sync CLEAR_SATB so every mutator HandleGCPhase flushes its current
+        // satbNode into retiredNodes (GetRetiredObjects only pops retired — in-flight node is
+        // otherwise invisible). Same shape as MarkSatbBuffer timeout STW.
+        stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
+                                                   GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
         // youngmiss: concurrent-window remset edges are NEW greys. Under FYS, RescanRememberedSet
         // filters by reachableSlots (slots visited during the concurrent mark wave). A slot written
         // after its holder was scanned is often absent from that set, so the edge was silently
         // dropped — both from the mark workstack and from liveRememberedSlots (evac fixup).
         // Fix: (1) rescan concurrent remset with fullYoungScan=false (retained/liveness filter only);
         // (2) force-admit those slots into reachableSlots for the evacuate ledger;
-        // (3) fixpoint remset+roots+satb until quiet (single pass left residual greys).
+        // (3) fixpoint remset+roots+satb until quiet (single pass left residual greys);
+        // (4) youngmiss2: rescan reachableVec fields for unmarked young (young→young, not remset).
         {
             MRT_PHASE_TIMER("young.stw2_fixpoint");
             constexpr size_t kMaxStw2Iters = 8;
             size_t totalConcRemset = 0;
+            size_t totalFieldExtra = 0;
             size_t iters = 0;
             for (; iters < kMaxStw2Iters; ++iters) {
                 const size_t reachableBefore = reachableVec.size();
@@ -4108,6 +4114,7 @@ void WCollector::DoYoungGarbageCollection()
                         });
                     }
                     fieldExtraN = fieldExtra.size();
+                    totalFieldExtra += fieldExtraN;
                     if (!fieldExtra.empty()) {
                         TraceYoungClosure(fieldExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
                                           weakSlots, useBitmapLedger);
@@ -4119,8 +4126,15 @@ void WCollector::DoYoungGarbageCollection()
                 }
             }
             VLOG(REPORT,
-                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu reachable=%zu", iters + 1,
-                 totalConcRemset, reachableVec.size());
+                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu field_extra_total=%zu "
+                 "reachable=%zu",
+                 iters + 1, totalConcRemset, totalFieldExtra, reachableVec.size());
+            if (iters + 1 >= kMaxStw2Iters) {
+                VLOG(REPORT,
+                     "[GCV2][youngconc] stw2_fixpoint NON_CONVERGED max_iters=%zu reachable=%zu "
+                     "conc_remset_total=%zu field_extra_total=%zu",
+                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra);
+            }
         }
         // Rebuild liveRememberedSlots after concurrent remset merge (evac uses this set).
         liveRememberedSlots.clear();
