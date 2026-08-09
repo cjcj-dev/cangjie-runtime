@@ -2903,6 +2903,10 @@ void WCollector::FixMinorRootSlots()
 
 void WCollector::FixMinorObjectSlots(BaseObject* object)
 {
+    // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
+    if (object == nullptr || !object->IsValidObject()) {
+        return;
+    }
     if (!object->HasRefField()) {
         return;
     }
@@ -4407,14 +4411,21 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     }
 
     if (fwdTable.RouteRegion(region)) {
-        if (region->TryLockReadFromRegion()) {
-            BaseObject* toVersion = ForwardObjectImpl(obj, region);
-            region->UnlockReadFromRegion();
-            return toVersion;
-        } else {
-            return FindToVersion(obj);
+        // secondclass ①: GetRoute is geometric plan; wait FORWARDED or read-lock
+        // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
+        for (;;) {
+            if (region->TryLockReadFromRegion()) {
+                BaseObject* toVersion = ForwardObjectImpl(obj, region);
+                region->UnlockReadFromRegion();
+                return toVersion;
+            }
+            if (obj->IsForwarded()) {
+                return FindToVersion(obj);
+            }
+            sched_yield();
         }
     } else if (region->IsCompacted()) {
+        // Compact copies under region write-lock before COMPACTED is published.
         return FindToVersion(obj);
     }
     return nullptr;
