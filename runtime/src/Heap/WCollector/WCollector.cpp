@@ -1761,8 +1761,13 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
             return;
         }
     }
-    // Mark current liveInfo (post-snapshot: same pointer as liveInfo0).
+    // Mark current liveInfo (post-snapshot: same pointer as liveInfo0 when non-null).
     (void)collector->MarkObject(obj);
+    // If ghost face was null (snapshot of empty liveInfo), bind freshly allocated liveInfo
+    // so GetRoute's liveInfo0!=null gate opens on the bits we just painted.
+    if (isGhost) {
+        region->BindLiveInfo0FromLiveIfNull();
+    }
     LiveInfo* live = region->GetLiveInfo();
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
     if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
@@ -1774,7 +1779,18 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
             (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
         }
     }
-    g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
+    // Re-check: grant only counts if GetRoute face now accepts (positive control truth).
+    ghost = region->GetLiveInfo0ForProbe();
+    if (isGhost) {
+        if (ghost != nullptr && ghost->IsSurvivedObject(offset)) {
+            g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        // pre-snapshot from: paint lands on liveInfo; PrepareForwardable will copy pointer.
+        g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 } // namespace
 
@@ -3240,13 +3256,20 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         // installdomain: serial pre-grant while every from region is still FORWARDABLE.
         // Must finish before any Fix/Forward can RouteRegion→ROUTED (else liveByteCount
-        // geometry freezes without the late survivor). Walk remset + reachable holders.
+        // geometry freezes without the late survivor). Walk remset + reachable + roots
+        // (same surface as fixForwardedReferences) and also grant the holder itself.
         {
-            auto ensureField = [this](RefField<>& field) {
-                RefField<> value(field);
-                BaseObject* t = to_object(value.GetTargetObject());
+            auto ensureObj = [this](BaseObject* t) {
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
             };
+            auto ensureField = [&ensureObj](RefField<>& field) {
+                RefField<> value(field);
+                ensureObj(to_object(value.GetTargetObject()));
+            };
+            // Holders first (currentObject will ForwardObject them).
+            for (BaseObject* object : reachableVec) {
+                ensureObj(object);
+            }
             for (MAddress slot : remsetVec) {
                 if (Heap::IsHeapAddress(slot)) {
                     ensureField(HeapSlotAt<>(slot));
@@ -3264,24 +3287,27 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 object->ForEachRefField(ensureField);
             }
+            // Roots after PrepareForwardable (pass2 surface).
+            RootVisitor rootEnsure = [this, &ensureObj](ObjectRef& root) {
+                zaddress_unsafe observed = root.LoadPlain();
+                HeapSlot<> bits(to_zpointer(raw(observed)));
+                ensureObj(to_object(bits.GetTargetObject()));
+            };
+            MutatorManager::Instance().VisitAllMutators(
+                [&rootEnsure](Mutator& mutator) { mutator.VisitMutatorRoots(rootEnsure); });
+            Heap::GetHeap().VisitStaticRoots(rootEnsure);
+            Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rootEnsure);
+            collectorResources.GetFinalizerProcessor().VisitRawPointers(rootEnsure);
+            Heap::GetHeap().VisitAllExportRoots(rootEnsure);
+
             size_t grant = g_installDomainGrant.load(std::memory_order_relaxed);
             size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
             size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
             size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
-            if (grant != 0 || tooLate != 0) {
-                VLOG(REPORT,
-                     "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
-                     grant, already, tooLate, skip);
-            }
-            static const bool account = []() {
-                const char* v = std::getenv("MRT_GCV2_INSTALLDOMAIN_ACCOUNT");
-                return v != nullptr && v[0] == '1' && v[1] == '\0';
-            }();
-            if (account) {
-                VLOG(REPORT,
-                     "[GCV2][installdomain] account grant=%zu already=%zu tooLate=%zu skip=%zu",
-                     grant, already, tooLate, skip);
-            }
+            // Always emit (RTLOG_ERROR) so measure captures positive control without VLOG gate.
+            LOG(RTLOG_ERROR,
+                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
+                grant, already, tooLate, skip);
         }
 
         // Reset CAS counters for this fix window (positive-control visibility).

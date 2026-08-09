@@ -178,6 +178,24 @@ public:
     // Probe-only: raw ghost liveInfo0 (no TEMPORARY filter; ghost never uses TEMPORARY).
     LiveInfo* GetLiveInfo0ForProbe() const { return metadata.liveInfo0; }
 
+    // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
+    // rejects. After MarkObject created current liveInfo, bind it as ghost while still
+    // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
+    void BindLiveInfo0FromLiveIfNull()
+    {
+        if (metadata.liveInfo0 != nullptr) {
+            return;
+        }
+        LiveInfo* live = GetLiveInfo();
+        if (live == nullptr) {
+            return;
+        }
+        metadata.liveInfo0 = live;
+        if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
+            metadata.regionEnd0 = metadata.regionEnd;
+        }
+    }
+
     LiveInfo* GetRetainedLiveInfo() const { return metadata.retainedLiveInfo; }
 
     RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
