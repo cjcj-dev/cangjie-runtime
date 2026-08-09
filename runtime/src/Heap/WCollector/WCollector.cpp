@@ -4055,62 +4055,69 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
-    // blackmark: fixpoint edges from already-reachable holders to unmarked young objects.
-    // PrepareYoung ClearLiveInfo drops any pre-mark allocation-black bits; objects allocated
-    // into candidate regions (or still living there) that are only reached from live holders
-    // after the root/remset wave can still be live0Surv=0 at GetRoute. Walk reachableVec
-    // fields once more and re-enter TraceYoungClosure for newly claimed young targets.
-    // Default OFF (same switch as alloc paint). Incomplete: ALOT still 10/10 route miss.
+    // floorremset / postallocgap: after remset stamp + mark, grant unmarked young that are
+    // still pointed-to by reachableVec holders or remset slots. GetRoute reads ghost liveInfo0
+    // (= liveInfo at PrepareForwardable); live edges must be marked or FixMinor aborts.
+    // Always on (not gated by ALLOC_BLACK). Differs from ALLOC_BLACK paint-at-alloc:
+    // only edge-proven targets, after ClearLiveInfo, before liveInfo0 snapshot.
     {
-        static const bool blackmarkFixOn = []() {
-            const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
-            return v != nullptr && v[0] == '1' && v[1] == '\0';
-        }();
-        if (blackmarkFixOn) {
-            WorkStack blackmarkExtra = NewWorkStack();
+        size_t totalGranted = 0;
+        for (int pass = 0; pass < 8; ++pass) {
+            WorkStack grantExtra = NewWorkStack();
+            auto considerTarget = [this, &grantExtra](BaseObject* target) {
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("floorremset.grant.target", target)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                    if (host != nullptr && host != target) {
+                        target = host;
+                    } else {
+                        return;
+                    }
+                }
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (region == nullptr || !region->IsYoungRegion() || region->IsMarkedObject(target)) {
+                    return;
+                }
+                grantExtra.push_back(target);
+            };
             const size_t nHolders = reachableVec.size();
             for (size_t i = 0; i < nHolders; ++i) {
                 BaseObject* object = reachableVec[i];
-                if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                if (object == nullptr || !Heap::IsHeapAddress(object) ||
+                    !Collector::PlausibleManagedObjectGate("floorremset.grant.holder", object) ||
+                    !object->HasRefField()) {
                     continue;
                 }
-                if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.holder", object)) {
-                    continue;
-                }
-                if (!object->HasRefField()) {
-                    continue;
-                }
-                object->ForEachRefField([this, &blackmarkExtra](RefField<>& field) {
-                    BaseObject* target = ResolveMinorReference(field);
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        return;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.target", target)) {
-                        BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                        if (host != nullptr && host != target) {
-                            target = host;
-                        } else {
-                            return;
-                        }
-                    }
-                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (region == nullptr || !region->IsYoungRegion()) {
-                        return;
-                    }
-                    if (region->IsMarkedObject(target)) {
-                        return;
-                    }
-                    // Candidate / from / recent-full young: any young that can enter GetRoute.
-                    blackmarkExtra.push_back(target);
+                object->ForEachRefField([this, &considerTarget](RefField<>& field) {
+                    considerTarget(ResolveMinorReference(field));
                 });
             }
-            if (!blackmarkExtra.empty()) {
-                size_t before = reachableVec.size();
-                TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                  weakSlots, useBitmapLedger);
-                VLOG(REPORT, "[GCV2][blackmark] fixpoint_extra_roots=%zu reachable_before=%zu after=%zu",
-                     blackmarkExtra.size(), before, reachableVec.size());
+            for (MAddress slot : rememberedSlots) {
+                if (Heap::IsHeapAddress(slot)) {
+                    considerTarget(ResolveMinorReference(HeapSlotAt<>(slot)));
+                }
             }
+            for (BaseObject* object : allocationRoots) {
+                considerTarget(object);
+            }
+            VisitMinorRoots([&considerTarget](BaseObject* object) { considerTarget(object); }, stackScanEpoch);
+            if (grantExtra.empty()) {
+                break;
+            }
+            size_t before = reachableVec.size();
+            size_t extraN = grantExtra.size();
+            TraceYoungClosure(grantExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger);
+            totalGranted += extraN;
+            if (reachableVec.size() == before) {
+                break;
+            }
+        }
+        if (totalGranted != 0) {
+            VLOG(REPORT, "[GCV2][floorremset] grant_total=%zu reachable_final=%zu", totalGranted,
+                 reachableVec.size());
         }
     }
     // setbitmap2: optional closure equality probe (default off).
