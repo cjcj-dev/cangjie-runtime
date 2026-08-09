@@ -280,16 +280,16 @@ inline Lookup Find(void* obj, uintptr_t regionStart)
     }
     uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
     // Prefer exact near-end table (survives freeze clear of live lastObj).
-    Lookup near = FindNear(addr);
+    Lookup nearLookup = FindNear(addr);
     Slot* e = FindSlot(regionStart, false);
     if (e != nullptr) {
         r.clearTraceCnt = e->clearTraceCnt.load(std::memory_order_relaxed);
         r.everWasTrace = e->everWasTrace.load(std::memory_order_relaxed);
     }
-    if (near.found) {
-        near.clearTraceCnt = r.clearTraceCnt;
-        near.everWasTrace = r.everWasTrace;
-        return near;
+    if (nearLookup.found) {
+        nearLookup.clearTraceCnt = r.clearTraceCnt;
+        nearLookup.everWasTrace = r.everWasTrace;
+        return nearLookup;
     }
     if (e == nullptr) {
         return r;
