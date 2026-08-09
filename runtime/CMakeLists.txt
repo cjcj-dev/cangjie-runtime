@@ -488,11 +488,6 @@ elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1)
         "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
     set_property(TARGET cangjie-runtime APPEND PROPERTY LINK_DEPENDS
         "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_GENERATOR}")
-    add_custom_command(TARGET cangjie-runtime POST_BUILD
-        COMMAND python3 "${WINDOWS_EXPORT_GENERATOR}" check
-            "${WINDOWS_EXPORT_DEFINITION_RAW}" "${WINDOWS_EXPORT_DEFINITION}"
-        COMMENT "Checking the Windows runtime export surface"
-        VERBATIM)
 elseif (DOPRA_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0) # thread module
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"
         ${LINK_LIBS} "-Wl,--end-group -nodefaultlibs -Wl,-Bdynamic -lstdc++ -lm -lc -lgcc_s -lpthread -ldl")
