@@ -754,48 +754,19 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 
 void RegionManager::AssembleSmallGarbageCandidates()
 {
+    // Major Assemble runs before mark start: post-mark stamps from the previous cycle
+    // must be eligible here (they were never in that cycle's from-space). Do not filter
+    // on notRelocatableThisCycle — only PrepareYoung (minor CSet) reads that flag.
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
-    // twoflags: filter-merge — post-mark-start regions stay off from-space this cycle.
-    {
-        RegionInfo* region = recentFullRegionList.GetHeadRegion();
-        while (region != nullptr) {
-            RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle()) {
-                recentFullRegionList.DeleteRegion(region);
-                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
-            }
-            region = next;
-        }
-    }
-    {
-        RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
-        while (region != nullptr) {
-            RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle()) {
-                unmovableFromRegionList.DeleteRegion(region);
-                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
-            }
-            region = next;
-        }
-    }
+    fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
+    fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 
     fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
 }
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
-    // twoflags: keep notRelocatable large regions on recentLarge (not collected this cycle).
-    {
-        RegionInfo* region = recentLargeRegionList.GetHeadRegion();
-        while (region != nullptr) {
-            RegionInfo* next = region->GetNextRegion();
-            if (!region->IsNotRelocatableThisCycle()) {
-                recentLargeRegionList.DeleteRegion(region);
-                oldLargeRegionList.PrependRegion(region, RegionInfo::RegionType::LARGE_REGION);
-            }
-            region = next;
-        }
-    }
+    oldLargeRegionList.MergeRegionList(recentLargeRegionList, RegionInfo::RegionType::LARGE_REGION);
     for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
         region->ClearLiveInfo();
     }
@@ -849,8 +820,13 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        // twoflags: skip CSet for regions allocated after mark start this cycle.
-        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        // twoflags: exclude regions that received post-mark-start allocs (major TRACE+).
+        // Flag is sticky until next major PrepareTrace; minors must not CSet them.
+        if (region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;
         }
@@ -868,7 +844,11 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        if (region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;
         }
