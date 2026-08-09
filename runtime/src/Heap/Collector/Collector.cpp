@@ -412,10 +412,15 @@ const char* Collector::GetGCPhaseName(GCPhase phase)
 }
 
 // Positive-control inject for assertbody Phase 2 (MRT_ASSERTBODY_PROBE=1|2|3).
-// 1 = Collector.h-class named abort, 2 = TracingCollector.h-class named abort,
-// 3 = FormatLog(RTLOG_FATAL) path (CHECK-family). Off unless env set.
+// Fires on first RequestGC so SignalManager is already installed and rec=crash
+// can capture assert=. 1=Collector named abort, 2=TracingCollector named abort,
+// 3=FormatLog FATAL (CHECK-family). Off unless env set.
 static void MaybeAssertbodyProbe()
 {
+    static std::atomic<bool> done{ false };
+    if (done.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
     const char* p = std::getenv("MRT_ASSERTBODY_PROBE");
     if (p == nullptr || p[0] == '\0' || std::strcmp(p, "0") == 0) {
         return;
@@ -432,11 +437,15 @@ static void MaybeAssertbodyProbe()
     }
 }
 
-Collector::Collector() { MaybeAssertbodyProbe(); }
+Collector::Collector() {}
 
 const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
-void Collector::RequestGC(GCReason reason, bool async) { RequestGCInternal(reason, async); }
+void Collector::RequestGC(GCReason reason, bool async)
+{
+    MaybeAssertbodyProbe();
+    RequestGCInternal(reason, async);
+}
 
 // Virtual default: this collector type does not implement the method. Always abort;
 // body is out-of-line so Collector.h stays free of FormatLog / string payloads.
