@@ -18,6 +18,11 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 namespace MapleRuntime {
 
+// paramzero: crash-time dump of Mode-A frame slot + heap CAS-null counters.
+// Declared here so SignalManager can call without including WCollector.cpp guts.
+// Gate = MRT_GCV2_NULLSLOT (default off).
+void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
+
 class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}

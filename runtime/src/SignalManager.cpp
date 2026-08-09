@@ -20,6 +20,7 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
+#include "Heap/WCollector/WCollector.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
@@ -203,6 +204,17 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
                       static_cast<unsigned long>(sigRbp), phaseTok, gcKind, inParFix, regsBuf, insnBuf, assertTok);
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
+    }
+    // paramzero: dump -0x50(%rbp) + heap CAS-null counters (gate MRT_GCV2_NULLSLOT).
+    // Mode A pc_off=0x6ef90a / si_addr=0x38: answer "was entry arg already 0?".
+    if (context != nullptr) {
+        const ucontext_t& uctx = *static_cast<const ucontext_t*>(context);
+#if defined(__x86_64__) && !defined(__APPLE__)
+        uintptr_t rbx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBX]);
+#else
+        uintptr_t rbx = 0;
+#endif
+        EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
     }
 }
 } // namespace
