@@ -29,7 +29,7 @@ constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
 // Model of FixOldTagged / ResolveMinor non-heap arm: recolour (or keep) — never install 0.
 // Product: WCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
 // ResolveMinorReference non-heap early return (zcdnull / B-4 ③).
-Uptr ModelRecolourNonHeapNeverNull(Uptr slotVal, Uptr nonHeapTarget, bool isHeapTarget)
+Uptr ModelRecolourNonHeapNeverNull(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
 {
     if (!isHeapTarget && nonHeapTarget != 0) {
         return nonHeapTarget; // recolour-only; payload stays
