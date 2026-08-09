@@ -306,6 +306,7 @@ PackageInfo* CJFileLoader::GetPackageInfo(const char* pkgName) const
 
 void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 {
+    extensionDatas.erase(baseFile);
     loadedFiles.remove(baseFile);
     baseFile->UnregisterFile();
     delete baseFile;
@@ -381,6 +382,7 @@ void CJFileLoader::RecordTypeInfo(TypeInfo* ti)
 
 void CJFileLoader::ClearLoadedFiles()
 {
+    extensionDatas.clear();
     VisitBaseFile([](BaseFile* baseFile) {
         baseFile->UnregisterFile();
         delete baseFile;
