@@ -42,6 +42,150 @@ std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
 
+// promotegap: offset histogram for promote re-registration (MRT_GCV2_PROMOTEGAP_PROBE=1).
+namespace {
+constexpr size_t kPromoteGapOffBuckets = 64;
+std::atomic<uint64_t> g_pgInplaceSeen { 0 };
+std::atomic<uint64_t> g_pgInplaceRec { 0 };
+std::atomic<uint64_t> g_pgInplaceNode { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10Seen { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10Rec { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10SkipOldT { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10SkipNull { 0 };
+std::atomic<uint64_t> g_pgFwdSeen { 0 };
+std::atomic<uint64_t> g_pgFwdRec { 0 };
+std::atomic<uint64_t> g_pgFwdNode { 0 };
+std::atomic<uint64_t> g_pgFwdNode10Seen { 0 };
+std::atomic<uint64_t> g_pgFwdNode10Rec { 0 };
+std::atomic<uint64_t> g_pgFwdNode10SkipOldT { 0 };
+std::atomic<uint64_t> g_pgFwdNode10SkipNull { 0 };
+std::atomic<uint64_t> g_pgOffInplace[kPromoteGapOffBuckets] {};
+std::atomic<uint64_t> g_pgOffFwd[kPromoteGapOffBuckets] {};
+std::atomic<uint64_t> g_pgDumpSeq { 0 };
+
+bool PromoteGapProbeOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_PROMOTEGAP_PROBE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+bool IsDefaultNode(BaseObject* object)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    TypeInfo* ti = object->GetTypeInfo();
+    if (ti == nullptr) {
+        return false;
+    }
+    const char* name = ti->GetName();
+    return name != nullptr && std::strcmp(name, "default:Node") == 0;
+}
+
+void NotePromoteGapField(BaseObject* object, RefField<>& field, bool recorded, bool fwdPath)
+{
+    if (!PromoteGapProbeOn() || object == nullptr) {
+        return;
+    }
+    MAddress base = reinterpret_cast<MAddress>(object);
+    MAddress slot = reinterpret_cast<MAddress>(&field);
+    if (slot < base) {
+        return;
+    }
+    size_t off = static_cast<size_t>(slot - base);
+    if (fwdPath) {
+        g_pgFwdSeen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgFwdRec.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (off < kPromoteGapOffBuckets) {
+            g_pgOffFwd[off].fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        g_pgInplaceSeen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgInplaceRec.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (off < kPromoteGapOffBuckets) {
+            g_pgOffInplace[off].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    if (!IsDefaultNode(object)) {
+        return;
+    }
+    if (fwdPath) {
+        g_pgFwdNode.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_pgInplaceNode.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (off != 0x10) {
+        return;
+    }
+    BaseObject* target = to_object(field.GetTargetObject());
+    if (fwdPath) {
+        g_pgFwdNode10Seen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgFwdNode10Rec.fetch_add(1, std::memory_order_relaxed);
+        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            g_pgFwdNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_pgFwdNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        g_pgInplaceNode10Seen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgInplaceNode10Rec.fetch_add(1, std::memory_order_relaxed);
+        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            g_pgInplaceNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_pgInplaceNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+void DumpPromoteGapProbe(const char* tag)
+{
+    if (!PromoteGapProbeOn()) {
+        return;
+    }
+    uint64_t seq = g_pgDumpSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+    VLOG(REPORT,
+         "[PROMOTEGAP][%s] seq=%llu inplace seen=%llu rec=%llu node=%llu "
+         "node10seen=%llu node10rec=%llu node10skipOldT=%llu node10skipNull=%llu | "
+         "fwd seen=%llu rec=%llu node=%llu node10seen=%llu node10rec=%llu "
+         "node10skipOldT=%llu node10skipNull=%llu",
+         tag, static_cast<unsigned long long>(seq),
+         static_cast<unsigned long long>(g_pgInplaceSeen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceRec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10Seen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10Rec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10SkipOldT.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10SkipNull.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdSeen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdRec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10Seen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10Rec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10SkipOldT.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10SkipNull.load(std::memory_order_relaxed)));
+    for (size_t off = 0; off < kPromoteGapOffBuckets; ++off) {
+        uint64_t a = g_pgOffInplace[off].load(std::memory_order_relaxed);
+        uint64_t b = g_pgOffFwd[off].load(std::memory_order_relaxed);
+        if (a == 0 && b == 0) {
+            continue;
+        }
+        VLOG(REPORT,
+             "[PROMOTEGAP][OFF] seq=%llu offset=0x%zx inplace=%llu fwd=%llu",
+             static_cast<unsigned long long>(seq), off,
+             static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+    }
+}
+} // namespace
+
 size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
 {
     if (region == nullptr || !region->IsYoungRegion()) {
@@ -93,15 +237,17 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             return;
         }
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
-                                hasObjectLiveness, survived](RefField<>& field) {
+                                hasObjectLiveness, survived, object](RefField<>& field) {
             BaseObject* target = to_object(field.GetTargetObject());
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                NotePromoteGapField(object, field, false, false);
                 return;
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(reinterpret_cast<MAddress>(&field));
                 ++recorded;
+                NotePromoteGapField(object, field, true, false);
                 if (fysGapProbe) {
                     if (!hasObjectLiveness) {
                         ++unknownEdges;
@@ -111,6 +257,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                         ++deadEdges;
                     }
                 }
+            } else {
+                NotePromoteGapField(object, field, false, false);
             }
         });
     };
@@ -130,7 +278,9 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
 
 size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
 {
-    return g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
+    size_t n = g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
+    DumpPromoteGapProbe("consume");
+    return n;
 }
 
 size_t RegionManager::RecordPinnedCrossGenEdges()
@@ -1795,15 +1945,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
             if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
-                toObj->ForEachRefField([&rememberedSet, &promotedRecords](RefField<>& field) {
+                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
                     BaseObject* target = to_object(field.GetTargetObject());
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        NotePromoteGapField(toObj, field, false, true);
                         return;
                     }
                     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                         rememberedSet.Record(reinterpret_cast<MAddress>(&field));
                         ++promotedRecords;
+                        NotePromoteGapField(toObj, field, true, true);
+                    } else {
+                        NotePromoteGapField(toObj, field, false, true);
                     }
                 });
             }
