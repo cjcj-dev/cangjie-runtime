@@ -20,3 +20,11 @@ void WrongRootWrite(RootSlot& root, zpointer coloured)
     StorePlain(root, coloured);
 }
 #endif
+
+#if defined(MRT_EXPLICIT_ROOT_COLOUR_BYPASS)
+void ExplicitRootColourBypass(RootSlot& root, zpointer coloured)
+{
+    // Audit witness: public raw construction can deliberately wash the state.
+    StorePlain(root, to_zaddress(raw(coloured)));
+}
+#endif
