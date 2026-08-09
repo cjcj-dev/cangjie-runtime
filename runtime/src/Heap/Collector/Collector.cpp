@@ -411,7 +411,28 @@ const char* Collector::GetGCPhaseName(GCPhase phase)
     return phaseNames[phase];
 }
 
-Collector::Collector() {}
+// Positive-control inject for assertbody Phase 2 (MRT_ASSERTBODY_PROBE=1|2|3).
+// 1 = Collector.h-class named abort, 2 = TracingCollector.h-class named abort,
+// 3 = FormatLog(RTLOG_FATAL) path (CHECK-family). Off unless env set.
+static void MaybeAssertbodyProbe()
+{
+    const char* p = std::getenv("MRT_ASSERTBODY_PROBE");
+    if (p == nullptr || p[0] == '\0' || std::strcmp(p, "0") == 0) {
+        return;
+    }
+    if (std::strcmp(p, "1") == 0) {
+        Collector::AbortUnimplemented("Collector::GetGCStats");
+    }
+    if (std::strcmp(p, "2") == 0) {
+        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+    }
+    if (std::strcmp(p, "3") == 0) {
+        Logger::GetLogger().FormatLog(RTLOG_FATAL, true, "Check failed: assertbody_probe_formatlog");
+        std::abort();
+    }
+}
+
+Collector::Collector() { MaybeAssertbodyProbe(); }
 
 const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
