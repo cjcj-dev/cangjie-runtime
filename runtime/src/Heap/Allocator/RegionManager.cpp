@@ -148,12 +148,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    // floorremset: enumerate by heap address range (ForEachObjUnsafe), not by named
-    // RegionList membership. List-only stamp missed non-young holders that sit outside
-    // the pinned/full/from/tl set (IDLE bare-store + list gaps) so old→young never entered
-    // remset; minor mark then left those young white → GetRoute live0Surv=0.
-    // ForEachObjUnsafe walks every valid non-free/non-garbage unit under inactiveZone —
-    // same coverage as VerifyRememberedSetInvariant's independence walk.
     auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
         if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
             return;
@@ -176,8 +170,8 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         });
     };
     // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
-    // List stamp + post-mark grant (WCollector) close edge-live young; full-heap
-    // ForEachObj fill SEGV'd on stale tips under load (floorremset).
+    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
+    // floorremset: full-heap ForEachObjUnsafe fill tried → SEGV on stale tips; list stamp kept.
     recentPinnedRegionList.VisitAllRegions(scanRegion);
     oldPinnedRegionList.VisitAllRegions(scanRegion);
     rawPointerPinnedRegionList.VisitAllRegions(scanRegion);

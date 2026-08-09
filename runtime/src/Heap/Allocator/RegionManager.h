@@ -146,8 +146,7 @@ public:
     static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
     static size_t ConsumePromotedCrossGenEdgeCount();
     // Non-young holders (pinned/large at birth, or post-promote old) + IDLE bare store:
-    // edges never enter RecordCrossGenEdge. Stamp remset before each minor via full-heap
-    // ForEachObjUnsafe (floorremset: list-only stamp missed holders outside named lists).
+    // edges never enter RecordCrossGenEdge. Stamp remset before each minor (named lists).
     // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
     size_t RecordPinnedCrossGenEdges();
     void StampCensusBoundaries();
