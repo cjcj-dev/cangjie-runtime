@@ -75,25 +75,47 @@ public:
 
     virtual void RunGarbageCollection(uint64_t, GCReason) = 0;
 
-    virtual GCStats& GetGCStats() { std::abort(); }
+    // Named aborts: virtual defaults for collectors that do not implement this method.
+    // Bodies live in Collector.cpp so headers stay free of FormatLog / string literals.
+    [[noreturn]] static void AbortUnimplemented(const char* method);
 
-    virtual BaseObject* ForwardObject(BaseObject*) { std::abort(); }
+    virtual GCStats& GetGCStats() { AbortUnimplemented("Collector::GetGCStats"); }
+
+    virtual BaseObject* ForwardObject(BaseObject*) { AbortUnimplemented("Collector::ForwardObject"); }
 
     virtual bool ShouldIgnoreRequest(GCRequest& quest) = 0;
-    virtual bool IsFromObject(BaseObject*) const { std::abort(); }
-    virtual bool IsGhostFromObject(BaseObject*) const { std::abort(); }
-    virtual bool IsUnmovableFromObject(BaseObject*) const { std::abort(); }
+    virtual bool IsFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsFromObject"); }
+    virtual bool IsGhostFromObject(BaseObject*) const { AbortUnimplemented("Collector::IsGhostFromObject"); }
+    virtual bool IsUnmovableFromObject(BaseObject*) const
+    {
+        AbortUnimplemented("Collector::IsUnmovableFromObject");
+    }
     // nullptr means either (1) no routed to-version for a heap from-object, or
     // (2) obj is non-heap/null (gate) — not "dead". Callers must not treat (2) as
     // stale residue and must not CAS-null non-heap slots (may be RO static roots).
     // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
     virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
 
-    virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
-    virtual bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
-    virtual bool TryUntagRefField(BaseObject*, RefField<>&, BaseObject*&) const { std::abort(); }
-    virtual bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const { std::abort(); }
-    virtual RefField<> GetAndTryTagRefField(BaseObject*) const { std::abort(); }
+    virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    {
+        AbortUnimplemented("Collector::TryUpdateRefField");
+    }
+    virtual bool TryForwardRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    {
+        AbortUnimplemented("Collector::TryForwardRefField");
+    }
+    virtual bool TryUntagRefField(BaseObject*, RefField<>&, BaseObject*&) const
+    {
+        AbortUnimplemented("Collector::TryUntagRefField");
+    }
+    virtual bool TryTagRefField(BaseObject*, RefField<>&, BaseObject*) const
+    {
+        AbortUnimplemented("Collector::TryTagRefField");
+    }
+    virtual RefField<> GetAndTryTagRefField(BaseObject*) const
+    {
+        AbortUnimplemented("Collector::GetAndTryTagRefField");
+    }
 
     // "Does this reference need the barrier before use?" -- the question every consumer of the
     // two predicates below is actually asking. Today a reference carries no colour unless it is
@@ -115,16 +137,22 @@ public:
         return (raw(ref.GetFieldValue()) & ::g_cjLoadBadMask) != 0;
     }
 
-    virtual bool is_young_load_good(RefField<>&) const { std::abort(); }
-    virtual bool is_old_load_good(RefField<>&) const { std::abort(); }
+    virtual bool is_young_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_young_load_good"); }
+    virtual bool is_old_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_old_load_good"); }
 
     bool is_load_good(RefField<>& ref) const
     {
         return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
     }
 
-    virtual ZGenerationId remap_generation(RefField<>&) const { std::abort(); }
-    virtual BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const { std::abort(); }
+    virtual ZGenerationId remap_generation(RefField<>&) const
+    {
+        AbortUnimplemented("Collector::remap_generation");
+    }
+    virtual BaseObject* relocate_or_remap_object(BaseObject*, ZGenerationId) const
+    {
+        AbortUnimplemented("Collector::relocate_or_remap_object");
+    }
 
     // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
     // 新代码应经 to_object(zaddress) 出口。语义未改（任务边界）。
@@ -168,11 +196,14 @@ public:
     // trust it over ClassifyInteriorOffset heuristics.
     static BaseObject* TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase = nullptr);
 
-    virtual bool IsOldPointer(RefField<>&) const { std::abort(); }
-    virtual bool IsCurrentPointer(RefField<>&) const { std::abort(); }
-    virtual void AddRawPointerObject(BaseObject*) { std::abort(); }
-    virtual void RemoveRawPointerObject(BaseObject*) { std::abort(); }
-    virtual void ResolveCycleRef() { std::abort(); }
+    virtual bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
+    virtual bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }
+    virtual void AddRawPointerObject(BaseObject*) { AbortUnimplemented("Collector::AddRawPointerObject"); }
+    virtual void RemoveRawPointerObject(BaseObject*)
+    {
+        AbortUnimplemented("Collector::RemoveRawPointerObject");
+    }
+    virtual void ResolveCycleRef() { AbortUnimplemented("Collector::ResolveCycleRef"); }
 
     // F5: to==nullptr must not silently return a dead/zeroed from (REPORT-tagaba F5).
     // Implementation in Collector.cpp — needs complete BaseObject + CHECK_DETAIL.
@@ -180,7 +211,7 @@ public:
     BaseObject* FindLatestVersion(BaseObject* obj) const;
 
 protected:
-    virtual void RequestGCInternal(GCReason, bool) { std::abort(); }
+    virtual void RequestGCInternal(GCReason, bool) { AbortUnimplemented("Collector::RequestGCInternal"); }
 
     CollectorType collectorType = CollectorType::NO_COLLECTOR;
     std::atomic<GCPhase> gcPhase = { GCPhase::GC_PHASE_IDLE };

@@ -11,6 +11,7 @@
 #include <unistd.h>
 
 #include "Base/CString.h"
+#include "Base/GcLog.h"
 #include "Base/Globals.h"
 #include "Base/ImmortalWrapper.h"
 #include "Base/SysCall.h"
@@ -19,6 +20,33 @@
 #include "securec.h"
 #include "Base/LogFile.h"
 namespace MapleRuntime {
+namespace {
+// Feed the crash-signature assert= slot. FAIL is recorded too so CHECK_DETAIL's
+// first line is not lost if FATAL formatting fails; only FATAL aborts.
+void RememberFatalBody(RTLogLevel level, const char* body, size_t len)
+{
+    if ((level == RTLOG_FATAL || level == RTLOG_FAIL) && body != nullptr && len > 0) {
+        GcLog::RememberFatal(body, len);
+    }
+}
+
+[[noreturn]] void AbortLogInitFailed(const char* where)
+{
+    const char* msg = "Logger: log file open failed; aborting on RTLOG_FATAL";
+    if (where != nullptr && where[0] != '\0') {
+        char buf[256];
+        int n = sprintf_s(buf, sizeof(buf), "Logger: log file open failed at %s; aborting on RTLOG_FATAL", where);
+        if (n > 0) {
+            GcLog::RememberFatal(buf, static_cast<size_t>(n));
+            (void)std::fprintf(stderr, "%s\n", buf);
+            std::abort();
+        }
+    }
+    GcLog::RememberFatal(msg, std::strlen(msg));
+    (void)std::fprintf(stderr, "%s\n", msg);
+    std::abort();
+}
+} // namespace
 static ImmortalWrapper<Logger> g_loggerInstance;
 
 Logger& Logger::GetLogger() noexcept { return *g_loggerInstance; }
@@ -243,7 +271,7 @@ bool Logger::CheckLogLevel(RTLogLevel level)
         std::lock_guard<std::recursive_mutex> lock(logMutex);
         if (fd == nullptr && (!InitLog())) {
             if (level == RTLOG_FATAL) {
-                std::abort();
+                AbortLogInitFailed("CheckLogLevel/OHOS");
             }
             return false;
         }
@@ -260,7 +288,7 @@ bool Logger::CheckLogLevel(RTLogLevel level)
         std::lock_guard<std::recursive_mutex> lock(logMutex);
         if (fd == nullptr && (!InitLog())) {
             if (level == RTLOG_FATAL) {
-                std::abort();
+                AbortLogInitFailed("CheckLogLevel");
             }
             return false;
         }
@@ -384,6 +412,10 @@ void Logger::FormatLog(RTLogLevel level, bool notInSigHandler, const char* forma
     }
     index += ret;
     va_end(args);
+    // Body is the message after the level letter (index was prefix length before vsprintf).
+    // On OHOS/Android/iOS the prefix is empty (index=0) so body == whole buf.
+    size_t bodyOff = static_cast<size_t>(index > ret ? index - ret : 0);
+    RememberFatalBody(level, buf + bodyOff, static_cast<size_t>(ret));
 #if (defined(__OHOS__) && (__OHOS__ == 1))
     WriteLogOnOhos(level, buf, true);
 #elif defined(__ANDROID__)
@@ -449,6 +481,7 @@ void HiLogForCJThread(RTLogLevel level, const char* format, va_list args)
         WriteStr(STDOUT_FILENO, errMsg, true);
         return;
     }
+    RememberFatalBody(level, buf, static_cast<size_t>(ret));
 #if (defined(__OHOS__) && (__OHOS__ == 1))
     WriteLogOnOhos(level, buf, false);
 #elif defined(__ANDROID__)

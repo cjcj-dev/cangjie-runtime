@@ -411,9 +411,50 @@ const char* Collector::GetGCPhaseName(GCPhase phase)
     return phaseNames[phase];
 }
 
+// Positive-control inject for assertbody Phase 2 (MRT_ASSERTBODY_PROBE=1|2|3).
+// Fires on first RequestGC so SignalManager is already installed and rec=crash
+// can capture assert=. 1=Collector named abort, 2=TracingCollector named abort,
+// 3=FormatLog FATAL (CHECK-family). Off unless env set.
+static void MaybeAssertbodyProbe()
+{
+    static std::atomic<bool> done{ false };
+    if (done.exchange(true, std::memory_order_relaxed)) {
+        return;
+    }
+    const char* p = std::getenv("MRT_ASSERTBODY_PROBE");
+    if (p == nullptr || p[0] == '\0' || std::strcmp(p, "0") == 0) {
+        return;
+    }
+    if (std::strcmp(p, "1") == 0) {
+        Collector::AbortUnimplemented("Collector::GetGCStats");
+    }
+    if (std::strcmp(p, "2") == 0) {
+        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+    }
+    if (std::strcmp(p, "3") == 0) {
+        Logger::GetLogger().FormatLog(RTLOG_FATAL, true, "Check failed: assertbody_probe_formatlog");
+        std::abort();
+    }
+}
+
 Collector::Collector() {}
 
 const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
-void Collector::RequestGC(GCReason reason, bool async) { RequestGCInternal(reason, async); }
+void Collector::RequestGC(GCReason reason, bool async)
+{
+    MaybeAssertbodyProbe();
+    RequestGCInternal(reason, async);
+}
+
+// Virtual default: this collector type does not implement the method. Always abort;
+// body is out-of-line so Collector.h stays free of FormatLog / string payloads.
+[[noreturn]] void Collector::AbortUnimplemented(const char* method)
+{
+    Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
+                                  "unimplemented virtual %s on this Collector "
+                                  "(base default must not be reached)",
+                                  method != nullptr ? method : "?");
+    std::abort();
+}
 } // namespace MapleRuntime.
