@@ -3967,76 +3967,105 @@ void WCollector::DoYoungGarbageCollection()
                      "young concurrent mark SATB not cleared");
         // STW2: freeze world for post-mark verify + evacuate (still STW today).
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", false);
-        // Concurrent window recorded new old→young edges on the active remset face.
-        // Drain them under STW and fold into the same mark/remset ledger used by evacuate.
+        // youngmiss: concurrent-window remset edges are NEW greys. Under FYS, RescanRememberedSet
+        // filters by reachableSlots (slots visited during the concurrent mark wave). A slot written
+        // after its holder was scanned is often absent from that set, so the edge was silently
+        // dropped — both from the mark workstack and from liveRememberedSlots (evac fixup).
+        // Fix: (1) rescan concurrent remset with fullYoungScan=false (retained/liveness filter only);
+        // (2) force-admit those slots into reachableSlots for the evacuate ledger;
+        // (3) fixpoint remset+roots+satb until quiet (single pass left residual greys).
         {
-            MRT_PHASE_TIMER("young.remset_drain_conc");
-            MinorSlotSet concurrentRemset;
-            size_t nConc = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
-            if (nConc != 0) {
-                VLOG(REPORT, "[GCV2][youngconc] concurrent remset drained=%zu", nConc);
-                rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                remsetStats.recorded = rememberedSlots.size();
-                RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots, fullYoungScan,
-                                    &consumedSlots, &remsetStats);
-                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                  useBitmapLedger);
-            }
-        }
-        // Re-enum roots under STW2: stacks/statics may have gained young refs while concurrent.
-        {
-            MRT_PHASE_TIMER("young.root_enum_final");
-            WorkStack finalRoots = NewWorkStack();
-            theAllocator.VisitAllocBuffers([&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
-            SatbBuffer::Instance().GetRetiredObjects(finalRoots);
-            while (!finalRoots.empty()) {
-                BaseObject* object = finalRoots.back();
-                finalRoots.pop_back();
-                if (Heap::IsHeapAddress(object)) {
-                    allocationRoots.insert(object);
-                }
-                if (fullYoungScan) {
-                    if (Heap::IsHeapAddress(object)) {
-                        workStack.push_back(object);
+            MRT_PHASE_TIMER("young.stw2_fixpoint");
+            constexpr size_t kMaxStw2Iters = 8;
+            size_t totalConcRemset = 0;
+            size_t iters = 0;
+            for (; iters < kMaxStw2Iters; ++iters) {
+                const size_t reachableBefore = reachableVec.size();
+                size_t nConc = 0;
+                {
+                    MinorSlotSet concurrentRemset;
+                    nConc = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
+                    if (nConc != 0) {
+                        totalConcRemset += nConc;
+                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                        remsetStats.recorded = rememberedSlots.size();
+                        // Do NOT pass product fullYoungScan: that path drops slots missing from
+                        // reachableSlots. Concurrent edges are the authority for new greys.
+                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats);
+                        for (MAddress slot : concurrentRemset) {
+                            if (!Heap::IsHeapAddress(slot)) {
+                                continue;
+                            }
+                            (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
+                                               g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                        }
+                        if (!workStack.empty()) {
+                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
+                                              reachableSlots, weakSlots, useBitmapLedger);
+                        }
                     }
-                } else {
-                    PushYoungObject(object, workStack, "alloc_buffer_final");
                 }
-            }
-            VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
-                if (fullYoungScan) {
-                    if (Heap::IsHeapAddress(object)) {
-                        workStack.push_back(object);
+                {
+                    WorkStack finalRoots = NewWorkStack();
+                    theAllocator.VisitAllocBuffers(
+                        [&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
+                    SatbBuffer::Instance().GetRetiredObjects(finalRoots);
+                    while (!finalRoots.empty()) {
+                        BaseObject* object = finalRoots.back();
+                        finalRoots.pop_back();
+                        if (Heap::IsHeapAddress(object)) {
+                            allocationRoots.insert(object);
+                        }
+                        if (fullYoungScan) {
+                            if (Heap::IsHeapAddress(object)) {
+                                workStack.push_back(object);
+                            }
+                        } else {
+                            PushYoungObject(object, workStack, "alloc_buffer_final");
+                        }
                     }
-                } else {
-                    PushYoungObject(object, workStack, "minor_root_final");
+                    VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
+                        if (fullYoungScan) {
+                            if (Heap::IsHeapAddress(object)) {
+                                workStack.push_back(object);
+                            }
+                        } else {
+                            PushYoungObject(object, workStack, "minor_root_final");
+                        }
+                    });
+                    if (!workStack.empty()) {
+                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                          weakSlots, useBitmapLedger);
+                    }
                 }
-            });
-            if (!workStack.empty()) {
-                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                  useBitmapLedger);
-            }
-        }
-        // Final SATB drain under STW so no mutator write is in flight past this point.
-        {
-            WorkStack finalSatb = NewWorkStack();
-            SatbBuffer::Instance().GetRetiredObjects(finalSatb);
-            while (!finalSatb.empty()) {
-                BaseObject* obj = finalSatb.back();
-                finalSatb.pop_back();
-                if (!Heap::IsHeapAddress(obj)) {
-                    continue;
+                {
+                    WorkStack finalSatb = NewWorkStack();
+                    SatbBuffer::Instance().GetRetiredObjects(finalSatb);
+                    while (!finalSatb.empty()) {
+                        BaseObject* obj = finalSatb.back();
+                        finalSatb.pop_back();
+                        if (!Heap::IsHeapAddress(obj)) {
+                            continue;
+                        }
+                        if (fullYoungScan) {
+                            workStack.push_back(obj);
+                        } else {
+                            PushYoungObject(obj, workStack, "young_satb_final");
+                        }
+                    }
+                    if (!workStack.empty()) {
+                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                          weakSlots, useBitmapLedger);
+                    }
                 }
-                if (fullYoungScan) {
-                    workStack.push_back(obj);
-                } else {
-                    PushYoungObject(obj, workStack, "young_satb_final");
+                if (nConc == 0 && workStack.empty() && reachableVec.size() == reachableBefore) {
+                    break;
                 }
             }
-            if (!workStack.empty()) {
-                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                  useBitmapLedger);
-            }
+            VLOG(REPORT,
+                 "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu reachable=%zu", iters + 1,
+                 totalConcRemset, reachableVec.size());
         }
         // Rebuild liveRememberedSlots after concurrent remset merge (evac uses this set).
         liveRememberedSlots.clear();
