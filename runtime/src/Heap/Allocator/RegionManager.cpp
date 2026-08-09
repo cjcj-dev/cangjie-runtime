@@ -843,12 +843,8 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        // twoflags: regions that received allocs after major mark start are not
-        // young-CSet candidates until the next major PrepareTrace clears the stamp.
-        if (region->IsNotRelocatableThisCycle()) {
-            region = next;
-            continue;
-        }
+        // twoflags: do NOT filter here — young mark re-establishes liveness.
+        // notRelocatableThisCycle is major-Assemble only (cleared at PrepareTrace).
         region->ClearLiveInfo();
         visitor(region);
         ++stats.candidateRegions;
@@ -864,10 +860,6 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
         if (!region->IsYoungRegion()) {
-            region = next;
-            continue;
-        }
-        if (region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;
         }
