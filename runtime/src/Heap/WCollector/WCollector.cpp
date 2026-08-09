@@ -3970,6 +3970,56 @@ void WCollector::DoYoungGarbageCollection()
                      "young concurrent mark SATB not cleared");
         // STW2: freeze world for post-mark verify + evacuate (still STW today).
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", false);
+        // Concurrent window recorded new old→young edges on the active remset face.
+        // Drain them under STW and fold into the same mark/remset ledger used by evacuate.
+        {
+            MRT_PHASE_TIMER("young.remset_drain_conc");
+            MinorSlotSet concurrentRemset;
+            size_t nConc = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
+            if (nConc != 0) {
+                VLOG(REPORT, "[GCV2][youngconc] concurrent remset drained=%zu", nConc);
+                rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                remsetStats.recorded = rememberedSlots.size();
+                RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots, fullYoungScan,
+                                    &consumedSlots, &remsetStats);
+                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                  useBitmapLedger);
+            }
+        }
+        // Re-enum roots under STW2: stacks/statics may have gained young refs while concurrent.
+        {
+            MRT_PHASE_TIMER("young.root_enum_final");
+            WorkStack finalRoots = NewWorkStack();
+            theAllocator.VisitAllocBuffers([&finalRoots](AllocBuffer& buffer) { buffer.MergeRoots(finalRoots); });
+            SatbBuffer::Instance().GetRetiredObjects(finalRoots);
+            while (!finalRoots.empty()) {
+                BaseObject* object = finalRoots.back();
+                finalRoots.pop_back();
+                if (Heap::IsHeapAddress(object)) {
+                    allocationRoots.insert(object);
+                }
+                if (fullYoungScan) {
+                    if (Heap::IsHeapAddress(object)) {
+                        workStack.push_back(object);
+                    }
+                } else {
+                    PushYoungObject(object, workStack, "alloc_buffer_final");
+                }
+            }
+            VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
+                if (fullYoungScan) {
+                    if (Heap::IsHeapAddress(object)) {
+                        workStack.push_back(object);
+                    }
+                } else {
+                    PushYoungObject(object, workStack, "minor_root_final");
+                }
+            });
+            if (!workStack.empty()) {
+                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                  useBitmapLedger);
+            }
+        }
         // Final SATB drain under STW so no mutator write is in flight past this point.
         {
             WorkStack finalSatb = NewWorkStack();
@@ -3991,7 +4041,18 @@ void WCollector::DoYoungGarbageCollection()
                                   useBitmapLedger);
             }
         }
-        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac");
+        // Rebuild liveRememberedSlots after concurrent remset merge (evac uses this set).
+        liveRememberedSlots.clear();
+        for (MAddress slot : rememberedSlots) {
+            if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
+                (!fullYoungScan ||
+                 LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
+                liveRememberedSlots.insert(slot);
+            }
+        }
+        remsetStats.live = liveRememberedSlots.size();
+        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
+             reachableVec.size());
     }
     g_minorLedgerCost.Report();
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
