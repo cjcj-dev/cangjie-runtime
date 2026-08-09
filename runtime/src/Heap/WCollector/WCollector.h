@@ -408,6 +408,10 @@ private:
     void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                    MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool);
+    // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
+    bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                             std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                             MinorSlotSet& weakSlots, bool useBitmapLedger);
     friend class YoungMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,

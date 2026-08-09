@@ -2444,6 +2444,58 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
                               useBitmapLedger, threadPool);
 }
 
+// youngconc: SATB termination for concurrent young mark — same loop shape as
+// TracingCollector::MarkSatbBuffer, but feeds TraceYoungClosure (young claim + FYS).
+// Mutators run under TraceBarrier (InstallBarrier TRACE); final CLEAR_SATB is STW.
+bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                     std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                     MinorSlotSet& weakSlots, bool useBitmapLedger)
+{
+    MRT_PHASE_TIMER("young.mark_satb");
+    workStack.clear();
+    constexpr uint64_t maxIterationTime = 120ULL * 1000 * 1000 * 1000;
+    constexpr uint64_t maxIterationLoopNum = 1000;
+    auto visitSatbObj = [this, fullYoungScan, &workStack]() {
+        WorkStack remarkStack;
+        SatbBuffer::Instance().GetRetiredObjects(remarkStack);
+        while (!remarkStack.empty()) {
+            BaseObject* obj = remarkStack.back();
+            remarkStack.pop_back();
+            if (!Heap::IsHeapAddress(obj)) {
+                continue;
+            }
+            if (fullYoungScan) {
+                workStack.push_back(obj);
+            } else {
+                PushYoungObject(obj, workStack, "young_satb");
+            }
+        }
+    };
+    visitSatbObj();
+    uint64_t iterationCnt = 0;
+    uint64_t iterationStartTime = TimeUtil::NanoSeconds();
+    do {
+        if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
+            ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+            VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
+            visitSatbObj();
+            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger);
+            return workStack.empty();
+        }
+        if (!workStack.empty()) {
+            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger);
+        }
+        visitSatbObj();
+        if (workStack.empty()) {
+            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            visitSatbObj();
+        }
+    } while (!workStack.empty());
+    return true;
+}
+
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
@@ -3861,6 +3913,24 @@ void WCollector::DoYoungGarbageCollection()
             }
         }, stackScanEpoch);
     }
+    // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
+    // Default ON. MRT_GCV2_YOUNG_CONC_MARK=0 keeps mark_closure inside the existing STW
+    // (A/B arm). Reuses major TRACE barrier + SATB; no second barrier family.
+    // STW1 = prepare + remset drain + root enum; STW2 = post-mark verify + evacuate.
+    static const bool youngConcMark = []() {
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
+        if (v != nullptr && std::strcmp(v, "0") == 0) {
+            return false;
+        }
+        return true;
+    }();
+    if (youngConcMark && stw != nullptr) {
+        // Publish TRACE while mutators are still stopped so resume sees TraceBarrier/SATB.
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        stw.reset();
+        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running)");
+    }
     g_minorLedgerCost.Reset();
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
@@ -3893,10 +3963,40 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    if (youngConcMark) {
+        // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
+        CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                         weakSlots, useBitmapLedger),
+                     "young concurrent mark SATB not cleared");
+        // STW2: freeze world for post-mark verify + evacuate (still STW today).
+        stw = std::make_unique<ScopedStopTheWorld>("young post-mark", false);
+        // Final SATB drain under STW so no mutator write is in flight past this point.
+        {
+            WorkStack finalSatb = NewWorkStack();
+            SatbBuffer::Instance().GetRetiredObjects(finalSatb);
+            while (!finalSatb.empty()) {
+                BaseObject* obj = finalSatb.back();
+                finalSatb.pop_back();
+                if (!Heap::IsHeapAddress(obj)) {
+                    continue;
+                }
+                if (fullYoungScan) {
+                    workStack.push_back(obj);
+                } else {
+                    PushYoungObject(obj, workStack, "young_satb_final");
+                }
+            }
+            if (!workStack.empty()) {
+                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                  useBitmapLedger);
+            }
+        }
+        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac");
+    }
     g_minorLedgerCost.Report();
-    VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d",
+    VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
-         static_cast<int>(fullYoungScan));
+         static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
     // blackmark: fixpoint edges from already-reachable holders to unmarked young objects.
     // PrepareYoung ClearLiveInfo drops any pre-mark allocation-black bits; objects allocated
     // into candidate regions (or still living there) that are only reached from live holders
