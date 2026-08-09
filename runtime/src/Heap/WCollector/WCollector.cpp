@@ -3019,10 +3019,43 @@ void WCollector::FixMinorRootSlots()
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
 }
 
+// fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
+// Reject arm must not silent-drop: recover interior host when possible; else sample LOG.
+namespace {
+std::atomic<size_t> g_fixinputReject{ 0 };
+std::atomic<size_t> g_fixinputRecover{ 0 };
+std::atomic<size_t> g_fixinputUnrecoverable{ 0 };
+std::atomic<size_t> g_fixinputFwdFallback{ 0 };
+} // namespace
+
 void WCollector::FixMinorObjectSlots(BaseObject* object)
 {
     // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
     if (object == nullptr || !object->IsValidObject()) {
+        return;
+    }
+    // fixinput / nilclass 丙: mark side already uses PlausibleManagedObjectGate
+    // (PushYoungObject / TraceYoungClosure); Fix only had IsValidObject (tip≠null).
+    // Coloured heap ref as tip (tip-in-heap) still passes IsValidObject → SEGV_nil in
+    // ForEachBitmapWord. Reuse gate semantics at the consumer; do not relax the gate.
+    if (!Collector::PlausibleManagedObjectGate("FixMinorObjectSlots", object)) {
+        size_t n = g_fixinputReject.fetch_add(1, std::memory_order_relaxed) + 1;
+        BaseObject* host = Collector::TryRecoverInteriorBase(object);
+        if (host != nullptr && host != object) {
+            g_fixinputRecover.fetch_add(1, std::memory_order_relaxed);
+            // Edge disposition: scan the real object (host), not the interior.
+            FixMinorObjectSlots(host);
+            return;
+        }
+        g_fixinputUnrecoverable.fetch_add(1, std::memory_order_relaxed);
+        // Edge disposition: not a managed object header — no legitimate field edges to
+        // walk. Account + sample; do not soft-fail the CHECK path elsewhere.
+        if (n <= 16) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][fixinput] reject FixMinorObjectSlots obj=%p tip=%p n=%zu "
+                "reason=non-object-no-host (edge: no field walk; host unknown)",
+                object, object->GetTypeInfo(), n);
+        }
         return;
     }
     if (!object->HasRefField()) {
@@ -3077,9 +3110,40 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             VLOG(REPORT, "[GCV2][verify][post-evac] point=%s run=%zu", point, minorTotalRuns + 1);
         }
     };
-    auto currentObject = [this](BaseObject* object) {
+    // fixinput: holders in reachableVec are mark-gated, but currentObject may hand
+    // FixMinorObjectSlots a to-slot / residual whose tip is a coloured ref (nilclass).
+    // Ensure route-domain before Forward (same as FixMinorEvacuatedSlot); after Forward
+    // re-check Plausible — bad to falls back to from when from is still a real object.
+    auto currentObject = [this](BaseObject* object) -> BaseObject* {
+        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+            return object;
+        }
+        if (!Collector::PlausibleManagedObjectGate("currentObject.in", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object &&
+                Collector::PlausibleManagedObjectGate("currentObject.host", host)) {
+                g_fixinputRecover.fetch_add(1, std::memory_order_relaxed);
+                object = host;
+            } else {
+                g_fixinputReject.fetch_add(1, std::memory_order_relaxed);
+                return object; // FixMinorObjectSlots will reject + account
+            }
+        }
         if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
-            return ForwardObject(object);
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
+            BaseObject* to = ForwardObject(object);
+            if (to != nullptr &&
+                Collector::PlausibleManagedObjectGate("currentObject.out", to)) {
+                return to;
+            }
+            // Bad / null to after forward: keep from if still a real object (ior and nil
+            // share this outlet — route failure CHECKs inside ForwardObjectExclusive;
+            // residual to with tip-in-heap is caught here).
+            if (Collector::PlausibleManagedObjectGate("currentObject.from_fallback", object)) {
+                g_fixinputFwdFallback.fetch_add(1, std::memory_order_relaxed);
+                return object;
+            }
+            return (to != nullptr) ? to : object;
         }
         return object;
     };
@@ -3327,6 +3391,20 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                  g_minorRefCasFail.load(std::memory_order_relaxed));
         } else {
             fixForwardedReferencesParallel(threadPool);
+        }
+
+        // fixinput positive control: must be >0 on nilclass/ior windows when non-objects
+        // reach Fix; zero across a full NEW N=20 would falsify the reader-side premise.
+        {
+            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
+            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
+            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
+            size_t fb = g_fixinputFwdFallback.load(std::memory_order_relaxed);
+            if (rej != 0 || rec != 0 || unr != 0 || fb != 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu fwd_fallback=%zu",
+                    rej, rec, unr, fb);
+            }
         }
 
         ValidateMinorReferences("before-return", &reachableVec);
