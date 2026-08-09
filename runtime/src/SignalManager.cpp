@@ -20,11 +20,14 @@
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/TracingCollector.h"
 #include "Heap/Heap.h"
-#include "Heap/WCollector/WCollector.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
 #include "LoaderManager.h"
+// paramzero: avoid #include WCollector.h (its Heap include graph needs WCollector TU paths).
+namespace MapleRuntime {
+void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
+}
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
 #include "Signal/SignalUtils.h"
