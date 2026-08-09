@@ -15,7 +15,7 @@
 
 namespace MapleRuntime {
 
-__attribute__((weak)) [[noreturn]] void Collector::AbortUnimplemented(const char* method)
+[[noreturn]] void Collector::AbortUnimplemented(const char* method)
 {
     std::fprintf(stderr, "Collector::AbortUnimplemented: %s\n", method);
     std::fflush(stderr);
