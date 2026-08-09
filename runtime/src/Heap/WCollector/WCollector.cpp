@@ -1038,6 +1038,38 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                  "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
                  holder, &field, fromObj, latest);
         }
+        {
+            const char* reason = "unknown";
+            unsigned rtype = 0;
+            int latestValid = -1;
+            if (latest == nullptr) {
+                reason = "latest_null";
+            } else if (!Heap::IsHeapAddress(latest)) {
+                reason = "latest_not_heap";
+            } else {
+                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+                if (region == nullptr) {
+                    reason = "region_null";
+                } else if (region->IsFreeRegion()) {
+                    reason = "region_free";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                } else if (region->IsGarbageRegion()) {
+                    reason = "region_garbage";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                } else {
+                    latestValid = latest->IsValidObject() ? 1 : 0;
+                    reason = latestValid ? "valid_but_not_live" : "invalid_object";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                }
+            }
+            size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
+            if (NullslotProbeEnabled() && whyN < 64) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
+                    "holder=%p field=%p from=%p latest=%p",
+                    whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
+            }
+        }
         NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
         RefField<> nullField(nullptr);
         (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
