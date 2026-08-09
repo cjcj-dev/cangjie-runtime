@@ -1125,6 +1125,15 @@ public:
             }
         }
     }
+    // twoflags: CSet/route exclusion only. Independent of isTraceRegion lifetime.
+    void SetNotRelocatableThisCycle(uint8_t flag)
+    {
+        __atomic_store_n(&metadata.notRelocatableThisCycle, flag, __ATOMIC_RELEASE);
+    }
+    bool IsNotRelocatableThisCycle() const
+    {
+        return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
+    }
     void SetInGhostRegion(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
@@ -1536,6 +1545,11 @@ private:
             BitField<uint16_t> regionStateBitField;
         };
         RouteState routeState; // todo: put in RouteInfo
+        // twoflags: orthogonal to isTraceRegion.
+        // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
+        // notRelocatableThisCycle = allocated after mark start this cycle → not a
+        // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
+        uint8_t notRelocatableThisCycle = 0;
         ZGenerationId _generation_id;
         RwLock rwLock;
     };
@@ -1721,6 +1735,7 @@ private:
         BumpSnapshotEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
+        SetNotRelocatableThisCycle(0);
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
         SetInGhostRegion(0);
