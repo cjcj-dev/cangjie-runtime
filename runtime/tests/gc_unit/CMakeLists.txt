@@ -9,6 +9,7 @@
 
 set(GC_UNIT_SOURCES
     gc_unit_main.cpp
+    gc_unit_stubs.cpp
     test_colour_address.cpp
     test_route_info.cpp
     test_live_map.cpp

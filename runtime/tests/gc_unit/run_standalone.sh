@@ -41,6 +41,7 @@ fi
 $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "${INC_FLAGS[@]}" \
   "$SRC/gc_unit_main.cpp" \
+  "$SRC/gc_unit_stubs.cpp" \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_route_info.cpp" \
   "$SRC/test_live_map.cpp" \
