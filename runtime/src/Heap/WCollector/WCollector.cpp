@@ -4242,6 +4242,62 @@ void WCollector::DoYoungGarbageCollection()
                     }
                 }
             }
+            // youngconc Ⅱ: TRACE-window allocate-black greys (painted at alloc). Claim skip in
+            // TraceYoungClosure would drop reachableVec/fields — force ledger + child greys.
+            // Skip incomplete headers (STW mid-construct); paint still covers GetRoute face.
+            size_t allocBlackN = 0;
+            {
+                WorkStack allocBlack = NewWorkStack();
+                theAllocator.VisitAllocBuffers(
+                    [&allocBlack](AllocBuffer& buffer) { buffer.MergeYoungAllocBlack(allocBlack); });
+                allocBlackN = allocBlack.size();
+                while (!allocBlack.empty()) {
+                    BaseObject* object = allocBlack.back();
+                    allocBlack.pop_back();
+                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                        continue;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("youngconc.alloc_black", object)) {
+                        continue;
+                    }
+                    if (!object->IsValidObject()) {
+                        continue;
+                    }
+                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                    if (region == nullptr || !region->IsYoungRegion()) {
+                        continue;
+                    }
+                    (void)MarkObject(object);
+                    reachableVec.push_back(object);
+                    if (!object->HasRefField() || object->IsWeakRef()) {
+                        continue;
+                    }
+                    if (useBitmapLedger && fullYoungScan) {
+                        object->ForEachRefField([this, &reachableSlots](RefField<>& field) {
+                            MAddress slot = reinterpret_cast<MAddress>(&field);
+                            if (Heap::IsHeapAddress(slot)) {
+                                (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
+                                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                            }
+                        });
+                    }
+                    object->ForEachRefField([this, &workStack, fullYoungScan](RefField<>& field) {
+                        BaseObject* target = ResolveMinorReference(field);
+                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                            return;
+                        }
+                        if (fullYoungScan) {
+                            workStack.push_back(target);
+                        } else {
+                            PushYoungObject(target, workStack, "young_alloc_black");
+                        }
+                    });
+                }
+                if (!workStack.empty()) {
+                    TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                      weakSlots, useBitmapLedger);
+                }
+            }
             constexpr size_t kMaxStw2Iters = 16;
             size_t totalFieldExtra = 0;
             size_t iters = 0;
@@ -4381,13 +4437,14 @@ void WCollector::DoYoungGarbageCollection()
             }
             VLOG(REPORT,
                  "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu field_extra_total=%zu "
-                 "reachable=%zu converged=%d",
-                 iters + 1, totalConcRemset, totalFieldExtra, reachableVec.size(), static_cast<int>(converged));
+                 "alloc_black=%zu reachable=%zu converged=%d",
+                 iters + 1, totalConcRemset, totalFieldExtra, allocBlackN, reachableVec.size(),
+                 static_cast<int>(converged));
             if (!converged) {
                 VLOG(REPORT,
                      "[GCV2][youngconc] stw2_fixpoint NON_CONVERGED max_iters=%zu reachable=%zu "
-                     "conc_remset_total=%zu field_extra_total=%zu",
-                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra);
+                     "conc_remset_total=%zu field_extra_total=%zu alloc_black=%zu",
+                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra, allocBlackN);
             }
         }
         // Rebuild liveRememberedSlots after concurrent remset merge (evac uses this set).

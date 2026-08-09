@@ -335,12 +335,13 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                     needBlack = phaseNeedsBlack(mutP) || phaseNeedsBlack(heapP) || reg->IsTraceRegion();
                 } else {
                     // youngconc only: concurrent mark window (TRACE/CLEAR) + young region.
+                    // Also paint when isTraceRegion (ShouldEnqueue skip) even if mutator phase lags.
                     // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
                     const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
                                              heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
                                              mutP == GCPhase::GC_PHASE_TRACE ||
                                              mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-                    needBlack = inConcMark && reg->IsYoungRegion();
+                    needBlack = reg->IsYoungRegion() && (inConcMark || reg->IsTraceRegion());
                 }
                 if (needBlack) {
                     MAddress regionStart = reg->GetRegionStart();
@@ -352,11 +353,15 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         if (!already) {
                             reg->AddLiveByteCount(totalSize);
                         }
-                        // Ghost route domain (liveInfo0) may already be snapshotted.
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
                         if (ghost != nullptr && ghost->markBitmap != nullptr &&
                             reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
                             (void)ghost->markBitmap->MarkBits(offset, totalSize, regionSize);
+                        }
+                        // youngconc: also grey-list so STW2 can force reachableVec + field scan
+                        // (TraceYoungClosure claim-skips already-marked → would miss children).
+                        if (youngConcMarkOn) {
+                            PushYoungAllocBlack(reinterpret_cast<BaseObject*>(addr));
                         }
                     }
                 }
