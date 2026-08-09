@@ -19,6 +19,7 @@ set(SRC_LIST
     "StackFrameOracle.cpp"
     "StackWatermarkOracle.cpp"
     "StackExposureOracle.cpp"
+    "PlainCensus.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
