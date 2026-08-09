@@ -154,8 +154,42 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     // remset; minor mark then left those young white → GetRoute live0Surv=0.
     // ForEachObjUnsafe walks every valid non-free/non-garbage unit under inactiveZone —
     // same coverage as VerifyRememberedSetInvariant's independence walk.
+    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
+        if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
+            return;
+        }
+        region->VisitAllObjects([&rememberedSet, &recorded](BaseObject* object) {
+            if (object == nullptr || !object->HasRefField()) {
+                return;
+            }
+            object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                    ++recorded;
+                }
+            });
+        });
+    };
+    recentPinnedRegionList.VisitAllRegions(scanRegion);
+    oldPinnedRegionList.VisitAllRegions(scanRegion);
+    rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
+    recentLargeRegionList.VisitAllRegions(scanRegion);
+    oldLargeRegionList.VisitAllRegions(scanRegion);
+    largeTraceRegions.VisitAllRegions(scanRegion);
+    recentFullRegionList.VisitAllRegions(scanRegion);
+    fullTraceRegions.VisitAllRegions(scanRegion);
+    unmovableFromRegionList.VisitAllRegions(scanRegion);
+    fromRegionList.VisitAllRegions(scanRegion);
+    tlRegionList.VisitAllRegions(scanRegion);
+    // floorremset gap fill: units not on named lists. Order matches VerifyRememberedSet —
+    // IsValidObject before HasRefField (HasRefField alone SEGV on stale tips).
     ForEachObjUnsafe([&rememberedSet, &recorded](BaseObject* object) {
-        if (object == nullptr || !object->HasRefField()) {
+        if (object == nullptr || !object->IsValidObject() || !object->HasRefField()) {
             return;
         }
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
