@@ -1116,6 +1116,12 @@ public:
     {
         uint8_t prev = metadata.isTraceRegion;
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
+        // postallocgap: TRACE-region objects never got mark bits (ShouldEnqueue skip only).
+        // When the flag is cleared, stamp notRelocatable so PrepareYoung excludes the region
+        // until next PrepareTrace (full mark). Same carrier as POST_TRACE stamp; cleared there.
+        if (flag == 0 && prev != 0) {
+            SetNotRelocatableThisCycle(1);
+        }
         // blackmark: track 1→0 clears (EnlistFullThreadLocalRegion / HandleTraceRegions).
         if (AllocPhaseDiag::Enabled()) {
             if (flag == 0 && prev != 0) {

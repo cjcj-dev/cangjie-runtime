@@ -3550,11 +3550,10 @@ void WCollector::DoYoungGarbageCollection()
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan));
     // postallocgap: after young mark, grant route-domain bits for live edges that mark
-    // missed (live non-young holder / remset slot → unmarked young candidate). GetRoute
-    // reads ghost liveInfo0 snapshotted from current liveInfo at PrepareForwardable —
-    // so paint here (after ClearLiveInfo, before snapshot) lands where GetRoute reads.
-    // Differs from ALLOC_BLACK: ⛔ not at alloc; ⛔ not wiped by PrepareYoung ClearLiveInfo;
-    // only targets already proven live by a reachableVec/remset edge. Multi-pass until fixpoint.
+    // missed. GetRoute reads ghost liveInfo0 (= current liveInfo at PrepareForwardable).
+    // Paint here (after ClearLiveInfo, before snapshot). Differs from ALLOC_BLACK:
+    // ⛔ not at alloc; ⛔ not wiped by PrepareYoung; only edge-proven targets.
+    // Holders: reachableVec + full remset (not only liveRemembered) + allocationRoots + minor roots.
     {
         size_t totalGranted = 0;
         for (int pass = 0; pass < 8; ++pass) {
@@ -3578,6 +3577,7 @@ void WCollector::DoYoungGarbageCollection()
                 if (region->IsMarkedObject(target)) {
                     return;
                 }
+                // TraceYoungClosure marks + expands; do not MarkObject here (would skip vec insert).
                 grantExtra.push_back(target);
             };
             const size_t nHolders = reachableVec.size();
@@ -3596,12 +3596,17 @@ void WCollector::DoYoungGarbageCollection()
                     considerTarget(ResolveMinorReference(field));
                 });
             }
-            for (MAddress slot : liveRememberedSlots) {
+            // Full remset (pre-filter): deadedge hosts may sit only on remset edges.
+            for (MAddress slot : rememberedSlots) {
                 if (!Heap::IsHeapAddress(slot)) {
                     continue;
                 }
                 considerTarget(ResolveMinorReference(HeapSlotAt<>(slot)));
             }
+            for (BaseObject* object : allocationRoots) {
+                considerTarget(object);
+            }
+            VisitMinorRoots([&considerTarget](BaseObject* object) { considerTarget(object); }, stackScanEpoch);
             if (grantExtra.empty()) {
                 break;
             }
@@ -3610,18 +3615,13 @@ void WCollector::DoYoungGarbageCollection()
             TraceYoungClosure(grantExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                               useBitmapLedger);
             totalGranted += extraN;
-            VLOG(REPORT,
-                 "[GCV2][postallocgap] grant_pass=%d extra=%zu reachable_before=%zu after=%zu", pass, extraN, before,
-                 reachableVec.size());
             if (reachableVec.size() == before) {
-                // Targets pushed but already claimed without growing vec — still marked via MarkObject.
                 break;
             }
         }
-        if (totalGranted != 0) {
-            VLOG(REPORT, "[GCV2][postallocgap] grant_total=%zu reachable_final=%zu", totalGranted,
-                 reachableVec.size());
-        }
+        // Always-on breadcrumb so measure sees grant without VLOG env.
+        LOG(RTLOG_ERROR, "[GCV2][postallocgap] grant_total=%zu reachable_final=%zu pass_done", totalGranted,
+            reachableVec.size());
     }
     // setbitmap2: optional closure equality probe (default off).
     // mode=1: dump product ptr-set hash; mode=2: in-process dual legacy set walk on same roots.
