@@ -10,6 +10,10 @@
 #include "Common/TypeDef.h"
 #include "Heap/Collector/Collector.h"
 
+#ifdef REASON_UNKNOWN
+#undef REASON_UNKNOWN
+#endif
+
 namespace MapleRuntime {
 namespace RemsetPhaseProbe {
 
