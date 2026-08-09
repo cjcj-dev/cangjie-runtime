@@ -65,6 +65,14 @@ static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserv
 std::atomic<size_t> g_forwardRaceTotalCount{ 0 };
 std::atomic<size_t> g_forwardRaceStillBadCount{ 0 };
 
+// installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
+// outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
+// Report with MRT_GCV2_INSTALLDOMAIN_ACCOUNT=1 (also always VLOG once per minor if >0).
+std::atomic<size_t> g_installDomainGrant{ 0 };
+std::atomic<size_t> g_installDomainAlready{ 0 };
+std::atomic<size_t> g_installDomainTooLate{ 0 };
+std::atomic<size_t> g_installDomainSkip{ 0 };
+
 void ReportForwardRaceCounts()
 {
     static const bool account = []() {
@@ -1693,6 +1701,81 @@ bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, RefField<> d
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
     return true;
 }
+
+// installdomain (ZGC mark_and_remember shape, GC-thread side): before installing a
+// from/ghost-from address into a heap slot (or forwarding it), ensure the survivor
+// bit that GetRoute will read is set.
+//
+// Two windows:
+//   (1) pass1 before PrepareForwardable: region is still from (not yet ghost). Mark
+//       current liveInfo; PrepareForwardable does liveInfo0 = liveInfo (pointer copy)
+//       so the paint is snapshotted into the route domain.
+//   (2) after PrepareForwardable while routeState==FORWARDABLE: MarkObject writes the
+//       same LiveInfo that liveInfo0 points at — visible to GetRoute, not wiped by
+//       ClearLiveInfo (that already ran at PrepareYoung).
+// After ROUTED, liveByteCount/geometry are frozen — do not paint (tooLate counter).
+void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (!Collector::PlausibleManagedObjectGate("EnsureRouteDomain", obj)) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (!obj->IsValidObject()) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (collector->IsUnmovableFromObject(obj)) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    if (region == nullptr) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    const bool isGhost = collector->IsGhostFromObject(obj);
+    const bool isFrom = collector->IsFromObject(obj);
+    if (!isGhost && !isFrom) {
+        g_installDomainSkip.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+    // Prefer ghost face when present (what GetRoute reads); else current liveInfo.
+    LiveInfo* face = region->GetLiveInfo0ForProbe();
+    if (face == nullptr) {
+        face = region->GetLiveInfo();
+    }
+    if (face != nullptr && face->IsSurvivedObject(offset)) {
+        g_installDomainAlready.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (isGhost) {
+        // Only paint while FORWARDABLE: RouteOrCompactRegionImpl freezes liveByteCount.
+        RegionInfo::RouteState rs = region->GetRouteState();
+        if (rs != RegionInfo::RouteState::FORWARDABLE) {
+            g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    // Mark current liveInfo (post-snapshot: same pointer as liveInfo0).
+    (void)collector->MarkObject(obj);
+    LiveInfo* live = region->GetLiveInfo();
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
+        reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+        size_t objSize = obj->GetSize();
+        MAddress regionStart = region->GetRegionStart();
+        size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
+        if (objSize > 0 && offset + objSize <= regionSize) {
+            (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
+        }
+    }
+    g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
+}
 } // namespace
 
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
@@ -1706,6 +1789,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         // FixMinor/VisitMinor keep the from address and young GC thrash (10/10 HANG).
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
+            // installdomain: admit into route domain before any install/forward consumes it.
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
             if (to != nullptr && Heap::IsHeapAddress(to)) {
                 MAddress expected = raw(value.GetFieldValue());
@@ -1737,6 +1822,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
+            // installdomain: identity arm is the A-only fork (IsValidObject without liveInfo0).
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(object, &field));
             return object;
         }
@@ -1767,6 +1854,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
     if (!IsOldPointer(observedBits)) {
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
             if (to != nullptr && Heap::IsHeapAddress(to)) {
                 HealRoot(root, from_object(to));
@@ -1789,6 +1877,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
         RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             HealRoot(root, from_object(object));
             return object;
         }
@@ -2793,6 +2882,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
@@ -2817,6 +2907,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        // installdomain: route-domain grant before ForwardObject → GetRoute.
+        EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
@@ -2867,6 +2959,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+            EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
@@ -2881,6 +2974,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
@@ -3143,6 +3237,52 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
+
+        // installdomain: serial pre-grant while every from region is still FORWARDABLE.
+        // Must finish before any Fix/Forward can RouteRegion→ROUTED (else liveByteCount
+        // geometry freezes without the late survivor). Walk remset + reachable holders.
+        {
+            auto ensureField = [this](RefField<>& field) {
+                RefField<> value(field);
+                BaseObject* t = to_object(value.GetTargetObject());
+                EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
+            };
+            for (MAddress slot : remsetVec) {
+                if (Heap::IsHeapAddress(slot)) {
+                    ensureField(HeapSlotAt<>(slot));
+                }
+            }
+            for (BaseObject* object : reachableVec) {
+                if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                    continue;
+                }
+                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
+                    continue;
+                }
+                if (!object->IsValidObject() || !object->HasRefField()) {
+                    continue;
+                }
+                object->ForEachRefField(ensureField);
+            }
+            size_t grant = g_installDomainGrant.load(std::memory_order_relaxed);
+            size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
+            size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
+            size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
+            if (grant != 0 || tooLate != 0) {
+                VLOG(REPORT,
+                     "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
+                     grant, already, tooLate, skip);
+            }
+            static const bool account = []() {
+                const char* v = std::getenv("MRT_GCV2_INSTALLDOMAIN_ACCOUNT");
+                return v != nullptr && v[0] == '1' && v[1] == '\0';
+            }();
+            if (account) {
+                VLOG(REPORT,
+                     "[GCV2][installdomain] account grant=%zu already=%zu tooLate=%zu skip=%zu",
+                     grant, already, tooLate, skip);
+            }
+        }
 
         // Reset CAS counters for this fix window (positive-control visibility).
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
