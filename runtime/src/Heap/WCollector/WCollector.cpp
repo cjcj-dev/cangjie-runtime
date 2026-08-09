@@ -4299,6 +4299,16 @@ void WCollector::DoYoungGarbageCollection()
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
          liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+    // csetalloc: surface cumulative "would allocate into CSet" count (always-on counter,
+    // zero-cost when no hits; LOG only if non-zero so default noise stays quiet).
+    {
+        size_t into = RegionSpace::AllocIntoCSetCount();
+        size_t retired = RegionSpace::AllocIntoCSetRetiredCount();
+        if (into != 0 || retired != 0) {
+            VLOG(REPORT, "[GCV2][csetalloc] cumulative intoCSet=%zu retired=%zu (post-minor run=%zu)",
+                 into, retired, minorTotalRuns);
+        }
+    }
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
 }

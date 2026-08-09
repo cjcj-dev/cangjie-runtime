@@ -7,6 +7,10 @@
 
 #include "Allocator/RegionSpace.h"
 
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
@@ -20,6 +24,68 @@
 #include "Mutator/Mutator.h"
 
 namespace MapleRuntime {
+namespace {
+// csetalloc: count mutator MOVEABLE bumps that would land in a region already in
+// the relocation set (FROM / LONE_FROM / route-in-progress). Always-on counters;
+// sample lines gated by MRT_GCV2_ALLOC_INTO_CSET_DIAG=1.
+std::atomic<size_t> g_allocIntoCSetCount{ 0 };
+std::atomic<size_t> g_allocIntoCSetRetired{ 0 };
+
+bool AllocIntoCSetDiagEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_ALLOC_INTO_CSET_DIAG");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    return on;
+}
+
+// Region is currently a relocation-set member (or mid-route). Mutator bump into it
+// is the ZGC-forbidden "allocate into page being relocated" shape.
+bool RegionIsInRelocationSet(const RegionInfo* reg)
+{
+    if (reg == nullptr || reg == RegionInfo::NullRegion()) {
+        return false;
+    }
+    if (reg->IsFromRegion() || reg->IsLoneFromRegion()) {
+        return true;
+    }
+    RegionInfo::RouteState rs = reg->GetRouteState();
+    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+        rs == RegionInfo::RouteState::ROUTED;
+}
+
+void NoteAllocIntoCSet(RegionInfo* reg, const char* where)
+{
+    size_t n = g_allocIntoCSetCount.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (!AllocIntoCSetDiagEnabled() || n > 64) {
+        return;
+    }
+    GCPhase heapP = Heap::GetHeap().GetGCPhase();
+    GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
+    Mutator* m = Mutator::GetMutator();
+    if (m != nullptr) {
+        mutP = m->GetMutatorPhase();
+    }
+    VLOG(REPORT,
+         "[GCV2][csetalloc] n=%zu where=%s reg=%p type=%u route=%u young=%u "
+         "heapP=%u mutP=%u start=%#zx alloc=%#zx",
+         n, where, reg, static_cast<unsigned>(reg->GetRegionType()),
+         static_cast<unsigned>(reg->GetRouteState()), static_cast<unsigned>(reg->IsYoungRegion()),
+         static_cast<unsigned>(heapP), static_cast<unsigned>(mutP),
+         static_cast<size_t>(reg->GetRegionStart()), static_cast<size_t>(reg->GetRegionAllocPtr()));
+}
+} // namespace
+
+size_t RegionSpace::AllocIntoCSetCount()
+{
+    return g_allocIntoCSetCount.load(std::memory_order_relaxed);
+}
+
+size_t RegionSpace::AllocIntoCSetRetiredCount()
+{
+    return g_allocIntoCSetRetired.load(std::memory_order_relaxed);
+}
 MAddress RegionSpace::TryAllocateOnce(size_t allocSize, AllocType allocType)
 {
     if (UNLIKELY(allocType == AllocType::PINNED_OBJECT)) {
@@ -165,6 +231,23 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         return AllocateRawPointerObject(totalSize);
     }
 
+    // csetalloc: never bump into a region already in the relocation set.
+    // Mirror pin path's "no reuse after POST_TRACE" rule (RegionManager.cpp free-list).
+    // If tlRegion was reclassified to FROM while we still hold it, retire and slow-path.
+    if (UNLIKELY(tlRegion != RegionInfo::NullRegion() && RegionIsInRelocationSet(tlRegion))) {
+        NoteAllocIntoCSet(tlRegion, "fast-retire");
+        g_allocIntoCSetRetired.fetch_add(1, std::memory_order_relaxed);
+        // FROM/LONE_FROM are already off tlRegionList — only drop the local shortcut.
+        // Still-THREAD_LOCAL but routing: flush to recentFull so it can be handled by GC lists.
+        if (tlRegion->IsThreadLocalRegion()) {
+            RegionSpace& theAllocator = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+            RegionManager& manager = theAllocator.GetRegionManager();
+            manager.RemoveThreadLocalRegion(tlRegion);
+            manager.EnlistFullThreadLocalRegion(tlRegion);
+        }
+        tlRegion = RegionInfo::NullRegion();
+    }
+
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
         addr = tlRegion->Alloc(totalSize);
     }
@@ -181,6 +264,17 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             reg = tlRegion;
         } else {
             reg = RegionInfo::TryGetRegionInfoAt(addr);
+        }
+        // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
+        // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
+        // TRACE (would exclude most young regions until next major → minor starvation).
+        // ⛔ No CLEAR_SATB (minor shares it). Orthogonal to isTraceRegion / ShouldEnqueue.
+        if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
+            GCPhase heapP = Heap::GetHeap().GetGCPhase();
+            if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
+                heapP == GCPhase::GC_PHASE_FORWARD) {
+                reg->SetNotRelocatableThisCycle(1);
+            }
         }
         // marklate: per-region last-alloc phase (NULLROUTE_DIAG only; no TLS).
         // blackmark: also stamp isTraceRegion at alloc for H3.
@@ -264,17 +358,27 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
 
     // allocate from thread local region
     if (LIKELY(tlRegion != RegionInfo::NullRegion())) {
-        MAddress addr = tlRegion->Alloc(totalSize);
-        if (addr != 0) {
-            return addr;
-        }
-
-        // allocation failed because region is full.
-        CHECK(tlRegion->IsThreadLocalRegion());
-        {
-            manager.RemoveThreadLocalRegion(tlRegion);
-            manager.EnlistFullThreadLocalRegion(tlRegion);
+        if (UNLIKELY(RegionIsInRelocationSet(tlRegion))) {
+            NoteAllocIntoCSet(tlRegion, "impl-retire");
+            g_allocIntoCSetRetired.fetch_add(1, std::memory_order_relaxed);
+            if (tlRegion->IsThreadLocalRegion()) {
+                manager.RemoveThreadLocalRegion(tlRegion);
+                manager.EnlistFullThreadLocalRegion(tlRegion);
+            }
             tlRegion = RegionInfo::NullRegion();
+        } else {
+            MAddress addr = tlRegion->Alloc(totalSize);
+            if (addr != 0) {
+                return addr;
+            }
+
+            // allocation failed because region is full.
+            CHECK(tlRegion->IsThreadLocalRegion());
+            {
+                manager.RemoveThreadLocalRegion(tlRegion);
+                manager.EnlistFullThreadLocalRegion(tlRegion);
+                tlRegion = RegionInfo::NullRegion();
+            }
         }
     }
 
@@ -283,12 +387,22 @@ MAddress AllocBuffer::AllocateImpl(size_t totalSize, AllocType allocType)
     RegionInfo* r  = preparedRegion.load(std::memory_order_acquire);
     if (r != nullptr) {
         preparedRegion.store(nullptr, std::memory_order_release);
-        tlRegion = r;
-        if (theAllocator.IsAsyncAllocationEnable()) {
-            theAllocator.AddHungryBuffer(*this);
-            Heap::GetHeap().GetFinalizerProcessor().NotifyToFeedAllocBuffers();
+        if (UNLIKELY(RegionIsInRelocationSet(r))) {
+            NoteAllocIntoCSet(r, "prepared-reject");
+            // prepared region must not be a CSet member; reclaim path via flush semantics.
+            if (r->IsThreadLocalRegion()) {
+                manager.RemoveThreadLocalRegion(r);
+            }
+            manager.ReclaimRegion(r);
+            r = nullptr;
+        } else {
+            tlRegion = r;
+            if (theAllocator.IsAsyncAllocationEnable()) {
+                theAllocator.AddHungryBuffer(*this);
+                Heap::GetHeap().GetFinalizerProcessor().NotifyToFeedAllocBuffers();
+            }
+            return r->Alloc(totalSize);
         }
-        return r->Alloc(totalSize);
     }
     // AllocateThreadLocalRegion is a safepoint, in which cj thread rescheule may happen.
     // tlRegion is bound to specific thread, so we need to forbid reschedule.
