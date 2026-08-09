@@ -76,6 +76,7 @@ std::atomic<size_t> g_installDomainSkip{ 0 };
 
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
+// rootdrop: same gate also arms path=resolve_root_null (RootSlot HealRoot null).
 namespace {
 bool NullslotProbeEnabled()
 {
@@ -89,6 +90,12 @@ bool NullslotProbeEnabled()
 std::atomic<size_t> g_nullslotF3{ 0 };
 std::atomic<size_t> g_nullslotResolve{ 0 };
 std::atomic<size_t> g_nullslotRemset{ 0 };
+std::atomic<size_t> g_nullslotResolveRoot{ 0 };
+// rootdrop entry accounting (always-on atomics; LOG only when MRT_GCV2_NULLSLOT=1).
+std::atomic<size_t> g_resolveRootEntry{ 0 };
+std::atomic<size_t> g_resolveRootOld{ 0 };
+std::atomic<size_t> g_resolveRootHealNull{ 0 };
+std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
 
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
                        std::atomic<size_t>* pathCount)
@@ -105,6 +112,73 @@ void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseOb
         holder != nullptr && Heap::IsHeapAddress(holder) ? static_cast<int>(holder->IsValidObject()) : -1,
         static_cast<unsigned>(from != nullptr && Heap::IsHeapAddress(from)),
         static_cast<unsigned>(latest != nullptr && Heap::IsHeapAddress(latest)));
+}
+
+// Classify why ResolveMinorReference(RootSlot) live-predicates rejected to/from.
+// Gate: NullslotProbeEnabled (MRT_GCV2_NULLSLOT=1); default off — never on hot path alone.
+// Never touch object headers when region is free/garbage (madvise / recycled).
+const char* ClassifyRootLiveFail(BaseObject* obj, RegionInfo* region)
+{
+    if (obj == nullptr) {
+        return "obj_null";
+    }
+    if (!Heap::IsHeapAddress(obj)) {
+        return "not_heap";
+    }
+    if (region == nullptr) {
+        return "no_region";
+    }
+    if (region->IsFreeRegion()) {
+        return "free";
+    }
+    if (region->IsGarbageRegion()) {
+        return "garbage";
+    }
+    // Only touch header when region still claims to own live units.
+    if (!obj->IsValidObject()) {
+        return "invalid_object";
+    }
+    return "live_ok";
+}
+
+void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, RegionInfo* fromRegion,
+                         RegionInfo* toRegion, const char* toWhy, const char* fromWhy)
+{
+    size_t n = g_nullslotResolveRoot.fetch_add(1, std::memory_order_relaxed);
+    if (!NullslotProbeEnabled() || n >= 64) {
+        return;
+    }
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    unsigned fromRtype = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRegionType()) : 0xffu;
+    unsigned toRtype = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRegionType()) : 0xffu;
+    unsigned fromRoute = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRouteState()) : 0xffu;
+    unsigned toRoute = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRouteState()) : 0xffu;
+    unsigned fromYoung = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->IsYoungRegion()) : 0xffu;
+    unsigned toYoung = toRegion != nullptr ? static_cast<unsigned>(toRegion->IsYoungRegion()) : 0xffu;
+    int fromMarked = -1;
+    int toMarked = -1;
+    // Skip mark/valid probes on free/garbage — header may be unmapped.
+    const bool fromSafe = from != nullptr && fromRegion != nullptr && Heap::IsHeapAddress(from) &&
+                          !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion();
+    const bool toSafe = to != nullptr && toRegion != nullptr && Heap::IsHeapAddress(to) &&
+                        !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion();
+    if (fromSafe) {
+        fromMarked = static_cast<int>(fromRegion->IsMarkedObject(from));
+    }
+    if (toSafe) {
+        toMarked = static_cast<int>(toRegion->IsMarkedObject(to));
+    }
+    int fromValid = fromSafe ? static_cast<int>(from->IsValidObject()) : -1;
+    int toValid = toSafe ? static_cast<int>(to->IsValidObject()) : -1;
+    // fprintf+fflush: Mode A often dies in the same concurrent window; LOG may not flush.
+    std::fprintf(stderr,
+                 "[GCV2][nullslot] path=resolve_root_null n=%zu root=%p from=%p to=%p phase=%s(%u) "
+                 "fromRtype=%u fromRoute=%u fromYoung=%u fromMarked=%d fromValid=%d fromWhy=%s "
+                 "toRtype=%u toRoute=%u toYoung=%u toMarked=%d toValid=%d toWhy=%s\n",
+                 n, rootSlot, from, to, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), fromRtype,
+                 fromRoute, fromYoung, fromMarked, fromValid, fromWhy, toRtype, toRoute, toYoung, toMarked, toValid,
+                 toWhy);
+    std::fflush(stderr);
 }
 } // namespace
 
@@ -1953,7 +2027,25 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
     zaddress_unsafe observed = root.LoadPlain();
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* object = to_object(observedBits.GetTargetObject());
-    if (!IsOldPointer(observedBits)) {
+    const bool isOld = IsOldPointer(observedBits);
+    {
+        size_t en = g_resolveRootEntry.fetch_add(1, std::memory_order_relaxed);
+        if (isOld) {
+            g_resolveRootOld.fetch_add(1, std::memory_order_relaxed);
+        }
+        // Entry sample: prove FixMinorRootSlots reaches this function before Mode A.
+        if (NullslotProbeEnabled() && en < 32) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            std::fprintf(stderr,
+                         "[GCV2][nullslot] path=resolve_root_entry n=%zu root=%p obj=%p raw=%#zx "
+                         "isOld=%u phase=%s(%u)\n",
+                         en, static_cast<void*>(&root), object, static_cast<size_t>(raw(observed)),
+                         static_cast<unsigned>(isOld), Collector::GetGCPhaseName(phase),
+                         static_cast<unsigned>(phase));
+            std::fflush(stderr);
+        }
+    }
+    if (!isOld) {
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
@@ -1987,6 +2079,28 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
     if (object != nullptr && !Heap::IsHeapAddress(object)) {
         return object;
     }
+    // rootdrop probe: classify why to/from both failed live predicates before drop-null.
+    // Gate = MRT_GCV2_NULLSLOT (same as nullslot); default off.
+    {
+        RegionInfo* toRegion =
+            (to != nullptr && Heap::IsHeapAddress(to))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to))
+                : nullptr;
+        RegionInfo* fromRegion =
+            (object != nullptr && Heap::IsHeapAddress(object))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object))
+                : nullptr;
+        const char* toWhy = nullptr;
+        if (to == nullptr) {
+            toWhy = "to_null";
+        } else if (!Heap::IsHeapAddress(to)) {
+            toWhy = "to_not_heap";
+        } else {
+            toWhy = ClassifyRootLiveFail(to, toRegion);
+        }
+        const char* fromWhy = ClassifyRootLiveFail(object, fromRegion);
+        NoteResolveRootNull(&root, object, to, fromRegion, toRegion, toWhy, fromWhy);
+    }
     static std::atomic<size_t> g_staleOldRootLogged{ 0 };
     size_t n = g_staleOldRootLogged.fetch_add(1, std::memory_order_relaxed);
     if (n < 16) {
@@ -1995,6 +2109,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
              "(drop; full-GC root residue after Flip)",
              &root, static_cast<size_t>(raw(observed)), object, to);
     }
+    g_resolveRootHealNull.fetch_add(1, std::memory_order_relaxed);
     HealRoot(root, zaddress::null);
     return nullptr;
 }
@@ -3094,6 +3209,19 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
 
 void WCollector::FixMinorRootSlots()
 {
+    size_t callN = g_fixMinorRootSlotsCalls.fetch_add(1, std::memory_order_relaxed);
+    const size_t entryBefore = g_resolveRootEntry.load(std::memory_order_relaxed);
+    const size_t oldBefore = g_resolveRootOld.load(std::memory_order_relaxed);
+    const size_t nullBefore = g_resolveRootHealNull.load(std::memory_order_relaxed);
+    if (NullslotProbeEnabled() && callN < 32) {
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        std::fprintf(stderr,
+                     "[GCV2][nullslot] path=fix_minor_roots begin n=%zu phase=%s(%u) "
+                     "entry=%zu old=%zu healNull=%zu\n",
+                     callN, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), entryBefore, oldBefore,
+                     nullBefore);
+        std::fflush(stderr);
+    }
     RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
@@ -3104,6 +3232,18 @@ void WCollector::FixMinorRootSlots()
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    if (NullslotProbeEnabled() && callN < 32) {
+        std::fprintf(stderr,
+                     "[GCV2][nullslot] path=fix_minor_roots end n=%zu dEntry=%zu dOld=%zu dHealNull=%zu "
+                     "entry=%zu old=%zu healNull=%zu\n",
+                     callN, g_resolveRootEntry.load(std::memory_order_relaxed) - entryBefore,
+                     g_resolveRootOld.load(std::memory_order_relaxed) - oldBefore,
+                     g_resolveRootHealNull.load(std::memory_order_relaxed) - nullBefore,
+                     g_resolveRootEntry.load(std::memory_order_relaxed),
+                     g_resolveRootOld.load(std::memory_order_relaxed),
+                     g_resolveRootHealNull.load(std::memory_order_relaxed));
+        std::fflush(stderr);
+    }
 }
 
 // fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
