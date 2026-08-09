@@ -480,8 +480,19 @@ elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG IN_LIST OHOS_FLAG_LIST AND WINDOWS_FL
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"
         "-lstdc++" ${LINK_LIBS} "-Wl,--end-group -lunwind -lclang_rt.builtins -lhilog_ndk.z -lhitrace_ndk.z")
 elseif (DOPRA_FLAG MATCHES 1 AND OHOS_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 1) # Windows
+    set(WINDOWS_EXPORT_DEFINITION "${CMAKE_CURRENT_SOURCE_DIR}/src/windows_x86_64_exports.def")
+    set(WINDOWS_EXPORT_DEFINITION_RAW "${CMAKE_CURRENT_BINARY_DIR}/windows_x86_64_exports.raw.def")
+    set(WINDOWS_EXPORT_GENERATOR "${CMAKE_CURRENT_SOURCE_DIR}/build/generate_windows_exports.py")
     target_link_libraries(cangjie-runtime PRIVATE "-Wl,--start-group"
-        "-Wl,--export-all-symbols" "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
+        "-Wl,--export-all-symbols,--output-def=${WINDOWS_EXPORT_DEFINITION_RAW}"
+        "-lc++" "-lc++abi" "-lunwind" ${LINK_LIBS} "-Wl,--end-group -Wl,--no-insert-timestamp")
+    set_property(TARGET cangjie-runtime APPEND PROPERTY LINK_DEPENDS
+        "${WINDOWS_EXPORT_DEFINITION}" "${WINDOWS_EXPORT_GENERATOR}")
+    add_custom_command(TARGET cangjie-runtime POST_BUILD
+        COMMAND python3 "${WINDOWS_EXPORT_GENERATOR}" check
+            "${WINDOWS_EXPORT_DEFINITION_RAW}" "${WINDOWS_EXPORT_DEFINITION}"
+        COMMENT "Checking the Windows runtime export surface"
+        VERBATIM)
 elseif (DOPRA_FLAG MATCHES 0 AND WINDOWS_FLAG MATCHES 0) # thread module
     target_link_libraries(cangjie-runtime "-Wl,--start-group -Wl,--version-script=${CMAKE_CURRENT_SOURCE_DIR}/src/${EXPORT_MAP}"
         ${LINK_LIBS} "-Wl,--end-group -nodefaultlibs -Wl,-Bdynamic -lstdc++ -lm -lc -lgcc_s -lpthread -ldl")
