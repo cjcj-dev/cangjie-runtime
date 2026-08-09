@@ -755,8 +755,30 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 void RegionManager::AssembleSmallGarbageCandidates()
 {
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
-    fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
-    fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
+    // twoflags: regions stamped post-mark-start of the previous major stay off from-space
+    // until PrepareTrace clears the stamp (after this Assemble).
+    {
+        RegionInfo* region = recentFullRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsNotRelocatableThisCycle()) {
+                recentFullRegionList.DeleteRegion(region);
+                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            }
+            region = next;
+        }
+    }
+    {
+        RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsNotRelocatableThisCycle()) {
+                unmovableFromRegionList.DeleteRegion(region);
+                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            }
+            region = next;
+        }
+    }
 
     fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
 }
@@ -1445,8 +1467,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
-            // twoflags: CSet exclusion for post-mark-start regions (orthogonal to isTraceRegion).
-            // No CLEAR_SATB: shared with minor GC (see RegionSpace.cpp alloc path).
+            // twoflags: CSet exclusion (orthogonal to isTraceRegion). No CLEAR_SATB/RECLAIM.
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_POST_TRACE ||
                 phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
                 region->SetNotRelocatableThisCycle(1);

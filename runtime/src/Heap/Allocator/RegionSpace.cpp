@@ -184,8 +184,8 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         }
         // twoflags: any successful alloc after major mark start stamps CSet exclusion.
         // Covers IDLE-born TL tails that keep bumping during TRACE/POST_TRACE.
-        // ⛔ Do NOT include CLEAR_SATB_BUFFER: minor GC also uses that phase and would
-        // stamp almost every young region, starving PrepareYoung (default-arm regression).
+        // ⛔ Do NOT include CLEAR_SATB_BUFFER (minor shares it) or RECLAIM_SATB_NODE
+        // (post-cycle; would re-stamp after PrepareTrace clear and poison next Assemble).
         // Orthogonal to isTraceRegion; never read by ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
             GCPhase heapP = Heap::GetHeap().GetGCPhase();

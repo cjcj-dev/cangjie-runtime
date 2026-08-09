@@ -216,8 +216,7 @@ public:
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
-            // twoflags: CSet exclusion for regions born after mark start (incl. POST_TRACE).
-            // No CLEAR_SATB: shared with minor GC.
+            // twoflags: CSet exclusion (incl. POST_TRACE). No CLEAR_SATB/RECLAIM.
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_POST_TRACE ||
                 phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
                 region->SetNotRelocatableThisCycle(1);
@@ -263,7 +262,6 @@ public:
             region->SetTraceRegionFlag(0);
         }
         // twoflags: independent of isTraceRegion / largeTraceRegions success.
-        // No CLEAR_SATB: shared with minor GC.
         if (phase == GC_PHASE_TRACE || phase == GC_PHASE_POST_TRACE ||
             phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
             region->SetNotRelocatableThisCycle(1);
@@ -566,8 +564,8 @@ public:
     {
         fullTraceRegions.ActivateRegionCache();
         largeTraceRegions.ActivateRegionCache();
-        // twoflags: Assemble (just ran) already filtered previous-cycle stamps.
-        // Clear so this TRACE can re-stamp only regions that allocate after mark start.
+        // twoflags: Assemble just filtered previous-cycle stamps; clear so this TRACE
+        // re-stamps only regions that allocate after this mark start.
         ClearNotRelocatableThisCycleFlags();
     }
 
