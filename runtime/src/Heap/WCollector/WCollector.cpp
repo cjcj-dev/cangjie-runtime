@@ -111,6 +111,7 @@ void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseOb
 
 // Classify why ResolveMinorReference(RootSlot) live-predicates rejected to/from.
 // Gate: NullslotProbeEnabled (MRT_GCV2_NULLSLOT=1); default off — never on hot path alone.
+// Never touch object headers when region is free/garbage (madvise / recycled).
 const char* ClassifyRootLiveFail(BaseObject* obj, RegionInfo* region)
 {
     if (obj == nullptr) {
@@ -128,6 +129,7 @@ const char* ClassifyRootLiveFail(BaseObject* obj, RegionInfo* region)
     if (region->IsGarbageRegion()) {
         return "garbage";
     }
+    // Only touch header when region still claims to own live units.
     if (!obj->IsValidObject()) {
         return "invalid_object";
     }
@@ -150,20 +152,28 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
     unsigned toYoung = toRegion != nullptr ? static_cast<unsigned>(toRegion->IsYoungRegion()) : 0xffu;
     int fromMarked = -1;
     int toMarked = -1;
-    if (from != nullptr && fromRegion != nullptr && Heap::IsHeapAddress(from) && !fromRegion->IsFreeRegion()) {
+    // Skip mark/valid probes on free/garbage — header may be unmapped.
+    const bool fromSafe = from != nullptr && fromRegion != nullptr && Heap::IsHeapAddress(from) &&
+                          !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion();
+    const bool toSafe = to != nullptr && toRegion != nullptr && Heap::IsHeapAddress(to) &&
+                        !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion();
+    if (fromSafe) {
         fromMarked = static_cast<int>(fromRegion->IsMarkedObject(from));
     }
-    if (to != nullptr && toRegion != nullptr && Heap::IsHeapAddress(to) && !toRegion->IsFreeRegion()) {
+    if (toSafe) {
         toMarked = static_cast<int>(toRegion->IsMarkedObject(to));
     }
-    int fromValid = from != nullptr && Heap::IsHeapAddress(from) ? static_cast<int>(from->IsValidObject()) : -1;
-    int toValid = to != nullptr && Heap::IsHeapAddress(to) ? static_cast<int>(to->IsValidObject()) : -1;
-    LOG(RTLOG_ERROR,
-        "[GCV2][nullslot] path=resolve_root_null n=%zu root=%p from=%p to=%p phase=%s(%u) "
-        "fromRtype=%u fromRoute=%u fromYoung=%u fromMarked=%d fromValid=%d fromWhy=%s "
-        "toRtype=%u toRoute=%u toYoung=%u toMarked=%d toValid=%d toWhy=%s",
-        n, rootSlot, from, to, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), fromRtype, fromRoute,
-        fromYoung, fromMarked, fromValid, fromWhy, toRtype, toRoute, toYoung, toMarked, toValid, toWhy);
+    int fromValid = fromSafe ? static_cast<int>(from->IsValidObject()) : -1;
+    int toValid = toSafe ? static_cast<int>(to->IsValidObject()) : -1;
+    // fprintf+fflush: Mode A often dies in the same concurrent window; LOG may not flush.
+    std::fprintf(stderr,
+                 "[GCV2][nullslot] path=resolve_root_null n=%zu root=%p from=%p to=%p phase=%s(%u) "
+                 "fromRtype=%u fromRoute=%u fromYoung=%u fromMarked=%d fromValid=%d fromWhy=%s "
+                 "toRtype=%u toRoute=%u toYoung=%u toMarked=%d toValid=%d toWhy=%s\n",
+                 n, rootSlot, from, to, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), fromRtype,
+                 fromRoute, fromYoung, fromMarked, fromValid, fromWhy, toRtype, toRoute, toYoung, toMarked, toValid,
+                 toWhy);
+    std::fflush(stderr);
 }
 } // namespace
 
