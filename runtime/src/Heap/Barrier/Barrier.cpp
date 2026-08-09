@@ -9,6 +9,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -490,9 +491,10 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
 {
     using namespace RemsetPhaseProbe;
     const bool probeOn = Enabled();
+    const bool idleEdgeOn = IdleEdgeDiag::Enabled();
     const bool forceRecord = ForceRecordEnabled();
     GCPhase phase = GCPhase::GC_PHASE_UNDEF;
-    if (probeOn) {
+    if (probeOn || idleEdgeOn) {
         phase = Heap::GetHeap().GetGCPhase();
     }
 
@@ -500,11 +502,17 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_NO_YOUNG, false);
         }
+        if (idleEdgeOn) {
+            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
+        }
         return;
     }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NULL_OR_NONHEAP, false);
+        }
+        if (idleEdgeOn) {
+            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
         }
         return;
     }
@@ -512,6 +520,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     if (!targetRegion->IsYoungRegion()) {
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NOT_YOUNG, false);
+        }
+        if (idleEdgeOn) {
+            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
         }
         return;
     }
@@ -521,6 +532,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (probeOn) {
                 NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
             }
+            if (idleEdgeOn) {
+                IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
+            }
             return;
         }
         RegionInfo* sourceRegion = RegionInfo::GetRegionInfoAt(fieldAddress);
@@ -528,11 +542,17 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (probeOn) {
                 NoteWrite(fieldAddress, phase, REASON_HOLDER_YOUNG, false);
             }
+            if (idleEdgeOn) {
+                IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
+            }
             return;
         }
         theRememberedSet.Record(fieldAddress);
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
+        }
+        if (idleEdgeOn) {
+            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, true);
         }
         return;
     }
@@ -547,6 +567,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
 #endif
     if (probeOn) {
         NoteWrite(fieldAddress, phase, REASON_HOLDER_NULL_OR_NONHEAP, false);
+    }
+    if (idleEdgeOn) {
+        IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false);
     }
 }
 

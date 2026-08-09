@@ -44,6 +44,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -3998,6 +3999,8 @@ void WCollector::DoYoungGarbageCollection()
     // Pinned holders (Future/Mutex/Monitor): AllocPinned never sets young; IDLE write
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
+    // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
+    IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -4491,6 +4494,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
+    IdleEdgeDiag::DumpProcessTotals("post-minor");
 }
 
 void WCollector::DoGarbageCollection()
