@@ -78,6 +78,35 @@ GC_TEST(RouteInfo, SetRouteInfoOverwrites)
     GC_EXPECT_EQ(ri.GetRoute(10), 0x9000u + 10u);
 }
 
+// Eth: to-region1 capacity boundary — preLiveBytes at to1used-1 stays in region1.
+GC_TEST(RouteInfo, ToRegion1BoundaryInclusive)
+{
+    RouteInfo ri;
+    constexpr uintptr_t kToStart = 0x30000000u;
+    constexpr uint32_t kUsed = 256;
+    ri.SetRouteInfo(kToStart, kUsed);
+    GC_EXPECT_EQ(ri.GetRoute(0), kToStart);
+    GC_EXPECT_EQ(ri.GetRoute(kUsed - 1), kToStart + (kUsed - 1));
+}
+
+// Eth: overflow into to-region2 via unit index (fixture region1 as to2).
+// Product LiveInfo.cpp:15-24 — preLiveBytes >= to1used ⇒ GetRegionInfo(to2).
+GC_TEST(RouteInfo, ToRegion2WhenPreLiveExceedsTo1)
+{
+    GcHeapFixture fx;
+    RouteInfo ri;
+    constexpr uintptr_t kTo1 = 0x30000000u;
+    constexpr uint32_t kUsed = 64;
+    // Fixture units 0 and 1; use unit index 1 as to-region2.
+    ri.SetRouteInfo(kTo1, kUsed, /*to2=*/1u);
+    uintptr_t got = ri.GetRoute(kUsed); // first byte in region2
+    uintptr_t expect = fx.region1->GetRegionStart() + 0;
+    GC_EXPECT_EQ(got, expect);
+    got = ri.GetRoute(kUsed + 32);
+    expect = fx.region1->GetRegionStart() + 32;
+    GC_EXPECT_EQ(got, expect);
+}
+
 // U4 surface: product BindLiveInfo0FromLiveIfNull on RegionInfo.
 GC_TEST(RouteInfo, BindLiveInfo0FromLiveIfNull)
 {

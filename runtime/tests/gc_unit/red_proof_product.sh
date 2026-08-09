@@ -108,4 +108,9 @@ backup_and_break "$REGION_H" \
 run_expect_fail "U3_domain"
 restore "$REGION_H"
 
+# A3 MarkGoodHeapGate lives in the product .so (Collector.cpp). Breaking the
+# source without rebuilding libcangjie-runtime cannot turn the linked suite red.
+# Model-level red for A3/nullslot/field-place/bitCover is in red_proof.cpp.
+echo "RED_PROOF_NOTE: A3 MarkGoodHeapGate product red needs rebuilt .so (red_proof.cpp models cover it)"
+
 echo "RED_PROOF_PRODUCT_OK: observed failures on product reverts U3+U4"

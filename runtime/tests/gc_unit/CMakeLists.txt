@@ -16,6 +16,9 @@ set(GC_UNIT_SOURCES
     test_live_map.cpp
     test_object_gate.cpp
     test_remset.cpp
+    test_defect_regressions.cpp
+    test_region_bitmap.cpp
+    test_region_age.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

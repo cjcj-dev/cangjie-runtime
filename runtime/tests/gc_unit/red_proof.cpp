@@ -59,6 +59,26 @@ struct BrokenGhost {
 // --- Broken U6: tip-small-int accepted ---
 static bool broken_tip_ok(uintptr_t tip) { return tip != 0; } // BUG: accepts small ints
 
+// --- Broken nullslot: non-heap CAS-null ---
+static uintptr_t broken_null_nonheap(uintptr_t target, bool isHeap)
+{
+    (void)isHeap;
+    return 0; // BUG: always null
+}
+
+// --- Broken mark-good: no heap gate ---
+static bool broken_mark_good_admits(uintptr_t /*target*/) { return true; }
+
+// --- Broken field place: no strip ---
+static uintptr_t broken_field_place(uintptr_t coloured) { return coloured; }
+
+// --- Broken bitCover: under-cover near end ---
+static bool broken_near_end_in_cover(size_t offset, size_t bitCover)
+{
+    (void)bitCover;
+    return offset < 4096; // BUG: only first page covered
+}
+
 int main()
 {
     constexpr uintptr_t addr = 0x00007f1234567000ULL;
@@ -87,13 +107,26 @@ int main()
     // U6 red: tip-small-int accepted
     RED_EXPECT(!broken_tip_ok(42), "U6 tip-small-int rejected [pre PlausibleManagedObjectGate]");
 
+    // nullslot red: non-heap nulled
+    RED_EXPECT(broken_null_nonheap(0x7f000000, false) != 0, "nullslot non-heap never CAS-null");
+
+    // mark-good red: non-heap admitted
+    RED_EXPECT(!broken_mark_good_admits(0x55), "mark-good heap gate blocks non-heap");
+
+    // field place red: colour bits survive
+    uintptr_t place = coloured + 16;
+    RED_EXPECT((broken_field_place(place) & ~mask48) == 0, "field place strips colour at ABI");
+
+    // bitCover red: near-end offset out of cover
+    RED_EXPECT(broken_near_end_in_cover(65504, 65536), "bitCover includes near-end offsets");
+
     std::printf("[========] red_proof: %d passed, %d failed (expect failures)\n", g_pass, g_fail);
-    // Exit 1 if we saw the expected reds (so CI can assert "red_proof is red").
+    // Exit 0 if we saw the expected reds (so CI can assert "red_proof is red").
     // If everything passed, the broken models are wrong → also fail.
-    if (g_fail >= 4) {
+    if (g_fail >= 6) {
         std::printf("RED_PROOF_OK: observed %d failures on broken models\n", g_fail);
         return 0; // proof succeeded (suite is capable of red)
     }
-    std::printf("RED_PROOF_BAD: expected >=4 failures, got %d\n", g_fail);
+    std::printf("RED_PROOF_BAD: expected >=6 failures, got %d\n", g_fail);
     return 2;
 }
