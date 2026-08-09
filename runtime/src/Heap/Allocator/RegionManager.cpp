@@ -754,9 +754,6 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 
 void RegionManager::AssembleSmallGarbageCandidates()
 {
-    // Major Assemble runs before mark start: post-mark stamps from the previous cycle
-    // must be eligible here (they were never in that cycle's from-space). Do not filter
-    // on notRelocatableThisCycle — only PrepareYoung (minor CSet) reads that flag.
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
@@ -824,8 +821,8 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        // twoflags: exclude regions that received post-mark-start allocs (major TRACE+).
-        // Flag is sticky until next major PrepareTrace; minors must not CSet them.
+        // twoflags: regions that received allocs after major mark start are not
+        // young-CSet candidates until the next major PrepareTrace clears the stamp.
         if (region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;

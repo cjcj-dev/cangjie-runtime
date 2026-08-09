@@ -566,8 +566,8 @@ public:
     {
         fullTraceRegions.ActivateRegionCache();
         largeTraceRegions.ActivateRegionCache();
-        // twoflags: new cycle — drop previous cycle's CSet-exclusion stamps.
-        // isTraceRegion lifetime is unchanged (HandleTraceRegions still clears it).
+        // twoflags: Assemble (just ran) already filtered previous-cycle stamps.
+        // Clear so this TRACE can re-stamp only regions that allocate after mark start.
         ClearNotRelocatableThisCycleFlags();
     }
 
