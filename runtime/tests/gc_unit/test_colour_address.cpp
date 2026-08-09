@@ -125,3 +125,34 @@ GC_TEST(ColourAddress, AddressAndColourMasksDisjoint)
     GC_EXPECT_EQ(kAddrMask & MARKED_OLD_MASK, 0u);
     GC_EXPECT_EQ(kAddrMask & TAGGED_BITS_MASK, 0u);
 }
+
+// Eth: colour bit-field encode/decode matrix (JDK test_zBitField spirit).
+// Product colour one-hots must round-trip through paint/uncolor without cross-talk.
+GC_TEST(ColourAddress, BitFieldRemapOneHotMatrix)
+{
+    const Uptr remapBits[] = { ZPointerRemapped00, ZPointerRemapped01, ZPointerRemapped10, ZPointerRemapped11 };
+    for (size_t i = 0; i < 4; ++i) {
+        Uptr coloured = Color(kSampleAddr, remapBits[i]);
+        GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(coloured))), kSampleAddr);
+        // Exactly one remap one-hot set in the colour field.
+        Uptr colourOnly = coloured & REMAP_COLOUR_MASK;
+        GC_EXPECT_EQ(colourOnly, remapBits[i]);
+        for (size_t j = 0; j < 4; ++j) {
+            if (i == j) {
+                GC_EXPECT_EQ(colourOnly & remapBits[j], remapBits[j]);
+            } else {
+                GC_EXPECT_EQ(colourOnly & remapBits[j], 0u);
+            }
+        }
+    }
+}
+
+// Eth: mark young/old bits encode independently of remap one-hot.
+GC_TEST(ColourAddress, BitFieldMarkBitsIndependentOfRemap)
+{
+    Uptr base = Color(kSampleAddr, ZPointerRemapped10 | MARKED_YOUNG_1 | MARKED_OLD_0);
+    GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(base))), kSampleAddr);
+    GC_EXPECT_EQ(base & REMAP_COLOUR_MASK, ZPointerRemapped10);
+    GC_EXPECT_EQ(base & MARKED_YOUNG_MASK, MARKED_YOUNG_1);
+    GC_EXPECT_EQ(base & MARKED_OLD_MASK, MARKED_OLD_0);
+}
