@@ -269,13 +269,22 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // stamp CSet exclusion for both major Assemble and minor PrepareYoung.
         // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
         // TRACE (would exclude most young regions until next major → minor starvation).
-        // ⛔ No CLEAR_SATB (minor shares it). ⛔ No RECLAIM_SATB: that phase is the post-GC
-        // tail of every cycle (incl. minor); stamping it + PrepareYoung filter starves young.
+        // ⛔ No CLEAR_SATB (minor shares it). ⛔ No RECLAIM_SATB: every-GC tail; stamping it
+        // + PrepareYoung filter starves young (7013fc99). Use max(heap,mutator) so lagging
+        // mutator still stamps when heap already left POST_TRACE/FORWARD.
         // Orthogonal to isTraceRegion / ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
             GCPhase heapP = Heap::GetHeap().GetGCPhase();
-            if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-                heapP == GCPhase::GC_PHASE_FORWARD) {
+            GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
+            Mutator* mStamp = Mutator::GetMutator();
+            if (mStamp != nullptr) {
+                mutP = mStamp->GetMutatorPhase();
+            }
+            auto needsStamp = [](GCPhase p) {
+                return p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
+                    p == GCPhase::GC_PHASE_FORWARD;
+            };
+            if (needsStamp(heapP) || needsStamp(mutP)) {
                 reg->SetNotRelocatableThisCycle(1);
             }
         }
