@@ -74,6 +74,40 @@ std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
 
+// nullslot: count product paths that CAS-install nullptr into a ref field.
+// MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
+namespace {
+bool NullslotProbeEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_NULLSLOT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+std::atomic<size_t> g_nullslotF3{ 0 };
+std::atomic<size_t> g_nullslotResolve{ 0 };
+std::atomic<size_t> g_nullslotRemset{ 0 };
+
+void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
+                       std::atomic<size_t>* pathCount)
+{
+    size_t n = pathCount->fetch_add(1, std::memory_order_relaxed);
+    if (!NullslotProbeEnabled() || n >= 64) {
+        return;
+    }
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    LOG(RTLOG_ERROR,
+        "[GCV2][nullslot] path=%s n=%zu holder=%p field=%p from=%p latest=%p phase=%s(%u) "
+        "holderValid=%d fromHeap=%u latestHeap=%u",
+        path, n, holder, field, from, latest, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+        holder != nullptr && Heap::IsHeapAddress(holder) ? static_cast<int>(holder->IsValidObject()) : -1,
+        static_cast<unsigned>(from != nullptr && Heap::IsHeapAddress(from)),
+        static_cast<unsigned>(latest != nullptr && Heap::IsHeapAddress(latest)));
+}
+} // namespace
+
 void ReportForwardRaceCounts()
 {
     static const bool account = []() {
@@ -987,6 +1021,21 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (latest == nullptr) {
         latest = fromObj;
     }
+    // Non-heap targets (TypeInfo*, binary constants, immortal metadata): address is
+    // outside the managed heap, so IsHeapAddress/IsValidObject are structurally false.
+    // After Flip their colour is IsOldPointer, but the payload is still the live
+    // non-heap pointer. Recolour only — never CAS null.
+    // nullslot evidence (selfhost×main probe): reason=latest_not_heap was 58-60/64 of
+    // f3_fix_oldtag null writes; nulling those slots is what zeros TypeInfo* →
+    // GetMTable(rdi=0) and sibling null-field SEGV under in_par_fix.
+    // Same non-heap arm as ResolveMinorReference (never CAS null on non-heap).
+    if (latest != nullptr && !Heap::IsHeapAddress(latest)) {
+        RefField<> newField = RootSlotWriteback(latest, &field);
+        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
+            (void)field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+        }
+        return;
+    }
     bool latestLive = false;
     if (Heap::IsHeapAddress(latest)) {
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
@@ -997,6 +1046,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         // Dead one-gen-stale residue (common right after Flip of the just-tagged
         // generation, or remset residue). Null the slot instead of fail-closed:
         // F5 still guards major FindLatestVersion consumers.
+        // Restricted to heap addresses: non-heap handled above.
         static std::atomic<size_t> g_f3DeadLogged{ 0 };
         size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
         if (n < 16) {
@@ -1004,6 +1054,39 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                  "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
                  holder, &field, fromObj, latest);
         }
+        {
+            const char* reason = "unknown";
+            unsigned rtype = 0;
+            int latestValid = -1;
+            if (latest == nullptr) {
+                reason = "latest_null";
+            } else if (!Heap::IsHeapAddress(latest)) {
+                reason = "latest_not_heap";
+            } else {
+                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+                if (region == nullptr) {
+                    reason = "region_null";
+                } else if (region->IsFreeRegion()) {
+                    reason = "region_free";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                } else if (region->IsGarbageRegion()) {
+                    reason = "region_garbage";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                } else {
+                    latestValid = latest->IsValidObject() ? 1 : 0;
+                    reason = latestValid ? "valid_but_not_live" : "invalid_object";
+                    rtype = static_cast<unsigned>(region->GetRegionType());
+                }
+            }
+            size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
+            if (NullslotProbeEnabled() && whyN < 64) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
+                    "holder=%p field=%p from=%p latest=%p",
+                    whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
+            }
+        }
+        NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
         RefField<> nullField(nullptr);
         (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
         return;
@@ -1859,6 +1942,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              "(drop; full-GC remset/root residue after Flip)",
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
+    NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
     (void)CasInstallResolvedTarget(field, expected, RefField<>(nullptr));
     return nullptr;
 }
@@ -2814,6 +2898,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
+                NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
                 (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), RefField<>(nullptr));
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
