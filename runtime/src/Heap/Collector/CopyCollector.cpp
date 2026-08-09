@@ -13,6 +13,8 @@
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
+#include "Heap/Verify/FloorEnumDiag.h"
+#include "Heap/Heap.h"
 #include "schedule.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -34,6 +36,11 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    // evacwrite: memmove bypasses mutator barriers; one counter hit per copy (not per field).
+    if (FloorEnumDiag::WriteJournalArmed()) {
+        FloorEnumDiag::NoteWrite(const_cast<BaseObject*>(&fromObj), 0, to, 0, "copy_object",
+                                 static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), true);
+    }
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

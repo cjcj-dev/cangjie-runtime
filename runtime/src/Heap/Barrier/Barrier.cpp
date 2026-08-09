@@ -11,6 +11,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/FloorEnumDiag.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -72,6 +73,15 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
     WriteReferenceImpl(obj, field, ref);
+    if (FloorEnumDiag::WriteJournalArmed()) {
+        size_t off = 0;
+        if (obj != nullptr) {
+            off = reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(obj);
+        }
+        FloorEnumDiag::NoteWrite(obj, off, reinterpret_cast<uintptr_t>(&field),
+                                 raw(field.GetFieldValue()), "mcc_write_ref",
+                                 static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), IsGcThread());
+    }
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 
@@ -86,6 +96,12 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
+    if (FloorEnumDiag::WriteJournalArmed() && obj != nullptr && dstLen >= sizeof(void*)) {
+        // One sample entry for the struct base; bulk is rare in T2-T4 STW window.
+        FloorEnumDiag::NoteWrite(obj, static_cast<size_t>(dst - reinterpret_cast<MAddress>(obj)),
+                                 static_cast<uintptr_t>(dst), 0, "mcc_write_struct",
+                                 static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), IsGcThread());
+    }
     RecordCrossGenEdgesInStruct(obj, dst, dstLen);
 }
 
@@ -188,6 +204,15 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     AtomicWriteReferenceImpl(obj, field, ref, order);
+    if (FloorEnumDiag::WriteJournalArmed()) {
+        size_t off = 0;
+        if (obj != nullptr) {
+            off = reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(obj);
+        }
+        FloorEnumDiag::NoteWrite(obj, off, reinterpret_cast<uintptr_t>(&field),
+                                 raw(field.GetFieldValue()), "mcc_atomic",
+                                 static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), IsGcThread());
+    }
     RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
 }
 

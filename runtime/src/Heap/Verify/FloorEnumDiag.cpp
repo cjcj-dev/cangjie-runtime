@@ -9,6 +9,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <unordered_map>
@@ -19,6 +20,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -42,6 +44,21 @@ struct SlotKeyHash {
     }
 };
 
+struct WriteRec {
+    BaseObject* host = nullptr;
+    size_t offset = 0;
+    uintptr_t slot = 0;
+    MAddress newRaw = 0;
+    uint8_t phase = 0;
+    uint8_t isGc = 0;
+    char path[24]{};
+};
+
+struct PhaseRec {
+    char where[24]{};
+    uint8_t phase = 0;
+};
+
 struct MinorSnap {
     std::unordered_set<BaseObject*> reachable;
     std::unordered_set<MAddress> remsetSlots;
@@ -51,6 +68,11 @@ struct MinorSnap {
     std::unordered_map<SlotKey, MAddress, SlotKeyHash> t2Slots;
     // remset face: absolute slot → raw (remset has no host offset identity)
     std::unordered_map<MAddress, MAddress> t2RemsetSlots;
+    // evacwrite: last-write maps while journal armed (T2→ClearSnap)
+    std::unordered_map<SlotKey, WriteRec, SlotKeyHash> writeByKey;
+    std::unordered_map<MAddress, WriteRec> writeBySlot;
+    std::vector<PhaseRec> phases;
+    size_t writeN = 0;
     bool indepRan = false;
     size_t minorIndex = 0;
     size_t grantVisibleN = 0;
@@ -71,6 +93,58 @@ std::atomic<size_t> g_clsSame{ 0 };   // ①
 std::atomic<size_t> g_clsDiff{ 0 };   // ②
 std::atomic<size_t> g_clsMiss{ 0 };   // ③
 std::atomic<size_t> g_clsNoSlot{ 0 };
+std::atomic<bool> g_armed{ false };
+// writer path counters (window-wide, not per-slot)
+std::atomic<size_t> g_wMccRef{ 0 };
+std::atomic<size_t> g_wMccStruct{ 0 };
+std::atomic<size_t> g_wMccAtomic{ 0 };
+std::atomic<size_t> g_wFixCas{ 0 };
+std::atomic<size_t> g_wResolveCas{ 0 };
+std::atomic<size_t> g_wCopyObject{ 0 };
+std::atomic<size_t> g_wOther{ 0 };
+constexpr size_t kWriteCap = 4096;
+constexpr size_t kPhaseCap = 64;
+
+const char* PhaseNameLocal(uint8_t p)
+{
+    switch (p) {
+        case 0: return "UNDEF";
+        case 1: return "IDLE";
+        case 2: return "FINISH";
+        case 3: return "RECLAIM_SATB";
+        case 8: return "INIT";
+        case 9: return "ENUM";
+        case 10: return "TRACE";
+        case 11: return "CLEAR_SATB";
+        case 12: return "POST_TRACE";
+        case 13: return "PREFORWARD";
+        case 14: return "FORWARD";
+        default: return "?";
+    }
+}
+
+void BumpPathCounter(const char* path)
+{
+    if (path == nullptr) {
+        g_wOther.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (std::strcmp(path, "mcc_write_ref") == 0) {
+        g_wMccRef.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(path, "mcc_write_struct") == 0) {
+        g_wMccStruct.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(path, "mcc_atomic") == 0) {
+        g_wMccAtomic.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(path, "fix_minor_cas") == 0) {
+        g_wFixCas.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(path, "fix_resolve_cas") == 0) {
+        g_wResolveCas.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(path, "copy_object") == 0) {
+        g_wCopyObject.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_wOther.fetch_add(1, std::memory_order_relaxed);
+    }
+}
 
 void BuildIndepReachable(
     const std::function<void(const std::function<void(BaseObject*)>&)>& visitRoots,
@@ -242,21 +316,47 @@ size_t SlotCap()
 
 void ClearSnap()
 {
-    std::lock_guard<std::mutex> lock(g_mu);
-    g_snap.reachable.clear();
-    g_snap.remsetSlots.clear();
-    g_snap.indepReachable.clear();
-    g_snap.grantVisibleYoung.clear();
-    g_snap.t2Slots.clear();
-    g_snap.t2RemsetSlots.clear();
-    g_snap.indepRan = false;
-    g_snap.minorIndex = 0;
-    g_snap.grantVisibleN = 0;
-    g_snap.reachableN = 0;
-    g_snap.remsetN = 0;
-    g_snap.t2SlotN = 0;
-    g_snap.t2Truncated = 0;
-    g_snap.t2BuildUs = 0;
+    size_t writeN = 0;
+    size_t writeDrop = 0;
+    size_t phaseN = 0;
+    size_t minorIndex = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        writeN = g_snap.writeN;
+        writeDrop = 0;
+        phaseN = g_snap.phases.size();
+        minorIndex = g_snap.minorIndex;
+        g_snap.reachable.clear();
+        g_snap.remsetSlots.clear();
+        g_snap.indepReachable.clear();
+        g_snap.grantVisibleYoung.clear();
+        g_snap.t2Slots.clear();
+        g_snap.t2RemsetSlots.clear();
+        g_snap.writeByKey.clear();
+        g_snap.writeBySlot.clear();
+        g_snap.phases.clear();
+        g_snap.writeN = 0;
+        g_snap.indepRan = false;
+        g_snap.minorIndex = 0;
+        g_snap.grantVisibleN = 0;
+        g_snap.reachableN = 0;
+        g_snap.remsetN = 0;
+        g_snap.t2SlotN = 0;
+        g_snap.t2Truncated = 0;
+        g_snap.t2BuildUs = 0;
+    }
+    g_armed.store(false, std::memory_order_release);
+    if (DiagEnabled() && (writeN != 0 || phaseN != 0)) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][evacwrite] clear minor=%zu writeN=%zu writeDrop=%zu phaseN=%zu "
+            "cntMccRef=%zu cntMccStruct=%zu cntMccAtomic=%zu cntFixCas=%zu "
+            "cntResolveCas=%zu cntCopy=%zu cntOther=%zu",
+            minorIndex, writeN, writeDrop, phaseN,
+            g_wMccRef.load(std::memory_order_relaxed), g_wMccStruct.load(std::memory_order_relaxed),
+            g_wMccAtomic.load(std::memory_order_relaxed), g_wFixCas.load(std::memory_order_relaxed),
+            g_wResolveCas.load(std::memory_order_relaxed), g_wCopyObject.load(std::memory_order_relaxed),
+            g_wOther.load(std::memory_order_relaxed));
+    }
 }
 
 void CapturePreEvacuate(
@@ -309,11 +409,81 @@ void CapturePreEvacuate(
     {
         std::lock_guard<std::mutex> lock(g_mu);
         g_snap = std::move(local);
+        g_snap.writeByKey.clear();
+        g_snap.writeBySlot.clear();
+        g_snap.phases.clear();
+        g_snap.writeN = 0;
+        g_snap.phases.reserve(16);
+    }
+    g_wMccRef.store(0, std::memory_order_relaxed);
+    g_wMccStruct.store(0, std::memory_order_relaxed);
+    g_wMccAtomic.store(0, std::memory_order_relaxed);
+    g_wFixCas.store(0, std::memory_order_relaxed);
+    g_wResolveCas.store(0, std::memory_order_relaxed);
+    g_wCopyObject.store(0, std::memory_order_relaxed);
+    g_wOther.store(0, std::memory_order_relaxed);
+    g_armed.store(true, std::memory_order_release);
+    {
+        uint8_t ph = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
+        NotePhase("t2_capture", ph);
     }
     LOG(RTLOG_ERROR,
         "[GCV2][floorenum] snap minor=%zu reachable=%zu remset=%zu grantVisYoung=%zu "
         "t2Slots=%zu t2Trunc=%zu t2Us=%zu indepRan=%u indepSize=%zu",
         minorIndex, reachN, remN, grantN, t2N, t2Trunc, t2Us, indepRan, indepSz);
+}
+
+bool WriteJournalArmed()
+{
+    return DiagEnabled() && g_armed.load(std::memory_order_acquire);
+}
+
+void NotePhase(const char* where, uint8_t phase)
+{
+    if (!DiagEnabled()) {
+        return;
+    }
+    PhaseRec rec{};
+    rec.phase = phase;
+    if (where != nullptr) {
+        std::strncpy(rec.where, where, sizeof(rec.where) - 1);
+    }
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        if (g_snap.phases.size() < kPhaseCap) {
+            g_snap.phases.push_back(rec);
+        }
+    }
+    LOG(RTLOG_ERROR, "[GCV2][evacwrite] phase where=%s phase=%u(%s) armed=%u",
+        where != nullptr ? where : "?", static_cast<unsigned>(phase), PhaseNameLocal(phase),
+        static_cast<unsigned>(g_armed.load(std::memory_order_relaxed)));
+}
+
+void NoteWrite(BaseObject* markHost, size_t fieldOffset, uintptr_t slotAddr, MAddress newRaw,
+               const char* path, uint8_t phase, bool isGcThread)
+{
+    if (!WriteJournalArmed()) {
+        return;
+    }
+    BumpPathCounter(path);
+    WriteRec rec{};
+    rec.host = markHost;
+    rec.offset = fieldOffset;
+    rec.slot = slotAddr;
+    rec.newRaw = newRaw;
+    rec.phase = phase;
+    rec.isGc = isGcThread ? 1 : 0;
+    if (path != nullptr) {
+        std::strncpy(rec.path, path, sizeof(rec.path) - 1);
+    }
+    std::lock_guard<std::mutex> lock(g_mu);
+    ++g_snap.writeN;
+    if (markHost != nullptr && fieldOffset != 0) {
+        g_snap.writeByKey[SlotKey{ markHost, fieldOffset }] = rec;
+    }
+    if (slotAddr != 0) {
+        g_snap.writeBySlot[static_cast<MAddress>(slotAddr)] = rec;
+    }
 }
 
 void NoteCrossGen(bool recorded)
@@ -582,6 +752,88 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
         deltaName = "slot_not_in_t2";
     }
 
+    // evacwrite: match journal entries for this (host,offset) or absolute slot.
+    char wPathBuf[24] = "none";
+    uint8_t wPhase = 0;
+    uint8_t wIsGc = 0;
+    unsigned wHits = 0;
+    unsigned wGcHits = 0;
+    unsigned wMutHits = 0;
+    MAddress wLastRaw = 0;
+    size_t writeN = 0;
+    size_t writeDrop = 0;
+    size_t phaseN = 0;
+    char phaseTimeline[96]{};
+    {
+        std::lock_guard<std::mutex> lock(g_mu);
+        writeN = g_snap.writeN;
+        writeDrop = 0;
+        phaseN = g_snap.phases.size();
+        size_t pt = 0;
+        for (size_t i = 0; i < g_snap.phases.size() && pt + 12 < sizeof(phaseTimeline); ++i) {
+            if (i != 0 && pt + 1 < sizeof(phaseTimeline)) {
+                phaseTimeline[pt++] = ',';
+            }
+            int nw = std::snprintf(phaseTimeline + pt, sizeof(phaseTimeline) - pt, "%s=%u",
+                                   g_snap.phases[i].where[0] ? g_snap.phases[i].where : "?",
+                                   static_cast<unsigned>(g_snap.phases[i].phase));
+            if (nw > 0) {
+                pt += static_cast<size_t>(nw);
+            }
+        }
+        const WriteRec* hit = nullptr;
+        if (hostObj != nullptr && fieldOff != 0) {
+            auto it = g_snap.writeByKey.find(SlotKey{ hostObj, fieldOff });
+            if (it != g_snap.writeByKey.end()) {
+                hit = &it->second;
+            }
+        }
+        if (hit == nullptr && slotAddr != 0) {
+            auto it = g_snap.writeBySlot.find(static_cast<MAddress>(slotAddr));
+            if (it != g_snap.writeBySlot.end()) {
+                hit = &it->second;
+            }
+        }
+        if (hit != nullptr) {
+            wHits = 1;
+            if (hit->isGc) {
+                wGcHits = 1;
+            } else {
+                wMutHits = 1;
+            }
+            if (hit->path[0]) {
+                std::memcpy(wPathBuf, hit->path, sizeof(wPathBuf));
+                wPathBuf[sizeof(wPathBuf) - 1] = '\0';
+            }
+            wPhase = hit->phase;
+            wIsGc = hit->isGc;
+            wLastRaw = hit->newRaw;
+        }
+    }
+    const char* wPath = wPathBuf;
+    // Heuristic when journal missed: same address bits ⇒ colour-only rewrite by fix.
+    unsigned sameAddrBits = 0;
+    if (t2InSet == 1 && t2Raw != 0 && t4Raw != 0) {
+        constexpr MAddress kAddrMask = (static_cast<MAddress>(1) << 48) - 1u;
+        if ((t2Raw & kAddrMask) == (t4Raw & kAddrMask)) {
+            sameAddrBits = 1;
+        }
+    }
+    const char* writerHint = "no_journal_hit";
+    if (wHits != 0) {
+        if (wGcHits != 0 && wMutHits == 0) {
+            writerHint = "gc_only";
+        } else if (wMutHits != 0 && wGcHits == 0) {
+            writerHint = "mutator_only";
+        } else {
+            writerHint = "mixed";
+        }
+    } else if (deltaClass == 2 && sameAddrBits == 1) {
+        writerHint = "colour_only_likely_fix";
+    } else if (deltaClass == 2) {
+        writerHint = "value_changed_no_hit";
+    }
+
     LOG(RTLOG_ERROR,
         "[GCV2][slotdelta] n=%zu minor=%zu class=%u(%s) t2InSet=%u face=%s "
         "slot=%#zx fieldOff=%zu t2Raw=%#zx t4Raw=%#zx target=%p host=%p walkBase=%p "
@@ -594,6 +846,21 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
         g_clsSame.load(std::memory_order_relaxed), g_clsDiff.load(std::memory_order_relaxed),
         g_clsMiss.load(std::memory_order_relaxed), g_clsNoSlot.load(std::memory_order_relaxed),
         tgtGrantVis, tgtBmMark, hostInReachable, hint);
+
+    LOG(RTLOG_ERROR,
+        "[GCV2][evacwrite] n=%zu minor=%zu class=%u(%s) host=%p fieldOff=%zu slot=%#zx "
+        "t2Raw=%#zx t4Raw=%#zx sameAddr=%u "
+        "wHits=%u wGc=%u wMut=%u wPath=%s wPhase=%u(%s) wIsGc=%u wLastRaw=%#zx "
+        "writerHint=%s writeN=%zu writeDrop=%zu phaseN=%zu timeline=%s "
+        "cntMccRef=%zu cntFixCas=%zu cntResolveCas=%zu cntCopy=%zu",
+        n, minorIndex, deltaClass, deltaName, hostObj, fieldOff, static_cast<size_t>(slotAddr),
+        static_cast<size_t>(t2Raw), static_cast<size_t>(t4Raw), sameAddrBits,
+        wHits, wGcHits, wMutHits, wPath, static_cast<unsigned>(wPhase), PhaseNameLocal(wPhase),
+        static_cast<unsigned>(wIsGc), static_cast<size_t>(wLastRaw),
+        writerHint, writeN, writeDrop, phaseN, phaseTimeline[0] ? phaseTimeline : "-",
+        g_wMccRef.load(std::memory_order_relaxed), g_wFixCas.load(std::memory_order_relaxed),
+        g_wResolveCas.load(std::memory_order_relaxed),
+        g_wCopyObject.load(std::memory_order_relaxed));
 
     LOG(RTLOG_ERROR,
         "[GCV2][floortarget] n=%zu minor=%zu target=%p host=%p edgeSrc=%s caller=%s "

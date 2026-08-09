@@ -7,10 +7,13 @@
 #ifndef MRT_FLOOR_ENUM_DIAG_H
 #define MRT_FLOOR_ENUM_DIAG_H
 
-// floorenum + floortarget + slotdelta: host recon, target lifecycle, T2/T4 slot delta.
+// floorenum + floortarget + slotdelta + evacwrite:
+// host recon, target lifecycle, T2/T4 slot delta, phase timeline, write journal.
 // Gate: MRT_GCV2_FLOORENUM_DIAG=1 (default off).
 // Indep full-root: MRT_GCV2_FLOORENUM_INDEP=1 every MRT_GCV2_FLOORENUM_EVERY (default 4).
 // Slot-set capacity: MRT_GCV2_SLOTDELTA_CAP (default 262144 entries); truncates past cap.
+// Write journal (evacwrite): armed between CapturePreEvacuate and ClearSnap.
+//   MRT_GCV2_EVACWRITE_JOURNAL=1 forces journal even if only FLOORENUM is on (same as FLOORENUM).
 // Target grant recon + slot face always on when FLOORENUM_DIAG=1 (no product path change).
 
 #include <cstddef>
@@ -31,6 +34,9 @@ bool IndepEnabled();
 size_t EveryN();
 size_t SlotCap();
 
+// True while T2 snap is live (CapturePreEvacuate .. ClearSnap). Write hooks no-op otherwise.
+bool WriteJournalArmed();
+
 void ClearSnap();
 
 void CapturePreEvacuate(
@@ -43,6 +49,15 @@ void NoteCrossGen(bool recorded);
 
 // Optional: call just before PrepareForwardableRegion walks from-list (not required).
 void NotePreForwardSnap(size_t fromRegions, size_t markedYoungSample);
+
+// Phase timeline breadcrumb (default-off via DiagEnabled). where = short tag.
+void NotePhase(const char* where, uint8_t phase);
+
+// Write journal entry for a heap ref slot update observed during the T2→T4 window.
+// path: short stable tag (mcc_write_ref / fix_minor_cas / fix_resolve_cas / copy_object / …).
+// markHost+fieldOffset preferred (liveobj face); slotAddr used for remset face.
+void NoteWrite(BaseObject* markHost, size_t fieldOffset, uintptr_t slotAddr, MAddress newRaw,
+               const char* path, uint8_t phase, bool isGcThread);
 
 void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slotAddr,
                         const char* edgeSrc, const char* caller);

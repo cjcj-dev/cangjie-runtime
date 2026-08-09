@@ -1686,6 +1686,20 @@ bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, RefField<> d
     }
     if (field.CompareExchange(to_zpointer(expected), to_zpointer(desiredVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        if (FloorEnumDiag::WriteJournalArmed()) {
+            BaseObject* host = static_cast<BaseObject*>(NullRouteCaller::Host());
+            size_t off = NullRouteCaller::FieldOffset();
+            if (host == nullptr || off == 0) {
+                // best-effort: absolute slot only
+                FloorEnumDiag::NoteWrite(nullptr, 0, reinterpret_cast<uintptr_t>(&field), desiredVal,
+                                         "fix_resolve_cas",
+                                         static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), true);
+            } else {
+                FloorEnumDiag::NoteWrite(host, off, reinterpret_cast<uintptr_t>(&field), desiredVal,
+                                         "fix_resolve_cas",
+                                         static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), true);
+            }
+        }
         return true;
     }
     g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
@@ -2840,6 +2854,13 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        if (FloorEnumDiag::WriteJournalArmed()) {
+            BaseObject* host = static_cast<BaseObject*>(NullRouteCaller::Host());
+            size_t off = NullRouteCaller::FieldOffset();
+            FloorEnumDiag::NoteWrite(host, off, reinterpret_cast<uintptr_t>(&field), newVal,
+                                     "fix_minor_cas",
+                                     static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), true);
+        }
         return true;
     }
     // CAS fail: accept if current == desired or already a plain/newer install (major style).
@@ -3139,6 +3160,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
         MRT_PHASE_TIMER("young.ref_fix");
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+        FloorEnumDiag::NotePhase("evac_preforward", static_cast<uint8_t>(GCPhase::GC_PHASE_PREFORWARD));
 
         GCThreadPool* threadPool = GetThreadPool();
         static const bool forceSerialEnv = []() {
@@ -3157,8 +3179,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
 
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        FloorEnumDiag::NotePhase("evac_post_trace_map", static_cast<uint8_t>(GCPhase::GC_PHASE_POST_TRACE));
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+        FloorEnumDiag::NotePhase("evac_preforward2", static_cast<uint8_t>(GCPhase::GC_PHASE_PREFORWARD));
         postEvacPoint("pre-fix-forwarded", false);
 
         // Reset CAS counters for this fix window (positive-control visibility).
@@ -4285,6 +4309,7 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER("young.pre_evac_clear");
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
+        FloorEnumDiag::NotePhase("pre_evac_post_trace", static_cast<uint8_t>(GCPhase::GC_PHASE_POST_TRACE));
         WeakRefBuffer::Instance().ClearWeakRefBuffer();
         SatbBuffer::Instance().ClearBuffer();
     }
@@ -4333,7 +4358,9 @@ void WCollector::DoYoungGarbageCollection()
     {
         // minortime: ⑧ post-evac finish
         MRT_PHASE_TIMER("young.post_evac_finish");
+        FloorEnumDiag::NotePhase("pre_idle", static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()));
         TransitionToGCPhase(GCPhase::GC_PHASE_IDLE, true);
+        FloorEnumDiag::NotePhase("post_evac_idle", static_cast<uint8_t>(GCPhase::GC_PHASE_IDLE));
         MergeResurrectExportObjects();
     }
     ++minorTotalRuns;
