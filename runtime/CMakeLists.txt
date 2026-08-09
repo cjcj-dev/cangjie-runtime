@@ -818,3 +818,9 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
 endif()
 
 endif() # BUILD_RUNTIME
+
+# GC unit tests — independent of BUILD_RUNTIME product link; default OFF.
+if (MRT_GC_UNIT_TESTS)
+    message(STATUS "MRT_GC_UNIT_TESTS=ON: building runtime/tests/gc_unit")
+    add_subdirectory(tests/gc_unit)
+endif()
