@@ -75,6 +75,7 @@ void ForwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, siz
             src, src + size);
     }
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void ForwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -86,6 +87,7 @@ void ForwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, c
         (void)target;
     });
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    FixupNonHeapStaticStructRefs(dst, src, size, gctib);
 }
 
 BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const

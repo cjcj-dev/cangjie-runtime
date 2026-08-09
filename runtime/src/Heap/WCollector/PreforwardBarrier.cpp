@@ -63,7 +63,7 @@ BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fie
 void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     if (obj != nullptr) {
-        // note fix/untag dst would be better.
+        // Heap-src self-heal stays on the heap field; non-heap dst is StorePlain below.
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
                 RefField<> oldField(field);
@@ -75,12 +75,17 @@ void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, 
 
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
                  "read struct memcpy_s failed");
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
                  "read struct memcpy_s failed");
+    if (!Heap::IsHeapAddress(dst)) {
+        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        return;
+    }
     gctib.ForEachBitmapWord(dst, [=](RefField<>& field) {
         RefField<> oldField(field);
         BaseObject* target = ReadReference(nullptr, field);

@@ -73,34 +73,31 @@ BaseObject* TraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) c
 
 void TraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    LocalRefFieldContainer refFields;
+    // Heap-src SATB / self-heal via ReadReference; non-heap dst gets StorePlain.
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
-            [&refFields, dst, src, size](RefField<false>& field) {
-                if (reinterpret_cast<MAddress>(&field) < src || reinterpret_cast<MAddress>(&field) >= (src + size)) {
-                    return;
-                }
-                MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(&HeapSlotAt<>(dst + offset));
+            [this, obj](RefField<false>& field) {
+                (void)ReadReference(obj, field);
             },
             src, src + size);
     }
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        (void)ReadReference(nullptr, dstRef);
-    });
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void TraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
+    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
+    if (!Heap::IsHeapAddress(dst)) {
+        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        return;
+    }
     LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(src, [&refFields, dst, src](RefField<>& srcField) {
         MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
         refFields.Push(&HeapSlotAt<>(dst + offset));
     }, src, src + size);
-
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     refFields.VisitRefField([this](RefField<>& dstRef) {
         (void)ReadReference(nullptr, dstRef);
     });

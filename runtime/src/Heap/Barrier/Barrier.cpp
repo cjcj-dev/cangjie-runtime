@@ -354,6 +354,40 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
 #endif
 }
 
+void Barrier::FixupNonHeapStructRefs(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const
+{
+    // Heap→heap must keep coloured slots; only non-heap (stack sret / root buffer) goes plain.
+    if (srcObj == nullptr || Heap::IsHeapAddress(dst)) {
+        return;
+    }
+    srcObj->ForEachRefInStruct(
+        [this, srcObj, dst, src, size](RefField<false>& field) {
+            MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+            if (fieldAddr < src || fieldAddr >= (src + size)) {
+                return;
+            }
+            // ReadReference may self-heal the heap source (colour stays on heap).
+            BaseObject* target = ReadReference(srcObj, field);
+            StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
+        },
+        src, src + size);
+}
+
+void Barrier::FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
+{
+    if (Heap::IsHeapAddress(dst)) {
+        return;
+    }
+    gctib.ForEachBitmapWordInRange(
+        src,
+        [this, dst, src](RefField<>& srcField) {
+            MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
+            BaseObject* target = ReadReference(nullptr, srcField);
+            StorePlain(RootSlotAt(dst + offset), from_object(target));
+        },
+        src, src + size);
+}
+
 void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     size_t dstSize = size;
@@ -373,6 +407,8 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
 
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstSize, reinterpret_cast<void*>(src), srcSize) == EOK,
                  "read struct memcpy_s failed");
+    // Non-heap dst: overwrite ref slots with plain (STACK_ROOTS_STAY_PLAIN).
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -381,6 +417,10 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
     size_t srcSize = size;
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstSize, reinterpret_cast<void*>(src), srcSize) == EOK,
                  "read struct memcpy_s failed");
+    if (!Heap::IsHeapAddress(dst)) {
+        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        return;
+    }
     gctib.ForEachBitmapWord(dst, [this](RefField<>& refField) {
         BaseObject* toVersion = nullptr;
         theCollector.TryUpdateRefField(nullptr, refField, toVersion);
