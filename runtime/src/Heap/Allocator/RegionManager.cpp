@@ -1469,9 +1469,9 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
                 region->SetTraceRegionFlag(1);
             }
             // twoflags: CSet exclusion for post-mark-start regions (orthogonal to isTraceRegion).
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER ||
-                phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
+            // No CLEAR_SATB: shared with minor GC (see RegionSpace.cpp alloc path).
+            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_POST_TRACE ||
+                phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
                 region->SetNotRelocatableThisCycle(1);
             }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);

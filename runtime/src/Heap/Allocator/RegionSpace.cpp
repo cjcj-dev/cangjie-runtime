@@ -182,14 +182,15 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         } else {
             reg = RegionInfo::TryGetRegionInfoAt(addr);
         }
-        // twoflags: any successful alloc after mark start stamps CSet exclusion on the
-        // region (covers IDLE-born TL tails that keep bumping during TRACE/POST_TRACE).
+        // twoflags: any successful alloc after major mark start stamps CSet exclusion.
+        // Covers IDLE-born TL tails that keep bumping during TRACE/POST_TRACE.
+        // ⛔ Do NOT include CLEAR_SATB_BUFFER: minor GC also uses that phase and would
+        // stamp almost every young region, starving PrepareYoung (default-arm regression).
         // Orthogonal to isTraceRegion; never read by ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
             GCPhase heapP = Heap::GetHeap().GetGCPhase();
-            if (heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-                heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-                heapP == GCPhase::GC_PHASE_FORWARD) {
+            if (heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_POST_TRACE ||
+                heapP == GCPhase::GC_PHASE_PREFORWARD || heapP == GCPhase::GC_PHASE_FORWARD) {
                 reg->SetNotRelocatableThisCycle(1);
             }
         }
