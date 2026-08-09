@@ -3366,32 +3366,37 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const bool forceSerial = forceSerialEnv;
         const bool useParallel = threadPool != nullptr && !forceSerial;
 
-        // pass1 root fix (before PrepareForwardTable) — serial sandwich stays;
-        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
-        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
-        FixMinorRootSlots();
-        PreforwardDiscoveredExternObjects();
-        PreforwardAllResurrectExportFromObjects();
-        postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
-
+        // iorfix: PrepareForwardTable FIRST so liveInfo0 exists, then pre-grant while
+        // every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
+        // Prior order ran FixMinorRootSlots before pregrant; that RouteRegion→ROUTED
+        // freezes liveByteCount so Ensure on liveobj edges is tooLate (iorsource 5/5 ROUTED).
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
 
-        // installdomain: serial pre-grant while every from region is still FORWARDABLE.
-        // Must finish before any Fix/Forward can RouteRegion→ROUTED (else liveByteCount
-        // geometry freezes without the late survivor). Walk remset + reachable + roots
-        // (same surface as fixForwardedReferences) and also grant the holder itself.
+        // installdomain / iorfix: serial pre-grant on FORWARDABLE ghost face only.
+        // Raw field read (no ResolveMinorReference — Resolve can RouteRegion).
+        // Multi-round field walk: grant may paint a young whose fields hold further
+        // unmarked from-objects (same shape as FixMinor liveobj IOR edges).
         {
             auto ensureObj = [this](BaseObject* t) {
+                if (t == nullptr || !Heap::IsHeapAddress(t)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", t)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(t);
+                    if (host != nullptr && host != t) {
+                        EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
+                    }
+                    return;
+                }
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
             };
             auto ensureField = [&ensureObj](RefField<>& field) {
                 RefField<> value(field);
                 ensureObj(to_object(value.GetTargetObject()));
             };
-            // Holders first (currentObject will ForwardObject them).
             for (BaseObject* object : reachableVec) {
                 ensureObj(object);
             }
@@ -3400,19 +3405,26 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     ensureField(HeapSlotAt<>(slot));
                 }
             }
-            for (BaseObject* object : reachableVec) {
-                if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                    continue;
+            constexpr size_t kPregrantRounds = 4;
+            for (size_t round = 0; round < kPregrantRounds; ++round) {
+                size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
+                for (BaseObject* object : reachableVec) {
+                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                        continue;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
+                        continue;
+                    }
+                    if (!object->IsValidObject() || !object->HasRefField()) {
+                        continue;
+                    }
+                    object->ForEachRefField(ensureField);
                 }
-                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
-                    continue;
+                size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
+                if (grantAfter == grantBefore) {
+                    break;
                 }
-                if (!object->IsValidObject() || !object->HasRefField()) {
-                    continue;
-                }
-                object->ForEachRefField(ensureField);
             }
-            // Roots after PrepareForwardable (pass2 surface).
             RootVisitor rootEnsure = [this, &ensureObj](ObjectRef& root) {
                 zaddress_unsafe observed = root.LoadPlain();
                 HeapSlot<> bits(to_zpointer(raw(observed)));
@@ -3429,11 +3441,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
             size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
             size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
-            // Always emit (RTLOG_ERROR) so measure captures positive control without VLOG gate.
             LOG(RTLOG_ERROR,
                 "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
                 grant, already, tooLate, skip);
         }
+
+        // pass1 root fix after domain grant — serial sandwich stays;
+        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
+        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
+        FixMinorRootSlots();
+        PreforwardDiscoveredExternObjects();
+        PreforwardAllResurrectExportFromObjects();
+        postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
 
         // Reset CAS counters for this fix window (positive-control visibility).
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
@@ -4550,18 +4569,18 @@ void WCollector::DoYoungGarbageCollection()
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
-    // blackmark: fixpoint edges from already-reachable holders to unmarked young objects.
-    // PrepareYoung ClearLiveInfo drops any pre-mark allocation-black bits; objects allocated
-    // into candidate regions (or still living there) that are only reached from live holders
-    // after the root/remset wave can still be live0Surv=0 at GetRoute. Walk reachableVec
-    // fields once more and re-enter TraceYoungClosure for newly claimed young targets.
-    // Default OFF (same switch as alloc paint). Incomplete: ALOT still 10/10 route miss.
+    // iorfix / blackmark: product post-mark fixpoint (always on).
+    // PrepareYoung ClearLiveInfo drops pre-mark allocation-black bits; live holders in
+    // reachableVec can still hold fields to unmarked young (live0Surv=0 at GetRoute).
+    // Re-walk holder fields via ResolveMinorReference and re-enter TraceYoungClosure so
+    // those targets join the route domain *before* PrepareForwardable freezes liveInfo0.
+    // Formerly gated by MRT_GCV2_ALLOC_BLACK (paint-side switch) — orthogonal to paint;
+    // IOR samples are FixMinorEvacuatedSlot×liveobj with ROUTED+surv0 (REPORT-iorsource).
     {
-        static const bool blackmarkFixOn = []() {
-            const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
-            return v != nullptr && v[0] == '1' && v[1] == '\0';
-        }();
-        if (blackmarkFixOn) {
+        size_t totalExtra = 0;
+        size_t rounds = 0;
+        constexpr size_t kMaxFixpointRounds = 8;
+        for (; rounds < kMaxFixpointRounds; ++rounds) {
             WorkStack blackmarkExtra = NewWorkStack();
             const size_t nHolders = reachableVec.size();
             for (size_t i = 0; i < nHolders; ++i) {
@@ -4569,7 +4588,7 @@ void WCollector::DoYoungGarbageCollection()
                 if (object == nullptr || !Heap::IsHeapAddress(object)) {
                     continue;
                 }
-                if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.holder", object)) {
+                if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.holder", object)) {
                     continue;
                 }
                 if (!object->HasRefField()) {
@@ -4580,7 +4599,7 @@ void WCollector::DoYoungGarbageCollection()
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         return;
                     }
-                    if (!Collector::PlausibleManagedObjectGate("blackmark.fixpoint.target", target)) {
+                    if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.target", target)) {
                         BaseObject* host = Collector::TryRecoverInteriorBase(target);
                         if (host != nullptr && host != target) {
                             target = host;
@@ -4595,17 +4614,25 @@ void WCollector::DoYoungGarbageCollection()
                     if (region->IsMarkedObject(target)) {
                         return;
                     }
-                    // Candidate / from / recent-full young: any young that can enter GetRoute.
                     blackmarkExtra.push_back(target);
                 });
             }
-            if (!blackmarkExtra.empty()) {
-                size_t before = reachableVec.size();
-                TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                  weakSlots, useBitmapLedger);
-                VLOG(REPORT, "[GCV2][blackmark] fixpoint_extra_roots=%zu reachable_before=%zu after=%zu",
-                     blackmarkExtra.size(), before, reachableVec.size());
+            if (blackmarkExtra.empty()) {
+                break;
             }
+            size_t before = reachableVec.size();
+            size_t extraN = blackmarkExtra.size();
+            TraceYoungClosure(blackmarkExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                              weakSlots, useBitmapLedger);
+            totalExtra += extraN;
+            if (reachableVec.size() == before) {
+                break;
+            }
+        }
+        if (totalExtra != 0) {
+            VLOG(REPORT,
+                 "[GCV2][iorfix] postmark_fixpoint extra_roots=%zu rounds=%zu reachable_after=%zu",
+                 totalExtra, rounds, reachableVec.size());
         }
     }
     // setbitmap2: optional closure equality probe (default off).
