@@ -198,6 +198,10 @@ public:
     void PrepareTrace() { regionManager.PrepareTrace(); }
     void FeedHungryBuffers() override;
 
+    // csetalloc: process-local counters (always on; sample log via MRT_GCV2_ALLOC_INTO_CSET_DIAG=1).
+    static size_t AllocIntoCSetCount();
+    static size_t AllocIntoCSetRetiredCount();
+
     static bool MarkObject(const BaseObject* obj)
     {
         // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
