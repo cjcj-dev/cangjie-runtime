@@ -2922,9 +2922,11 @@ void WCollector::FixMinorObjectSlots(BaseObject* object, BaseObject* markHost)
         return;
     }
     BaseObject* edgeHost = markHost != nullptr ? markHost : object;
-    object->ForEachRefField([this, edgeHost](RefField<>& field) {
+    // slotdelta: pass walkBase=object (may be to-version) so FieldOffset aligns with
+    // T2 snap which keys by (fromHost, fieldOffset) not absolute slot address.
+    object->ForEachRefField([this, edgeHost, object](RefField<>& field) {
         NullRouteCaller::ScopedEdge _edge(
-            "liveobj", edgeHost, reinterpret_cast<uintptr_t>(&field));
+            "liveobj", edgeHost, object, reinterpret_cast<uintptr_t>(&field));
         (void)FixMinorEvacuatedSlot(field);
     });
 }

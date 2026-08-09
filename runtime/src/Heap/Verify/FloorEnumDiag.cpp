@@ -18,6 +18,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/NullRouteCaller.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
@@ -25,16 +26,31 @@ namespace FloorEnumDiag {
 
 namespace {
 
+// slotdelta key: (fromHost, fieldOffset). Absolute slot addresses diverge after
+// ForwardObject (T4 walks to-version; T2 snaps from-version). Offset is stable.
+struct SlotKey {
+    BaseObject* host = nullptr;
+    size_t offset = 0;
+    bool operator==(const SlotKey& o) const { return host == o.host && offset == o.offset; }
+};
+
+struct SlotKeyHash {
+    size_t operator()(const SlotKey& k) const
+    {
+        return std::hash<uintptr_t>()(reinterpret_cast<uintptr_t>(k.host)) ^
+               (std::hash<size_t>()(k.offset) * 0x9e3779b97f4a7c15ULL);
+    }
+};
+
 struct MinorSnap {
     std::unordered_set<BaseObject*> reachable;
     std::unordered_set<MAddress> remsetSlots;
     std::unordered_set<BaseObject*> indepReachable;
-    // floortarget: young targets reachable via holder edges at CapturePreEvacuate
-    // (same face grant would walk). Used to answer contradiction ①.
     std::unordered_set<BaseObject*> grantVisibleYoung;
-    // slotdelta: slot address → raw field value (zpointer bits) at T2 grant walk.
-    // Same holder face as BuildGrantVisibleYoung (reachableVec ForEachRefField + remset).
-    std::unordered_map<MAddress, MAddress> t2Slots;
+    // slotdelta: (fromHost, fieldOffset) → raw field value at T2
+    std::unordered_map<SlotKey, MAddress, SlotKeyHash> t2Slots;
+    // remset face: absolute slot → raw (remset has no host offset identity)
+    std::unordered_map<MAddress, MAddress> t2RemsetSlots;
     bool indepRan = false;
     size_t minorIndex = 0;
     size_t grantVisibleN = 0;
@@ -51,11 +67,10 @@ std::atomic<size_t> g_sampleN{ 0 };
 std::atomic<size_t> g_indepRuns{ 0 };
 std::atomic<size_t> g_xgenRecord{ 0 };
 std::atomic<size_t> g_xgenSkip{ 0 };
-// slotdelta class counters (process lifetime while diag armed)
-std::atomic<size_t> g_clsSame{ 0 };   // ① slot in T2, value same
-std::atomic<size_t> g_clsDiff{ 0 };   // ② slot in T2, value different
-std::atomic<size_t> g_clsMiss{ 0 };   // ③ slot not in T2
-std::atomic<size_t> g_clsNoSlot{ 0 }; // slotAddr==0 (cannot classify)
+std::atomic<size_t> g_clsSame{ 0 };   // ①
+std::atomic<size_t> g_clsDiff{ 0 };   // ②
+std::atomic<size_t> g_clsMiss{ 0 };   // ③
+std::atomic<size_t> g_clsNoSlot{ 0 };
 
 void BuildIndepReachable(
     const std::function<void(const std::function<void(BaseObject*)>&)>& visitRoots,
@@ -97,8 +112,6 @@ void BuildIndepReachable(
     }
 }
 
-// Same holder face as postallocgap grant: walk reachableVec fields + remset slots,
-// collect young targets (whether marked or not). Answers "would grant have seen this edge".
 void BuildGrantVisibleYoung(
     const std::vector<BaseObject*>& reachableVec,
     const std::unordered_set<MAddress>& remsetSlots,
@@ -133,33 +146,23 @@ void BuildGrantVisibleYoung(
     }
 }
 
-// slotdelta: record every slot address + raw value on the same face as grant walk.
-// Cap-bounded; past cap we stop inserting and count truncations.
+// T2 face: key liveobj edges by (fromHost, fieldOffset); remset by absolute slot.
 void BuildT2SlotFace(
     const std::vector<BaseObject*>& reachableVec,
     const std::unordered_set<MAddress>& remsetSlots,
     size_t cap,
-    std::unordered_map<MAddress, MAddress>& out,
+    std::unordered_map<SlotKey, MAddress, SlotKeyHash>& outLive,
+    std::unordered_map<MAddress, MAddress>& outRem,
     size_t& truncated)
 {
-    out.clear();
+    outLive.clear();
+    outRem.clear();
     truncated = 0;
     if (cap == 0) {
         return;
     }
-    out.reserve(cap < 1024 ? cap : 1024);
-    auto record = [&](MAddress slotAddr, RefField<>& field) {
-        if (slotAddr == 0) {
-            return;
-        }
-        if (out.size() >= cap) {
-            ++truncated;
-            return;
-        }
-        MAddress rawVal = raw(field.GetFieldValue());
-        // first write wins (same slot should not appear twice on this face)
-        out.emplace(slotAddr, rawVal);
-    };
+    outLive.reserve(cap < 1024 ? cap : 1024);
+    auto liveFull = [&]() { return outLive.size() + outRem.size() >= cap; };
     for (BaseObject* object : reachableVec) {
         if (object == nullptr || !Heap::IsHeapAddress(object)) {
             continue;
@@ -168,15 +171,25 @@ void BuildT2SlotFace(
             continue;
         }
         object->ForEachRefField([&](RefField<>& field) {
-            record(reinterpret_cast<MAddress>(&field), field);
+            if (liveFull()) {
+                ++truncated;
+                return;
+            }
+            size_t off = reinterpret_cast<uintptr_t>(&field) - reinterpret_cast<uintptr_t>(object);
+            MAddress rawVal = raw(field.GetFieldValue());
+            outLive.emplace(SlotKey{ object, off }, rawVal);
         });
     }
     for (MAddress slot : remsetSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             continue;
         }
+        if (liveFull()) {
+            ++truncated;
+            continue;
+        }
         RefField<>& field = HeapSlotAt<>(slot);
-        record(slot, field);
+        outRem.emplace(slot, raw(field.GetFieldValue()));
     }
 }
 
@@ -218,7 +231,8 @@ size_t SlotCap()
     static const size_t n = []() {
         const char* v = std::getenv("MRT_GCV2_SLOTDELTA_CAP");
         if (v == nullptr || v[0] == '\0') {
-            return static_cast<size_t>(262144); // 256k entries ~4MB of map nodes
+            // 2M entries: enough for ~1M reachable hosts with a few refs each before trunc.
+            return static_cast<size_t>(2000000);
         }
         long x = std::strtol(v, nullptr, 10);
         return x < 0 ? static_cast<size_t>(0) : static_cast<size_t>(x);
@@ -234,6 +248,7 @@ void ClearSnap()
     g_snap.indepReachable.clear();
     g_snap.grantVisibleYoung.clear();
     g_snap.t2Slots.clear();
+    g_snap.t2RemsetSlots.clear();
     g_snap.indepRan = false;
     g_snap.minorIndex = 0;
     g_snap.grantVisibleN = 0;
@@ -267,14 +282,14 @@ void CapturePreEvacuate(
     BuildGrantVisibleYoung(reachableVec, remsetSlots, resolveField, local.grantVisibleYoung);
     local.grantVisibleN = local.grantVisibleYoung.size();
 
-    // slotdelta T2 face: same walk as grant, but keep (slot, raw-value) pairs.
     {
         auto t0 = std::chrono::steady_clock::now();
-        BuildT2SlotFace(reachableVec, remsetSlots, SlotCap(), local.t2Slots, local.t2Truncated);
+        BuildT2SlotFace(reachableVec, remsetSlots, SlotCap(), local.t2Slots, local.t2RemsetSlots,
+                        local.t2Truncated);
         auto t1 = std::chrono::steady_clock::now();
         local.t2BuildUs = static_cast<size_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(t1 - t0).count());
-        local.t2SlotN = local.t2Slots.size();
+        local.t2SlotN = local.t2Slots.size() + local.t2RemsetSlots.size();
     }
 
     bool doIndep = IndepEnabled() && (EveryN() == 0 || (minorIndex % EveryN()) == 0 || minorIndex == 1);
@@ -354,18 +369,17 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
     size_t indepSize = 0;
     unsigned indepRan = 0;
 
-    // floortarget target-side lifecycle columns
     unsigned tgtInReach = 0;
     unsigned tgtGrantVis = 0;
-    unsigned tgtBmMark = 0;   // current liveInfo IsMarkedObject
-    unsigned tgtLive0 = 0;    // ghost liveInfo0 IsSurvivedObject (should be 0 here)
-    unsigned tgtCurLive = 0;  // current liveInfo IsSurvivedObject
+    unsigned tgtBmMark = 0;
+    unsigned tgtLive0 = 0;
+    unsigned tgtCurLive = 0;
     unsigned tgtYoung = 0;
     unsigned tgtType = 0;
     unsigned tgtFrom = 0;
     unsigned tgtRoute = 0;
     unsigned tgtIsTrace = 0;
-    unsigned tgtInCSet = 0; // IsFromRegion | FORWARDABLE|ROUTING|ROUTED
+    unsigned tgtInCSet = 0;
     unsigned tgtIsTraceAtAlloc = 0;
     unsigned tgtEverWasTrace = 0;
     unsigned tgtClearTraceCnt = 0;
@@ -373,14 +387,16 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
     size_t tgtLiveBytes = 0;
     int tgtIndep = -1;
 
-    // slotdelta T2/T4 classification
-    // class: 0=no_slot 1=same_value 2=value_changed 3=slot_not_in_t2
+    // slotdelta
     unsigned deltaClass = 0;
     unsigned t2InSet = 0;
     MAddress t2Raw = 0;
     MAddress t4Raw = 0;
     size_t t2SlotN = 0;
     size_t t2Trunc = 0;
+    size_t fieldOff = NullRouteCaller::FieldOffset();
+    void* walkBase = NullRouteCaller::WalkBase();
+    const char* face = "none"; // liveobj | remset | root | unknown
 
     {
         std::lock_guard<std::mutex> lock(g_mu);
@@ -412,33 +428,73 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
                 tgtIndep = g_snap.indepReachable.count(fromObj) != 0 ? 1 : 0;
             }
         }
-        // slotdelta classify under lock (read t2 map)
-        if (slotAddr == 0) {
+
+        // Classify against T2 face. Prefer liveobj key (fromHost, offset); remset by addr.
+        const char* es = edgeSrc != nullptr ? edgeSrc : "none";
+        if (slotAddr == 0 && hostObj == nullptr) {
             deltaClass = 0;
+            face = "no_slot";
             g_clsNoSlot.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            auto it = g_snap.t2Slots.find(static_cast<MAddress>(slotAddr));
-            if (it == g_snap.t2Slots.end()) {
+        } else if (std::strcmp(es, "remset") == 0 ||
+                   (hostObj == nullptr && slotAddr != 0 &&
+                    g_snap.t2RemsetSlots.count(static_cast<MAddress>(slotAddr)) != 0)) {
+            face = "remset";
+            auto it = g_snap.t2RemsetSlots.find(static_cast<MAddress>(slotAddr));
+            if (it == g_snap.t2RemsetSlots.end()) {
                 t2InSet = 0;
-                deltaClass = 3; // ③ enum face mismatch
+                deltaClass = 3;
                 g_clsMiss.fetch_add(1, std::memory_order_relaxed);
             } else {
                 t2InSet = 1;
                 t2Raw = it->second;
             }
+        } else if (hostObj != nullptr && fieldOff != 0) {
+            face = "liveobj";
+            SlotKey key{ hostObj, fieldOff };
+            auto it = g_snap.t2Slots.find(key);
+            if (it == g_snap.t2Slots.end()) {
+                t2InSet = 0;
+                deltaClass = 3;
+                g_clsMiss.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                t2InSet = 1;
+                t2Raw = it->second;
+            }
+        } else if (hostObj != nullptr) {
+            // fieldOff==0 (header?) or walkBase unset — try offset from host if slot known
+            face = "liveobj_fallback";
+            if (slotAddr != 0 && walkBase != nullptr) {
+                fieldOff = static_cast<size_t>(slotAddr - reinterpret_cast<uintptr_t>(walkBase));
+            } else if (slotAddr != 0) {
+                fieldOff = static_cast<size_t>(slotAddr - reinterpret_cast<uintptr_t>(hostObj));
+            }
+            SlotKey key{ hostObj, fieldOff };
+            auto it = g_snap.t2Slots.find(key);
+            if (it == g_snap.t2Slots.end()) {
+                t2InSet = 0;
+                deltaClass = 3;
+                g_clsMiss.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                t2InSet = 1;
+                t2Raw = it->second;
+            }
+        } else {
+            face = "unknown";
+            deltaClass = 0;
+            g_clsNoSlot.fetch_add(1, std::memory_order_relaxed);
         }
     }
 
-    // T4 current raw value (outside lock; slot is live heap)
+    // T4 current raw value
     if (slotAddr != 0 && Heap::IsHeapAddress(static_cast<MAddress>(slotAddr))) {
         RefField<>& field = HeapSlotAt<>(static_cast<MAddress>(slotAddr));
         t4Raw = raw(field.GetFieldValue());
         if (t2InSet == 1) {
             if (t2Raw == t4Raw) {
-                deltaClass = 1; // ① same slot same value, different young verdict
+                deltaClass = 1;
                 g_clsSame.fetch_add(1, std::memory_order_relaxed);
             } else {
-                deltaClass = 2; // ② written after T2
+                deltaClass = 2;
                 g_clsDiff.fetch_add(1, std::memory_order_relaxed);
             }
         }
@@ -505,11 +561,11 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
         hint = "B_mark_underwalk";
     } else if (hostInReachable == 1) {
         if (tgtGrantVis == 1 && tgtBmMark == 0) {
-            hint = "target_grant_seen_unmarked"; // ⓐ/ⓒ: grant would see; mark bit missing
+            hint = "target_grant_seen_unmarked";
         } else if (tgtGrantVis == 0 && tgtBmMark == 0) {
-            hint = "target_not_grant_visible"; // ⓑ/ⓓ: edge not on grant face at snap
+            hint = "target_not_grant_visible";
         } else if (tgtBmMark == 1 && tgtLive0 == 0) {
-            hint = "target_marked_live0_empty"; // ghost/snapshot desync
+            hint = "target_marked_live0_empty";
         } else {
             hint = "host_in_reachable_check_target";
         }
@@ -519,22 +575,22 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
 
     const char* deltaName = "no_slot";
     if (deltaClass == 1) {
-        deltaName = "same_value"; // ① predicate mismatch
+        deltaName = "same_value";
     } else if (deltaClass == 2) {
-        deltaName = "value_changed"; // ② written after T2
+        deltaName = "value_changed";
     } else if (deltaClass == 3) {
-        deltaName = "slot_not_in_t2"; // ③ enum face mismatch
+        deltaName = "slot_not_in_t2";
     }
 
     LOG(RTLOG_ERROR,
-        "[GCV2][slotdelta] n=%zu minor=%zu class=%u(%s) t2InSet=%u "
-        "slot=%#zx t2Raw=%#zx t4Raw=%#zx target=%p host=%p edgeSrc=%s "
-        "t2Slots=%zu t2Trunc=%zu "
+        "[GCV2][slotdelta] n=%zu minor=%zu class=%u(%s) t2InSet=%u face=%s "
+        "slot=%#zx fieldOff=%zu t2Raw=%#zx t4Raw=%#zx target=%p host=%p walkBase=%p "
+        "edgeSrc=%s t2Slots=%zu t2Trunc=%zu "
         "clsSame=%zu clsDiff=%zu clsMiss=%zu clsNoSlot=%zu "
         "tgtGrantVis=%u tgtBmMark=%u A:inReach=%u hint=%s",
-        n, minorIndex, deltaClass, deltaName, t2InSet, static_cast<size_t>(slotAddr),
-        static_cast<size_t>(t2Raw), static_cast<size_t>(t4Raw), fromObj, hostObj,
-        edgeSrc != nullptr ? edgeSrc : "none", t2SlotN, t2Trunc,
+        n, minorIndex, deltaClass, deltaName, t2InSet, face, static_cast<size_t>(slotAddr),
+        fieldOff, static_cast<size_t>(t2Raw), static_cast<size_t>(t4Raw), fromObj, hostObj,
+        walkBase, edgeSrc != nullptr ? edgeSrc : "none", t2SlotN, t2Trunc,
         g_clsSame.load(std::memory_order_relaxed), g_clsDiff.load(std::memory_order_relaxed),
         g_clsMiss.load(std::memory_order_relaxed), g_clsNoSlot.load(std::memory_order_relaxed),
         tgtGrantVis, tgtBmMark, hostInReachable, hint);
@@ -565,7 +621,6 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
         tgtIsTraceAtAlloc, tgtEverWasTrace, tgtClearTraceCnt,
         g_xgenRecord.load(std::memory_order_relaxed), g_xgenSkip.load(std::memory_order_relaxed),
         hint);
-    // Keep floorenum line for cross-lane histogram compatibility.
     LOG(RTLOG_ERROR,
         "[GCV2][floorenum] n=%zu minor=%zu target=%p host=%p edgeSrc=%s caller=%s "
         "A:inReach=%u bmMark=%u young=%u "
