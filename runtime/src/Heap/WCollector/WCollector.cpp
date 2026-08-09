@@ -44,6 +44,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/PlainCensus.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -589,6 +590,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
         RefField<> newRef(target);
+        ScopedPlainWriter tag(PlainWriterSite::TryUntag);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
@@ -939,6 +941,9 @@ void WCollector::TraceHeap()
     WorkStack foreignStack = NewWorkStack();
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
+
+    // plaincensus Phase 1a: measure plain HeapSlots before major mark.
+    RunPlainCensus("pre-major-mark", false);
 
     // Full collection starts young and old marking in the same pause, as
     // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
@@ -2794,6 +2799,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
                 MAddress oldVal = raw(oldField.GetFieldValue());
                 MAddress plainVal = raw(plain.GetFieldValue());
                 if (oldVal != plainVal) {
+                    ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
                     (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
                 }
                 return true;
@@ -2803,6 +2809,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         MAddress oldVal = raw(oldField.GetFieldValue());
         MAddress plainVal = raw(plain.GetFieldValue());
         if (oldVal != plainVal) {
+            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
             (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
         }
         return false;
@@ -2817,6 +2824,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         MAddress oldVal = raw(field.GetFieldValue());
         MAddress plainVal = raw(plain.GetFieldValue());
         if (oldVal != plainVal) {
+            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
             (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
         }
         return false;
@@ -3757,6 +3765,8 @@ void WCollector::DoYoungGarbageCollection()
     } else {
         stw = std::make_unique<ScopedStopTheWorld>("young collection", true, GCPhase::GC_PHASE_ENUM);
     }
+    // plaincensus Phase 1a: measure plain HeapSlots before young mark mutates colours.
+    RunPlainCensus("pre-minor", false);
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor

@@ -18,16 +18,22 @@
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "Heap/Verify/PlainCensus.h"
 
 namespace MapleRuntime {
 // COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
+// plaincensus: also feed fail-open writer counters (MRT_GCV2_PLAIN_WRITE_COUNT=1).
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
-    static const bool on = []() {
+    static const bool assertOn = []() {
         const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
         return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
-    if (LIKELY(!on)) {
+    static const bool countOn = []() {
+        const char* v = std::getenv("MRT_GCV2_PLAIN_WRITE_COUNT");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    if (LIKELY(!assertOn && !countOn)) {
         return;
     }
     if (!Heap::IsHeapAddress(slot)) {
@@ -40,6 +46,12 @@ void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
     bool hasColour = (newVal & kColourMask) != 0;
     bool tagged = ((newVal >> 48) & 1) != 0;
     bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
+    if (!hasColour) {
+        NotePlainHeapWrite(slot, static_cast<uintptr_t>(newVal));
+    }
+    if (LIKELY(!assertOn)) {
+        return;
+    }
     CHECK_DETAIL(hasColour && (loadGood || tagged),
                  "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
                  "hasColour=%d loadGood=%d tagged=%d",
