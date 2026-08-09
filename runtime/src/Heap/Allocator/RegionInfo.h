@@ -1548,8 +1548,9 @@ private:
         // twoflags + postallocgap: orthogonal to isTraceRegion.
         // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
         // notRelocatableThisCycle = region received post-mark alloc (POST_TRACE|
-        // PREFORWARD|FORWARD|RECLAIM_SATB) → not a major or minor CSet candidate until
-        // next PrepareTrace (full mark covers it). Never read by ShouldEnqueue.
+        // PREFORWARD|FORWARD) → not a major or minor CSet candidate until next
+        // PrepareTrace (full mark covers it). Never read by ShouldEnqueue.
+        // ⛔ Not stamped on RECLAIM_SATB (every-GC tail incl. minor).
         uint8_t notRelocatableThisCycle = 0;
         ZGenerationId _generation_id;
         RwLock rwLock;

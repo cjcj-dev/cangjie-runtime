@@ -1469,10 +1469,10 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
-            // twoflags + postallocgap: POST_TRACE+ and RECLAIM_SATB (TRACE uses isTraceRegion).
-            // No CLEAR_SATB (minor shares it).
+            // twoflags + postallocgap: POST_TRACE+ only (TRACE uses isTraceRegion).
+            // No CLEAR_SATB (minor shares it). No RECLAIM_SATB (every-GC tail).
             if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD || phase == GC_PHASE_RECLAIM_SATB_NODE) {
+                phase == GC_PHASE_FORWARD) {
                 region->SetNotRelocatableThisCycle(1);
             }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
