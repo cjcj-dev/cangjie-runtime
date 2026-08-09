@@ -24,9 +24,7 @@
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
-#if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
-#endif
 
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Base/SysCall.h"
@@ -194,6 +192,79 @@ void ReportForwardRaceCounts()
     VLOG(REPORT, "[GCV2][fwdrace] total=%zu still_bad=%zu",
          g_forwardRaceTotalCount.load(std::memory_order_relaxed),
          g_forwardRaceStillBadCount.load(std::memory_order_relaxed));
+}
+
+// paramzero: crash-time snapshot of (a) Mode-A stack slot -0x50(%rbp) and
+// (b) heap CAS-null arm counters. Gate = MRT_GCV2_NULLSLOT (same as nullslot);
+// atomics themselves are always-on. Called from SignalManager::EmitCrashRec.
+// AS-safe-ish: only stack reads + write(2); no heap, no lock.
+void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip)
+{
+    if (!NullslotProbeEnabled()) {
+        return;
+    }
+    // Read -0x50(%rbp) = entry rsi spill (nullwriter objdump). Best-effort:
+    // if the page is unmapped this may re-fault; nested SEGV is accepted.
+    unsigned long slot50 = 0;
+    unsigned long slot30 = 0;
+    unsigned long slot40 = 0;
+    unsigned long savedRbp = 0;
+    unsigned long retAddr = 0;
+    unsigned long callerSlot50 = 0;
+    int slotOk = 0;
+    if (rbp != 0 && rbp > 0x1000UL) {
+        const unsigned long* fp = reinterpret_cast<const unsigned long*>(rbp);
+        // Frame layout: [rbp]=saved rbp, [rbp+8]=return, [rbp-0x50]=rsi spill.
+        savedRbp = fp[0];
+        retAddr = fp[1];
+        const unsigned long* slot50p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x50UL);
+        const unsigned long* slot30p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x30UL);
+        const unsigned long* slot40p =
+            reinterpret_cast<const unsigned long*>(rbp - 0x40UL);
+        slot50 = *slot50p;
+        slot30 = *slot30p;
+        slot40 = *slot40p;
+        slotOk = 1;
+        if (savedRbp != 0 && savedRbp > 0x1000UL) {
+            const unsigned long* cfp =
+                reinterpret_cast<const unsigned long*>(savedRbp - 0x50UL);
+            callerSlot50 = *cfp;
+        }
+    }
+    // rbx at crash is the reloaded -0x50 value (Mode A: 0).
+    // entry_is_zero: if slot50==0 at crash AND product never rewrites that spill
+    // before reload (objdump: only one store at 6ef849 before 6ef8ee load), then
+    // the argument was already 0 at function entry.
+    char line[768];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][nullslot] path=paramzero_frame n=0 "
+                      "rbp=%#lx rip=%#lx rbx=%#lx "
+                      "slot_m50=%#lx slot_m30=%#lx slot_m40=%#lx "
+                      "saved_rbp=%#lx ret=%#lx caller_slot_m50=%#lx slot_ok=%d "
+                      "entry_arg_zero=%d\n",
+                      static_cast<unsigned long>(rbp), static_cast<unsigned long>(rip),
+                      static_cast<unsigned long>(rbx), slot50, slot30, slot40, savedRbp,
+                      retAddr, callerSlot50, slotOk, (slotOk && slot50 == 0) ? 1 : 0);
+    if (n > 0) {
+        (void)write(STDERR_FILENO, line, static_cast<size_t>(n));
+    }
+    n = sprintf_s(line, sizeof(line),
+                  "[GCV2][nullslot] path=paramzero_cas n=0 "
+                  "fix_resolve_cas=%zu f3_fix_oldtag=%zu remset_stale=%zu "
+                  "resolve_root_entry=%zu resolve_root_old=%zu resolve_root_healNull=%zu "
+                  "fix_minor_roots_calls=%zu\n",
+                  g_nullslotResolve.load(std::memory_order_relaxed),
+                  g_nullslotF3.load(std::memory_order_relaxed),
+                  g_nullslotRemset.load(std::memory_order_relaxed),
+                  g_resolveRootEntry.load(std::memory_order_relaxed),
+                  g_resolveRootOld.load(std::memory_order_relaxed),
+                  g_resolveRootHealNull.load(std::memory_order_relaxed),
+                  g_fixMinorRootSlotsCalls.load(std::memory_order_relaxed));
+    if (n > 0) {
+        (void)write(STDERR_FILENO, line, static_cast<size_t>(n));
+    }
 }
 
 namespace {
