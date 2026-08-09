@@ -288,8 +288,14 @@ public:
     }
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) { std::abort(); }
+    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+    }
+    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");
+    }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
@@ -327,7 +333,10 @@ public:
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }
 
     virtual void UpdateGCStats();
-    virtual uint16_t GetCurrentTagID() { std::abort(); }
+    virtual uint16_t GetCurrentTagID()
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
+    }
 
     static const size_t MAX_MARKING_WORK_SIZE;
     static const size_t MIN_MARKING_WORK_SIZE;
@@ -398,7 +407,10 @@ protected:
 
     bool AddConcurrentTracingWork(RootSet& rs);
     void AddExportObjectsTracingWork(RootSet& exportRoots);
-    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const { std::abort(); }
+    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
+    {
+        Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
+    }
 
     void FindUselessExternObjects();
 

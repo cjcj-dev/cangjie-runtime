@@ -416,4 +416,15 @@ Collector::Collector() {}
 const char* Collector::GetCollectorName() const { return COLLECTOR_NAME[collectorType]; }
 
 void Collector::RequestGC(GCReason reason, bool async) { RequestGCInternal(reason, async); }
+
+// Virtual default: this collector type does not implement the method. Always abort;
+// body is out-of-line so Collector.h stays free of FormatLog / string payloads.
+[[noreturn]] void Collector::AbortUnimplemented(const char* method)
+{
+    Logger::GetLogger().FormatLog(RTLOG_FATAL, true,
+                                  "unimplemented virtual %s on this Collector "
+                                  "(base default must not be reached)",
+                                  method != nullptr ? method : "?");
+    std::abort();
+}
 } // namespace MapleRuntime.
