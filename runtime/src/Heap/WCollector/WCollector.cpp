@@ -76,6 +76,7 @@ std::atomic<size_t> g_installDomainSkip{ 0 };
 
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
+// rootdrop: same gate also arms path=resolve_root_null (RootSlot HealRoot null).
 namespace {
 bool NullslotProbeEnabled()
 {
@@ -89,6 +90,7 @@ bool NullslotProbeEnabled()
 std::atomic<size_t> g_nullslotF3{ 0 };
 std::atomic<size_t> g_nullslotResolve{ 0 };
 std::atomic<size_t> g_nullslotRemset{ 0 };
+std::atomic<size_t> g_nullslotResolveRoot{ 0 };
 
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
                        std::atomic<size_t>* pathCount)
@@ -105,6 +107,63 @@ void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseOb
         holder != nullptr && Heap::IsHeapAddress(holder) ? static_cast<int>(holder->IsValidObject()) : -1,
         static_cast<unsigned>(from != nullptr && Heap::IsHeapAddress(from)),
         static_cast<unsigned>(latest != nullptr && Heap::IsHeapAddress(latest)));
+}
+
+// Classify why ResolveMinorReference(RootSlot) live-predicates rejected to/from.
+// Gate: NullslotProbeEnabled (MRT_GCV2_NULLSLOT=1); default off — never on hot path alone.
+const char* ClassifyRootLiveFail(BaseObject* obj, RegionInfo* region)
+{
+    if (obj == nullptr) {
+        return "obj_null";
+    }
+    if (!Heap::IsHeapAddress(obj)) {
+        return "not_heap";
+    }
+    if (region == nullptr) {
+        return "no_region";
+    }
+    if (region->IsFreeRegion()) {
+        return "free";
+    }
+    if (region->IsGarbageRegion()) {
+        return "garbage";
+    }
+    if (!obj->IsValidObject()) {
+        return "invalid_object";
+    }
+    return "live_ok";
+}
+
+void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, RegionInfo* fromRegion,
+                         RegionInfo* toRegion, const char* toWhy, const char* fromWhy)
+{
+    size_t n = g_nullslotResolveRoot.fetch_add(1, std::memory_order_relaxed);
+    if (!NullslotProbeEnabled() || n >= 64) {
+        return;
+    }
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    unsigned fromRtype = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRegionType()) : 0xffu;
+    unsigned toRtype = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRegionType()) : 0xffu;
+    unsigned fromRoute = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->GetRouteState()) : 0xffu;
+    unsigned toRoute = toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRouteState()) : 0xffu;
+    unsigned fromYoung = fromRegion != nullptr ? static_cast<unsigned>(fromRegion->IsYoungRegion()) : 0xffu;
+    unsigned toYoung = toRegion != nullptr ? static_cast<unsigned>(toRegion->IsYoungRegion()) : 0xffu;
+    int fromMarked = -1;
+    int toMarked = -1;
+    if (from != nullptr && fromRegion != nullptr && Heap::IsHeapAddress(from) && !fromRegion->IsFreeRegion()) {
+        fromMarked = static_cast<int>(fromRegion->IsMarkedObject(from));
+    }
+    if (to != nullptr && toRegion != nullptr && Heap::IsHeapAddress(to) && !toRegion->IsFreeRegion()) {
+        toMarked = static_cast<int>(toRegion->IsMarkedObject(to));
+    }
+    int fromValid = from != nullptr && Heap::IsHeapAddress(from) ? static_cast<int>(from->IsValidObject()) : -1;
+    int toValid = to != nullptr && Heap::IsHeapAddress(to) ? static_cast<int>(to->IsValidObject()) : -1;
+    LOG(RTLOG_ERROR,
+        "[GCV2][nullslot] path=resolve_root_null n=%zu root=%p from=%p to=%p phase=%s(%u) "
+        "fromRtype=%u fromRoute=%u fromYoung=%u fromMarked=%d fromValid=%d fromWhy=%s "
+        "toRtype=%u toRoute=%u toYoung=%u toMarked=%d toValid=%d toWhy=%s",
+        n, rootSlot, from, to, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), fromRtype, fromRoute,
+        fromYoung, fromMarked, fromValid, fromWhy, toRtype, toRoute, toYoung, toMarked, toValid, toWhy);
 }
 } // namespace
 
@@ -1986,6 +2045,28 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
     }
     if (object != nullptr && !Heap::IsHeapAddress(object)) {
         return object;
+    }
+    // rootdrop probe: classify why to/from both failed live predicates before drop-null.
+    // Gate = MRT_GCV2_NULLSLOT (same as nullslot); default off.
+    {
+        RegionInfo* toRegion =
+            (to != nullptr && Heap::IsHeapAddress(to))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to))
+                : nullptr;
+        RegionInfo* fromRegion =
+            (object != nullptr && Heap::IsHeapAddress(object))
+                ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object))
+                : nullptr;
+        const char* toWhy = nullptr;
+        if (to == nullptr) {
+            toWhy = "to_null";
+        } else if (!Heap::IsHeapAddress(to)) {
+            toWhy = "to_not_heap";
+        } else {
+            toWhy = ClassifyRootLiveFail(to, toRegion);
+        }
+        const char* fromWhy = ClassifyRootLiveFail(object, fromRegion);
+        NoteResolveRootNull(&root, object, to, fromRegion, toRegion, toWhy, fromWhy);
     }
     static std::atomic<size_t> g_staleOldRootLogged{ 0 };
     size_t n = g_staleOldRootLogged.fetch_add(1, std::memory_order_relaxed);
