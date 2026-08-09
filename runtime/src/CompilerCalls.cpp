@@ -28,6 +28,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
 #include "Heap/Barrier/Barrier.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "HeapManager.inline.h"
@@ -35,6 +36,10 @@
 #include "TypeInfoManager.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #ifdef _WIN64
 #include "Mutator/MutatorManager.h"
 #include "Mutator/ThreadLocal.h"
@@ -1639,12 +1644,67 @@ extern "C" void* MCC_GetParameterAnnotations(ParameterInfo* parameterInfo, TypeI
     return parameterInfo->GetAnnotations(arrayTi);
 }
 
+// readnull: when ReadRefField returns null, record slot addr / raw 64-bit / return.
+// Gate MRT_GCV2_NULLSLOT (default off). Cap 64 samples. Probe-only; no product path change.
+namespace {
+bool ReadnullProbeEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_NULLSLOT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+std::atomic<size_t> g_readRefNullN{ 0 };
+} // namespace
+
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
-    if (IsGlobalStruct(obj, reinterpret_cast<MAddress>(field))) {
-        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(field));
+    const bool isGlobal = IsGlobalStruct(obj, reinterpret_cast<MAddress>(field));
+    // Snapshot raw slot BEFORE barrier may self-heal (CAS) the field.
+    const MAddress rawBefore =
+        field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
+    const MAddress addrBefore =
+        field != nullptr ? field->GetAddress() : 0;
+    ObjectPtr result = nullptr;
+    if (isGlobal) {
+        result = Heap::GetBarrier().ReadStaticRef(RootSlotAt(field));
+    } else {
+        result = Heap::GetBarrier().ReadReference(obj, *field);
     }
-    return Heap::GetBarrier().ReadReference(obj, *field);
+    if (result == nullptr && ReadnullProbeEnabled()) {
+        size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
+        if (n < 64) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            const MAddress rawAfter =
+                field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
+            const unsigned fieldInHeap =
+                field != nullptr && Heap::IsHeapAddress(reinterpret_cast<void*>(field)) ? 1u : 0u;
+            const unsigned holderInHeap =
+                obj != nullptr && Heap::IsHeapAddress(obj) ? 1u : 0u;
+            // 甲: raw address bits already 0; 乙: non-null raw decoded to null by barrier;
+            // 丙 candidate: field not in heap / holder not in heap (address-side).
+            const char* kind = "jia";
+            if (addrBefore != 0) {
+                kind = "yi";
+            } else if (rawBefore != 0) {
+                kind = "yi_coloured_null";
+            } else if (!fieldInHeap || (obj != nullptr && !holderInHeap)) {
+                kind = "bing_addr";
+            }
+            std::fprintf(stderr,
+                         "[GCV2][nullslot] path=read_ref_null n=%zu field=%p raw_before=%#lx "
+                         "addr_before=%#lx ret=%p raw_after=%#lx holder=%p is_global=%u "
+                         "field_in_heap=%u holder_in_heap=%u phase=%s(%u) kind=%s\n",
+                         n, static_cast<void*>(field), static_cast<unsigned long>(rawBefore),
+                         static_cast<unsigned long>(addrBefore), static_cast<void*>(result),
+                         static_cast<unsigned long>(rawAfter), static_cast<void*>(obj),
+                         isGlobal ? 1u : 0u, fieldInHeap, holderInHeap,
+                         Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), kind);
+            std::fflush(stderr);
+        }
+    }
+    return result;
 }
 
 extern "C" ObjectPtr CJ_MCC_ReadWeakRef(const ObjectPtr obj, RefField<false>* field)
