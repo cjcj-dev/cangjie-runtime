@@ -632,8 +632,9 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         // Anchor main 2f1bc8355e92dbf01c063050b5c9a2947c711d64
         CHECK_DETAIL(isValidTarget, "TryUntagRefField encounters invalid tagged target %p at field %p", target,
                      &field);
-        RefField<> newRef(target);
-        ScopedPlainWriter tag(PlainWriterSite::TryUntag);
+        // TRUST_STATE_KILL_PLAN Phase 1: API retained, but HeapSlot write-back is current colour
+        // (not plain). Read path no longer calls this; residual callers must not re-install trust.
+        RefField<> newRef = GetAndTryTagRefField(target);
         if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
