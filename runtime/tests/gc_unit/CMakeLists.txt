@@ -11,6 +11,7 @@ set(GC_UNIT_SOURCES
     gc_unit_main.cpp
     gc_unit_stubs.cpp
     test_colour_address.cpp
+    test_trustp1_phase1.cpp
     test_route_info.cpp
     test_live_map.cpp
     test_object_gate.cpp

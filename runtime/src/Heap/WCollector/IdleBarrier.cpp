@@ -60,23 +60,33 @@ BaseObject* IdleBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) co
 
 BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    RefField<false> oldField(field.GetFieldValue(order));
-    BaseObject* toVersion = nullptr;
-    // note TryUpdateRefField and TryUntagRefField are all atomic operations.
-    if (theCollector.TryUpdateRefField(obj, HeapSlotAt<false>(&field), toVersion)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), toVersion);
-        return toVersion;
-    }
+    // TRUST_STATE_KILL_PLAN Phase 1: retire TryUntagRefField plain-CAS from the read path.
+    // Match Forward/Preforward/PostTrace: load-good test + make_load_good + observed-raw CAS
+    // self-heal with current colour (not heap-slot untag-to-plain).
+    for (int attempts = 0;;) {
+        RefField<false> oldField(field.GetFieldValue(order));
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()),
+                 oldTarget);
+            return oldTarget;
+        }
 
-    BaseObject* target = nullptr;
-    if (theCollector.TryUntagRefField(obj, HeapSlotAt<false>(&field), target)) {
-        DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
-        return target;
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()),
+                 loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
+            return loadGood;
+        }
     }
-
-    target = ReadReference(nullptr, oldField);
-    DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
-    return target;
 }
 
 void IdleBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
