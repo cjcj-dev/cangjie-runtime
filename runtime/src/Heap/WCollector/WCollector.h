@@ -421,6 +421,7 @@ private:
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
+    void FixMinorObjectSlots(BaseObject* object, BaseObject* markHost);
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots);
     void ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec, const MinorObjectSet& allocationRoots);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
