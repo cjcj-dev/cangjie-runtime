@@ -295,20 +295,29 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             }
             AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
         }
-        // blackmark 甲: allocation-black = truly set mark bits (not only skip enqueue).
-        // Ordinary MOVEABLE alloc never called MarkNewObject; pin reuse did MarkObject.
+        // blackmark 甲 / youngconc Ⅱ: allocation-black = truly set mark bits (not only skip
+        // enqueue). Ordinary MOVEABLE alloc never called MarkNewObject; pin reuse did MarkObject.
         // GetRoute reads ghost liveInfo0 (PrepareForwardable snapshot). Marks written only to
         // current liveInfo after that snapshot are invisible to GetRoute — also mark ghost
         // when present. Use max(mutator,heap) phase so lagging mutator still covers.
-        // Default OFF: 甲 paints bits but young PrepareYoung ClearLiveInfo wipes them
-        // before mark; incomplete fix regressed default arm 3/10 (see REPORT-blackmark).
-        // MRT_GCV2_ALLOC_BLACK=1 enables experimental paint (+ ghost liveInfo0).
+        //
+        // MRT_GCV2_ALLOC_BLACK=1: experimental full paint (default OFF; PrepareYoung ClearLiveInfo
+        // can wipe pre-mark paint on the product path — see REPORT-blackmark).
+        //
+        // MRT_GCV2_YOUNG_CONC_MARK=1: ZGC allocate-black for the concurrent young mark window
+        // only — young non-large regions under TRACE/CLEAR after PrepareYoung already ran, so
+        // ClearLiveInfo will not wipe these bits before STW2 evacuate. isTraceRegion alone
+        // makes ShouldEnqueue skip SATB; without paint those objects stay live0Surv=0 at route.
         {
             static const bool allocBlackOn = []() {
                 const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
                 return v != nullptr && v[0] == '1' && v[1] == '\0';
             }();
-            if (allocBlackOn && reg != nullptr && !reg->IsLargeRegion()) {
+            static const bool youngConcMarkOn = []() {
+                const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if ((allocBlackOn || youngConcMarkOn) && reg != nullptr && !reg->IsLargeRegion()) {
                 GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
                 Mutator* m = Mutator::GetMutator();
                 if (m != nullptr) {
@@ -320,8 +329,19 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                         p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || p == GCPhase::GC_PHASE_POST_TRACE ||
                         p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD;
                 };
-                // Also: isTraceRegion alone means "implicit black" in ShouldEnqueue — unify.
-                bool needBlack = phaseNeedsBlack(mutP) || phaseNeedsBlack(heapP) || reg->IsTraceRegion();
+                bool needBlack = false;
+                if (allocBlackOn) {
+                    // Also: isTraceRegion alone means "implicit black" in ShouldEnqueue — unify.
+                    needBlack = phaseNeedsBlack(mutP) || phaseNeedsBlack(heapP) || reg->IsTraceRegion();
+                } else {
+                    // youngconc only: concurrent mark window (TRACE/CLEAR) + young region.
+                    // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
+                    const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
+                                             heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+                                             mutP == GCPhase::GC_PHASE_TRACE ||
+                                             mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+                    needBlack = inConcMark && reg->IsYoungRegion();
+                }
                 if (needBlack) {
                     MAddress regionStart = reg->GetRegionStart();
                     MAddress regionEnd = reg->GetRegionEnd();
