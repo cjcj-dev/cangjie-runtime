@@ -175,6 +175,9 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
             });
         });
     };
+    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
+    // List stamp + post-mark grant (WCollector) close edge-live young; full-heap
+    // ForEachObj fill SEGV'd on stale tips under load (floorremset).
     recentPinnedRegionList.VisitAllRegions(scanRegion);
     oldPinnedRegionList.VisitAllRegions(scanRegion);
     rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
@@ -186,29 +189,6 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     unmovableFromRegionList.VisitAllRegions(scanRegion);
     fromRegionList.VisitAllRegions(scanRegion);
     tlRegionList.VisitAllRegions(scanRegion);
-    // floorremset gap fill: units not on named lists. Order matches VerifyRememberedSet —
-    // IsValidObject before HasRefField (HasRefField alone SEGV on stale tips).
-    ForEachObjUnsafe([&rememberedSet, &recorded](BaseObject* object) {
-        if (object == nullptr || !object->IsValidObject() || !object->HasRefField()) {
-            return;
-        }
-        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (holderRegion == nullptr || holderRegion->IsYoungRegion() || holderRegion->IsGarbageRegion() ||
-            holderRegion->IsFreeRegion()) {
-            return;
-        }
-        object->ForEachRefField([&rememberedSet, &recorded](RefField<>& field) {
-            BaseObject* target = to_object(field.GetTargetObject());
-            if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                return;
-            }
-            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                ++recorded;
-            }
-        });
-    });
     return recorded;
 }
 
