@@ -1021,6 +1021,21 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (latest == nullptr) {
         latest = fromObj;
     }
+    // Non-heap targets (TypeInfo*, binary constants, immortal metadata): address is
+    // outside the managed heap, so IsHeapAddress/IsValidObject are structurally false.
+    // After Flip their colour is IsOldPointer, but the payload is still the live
+    // non-heap pointer. Recolour only — never CAS null.
+    // nullslot evidence (selfhost×main probe): reason=latest_not_heap was 58-60/64 of
+    // f3_fix_oldtag null writes; nulling those slots is what zeros TypeInfo* →
+    // GetMTable(rdi=0) and sibling null-field SEGV under in_par_fix.
+    // Same non-heap arm as ResolveMinorReference (never CAS null on non-heap).
+    if (latest != nullptr && !Heap::IsHeapAddress(latest)) {
+        RefField<> newField = RootSlotWriteback(latest, &field);
+        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
+            (void)field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+        }
+        return;
+    }
     bool latestLive = false;
     if (Heap::IsHeapAddress(latest)) {
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
@@ -1031,6 +1046,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         // Dead one-gen-stale residue (common right after Flip of the just-tagged
         // generation, or remset residue). Null the slot instead of fail-closed:
         // F5 still guards major FindLatestVersion consumers.
+        // Restricted to heap addresses: non-heap handled above.
         static std::atomic<size_t> g_f3DeadLogged{ 0 };
         size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
         if (n < 16) {
