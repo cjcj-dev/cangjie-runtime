@@ -839,10 +839,12 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
+        if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
+        // twoflags: notRelocatable is major-Assemble only. Young mark re-establishes
+        // liveness for POST_TRACE-stamped regions — do not skip minor CSet.
         region->ClearLiveInfo();
         visitor(region);
         ++stats.candidateRegions;
@@ -857,7 +859,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
+        if (!region->IsYoungRegion()) {
             region = next;
             continue;
         }
