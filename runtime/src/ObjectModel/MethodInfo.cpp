@@ -423,13 +423,19 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         }
         return obj;
     } else if (retType->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
+        // RAW_POINTER_OBJECT may land non-young; ref-bearing VArray uses WriteStruct (G-C3).
         MSize vArraySize = retType->GetFieldNum() * retType->GetComponentTypeInfo()->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
-        if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE), vArraySize,
-            reinterpret_cast<void*>(ret.ref), vArraySize) != EOK) {
+        if (vArraySize == 0) {
+            return obj;
+        }
+        MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
+        if (retType->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize,
+                                           reinterpret_cast<Uptr>(ret.ref), vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
+                            reinterpret_cast<void*>(ret.ref), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "RetValueToAny memcpy_s fail");
         }
         return obj;

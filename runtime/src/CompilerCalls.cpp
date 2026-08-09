@@ -1975,11 +1975,22 @@ extern "C" void CJ_MCC_ArrayCopyGeneric(const ObjectPtr dstObj, MAddress dstFiel
         case TypeKind::TYPE_KIND_UINT_NATIVE:
         case TypeKind::TYPE_KIND_CSTRING:
         case TypeKind::TYPE_KIND_CPOINTER:
-        case TypeKind::TYPE_KIND_CFUNC:
-        case TypeKind::TYPE_KIND_VARRAY: {
+        case TypeKind::TYPE_KIND_CFUNC: {
             CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
                                    reinterpret_cast<void*>(srcField), srcSize) == EOK,
                          "MCC_ArrayCopyGeneric memmove_s failed");
+            break;
+        }
+        case TypeKind::TYPE_KIND_VARRAY: {
+            // VArray may embed managed refs (HasRefField recurses via component flag /
+            // TypeGCInfo). Unconditional memmove skips remset post-record (G-C1).
+            if (componentTypeInfo->HasRefField()) {
+                Heap::GetBarrier().CopyStructArray(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+            } else {
+                CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize,
+                                       reinterpret_cast<void*>(srcField), srcSize) == EOK,
+                             "MCC_ArrayCopyGeneric memmove_s failed");
+            }
             break;
         }
         case TypeKind::TYPE_KIND_TUPLE:
