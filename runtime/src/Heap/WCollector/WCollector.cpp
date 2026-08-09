@@ -2727,6 +2727,75 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         PreforwardAllResurrectExportFromObjects();
         postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
 
+        // postallocgap: second-chance grant AFTER root preforward, BEFORE liveInfo0 snapshot.
+        // Root fix may have installed plain targets; re-scan reachableVec + remset for
+        // unmarked young and MarkObject so Route geometry includes them.
+        {
+            size_t secondGrant = 0;
+            for (BaseObject* object : reachableVec) {
+                if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                    continue;
+                }
+                if (!Collector::PlausibleManagedObjectGate("postallocgap.grant2.holder", object)) {
+                    continue;
+                }
+                if (!object->HasRefField()) {
+                    continue;
+                }
+                object->ForEachRefField([this, &secondGrant](RefField<>& field) {
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("postallocgap.grant2.target", target)) {
+                        BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                        if (host != nullptr && host != target) {
+                            target = host;
+                        } else {
+                            return;
+                        }
+                    }
+                    RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (region == nullptr || !region->IsYoungRegion()) {
+                        return;
+                    }
+                    if (region->IsMarkedObject(target)) {
+                        return;
+                    }
+                    if (!MarkObject(target)) {
+                        ++secondGrant;
+                    }
+                });
+            }
+            for (MAddress slot : remsetVec) {
+                if (!Heap::IsHeapAddress(slot)) {
+                    continue;
+                }
+                BaseObject* target = ResolveMinorReference(HeapSlotAt<>(slot));
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    continue;
+                }
+                if (!Collector::PlausibleManagedObjectGate("postallocgap.grant2.remset", target)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                    if (host != nullptr && host != target) {
+                        target = host;
+                    } else {
+                        continue;
+                    }
+                }
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (region == nullptr || !region->IsYoungRegion() || region->IsMarkedObject(target)) {
+                    continue;
+                }
+                if (!MarkObject(target)) {
+                    ++secondGrant;
+                }
+            }
+            if (secondGrant != 0) {
+                LOG(RTLOG_ERROR, "[GCV2][postallocgap] grant2_new_marks=%zu (pre-PrepareForwardTable)", secondGrant);
+            }
+        }
+
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
