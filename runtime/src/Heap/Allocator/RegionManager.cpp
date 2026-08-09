@@ -839,12 +839,10 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
+        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;
         }
-        // twoflags: do NOT filter here — young mark re-establishes liveness.
-        // notRelocatableThisCycle is major-Assemble only (cleared at PrepareTrace).
         region->ClearLiveInfo();
         visitor(region);
         ++stats.candidateRegions;
@@ -859,7 +857,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     region = recentFullRegionList.GetHeadRegion();
     while (region != nullptr) {
         RegionInfo* next = region->GetNextRegion();
-        if (!region->IsYoungRegion()) {
+        if (!region->IsYoungRegion() || region->IsNotRelocatableThisCycle()) {
             region = next;
             continue;
         }
@@ -1459,9 +1457,9 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
-            // twoflags: CSet exclusion (orthogonal to isTraceRegion). No CLEAR_SATB/RECLAIM.
-            if (phase == GC_PHASE_TRACE || phase == GC_PHASE_POST_TRACE ||
-                phase == GC_PHASE_PREFORWARD || phase == GC_PHASE_FORWARD) {
+            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion). No CLEAR_SATB.
+            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
+                phase == GC_PHASE_FORWARD) {
                 region->SetNotRelocatableThisCycle(1);
             }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);

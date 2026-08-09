@@ -182,15 +182,14 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         } else {
             reg = RegionInfo::TryGetRegionInfoAt(addr);
         }
-        // twoflags: any successful alloc after major mark start stamps CSet exclusion.
-        // Covers IDLE-born TL tails that keep bumping during TRACE/POST_TRACE.
-        // ⛔ Do NOT include CLEAR_SATB_BUFFER (minor shares it) or RECLAIM_SATB_NODE
-        // (post-cycle; would re-stamp after PrepareTrace clear and poison next Assemble).
-        // Orthogonal to isTraceRegion; never read by ShouldEnqueue.
+        // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
+        // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
+        // TRACE (would exclude most young regions until next major → minor starvation).
+        // ⛔ No CLEAR_SATB (minor shares it). Orthogonal to isTraceRegion / ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
             GCPhase heapP = Heap::GetHeap().GetGCPhase();
-            if (heapP == GCPhase::GC_PHASE_TRACE || heapP == GCPhase::GC_PHASE_POST_TRACE ||
-                heapP == GCPhase::GC_PHASE_PREFORWARD || heapP == GCPhase::GC_PHASE_FORWARD) {
+            if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
+                heapP == GCPhase::GC_PHASE_FORWARD) {
                 reg->SetNotRelocatableThisCycle(1);
             }
         }
