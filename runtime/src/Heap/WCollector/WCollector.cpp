@@ -4204,47 +4204,52 @@ void WCollector::DoYoungGarbageCollection()
         // otherwise invisible). Same shape as MarkSatbBuffer timeout STW.
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-        // youngmiss: concurrent-window remset edges are NEW greys. Under FYS, RescanRememberedSet
-        // filters by reachableSlots (slots visited during the concurrent mark wave). A slot written
-        // after its holder was scanned is often absent from that set, so the edge was silently
-        // dropped — both from the mark workstack and from liveRememberedSlots (evac fixup).
-        // Fix: (1) rescan concurrent remset with fullYoungScan=false (retained/liveness filter only);
-        // (2) force-admit those slots into reachableSlots for the evacuate ledger;
-        // (3) fixpoint remset+roots+satb until quiet (single pass left residual greys);
-        // (4) youngmiss2: rescan reachableVec fields for unmarked young (young→young, not remset).
+        // youngmiss / youngconc M1: concurrent-window remset edges are NEW greys. Under FYS,
+        // RescanRememberedSet filters by reachableSlots — a slot written after its holder was
+        // scanned is often absent, so the edge was silently dropped (mark + evac fixup ledger).
+        //
+        // ZGC shape (zGeneration.cpp:542-558 mark_end re-enter): under STW2 mutators are frozen,
+        // so remset is drained **once** then roots+SATB+field-rescan loop to a quiet fixpoint.
+        // Re-DrainForMinor each iter is wrong: under STW nothing mutator-side is added, and a
+        // non-empty active face from GC-side Record can force NON_CONVERGED forever (youngmiss2).
+        //
+        // (1) drain concurrent remset once, rescan with fullYoungScan=false + force-admit slots
+        // (2) fixpoint: roots + retired SATB + reachableVec field rescan (young→young)
+        // (3) quiet = no new greys this iter (work empty, no field extra, reachableVec stable)
         {
             MRT_PHASE_TIMER("young.stw2_fixpoint");
-            constexpr size_t kMaxStw2Iters = 8;
             size_t totalConcRemset = 0;
-            size_t totalFieldExtra = 0;
-            size_t iters = 0;
-            for (; iters < kMaxStw2Iters; ++iters) {
-                const size_t reachableBefore = reachableVec.size();
-                size_t nConc = 0;
-                {
-                    MinorSlotSet concurrentRemset;
-                    nConc = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
-                    if (nConc != 0) {
-                        totalConcRemset += nConc;
-                        rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
-                        remsetStats.recorded = rememberedSlots.size();
-                        // Do NOT pass product fullYoungScan: that path drops slots missing from
-                        // reachableSlots. Concurrent edges are the authority for new greys.
-                        RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                            /*fullYoungScan=*/false, &consumedSlots, &remsetStats);
-                        for (MAddress slot : concurrentRemset) {
-                            if (!Heap::IsHeapAddress(slot)) {
-                                continue;
-                            }
-                            (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
-                                               g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+            {
+                MinorSlotSet concurrentRemset;
+                totalConcRemset = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
+                if (totalConcRemset != 0) {
+                    rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
+                    remsetStats.recorded = rememberedSlots.size();
+                    // Do NOT pass product fullYoungScan: that path drops slots missing from
+                    // reachableSlots. Concurrent edges are the authority for new greys.
+                    RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
+                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats);
+                    for (MAddress slot : concurrentRemset) {
+                        if (!Heap::IsHeapAddress(slot)) {
+                            continue;
                         }
-                        if (!workStack.empty()) {
-                            TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec,
-                                              reachableSlots, weakSlots, useBitmapLedger);
-                        }
+                        (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
+                                           g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                    }
+                    if (!workStack.empty()) {
+                        TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                          weakSlots, useBitmapLedger);
                     }
                 }
+            }
+            constexpr size_t kMaxStw2Iters = 16;
+            size_t totalFieldExtra = 0;
+            size_t iters = 0;
+            bool converged = false;
+            for (; iters < kMaxStw2Iters; ++iters) {
+                const size_t reachableBefore = reachableVec.size();
+                size_t rootExtraN = 0;
+                size_t satbExtraN = 0;
                 {
                     WorkStack finalRoots = NewWorkStack();
                     theAllocator.VisitAllocBuffers(
@@ -4259,18 +4264,28 @@ void WCollector::DoYoungGarbageCollection()
                         if (fullYoungScan) {
                             if (Heap::IsHeapAddress(object)) {
                                 workStack.push_back(object);
+                                ++rootExtraN;
                             }
                         } else {
+                            size_t before = workStack.size();
                             PushYoungObject(object, workStack, "alloc_buffer_final");
+                            if (workStack.size() > before) {
+                                ++rootExtraN;
+                            }
                         }
                     }
-                    VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
+                    VisitMinorRoots([this, fullYoungScan, &workStack, &rootExtraN](BaseObject* object) {
                         if (fullYoungScan) {
                             if (Heap::IsHeapAddress(object)) {
                                 workStack.push_back(object);
+                                ++rootExtraN;
                             }
                         } else {
+                            size_t before = workStack.size();
                             PushYoungObject(object, workStack, "minor_root_final");
+                            if (workStack.size() > before) {
+                                ++rootExtraN;
+                            }
                         }
                     });
                     if (!workStack.empty()) {
@@ -4289,8 +4304,13 @@ void WCollector::DoYoungGarbageCollection()
                         }
                         if (fullYoungScan) {
                             workStack.push_back(obj);
+                            ++satbExtraN;
                         } else {
+                            size_t before = workStack.size();
                             PushYoungObject(obj, workStack, "young_satb_final");
+                            if (workStack.size() > before) {
+                                ++satbExtraN;
+                            }
                         }
                     }
                     if (!workStack.empty()) {
@@ -4299,10 +4319,7 @@ void WCollector::DoYoungGarbageCollection()
                     }
                 }
                 // youngmiss2 §1③: concurrent young→young stores are not in remset (old→young only).
-                // SATB should catch them, but residual nullroute still shows marked holder → white
-                // from-space child after remset+roots+satb fixpoint. Rescan fields of every object
-                // already in reachableVec and push unmarked young targets — same shape as the
-                // blackmark fixpoint, always on for youngconc only (not MRT_GCV2_ALLOC_BLACK).
+                // Rescan fields of every object already in reachableVec and push unmarked young.
                 size_t fieldExtraN = 0;
                 {
                     WorkStack fieldExtra = NewWorkStack();
@@ -4353,16 +4370,20 @@ void WCollector::DoYoungGarbageCollection()
                                           weakSlots, useBitmapLedger);
                     }
                 }
-                if (nConc == 0 && workStack.empty() && fieldExtraN == 0 &&
+                // Quiet: no new grey work this iteration. rootExtraN may re-push already-marked
+                // roots under FYS (PushYoungObject skips marked); only field/satb/vec growth count.
+                if (satbExtraN == 0 && fieldExtraN == 0 && workStack.empty() &&
                     reachableVec.size() == reachableBefore) {
+                    converged = true;
                     break;
                 }
+                (void)rootExtraN;
             }
             VLOG(REPORT,
                  "[GCV2][youngconc] stw2_fixpoint iters=%zu conc_remset_total=%zu field_extra_total=%zu "
-                 "reachable=%zu",
-                 iters + 1, totalConcRemset, totalFieldExtra, reachableVec.size());
-            if (iters + 1 >= kMaxStw2Iters) {
+                 "reachable=%zu converged=%d",
+                 iters + 1, totalConcRemset, totalFieldExtra, reachableVec.size(), static_cast<int>(converged));
+            if (!converged) {
                 VLOG(REPORT,
                      "[GCV2][youngconc] stw2_fixpoint NON_CONVERGED max_iters=%zu reachable=%zu "
                      "conc_remset_total=%zu field_extra_total=%zu",
