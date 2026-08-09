@@ -7,10 +7,11 @@
 #ifndef MRT_FLOOR_ENUM_DIAG_H
 #define MRT_FLOOR_ENUM_DIAG_H
 
-// floorenum + floortarget: four-column host recon + target lifecycle on nullroute.
+// floorenum + floortarget + slotdelta: host recon, target lifecycle, T2/T4 slot delta.
 // Gate: MRT_GCV2_FLOORENUM_DIAG=1 (default off).
 // Indep full-root: MRT_GCV2_FLOORENUM_INDEP=1 every MRT_GCV2_FLOORENUM_EVERY (default 4).
-// Target grant recon always on when FLOORENUM_DIAG=1 (no product path change).
+// Slot-set capacity: MRT_GCV2_SLOTDELTA_CAP (default 262144 entries); truncates past cap.
+// Target grant recon + slot face always on when FLOORENUM_DIAG=1 (no product path change).
 
 #include <cstddef>
 #include <cstdint>
@@ -28,6 +29,7 @@ namespace FloorEnumDiag {
 bool DiagEnabled();
 bool IndepEnabled();
 size_t EveryN();
+size_t SlotCap();
 
 void ClearSnap();
 
