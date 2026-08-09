@@ -72,6 +72,27 @@ std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
 
+// fysgrant: FYS mark result × pregrant face 2D (default off; MRT_GCV2_FYSGRANT=1).
+// Early-return BEFORE counters (promotegap shape).
+namespace {
+bool FysGrantProbeOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_FYSGRANT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+// Per-process cumulative (same shape as installdomain counters).
+std::atomic<size_t> g_fysgrantYoungInVec{ 0 };     // young in reachableVec (FYS/closure claimed)
+std::atomic<size_t> g_fysgrantMarkedLive{ 0 };     // among them: current liveInfo survived
+std::atomic<size_t> g_fysgrantGhostLive0{ 0 };     // among them: liveInfo0 survived (post PrepareForwardable)
+std::atomic<size_t> g_fysgrantMarkedNoLive0{ 0 };  // liveInfo yes, liveInfo0 no (would be 乙)
+std::atomic<size_t> g_fysgrantNeither{ 0 };        // neither face (unexpected if claimed)
+std::atomic<size_t> g_fysgrantOldInVec{ 0 };       // non-young holders in vec (FYS-only path)
+std::atomic<size_t> g_fysgrantMinorN{ 0 };
+} // namespace
+
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
 // rootdrop: same gate also arms path=resolve_root_null (RootSlot HealRoot null).
@@ -3655,6 +3676,68 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             LOG(RTLOG_ERROR,
                 "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
                 grant, already, tooLate, skip);
+
+            // fysgrant: after PrepareForwardTable + pregrant Ensure — classify reachableVec.
+            // Gate first; zero product cost when off. Counts are cumulative across minors.
+            if (FysGrantProbeOn()) {
+                size_t youngInVec = 0;
+                size_t markedLive = 0;
+                size_t ghostLive0 = 0;
+                size_t markedNoLive0 = 0;
+                size_t neither = 0;
+                size_t oldInVec = 0;
+                for (BaseObject* object : reachableVec) {
+                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                        continue;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("fysgrant.vec", object)) {
+                        continue;
+                    }
+                    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                    if (region == nullptr) {
+                        continue;
+                    }
+                    if (!region->IsYoungRegion()) {
+                        ++oldInVec;
+                        continue;
+                    }
+                    ++youngInVec;
+                    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
+                    LiveInfo* live = region->GetLiveInfo();
+                    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+                    const bool curOk = live != nullptr && live->IsSurvivedObject(offset);
+                    const bool g0Ok = ghost != nullptr && ghost->IsSurvivedObject(offset);
+                    if (curOk) {
+                        ++markedLive;
+                    }
+                    if (g0Ok) {
+                        ++ghostLive0;
+                    }
+                    if (curOk && !g0Ok) {
+                        ++markedNoLive0;
+                    }
+                    if (!curOk && !g0Ok) {
+                        ++neither;
+                    }
+                }
+                g_fysgrantYoungInVec.fetch_add(youngInVec, std::memory_order_relaxed);
+                g_fysgrantMarkedLive.fetch_add(markedLive, std::memory_order_relaxed);
+                g_fysgrantGhostLive0.fetch_add(ghostLive0, std::memory_order_relaxed);
+                g_fysgrantMarkedNoLive0.fetch_add(markedNoLive0, std::memory_order_relaxed);
+                g_fysgrantNeither.fetch_add(neither, std::memory_order_relaxed);
+                g_fysgrantOldInVec.fetch_add(oldInVec, std::memory_order_relaxed);
+                size_t minorN = g_fysgrantMinorN.fetch_add(1, std::memory_order_relaxed) + 1;
+                LOG(RTLOG_ERROR,
+                    "[GCV2][fysgrant] minor=%zu youngInVec=%zu markedLive=%zu live0=%zu "
+                    "markedNoLive0=%zu neither=%zu oldInVec=%zu "
+                    "pregrant grant=%zu already=%zu tooLate=%zu "
+                    "cum young=%zu live0=%zu markedNoLive0=%zu",
+                    minorN, youngInVec, markedLive, ghostLive0, markedNoLive0, neither, oldInVec,
+                    grant, already, tooLate,
+                    g_fysgrantYoungInVec.load(std::memory_order_relaxed),
+                    g_fysgrantGhostLive0.load(std::memory_order_relaxed),
+                    g_fysgrantMarkedNoLive0.load(std::memory_order_relaxed));
+            }
         }
 
         // pass1 root fix after domain grant — serial sandwich stays;
