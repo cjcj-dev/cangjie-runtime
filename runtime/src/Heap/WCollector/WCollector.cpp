@@ -22,6 +22,7 @@
 #include <memory>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include <unistd.h>
@@ -2000,9 +2001,202 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
     }
 }
 
-void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
-                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, bool useBitmapLedger)
+// R3 markpar: STW-parallel young.mark_closure — sibling of ConcurrentMarkingWork
+// (TracingCollector.cpp ConcurrentMarkingWork). Claim = MarkObject atomic bit;
+// per-worker reachableVec/slots/weaks merged after pool barrier. Env:
+// MRT_GCV2_MARKPAR_WORKERS / FORCE_SERIAL / INJECT_DISPEL.
+// Port of fix/markpar@3f869baa onto setbitmap ledger (reachableVec + useBitmapLedger).
+namespace {
+// MarkStack::size() counts buffers (64 objs each), not objects. Major uses 16/8 for
+// deep concurrent stacks; young LIFO DFS stays shallow ⇒ those thresholds never fire.
+// Buffer-level 2/1 so steal engages on ~64–128 greys (markpar 3f869baa).
+constexpr size_t kMarkparMaxWorkSize = 2;
+constexpr size_t kMarkparMinWorkSize = 1;
+} // namespace
+
+struct YoungMarkingShared {
+    WCollector* collector = nullptr;
+    GCThreadPool* pool = nullptr;
+    bool fullYoungScan = false;
+    bool useBitmapLedger = true;
+    bool recordSlots = false;
+    std::vector<std::vector<BaseObject*>> objects;
+    std::vector<std::vector<MAddress>> slots;
+    std::vector<std::vector<MAddress>> weaks;
+    std::vector<size_t> objectsMarked;
+    std::atomic<size_t> nextWorkerId{ 0 };
+};
+
+class YoungMarkingWork : public HeapWork {
+public:
+    YoungMarkingWork(YoungMarkingShared& shared, TracingCollector::WorkStack&& stack, size_t workerSlot)
+        : shared(shared), workStack(std::move(stack)), workerSlot(workerSlot)
+    {}
+
+    void TryForkTask()
+    {
+        if (shared.pool == nullptr) {
+            return;
+        }
+        size_t size = workStack.size();
+        if (size <= kMarkparMinWorkSize) {
+            return;
+        }
+        bool doFork = false;
+        size_t newSize = 0;
+        if (size > kMarkparMaxWorkSize) {
+            newSize = size >> 1;
+            doFork = true;
+        } else if (shared.pool->GetWaitingThreadNumber() > 0) {
+            constexpr uint8_t shiftForEight = 3;
+            newSize = size >> shiftForEight;
+            doFork = true;
+        }
+        if (!doFork || newSize == 0) {
+            return;
+        }
+        TracingCollector::WorkStackBuf* hSplit = workStack.split(newSize);
+        size_t childSlot = shared.nextWorkerId.fetch_add(1, std::memory_order_relaxed);
+        if (childSlot >= shared.objects.size()) {
+            TracingCollector::WorkStack child(hSplit);
+            while (!child.empty()) {
+                workStack.push_back(child.back());
+                child.pop_back();
+            }
+            return;
+        }
+        shared.pool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), childSlot));
+    }
+
+    void Execute(size_t) override
+    {
+        auto& localObjects = shared.objects[workerSlot];
+        auto& localSlots = shared.slots[workerSlot];
+        auto& localWeaks = shared.weaks[workerSlot];
+        size_t nMarked = 0;
+        // FYS non-young / legacy set: per-worker dedup (no shared set write under race).
+        std::unordered_set<BaseObject*> localNonYoungSeen;
+        WCollector* collector = shared.collector;
+        const bool fullYoungScan = shared.fullYoungScan;
+        const bool useBitmapLedger = shared.useBitmapLedger;
+        const bool recordSlots = shared.recordSlots;
+
+        auto pushTarget = [collector, fullYoungScan, this](RefField<>& field) {
+            BaseObject* target = collector->ResolveMinorReference(field);
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(target)) {
+                    workStack.push_back(target);
+                }
+            } else {
+                collector->PushYoungObject(target, workStack, "closure_edge");
+            }
+        };
+
+        for (;;) {
+            if (workStack.empty()) {
+                break;
+            }
+            BaseObject* object = workStack.back();
+            workStack.pop_back();
+            if (!Heap::IsHeapAddress(object)) {
+                continue;
+            }
+            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+                BaseObject* host = Collector::TryRecoverInteriorBase(object);
+                if (host != nullptr && host != object) {
+                    workStack.push_back(host);
+                }
+                continue;
+            }
+            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            const bool isYoung = region->IsYoungRegion();
+
+            if (useBitmapLedger) {
+                if (isYoung) {
+                    bool wasMarked = collector->MarkObject(object);
+                    if (wasMarked) {
+                        continue;
+                    }
+                    ++nMarked;
+                    CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+                    localObjects.push_back(object);
+                } else if (!fullYoungScan) {
+                    continue;
+                } else {
+                    if (!localNonYoungSeen.insert(object).second) {
+                        continue;
+                    }
+                    CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+                    localObjects.push_back(object);
+                }
+            } else {
+                if (isYoung) {
+                    bool wasMarked = collector->MarkObject(object);
+                    if (wasMarked) {
+                        continue;
+                    }
+                    ++nMarked;
+                    if (!localNonYoungSeen.insert(object).second) {
+                        continue;
+                    }
+                } else if (!fullYoungScan) {
+                    continue;
+                } else if (!localNonYoungSeen.insert(object).second) {
+                    continue;
+                }
+                CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+                localObjects.push_back(object);
+            }
+
+            if (!object->HasRefField()) {
+                if (shared.pool != nullptr) {
+                    TryForkTask();
+                }
+                continue;
+            }
+            if (UNLIKELY(object->IsWeakRef())) {
+                HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+                localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
+                BaseObject* referent = collector->ResolveMinorReference(referentField);
+                if (!Heap::IsHeapAddress(referent)) {
+                    if (shared.pool != nullptr) {
+                        TryForkTask();
+                    }
+                    continue;
+                }
+                RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
+                if (referentRegion->IsYoungRegion()) {
+                    WeakRefBuffer::Instance().Insert(object);
+                }
+                // weak referent double-scan: do not claim referent; N2 CAS converge.
+                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+                if (shared.pool != nullptr) {
+                    TryForkTask();
+                }
+                continue;
+            }
+            object->ForEachRefField([&localSlots, &pushTarget, recordSlots](RefField<>& field) {
+                if (recordSlots) {
+                    localSlots.push_back(reinterpret_cast<MAddress>(&field));
+                }
+                pushTarget(field);
+            });
+            if (shared.pool != nullptr) {
+                TryForkTask();
+            }
+        }
+        shared.objectsMarked[workerSlot] += nMarked;
+    }
+
+private:
+    YoungMarkingShared& shared;
+    TracingCollector::WorkStack workStack;
+    size_t workerSlot;
+};
+
+void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                         std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                         MinorSlotSet& weakSlots, bool useBitmapLedger)
 {
     // setbitmap O1③: useBitmapLedger=true → claim young via MarkObject (region mark bitmap)
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
@@ -2094,6 +2288,160 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             pushTarget(field);
         });
     }
+}
+
+void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                           MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool)
+{
+    // T-D ③: dispel frozen across parallel mark window (same as R2 reffix).
+    const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
+    {
+        const char* inject = std::getenv("MRT_GCV2_MARKPAR_INJECT_DISPEL");
+        if (inject != nullptr && std::strcmp(inject, "1") == 0) {
+            RegionInfo::InjectDispelCountForTest();
+            VLOG(REPORT, "[GCV2][markpar] inject_dispel=1 (positive control)");
+        }
+    }
+
+    const int32_t helperNum = threadPool->GetMaxThreadNum();
+    int32_t poolCap = helperNum + 1;
+    int32_t workers = poolCap;
+    {
+        const char* wEnv = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (wEnv != nullptr && wEnv[0] != '\0') {
+            int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
+            if (want >= 1 && want < workers) {
+                workers = want;
+            }
+        }
+    }
+    if (workers < 1) {
+        workers = 1;
+    }
+    // workers=1 apparatus: main only, no pool Start (markpar 0cd9df7c).
+    if (workers == 1) {
+        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                useBitmapLedger);
+        VLOG(REPORT,
+             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
+             "reachable_n=%zu parallel=0",
+             reachableVec.size(), reachableVec.size());
+        return;
+    }
+
+    const size_t slotBudget = static_cast<size_t>(workers) * 8 + 16;
+    YoungMarkingShared shared;
+    shared.collector = this;
+    shared.pool = threadPool;
+    shared.fullYoungScan = fullYoungScan;
+    shared.useBitmapLedger = useBitmapLedger;
+    shared.recordSlots = fullYoungScan;
+    shared.objects.resize(slotBudget);
+    shared.slots.resize(slotBudget);
+    shared.weaks.resize(slotBudget);
+    shared.objectsMarked.assign(slotBudget, 0);
+    shared.nextWorkerId.store(1, std::memory_order_relaxed);
+
+    const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
+    const int32_t wantActive = workers - 1;
+    if (wantActive != prevActive) {
+        threadPool->SetMaxActiveThreadNum(wantActive);
+    }
+
+    // Seed: peel root buffers to helpers first, then Start + main + WaitFinish.
+    size_t slot = 1;
+    while (workStack.size() > 1 && slot < static_cast<size_t>(workers)) {
+        TracingCollector::WorkStackBuf* hSplit = workStack.split(1);
+        if (hSplit == nullptr) {
+            break;
+        }
+        threadPool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), slot));
+        shared.nextWorkerId.store(slot + 1, std::memory_order_relaxed);
+        ++slot;
+    }
+    threadPool->Start();
+    YoungMarkingWork mainTask(shared, std::move(workStack), 0);
+    mainTask.Execute(0);
+    threadPool->WaitFinish();
+
+    if (wantActive != prevActive) {
+        threadPool->SetMaxActiveThreadNum(prevActive);
+    }
+
+    const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
+    CHECK_DETAIL(dispelAtExit == dispelAtEntry,
+                 "T-D ghost dispel during parallel mark_closure window entry=%zu exit=%zu", dispelAtEntry,
+                 dispelAtExit);
+
+    // Merge per-worker ledgers → global reachableVec / sets (downstream ⑦ consumes them).
+    size_t active = 0;
+    std::string markedStr;
+    for (size_t i = 0; i < shared.objects.size(); ++i) {
+        if (shared.objects[i].empty() && shared.slots[i].empty() && shared.weaks[i].empty() &&
+            shared.objectsMarked[i] == 0) {
+            continue;
+        }
+        if (shared.objectsMarked[i] != 0) {
+            ++active;
+        }
+        if (!markedStr.empty()) {
+            markedStr += ',';
+        }
+        markedStr += std::to_string(shared.objectsMarked[i]);
+        for (BaseObject* obj : shared.objects[i]) {
+            if (!useBitmapLedger) {
+                reachableObjects.insert(obj);
+            } else {
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                if (region != nullptr && !region->IsYoungRegion() && fullYoungScan) {
+                    reachableObjects.insert(obj);
+                }
+            }
+            reachableVec.push_back(obj);
+        }
+        for (MAddress s : shared.slots[i]) {
+            reachableSlots.insert(s);
+        }
+        for (MAddress s : shared.weaks[i]) {
+            weakSlots.insert(s);
+        }
+    }
+    if (markedStr.empty()) {
+        markedStr = "0";
+    }
+
+    VLOG(REPORT,
+         "[GCV2][markpar][parallel] workers_active=%zu workers_scheduled=%d objects_marked=[%s] "
+         "reachable_n=%zu parallel=1",
+         active, workers, markedStr.c_str(), reachableVec.size());
+}
+
+void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                   MinorSlotSet& weakSlots, bool useBitmapLedger)
+{
+    if (workStack.empty()) {
+        return;
+    }
+    GCThreadPool* threadPool = GetThreadPool();
+    static const bool forceSerialEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool useParallel = threadPool != nullptr && !forceSerialEnv;
+    if (!useParallel) {
+        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
+        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                useBitmapLedger);
+        VLOG(REPORT,
+             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
+             "reachable_n=%zu parallel=0",
+             reachableVec.size(), reachableVec.size());
+        return;
+    }
+    TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger, threadPool);
 }
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,

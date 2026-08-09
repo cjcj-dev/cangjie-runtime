@@ -398,9 +398,17 @@ private:
     void PushYoungObject(BaseObject* object, WorkStack& workStack, const char* origin = "unknown") const;
     // setbitmap O1③: claim young via MarkObject (region mark bitmap) + collect vector;
     // FYS=0 skips reachableSlots inserts (slots never looked up). MRT_GCV2_SETBITMAP=0 → legacy set.
+    // R3 markpar: STW-parallel claim+steal (sibling of ConcurrentMarkingWork); env MARKPAR_*.
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                            MinorSlotSet& weakSlots, bool useBitmapLedger);
+    void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                 std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                 MinorSlotSet& weakSlots, bool useBitmapLedger);
+    void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                   MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool);
+    friend class YoungMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
