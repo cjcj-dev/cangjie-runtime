@@ -239,9 +239,13 @@ bool InjectPlainHeapWriteOnce()
                     return;
                 }
                 if (field.CompareExchange(oldZ, to_zpointer(plainRaw))) {
-                    size_t idx = static_cast<size_t>(PlainWriterSite::InjectPositive);
-                    g_plainWriteTotal.fetch_add(1, std::memory_order_relaxed);
-                    g_plainWriteBySite[idx].fetch_add(1, std::memory_order_relaxed);
+                    // When PLAIN_WRITE_COUNT=1, AssertColouredWrite already Note'd via TLS.
+                    // When off, bump inject counter so DumpPlainWriteCounters still shows >0.
+                    if (!EnvIsOne("MRT_GCV2_PLAIN_WRITE_COUNT")) {
+                        size_t idx = static_cast<size_t>(PlainWriterSite::InjectPositive);
+                        g_plainWriteTotal.fetch_add(1, std::memory_order_relaxed);
+                        g_plainWriteBySite[idx].fetch_add(1, std::memory_order_relaxed);
+                    }
                     g_injectState.slot = &field;
                     g_injectState.saved = oldZ;
                     g_injectState.active = true;
