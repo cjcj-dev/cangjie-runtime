@@ -91,7 +91,7 @@ std::atomic<size_t> g_nullslotResolve{ 0 };
 std::atomic<size_t> g_nullslotRemset{ 0 };
 
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
-                       size_t* pathCount)
+                       std::atomic<size_t>* pathCount)
 {
     size_t n = pathCount->fetch_add(1, std::memory_order_relaxed);
     if (!NullslotProbeEnabled() || n >= 64) {
