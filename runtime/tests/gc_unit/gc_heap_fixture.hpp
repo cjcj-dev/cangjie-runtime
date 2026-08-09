@@ -16,7 +16,11 @@
 #include <sys/mman.h>
 
 #include "Common/BaseObject.h"
+// Test-only: plant liveInfo/liveInfo0 without product structure change (no 乙).
+// RegionInfo::metadata is private; unit tests need direct slot control.
+#define private public
 #include "Heap/Allocator/RegionInfo.h"
+#undef private
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/Flags.h"
