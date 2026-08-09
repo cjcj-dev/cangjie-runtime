@@ -4059,7 +4059,62 @@ void WCollector::DoYoungGarbageCollection()
                                           weakSlots, useBitmapLedger);
                     }
                 }
-                if (nConc == 0 && workStack.empty() && reachableVec.size() == reachableBefore) {
+                // youngmiss2 §1③: concurrent young→young stores are not in remset (old→young only).
+                // SATB should catch them, but residual nullroute still shows marked holder → white
+                // from-space child after remset+roots+satb fixpoint. Rescan fields of every object
+                // already in reachableVec and push unmarked young targets — same shape as the
+                // blackmark fixpoint, always on for youngconc only (not MRT_GCV2_ALLOC_BLACK).
+                size_t fieldExtraN = 0;
+                {
+                    WorkStack fieldExtra = NewWorkStack();
+                    const size_t nHolders = reachableVec.size();
+                    for (size_t i = 0; i < nHolders; ++i) {
+                        BaseObject* object = reachableVec[i];
+                        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                            continue;
+                        }
+                        if (!Collector::PlausibleManagedObjectGate("youngconc.field_rescan.holder", object)) {
+                            continue;
+                        }
+                        if (!object->HasRefField()) {
+                            continue;
+                        }
+                        object->ForEachRefField([this, &fieldExtra, &reachableSlots, fullYoungScan](RefField<>& field) {
+                            MAddress slot = reinterpret_cast<MAddress>(&field);
+                            if (fullYoungScan && Heap::IsHeapAddress(slot)) {
+                                (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
+                                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                            }
+                            BaseObject* target = ResolveMinorReference(field);
+                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                                return;
+                            }
+                            if (!Collector::PlausibleManagedObjectGate("youngconc.field_rescan.target", target)) {
+                                BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                                if (host != nullptr && host != target) {
+                                    target = host;
+                                } else {
+                                    return;
+                                }
+                            }
+                            RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                            if (region == nullptr || !region->IsYoungRegion()) {
+                                return;
+                            }
+                            if (region->IsMarkedObject(target)) {
+                                return;
+                            }
+                            fieldExtra.push_back(target);
+                        });
+                    }
+                    fieldExtraN = fieldExtra.size();
+                    if (!fieldExtra.empty()) {
+                        TraceYoungClosure(fieldExtra, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                          weakSlots, useBitmapLedger);
+                    }
+                }
+                if (nConc == 0 && workStack.empty() && fieldExtraN == 0 &&
+                    reachableVec.size() == reachableBefore) {
                     break;
                 }
             }
