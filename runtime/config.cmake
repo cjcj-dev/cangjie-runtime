@@ -459,6 +459,9 @@ option(BUILD_CJTHREAD "Build cjthread module" ON)
 option(BUILD_RUNTIME   "Build runtime module"   ON)
 option(BUILD_DEMANGLE  "Build demangle module"  OFF)
 option(MRT_GCV2_UNTAG_BREADCRUMB "Build untag-ref-field crash breadcrumb diagnostics" OFF)
+# GC unit tests (HotSpot-gtest-shaped, pure invariant TUs). Default OFF so product
+# builds are byte-identical when the option is left alone.
+option(MRT_GC_UNIT_TESTS "Build GC unit tests (cj_gc_unit)" OFF)
 
 set(TARGET_ARCH "linux_${CMAKE_HOST_SYSTEM_PROCESSOR}_cjnative")
 if (OHOS_FLAG MATCHES 1)
