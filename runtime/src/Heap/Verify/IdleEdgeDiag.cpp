@@ -84,10 +84,18 @@ const char* PhaseName(uint8_t p)
     }
 }
 
+// Gen encoding for stamp / miss attribution (promoteedge).
+constexpr uint8_t kGenUnknown = 0;
+constexpr uint8_t kGenYoung = 1;
+constexpr uint8_t kGenOld = 2;
+constexpr uint8_t kGenNonHeap = 3;
+
 struct StampSlot {
     std::atomic<uintptr_t> field{ 0 };
     std::atomic<uint8_t> phase{ 0 };
     std::atomic<uint8_t> recorded{ 0 };
+    std::atomic<uint8_t> holderGen{ 0 };
+    std::atomic<uint8_t> targetGen{ 0 };
 };
 
 StampSlot* g_stamps = nullptr;
@@ -134,6 +142,22 @@ struct OffSlot {
 OffSlot g_off[kOffBuckets] = {};
 std::atomic<uint64_t> g_offUnknown{ 0 };
 std::atomic<uint64_t> g_offNeg{ 0 };
+
+// Write-time generation of holder/target on missBare (promoteedge hypothesis).
+// Index: 0=unknown 1=young 2=old 3=nonheap
+std::atomic<uint64_t> g_bareHolderGen[4] = {};
+std::atomic<uint64_t> g_bareTargetGen[4] = {};
+std::atomic<uint64_t> g_missHolderGen[4] = {};
+std::atomic<uint64_t> g_missTargetGen[4] = {};
+// Decision-time totals (all barrier visits under idleedge, not only miss).
+std::atomic<uint64_t> g_decHolderYoung{ 0 };
+std::atomic<uint64_t> g_decHolderOld{ 0 };
+std::atomic<uint64_t> g_decHolderOther{ 0 };
+std::atomic<uint64_t> g_decTargetYoung{ 0 };
+std::atomic<uint64_t> g_decTargetOld{ 0 };
+std::atomic<uint64_t> g_decTargetOther{ 0 };
+std::atomic<uint64_t> g_decRecorded{ 0 };
+std::atomic<uint64_t> g_decSkippedHolderYoung{ 0 };
 
 struct RaSlot {
     std::atomic<uintptr_t> pc{ 0 };
@@ -182,7 +206,7 @@ size_t HashField(MAddress field)
     return static_cast<size_t>(x) & g_stampMask;
 }
 
-void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded)
+void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t holderGen, uint8_t targetGen)
 {
     EnsureStampTable();
     const uintptr_t key = static_cast<uintptr_t>(fieldAddress);
@@ -194,6 +218,8 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded)
         if (prev == key) {
             slot.phase.store(phase, std::memory_order_relaxed);
             slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+            slot.holderGen.store(holderGen, std::memory_order_relaxed);
+            slot.targetGen.store(targetGen, std::memory_order_relaxed);
             g_stampNotes.fetch_add(1, std::memory_order_relaxed);
             return;
         }
@@ -203,12 +229,16 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded)
                                                    std::memory_order_relaxed)) {
                 slot.phase.store(phase, std::memory_order_relaxed);
                 slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+                slot.holderGen.store(holderGen, std::memory_order_relaxed);
+                slot.targetGen.store(targetGen, std::memory_order_relaxed);
                 g_stampNotes.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
             if (expected == key) {
                 slot.phase.store(phase, std::memory_order_relaxed);
                 slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+                slot.holderGen.store(holderGen, std::memory_order_relaxed);
+                slot.targetGen.store(targetGen, std::memory_order_relaxed);
                 g_stampNotes.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
@@ -222,6 +252,8 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded)
     g_stampWraps.fetch_add(1, std::memory_order_relaxed);
     slot.phase.store(phase, std::memory_order_relaxed);
     slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+    slot.holderGen.store(holderGen, std::memory_order_relaxed);
+    slot.targetGen.store(targetGen, std::memory_order_relaxed);
     slot.field.store(key, std::memory_order_release);
     g_stampNotes.fetch_add(1, std::memory_order_relaxed);
 }
@@ -230,6 +262,8 @@ struct StampLookup {
     bool found = false;
     uint8_t phase = 0;
     bool recorded = false;
+    uint8_t holderGen = 0;
+    uint8_t targetGen = 0;
 };
 
 StampLookup LoadStamp(MAddress fieldAddress)
@@ -250,6 +284,8 @@ StampLookup LoadStamp(MAddress fieldAddress)
             r.found = true;
             r.phase = slot.phase.load(std::memory_order_relaxed);
             r.recorded = slot.recorded.load(std::memory_order_relaxed) != 0;
+            r.holderGen = slot.holderGen.load(std::memory_order_relaxed);
+            r.targetGen = slot.targetGen.load(std::memory_order_relaxed);
             return r;
         }
     }
@@ -400,6 +436,24 @@ void PushSample(CensusStats& stats, MAddress slot)
     }
 }
 
+void NoteGenOnMiss(const StampLookup& st, bool bare)
+{
+    uint8_t hg = st.found ? st.holderGen : kGenUnknown;
+    uint8_t tg = st.found ? st.targetGen : kGenUnknown;
+    if (hg > 3) {
+        hg = kGenUnknown;
+    }
+    if (tg > 3) {
+        tg = kGenUnknown;
+    }
+    g_missHolderGen[hg].fetch_add(1, std::memory_order_relaxed);
+    g_missTargetGen[tg].fetch_add(1, std::memory_order_relaxed);
+    if (bare) {
+        g_bareHolderGen[hg].fetch_add(1, std::memory_order_relaxed);
+        g_bareTargetGen[tg].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder)
 {
     ++stats.remsetMiss;
@@ -409,9 +463,11 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder)
         ++stats.missByPhase[0];
         NoteBareHolder(holder);
         NoteBareOffset(holder, fieldAddress);
+        NoteGenOnMiss(st, true);
         PushSample(stats, fieldAddress);
         return;
     }
+    NoteGenOnMiss(st, false);
     if (st.phase < kPhaseBuckets) {
         ++stats.missByPhase[st.phase];
     } else {
@@ -438,12 +494,33 @@ bool Enabled()
     return on;
 }
 
-void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded)
+void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, uint8_t holderGen,
+                         uint8_t targetGen)
 {
     if (!Enabled() || fieldAddress == 0) {
         return;
     }
-    StoreStamp(fieldAddress, static_cast<uint8_t>(phase), recorded);
+    if (holderGen == kGenYoung) {
+        g_decHolderYoung.fetch_add(1, std::memory_order_relaxed);
+        if (!recorded) {
+            g_decSkippedHolderYoung.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else if (holderGen == kGenOld) {
+        g_decHolderOld.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_decHolderOther.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (targetGen == kGenYoung) {
+        g_decTargetYoung.fetch_add(1, std::memory_order_relaxed);
+    } else if (targetGen == kGenOld) {
+        g_decTargetOld.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_decTargetOther.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (recorded) {
+        g_decRecorded.fetch_add(1, std::memory_order_relaxed);
+    }
+    StoreStamp(fieldAddress, static_cast<uint8_t>(phase), recorded, holderGen, targetGen);
     NoteRa(__builtin_return_address(1));
 }
 
@@ -677,6 +754,96 @@ void DumpProcessTotals(const char* tag)
              tag == nullptr ? "?" : tag, i + 1, static_cast<unsigned long long>(otop[i].c), pct, otop[i].raw,
              otop[i].off, otop[i].off, otop[i].n);
     }
+
+    // promoteedge: write-time generation of holder/target on bare/miss edges.
+    auto genName = [](size_t g) -> const char* {
+        switch (g) {
+            case 1:
+                return "young";
+            case 2:
+                return "old";
+            case 3:
+                return "nonheap";
+            default:
+                return "unknown";
+        }
+    };
+    uint64_t bareHg[4];
+    uint64_t bareTg[4];
+    uint64_t missHg[4];
+    uint64_t missTg[4];
+    uint64_t bareHgSum = 0;
+    uint64_t bareTgSum = 0;
+    uint64_t missHgSum = 0;
+    uint64_t missTgSum = 0;
+    for (size_t g = 0; g < 4; ++g) {
+        bareHg[g] = g_bareHolderGen[g].load(std::memory_order_relaxed);
+        bareTg[g] = g_bareTargetGen[g].load(std::memory_order_relaxed);
+        missHg[g] = g_missHolderGen[g].load(std::memory_order_relaxed);
+        missTg[g] = g_missTargetGen[g].load(std::memory_order_relaxed);
+        bareHgSum += bareHg[g];
+        bareTgSum += bareTg[g];
+        missHgSum += missHg[g];
+        missTgSum += missTg[g];
+    }
+    VLOG(REPORT,
+         "[GCV2][idleedge][WRITE_GEN] tag=%s bareHolder young=%llu(%.1f%%) old=%llu(%.1f%%) "
+         "nonheap=%llu unknown=%llu total=%llu | bareTarget young=%llu old=%llu nonheap=%llu unknown=%llu | "
+         "missHolder young=%llu(%.1f%%) old=%llu(%.1f%%) nonheap=%llu unknown=%llu total=%llu | "
+         "missTarget young=%llu old=%llu nonheap=%llu unknown=%llu",
+         tag == nullptr ? "?" : tag,
+         static_cast<unsigned long long>(bareHg[kGenYoung]),
+         bareHgSum == 0 ? 0.0 : 100.0 * static_cast<double>(bareHg[kGenYoung]) / static_cast<double>(bareHgSum),
+         static_cast<unsigned long long>(bareHg[kGenOld]),
+         bareHgSum == 0 ? 0.0 : 100.0 * static_cast<double>(bareHg[kGenOld]) / static_cast<double>(bareHgSum),
+         static_cast<unsigned long long>(bareHg[kGenNonHeap]),
+         static_cast<unsigned long long>(bareHg[kGenUnknown]),
+         static_cast<unsigned long long>(bareHgSum),
+         static_cast<unsigned long long>(bareTg[kGenYoung]), static_cast<unsigned long long>(bareTg[kGenOld]),
+         static_cast<unsigned long long>(bareTg[kGenNonHeap]),
+         static_cast<unsigned long long>(bareTg[kGenUnknown]),
+         static_cast<unsigned long long>(missHg[kGenYoung]),
+         missHgSum == 0 ? 0.0 : 100.0 * static_cast<double>(missHg[kGenYoung]) / static_cast<double>(missHgSum),
+         static_cast<unsigned long long>(missHg[kGenOld]),
+         missHgSum == 0 ? 0.0 : 100.0 * static_cast<double>(missHg[kGenOld]) / static_cast<double>(missHgSum),
+         static_cast<unsigned long long>(missHg[kGenNonHeap]),
+         static_cast<unsigned long long>(missHg[kGenUnknown]),
+         static_cast<unsigned long long>(missHgSum),
+         static_cast<unsigned long long>(missTg[kGenYoung]), static_cast<unsigned long long>(missTg[kGenOld]),
+         static_cast<unsigned long long>(missTg[kGenNonHeap]),
+         static_cast<unsigned long long>(missTg[kGenUnknown]));
+    for (size_t g = 0; g < 4; ++g) {
+        if (bareHg[g] == 0 && bareTg[g] == 0 && missHg[g] == 0 && missTg[g] == 0) {
+            continue;
+        }
+        VLOG(REPORT,
+             "[GCV2][idleedge][WRITE_GEN_DETAIL] tag=%s gen=%s bareHolder=%llu bareTarget=%llu "
+             "missHolder=%llu missTarget=%llu",
+             tag == nullptr ? "?" : tag, genName(g), static_cast<unsigned long long>(bareHg[g]),
+             static_cast<unsigned long long>(bareTg[g]), static_cast<unsigned long long>(missHg[g]),
+             static_cast<unsigned long long>(missTg[g]));
+    }
+    uint64_t decHy = g_decHolderYoung.load(std::memory_order_relaxed);
+    uint64_t decHo = g_decHolderOld.load(std::memory_order_relaxed);
+    uint64_t decHx = g_decHolderOther.load(std::memory_order_relaxed);
+    uint64_t decTy = g_decTargetYoung.load(std::memory_order_relaxed);
+    uint64_t decTo = g_decTargetOld.load(std::memory_order_relaxed);
+    uint64_t decTx = g_decTargetOther.load(std::memory_order_relaxed);
+    uint64_t decRec = g_decRecorded.load(std::memory_order_relaxed);
+    uint64_t decSkipY = g_decSkippedHolderYoung.load(std::memory_order_relaxed);
+    uint64_t decHsum = decHy + decHo + decHx;
+    VLOG(REPORT,
+         "[GCV2][idleedge][WRITE_GEN_DEC] tag=%s holderYoung=%llu(%.1f%%) holderOld=%llu(%.1f%%) "
+         "holderOther=%llu targetYoung=%llu targetOld=%llu targetOther=%llu recorded=%llu "
+         "skippedHolderYoung=%llu totalDec=%llu",
+         tag == nullptr ? "?" : tag, static_cast<unsigned long long>(decHy),
+         decHsum == 0 ? 0.0 : 100.0 * static_cast<double>(decHy) / static_cast<double>(decHsum),
+         static_cast<unsigned long long>(decHo),
+         decHsum == 0 ? 0.0 : 100.0 * static_cast<double>(decHo) / static_cast<double>(decHsum),
+         static_cast<unsigned long long>(decHx), static_cast<unsigned long long>(decTy),
+         static_cast<unsigned long long>(decTo), static_cast<unsigned long long>(decTx),
+         static_cast<unsigned long long>(decRec), static_cast<unsigned long long>(decSkipY),
+         static_cast<unsigned long long>(decHsum));
 
     struct RaP {
         uint64_t c;

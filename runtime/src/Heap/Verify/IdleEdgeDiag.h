@@ -28,10 +28,12 @@ namespace IdleEdgeDiag {
 
 bool Enabled();
 
-// Called from Barrier::RecordCrossGenEdge when an old→young heap edge is
-// evaluated. Records write-time GC phase for later miss attribution.
+// holderGen/targetGen: 0=unknown 1=young 2=old 3=nonheap (promoteedge).
+// Called from Barrier::RecordCrossGenEdge when an edge is evaluated.
+// Records write-time GC phase + gen for later miss attribution.
 // Fail-open: no-op when gate off.
-void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded);
+void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, uint8_t holderGen,
+                         uint8_t targetGen);
 
 // STW census: snapshot remset, walk all non-young holders, count old→young
 // edges vs remset membership. Call immediately BEFORE RecordPinnedCrossGenEdges
