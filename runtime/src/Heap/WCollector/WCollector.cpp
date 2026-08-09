@@ -3378,28 +3378,20 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
 
-        // installdomain / iorfix: serial pre-grant while every from region is still
-        // FORWARDABLE. Must finish before any Fix/Forward can RouteRegion→ROUTED
-        // (else liveByteCount geometry freezes without the late survivor).
-        // iorfix: resolve fields via ResolveMinorReference (same as Fix/Trace) and
-        // multi-round walk so newly granted young targets' children also enter domain.
+        // installdomain: serial pre-grant while every from region is still FORWARDABLE.
+        // Must finish before any Fix/Forward can RouteRegion→ROUTED (else liveByteCount
+        // geometry freezes without the late survivor). Walk remset + reachable + roots
+        // (same surface as fixForwardedReferences) and also grant the holder itself.
+        // iorfix: do NOT ResolveMinorReference here — that can RouteRegion mid-pregrant
+        // and abort IsGhostFromRegion; domain membership for late edges is closed by the
+        // product post-mark fixpoint (before PrepareForwardable) instead.
         {
             auto ensureObj = [this](BaseObject* t) {
-                if (t == nullptr || !Heap::IsHeapAddress(t)) {
-                    return;
-                }
-                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", t)) {
-                    BaseObject* host = Collector::TryRecoverInteriorBase(t);
-                    if (host != nullptr && host != t) {
-                        EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
-                    }
-                    return;
-                }
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
             };
-            auto ensureField = [this, &ensureObj](RefField<>& field) {
-                BaseObject* t = ResolveMinorReference(field);
-                ensureObj(t);
+            auto ensureField = [&ensureObj](RefField<>& field) {
+                RefField<> value(field);
+                ensureObj(to_object(value.GetTargetObject()));
             };
             // Holders first (currentObject will ForwardObject them).
             for (BaseObject* object : reachableVec) {
@@ -3410,27 +3402,17 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     ensureField(HeapSlotAt<>(slot));
                 }
             }
-            // Multi-round: grant can paint a young that was unmarked; its fields may
-            // still point at further unmarked from-objects (same shape as IOR liveobj).
-            constexpr size_t kPregrantRounds = 4;
-            for (size_t round = 0; round < kPregrantRounds; ++round) {
-                size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
-                for (BaseObject* object : reachableVec) {
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
-                        continue;
-                    }
-                    if (!object->IsValidObject() || !object->HasRefField()) {
-                        continue;
-                    }
-                    object->ForEachRefField(ensureField);
+            for (BaseObject* object : reachableVec) {
+                if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                    continue;
                 }
-                size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
-                if (grantAfter == grantBefore) {
-                    break;
+                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
+                    continue;
                 }
+                if (!object->IsValidObject() || !object->HasRefField()) {
+                    continue;
+                }
+                object->ForEachRefField(ensureField);
             }
             // Roots after PrepareForwardable (pass2 surface).
             RootVisitor rootEnsure = [this, &ensureObj](ObjectRef& root) {
