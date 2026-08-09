@@ -147,7 +147,7 @@ bool ExerciseNineEntries(TestBarrier& barrier, RegionFixture& fixture, Remembere
                             reinterpret_cast<MAddress>(&sourceField), sizeof(RefField<>));
     check("CopyStructArray");
 
-    auto* atomicField = reinterpret_cast<RefField<true>*>(fixture.field);
+    auto* atomicField = &HeapSlotAt<true>(fixture.field);
     atomicField->SetTargetObject(nullptr);
     barrier.AtomicWriteReference(fixture.oldObject, *atomicField, fixture.youngObject, std::memory_order_relaxed);
     check("AtomicWriteReference");
