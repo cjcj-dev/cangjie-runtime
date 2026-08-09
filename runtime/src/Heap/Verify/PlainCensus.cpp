@@ -121,6 +121,26 @@ const char* PlainWriterSiteName(PlainWriterSite site)
     }
 }
 
+PlainWriteColumn ColumnOf(PlainWriterSite site)
+{
+    switch (site) {
+        case PlainWriterSite::FixMinorInterior:
+            return PlainWriteColumn::DerivedLegal;
+        case PlainWriterSite::Unknown:
+            return PlainWriteColumn::Unknown;
+        case PlainWriterSite::StoreColoured:
+        case PlainWriterSite::CompareExchange:
+        case PlainWriterSite::Exchange:
+        case PlainWriterSite::TryUntag:
+        case PlainWriterSite::RootSlotWritebackPlain:
+        case PlainWriterSite::GetAndTryTag:
+        case PlainWriterSite::InjectPositive:
+            return PlainWriteColumn::HeapSlotPlain;
+        default:
+            return PlainWriteColumn::Unknown;
+    }
+}
+
 ScopedPlainWriter::ScopedPlainWriter(PlainWriterSite site) : prev_(g_tlsWriterSite)
 {
     g_tlsWriterSite = site;
@@ -160,36 +180,47 @@ void DumpPlainWriteCounters(const char* point)
         return;
     }
     uint64_t total = g_plainWriteTotal.load(std::memory_order_relaxed);
+    uint64_t bySite[kWriterSiteCount] = {};
+    uint64_t colHeap = 0;
+    uint64_t colDerived = 0;
+    uint64_t colUnknown = 0;
+    for (size_t i = 0; i < kWriterSiteCount; ++i) {
+        bySite[i] = g_plainWriteBySite[i].load(std::memory_order_relaxed);
+        switch (ColumnOf(static_cast<PlainWriterSite>(i))) {
+            case PlainWriteColumn::HeapSlotPlain:
+                colHeap += bySite[i];
+                break;
+            case PlainWriteColumn::DerivedLegal:
+                colDerived += bySite[i];
+                break;
+            case PlainWriteColumn::Unknown:
+            default:
+                colUnknown += bySite[i];
+                break;
+        }
+    }
     std::fprintf(stderr,
                  "[GCV2][plain][write-counters] point=%s total=%llu "
                  "unknown=%llu store_coloured=%llu cas=%llu exchange=%llu "
                  "try_untag=%llu fix_minor_interior=%llu root_writeback_plain=%llu "
                  "get_and_try_tag=%llu inject=%llu env=MRT_GCV2_PLAIN_WRITE_COUNT\n",
                  point == nullptr ? "?" : point, static_cast<unsigned long long>(total),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::Unknown)].load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::StoreColoured)].load(
-                         std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::CompareExchange)].load(
-                         std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::Exchange)].load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::TryUntag)].load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::FixMinorInterior)].load(
-                         std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::RootSlotWritebackPlain)].load(
-                         std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::GetAndTryTag)].load(
-                         std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(
-                     g_plainWriteBySite[static_cast<size_t>(PlainWriterSite::InjectPositive)].load(
-                         std::memory_order_relaxed)));
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::Unknown)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::StoreColoured)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::CompareExchange)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::Exchange)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::TryUntag)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::FixMinorInterior)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::RootSlotWritebackPlain)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::GetAndTryTag)]),
+                 static_cast<unsigned long long>(bySite[static_cast<size_t>(PlainWriterSite::InjectPositive)]));
+    // derivedtype K1 columns: HeapSlot plain must go to 0; DerivedLegal may be large.
+    std::fprintf(stderr,
+                 "[GCV2][plain][write-columns] point=%s heap_plain=%llu derived_legal=%llu "
+                 "unknown=%llu (K1=heap_plain)\n",
+                 point == nullptr ? "?" : point, static_cast<unsigned long long>(colHeap),
+                 static_cast<unsigned long long>(colDerived),
+                 static_cast<unsigned long long>(colUnknown));
 }
 
 // Injection state for positive control: leave plain until census restores.

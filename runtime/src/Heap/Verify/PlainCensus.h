@@ -27,19 +27,31 @@ namespace MapleRuntime {
 //   MRT_GCV2_PLAIN_WRITE_INJECT=1 — one-shot positive control: install a plain
 //                                   heap slot then re-census / fire count path
 //
-// K1 target: plainHeapRefSlots == 0 (this module only measures; no semantic change).
+// K1 target: HeapSlot plain-write column == 0 (DerivedLegal column may be non-zero).
+// Steady-state plainHeapRefSlots on heap fields should also be ~0 after minor fix drains.
 
+// Writer sites feed three census columns (derivedtype / trustkill K1):
+//   HeapSlot plain  = K1 residual (must go to 0)
+//   Derived legal   = FixMinorInterior / named interior plain (legal by 03fc21ed)
+//   unknown         = untagged choke hits
 enum class PlainWriterSite : uint8_t {
     Unknown = 0,
     StoreColoured,
     CompareExchange,
     Exchange,
     TryUntag,
-    FixMinorInterior,
+    FixMinorInterior, // derived-legal column (not K1)
     RootSlotWritebackPlain,
     GetAndTryTag,
-    InjectPositive,
+    InjectPositive, // heap-plain K1 positive control
     Count // sentinel
+};
+
+enum class PlainWriteColumn : uint8_t {
+    HeapSlotPlain = 0, // K1
+    DerivedLegal = 1,  // FixMinorInterior interiors
+    Unknown = 2,
+    Count = 3
 };
 
 const char* PlainWriterSiteName(PlainWriterSite site);
@@ -72,7 +84,10 @@ void RunPlainCensus(const char* point, bool force = false);
 bool InjectPlainHeapWriteOnce();
 
 // Dump writer counters (also emitted at end of each census when count env is on).
+// Prints per-site counts plus three columns: heap_plain / derived_legal / unknown.
 void DumpPlainWriteCounters(const char* point);
+
+PlainWriteColumn ColumnOf(PlainWriterSite site);
 
 } // namespace MapleRuntime
 

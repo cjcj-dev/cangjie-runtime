@@ -2786,31 +2786,32 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    // interiorsrc2 / introot: stack/reg may hold RawArray+8. Relocate via host; write plain.
+    // interiorsrc2 / introot: value may be RawArray+8 (derived interior). Relocate via host;
+    // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
+    // into it; CasInstallInteriorPlain names the (host,offset) provenance (derivedtype).
+    // ScopedPlainWriter tags DerivedLegal column, not K1 HeapSlot plain.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
-                BaseObject* toInterior = reinterpret_cast<BaseObject*>(
-                    reinterpret_cast<uintptr_t>(toHost) +
-                    (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
-                RefField<> plain(toInterior);
+                size_t offset = static_cast<size_t>(reinterpret_cast<uintptr_t>(target) -
+                                                    reinterpret_cast<uintptr_t>(host));
                 MAddress oldVal = raw(oldField.GetFieldValue());
-                MAddress plainVal = raw(plain.GetFieldValue());
+                MAddress plainVal = reinterpret_cast<MAddress>(toHost) + offset;
                 if (oldVal != plainVal) {
                     ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-                    (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
+                    (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset);
                 }
                 return true;
             }
         }
-        RefField<> plain(target);
+        // Gate rejected; host unknown or not forwarded — still plain interior (03fc21ed).
         MAddress oldVal = raw(oldField.GetFieldValue());
-        MAddress plainVal = raw(plain.GetFieldValue());
+        MAddress plainVal = reinterpret_cast<MAddress>(target);
         if (oldVal != plainVal) {
             ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
+            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target);
         }
         return false;
     }
@@ -2820,12 +2821,11 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        RefField<> plain(current);
         MAddress oldVal = raw(field.GetFieldValue());
-        MAddress plainVal = raw(plain.GetFieldValue());
+        MAddress plainVal = reinterpret_cast<MAddress>(current);
         if (oldVal != plainVal) {
             ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(plainVal));
+            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current);
         }
         return false;
     }

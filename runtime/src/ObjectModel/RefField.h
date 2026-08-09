@@ -279,6 +279,29 @@ inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset
     slot.StoreDerived(base, offset, order);
 }
 
+// Named HeapSlot write for a derived *value* (base+offset interior). The storage is still a
+// HeapSlot (object field / remset), but the payload is not an object root and must stay plain
+// (03fc21ed / interiorsrc2). DerivedSlot itself cannot CAS into HeapSlot storage — stackmap
+// DerivedSlots use RebaseDerived; these HeapSlot sites keep CAS and express provenance via
+// (host, offset) in the call. Do not colour the installed value.
+template<bool isAtomic = false>
+inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
+                                    BaseObject* host, size_t offset)
+{
+    MAddress plainVal = reinterpret_cast<MAddress>(host) + offset;
+    return field.CompareExchange(expected, to_zpointer(plainVal));
+}
+
+// When the host is unknown, still install a plain interior address (same 03fc21ed rule).
+// Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.
+template<bool isAtomic = false>
+inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
+                                    BaseObject* interior)
+{
+    MAddress plainVal = reinterpret_cast<MAddress>(interior);
+    return field.CompareExchange(expected, to_zpointer(plainVal));
+}
+
 static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");
 static_assert(sizeof(RootSlot) == sizeof(MAddress), "RootSlot must remain one machine word");
 static_assert(sizeof(DerivedSlot) == sizeof(MAddress), "DerivedSlot must remain one machine word");
