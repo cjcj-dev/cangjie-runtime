@@ -47,7 +47,7 @@ public:
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const override
     {
-        field.SetTargetObject(ref);
+        field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
     }
 };
 
@@ -108,7 +108,7 @@ bool ExpectOneRecord(const std::string& label, RememberedSet& rememberedSet, MAd
 template<typename BarrierType>
 bool ExerciseBarrier(const char* name, BarrierType& barrier, RegionFixture& fixture, RememberedSet& rememberedSet)
 {
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     Barrier& entry = barrier;
     entry.WriteReference(fixture.oldObject, *fixture.field, fixture.youngObject);
     bool passed = ExpectOneRecord(name, rememberedSet, reinterpret_cast<MAddress>(fixture.field));
@@ -128,45 +128,45 @@ bool ExerciseNineEntries(TestBarrier& barrier, RegionFixture& fixture, Remembere
         passed = one && passed;
     };
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.WriteReference(fixture.oldObject, *fixture.field, fixture.youngObject);
     check("WriteReference");
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.WriteStruct(fixture.oldObject, reinterpret_cast<MAddress>(fixture.field), sizeof(RefField<>),
                         reinterpret_cast<MAddress>(&sourceField), sizeof(RefField<>));
     check("WriteStruct");
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.CopyRefArray(fixture.oldObject, reinterpret_cast<MAddress>(fixture.field), sizeof(RefField<>), nullptr,
                          reinterpret_cast<MAddress>(&sourceField), sizeof(RefField<>));
     check("CopyRefArray");
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.CopyStructArray(fixture.oldObject, reinterpret_cast<MAddress>(fixture.field), sizeof(RefField<>), nullptr,
                             reinterpret_cast<MAddress>(&sourceField), sizeof(RefField<>));
     check("CopyStructArray");
 
     auto* atomicField = &HeapSlotAt<true>(fixture.field);
-    atomicField->SetTargetObject(nullptr);
+    atomicField->StoreColoured(zpointer::null);
     barrier.AtomicWriteReference(fixture.oldObject, *atomicField, fixture.youngObject, std::memory_order_relaxed);
     check("AtomicWriteReference");
 
-    atomicField->SetTargetObject(nullptr);
+    atomicField->StoreColoured(zpointer::null);
     barrier.AtomicSwapReference(fixture.oldObject, *atomicField, fixture.youngObject, std::memory_order_relaxed);
     check("AtomicSwapReference");
 
-    atomicField->SetTargetObject(nullptr);
+    atomicField->StoreColoured(zpointer::null);
     barrier.CompareAndSwapReference(fixture.oldObject, *atomicField, nullptr, fixture.youngObject,
                                     std::memory_order_relaxed, std::memory_order_relaxed);
     check("CompareAndSwapReference");
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.WriteGeneric(fixture.oldObject, fixture.field, reinterpret_cast<BaseObject*>(genericSource.data()),
                          sizeof(RefField<>));
     check("WriteGeneric");
 
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     barrier.ReadGeneric(fixture.oldObject, reinterpret_cast<BaseObject*>(genericSource.data()),
                         genericSource.data() + TYPEINFO_PTR_SIZE, sizeof(RefField<>));
     check("ReadGeneric");
@@ -212,7 +212,7 @@ int main()
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
     fixture.youngRegion->SetYoungRegionFlag(0);
     Barrier::ResetGenerationalBarrierProbe();
-    fixture.field->SetTargetObject(nullptr);
+    fixture.field->StoreColoured(zpointer::null);
     testBarrier.WriteReference(fixture.oldObject, *fixture.field, fixture.youngObject);
     uint64_t fastPathHits = Barrier::GetGenerationalBarrierFastPathHits();
     uint64_t regionLookups = Barrier::GetGenerationalBarrierRegionLookups();
