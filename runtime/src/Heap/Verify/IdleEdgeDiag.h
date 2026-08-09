@@ -43,6 +43,12 @@ void CensusPrePinnedStamp(size_t minorRunIndex);
 // Process-level totals (also printed each census when enabled).
 void DumpProcessTotals(const char* tag);
 
+// fullclear: stamp promote-time target generation for a field slot.
+// Gate: MRT_GCV2_FULLCLEAR_PROBE=1 (default off). Early-return before any counter.
+// targetGen: 0=unknown 1=young 2=old 3=null/nonheap.
+// recorded: whether promote path called RememberedSet::Record.
+void NotePromoteTimeTarget(MAddress fieldAddress, uint8_t targetGen, bool recorded);
+
 } // namespace IdleEdgeDiag
 } // namespace MapleRuntime
 

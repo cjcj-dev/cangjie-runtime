@@ -23,6 +23,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -239,15 +240,18 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
                                 hasObjectLiveness, survived, object](RefField<>& field) {
             BaseObject* target = to_object(field.GetTargetObject());
+            MAddress slot = reinterpret_cast<MAddress>(&field);
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
                 NotePromoteGapField(object, field, false, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
                 return;
             }
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                rememberedSet.Record(slot);
                 ++recorded;
                 NotePromoteGapField(object, field, true, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
                 if (fysGapProbe) {
                     if (!hasObjectLiveness) {
                         ++unknownEdges;
@@ -259,6 +263,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 }
             } else {
                 NotePromoteGapField(object, field, false, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
             }
         });
     };
@@ -1947,17 +1952,21 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
                 toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
                     BaseObject* target = to_object(field.GetTargetObject());
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
                         NotePromoteGapField(toObj, field, false, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
                         return;
                     }
                     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                        rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                        rememberedSet.Record(slot);
                         ++promotedRecords;
                         NotePromoteGapField(toObj, field, true, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
                     } else {
                         NotePromoteGapField(toObj, field, false, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
                     }
                 });
             }
