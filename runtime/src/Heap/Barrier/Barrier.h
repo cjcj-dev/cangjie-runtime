@@ -114,6 +114,12 @@ protected:
     Collector& theCollector;
 
 protected:
+    // STACK_ROOTS_STAY_PLAIN: non-heap ReadStruct/ReadStaticStruct dst ref slots
+    // must receive plain addresses (StorePlain), never coloured self-heal.
+    // Heap-src fields still heal via ReadReference; only the stack/root copy is plain.
+    void FixupNonHeapStructRefs(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const;
+    void FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
+
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;
     void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const;

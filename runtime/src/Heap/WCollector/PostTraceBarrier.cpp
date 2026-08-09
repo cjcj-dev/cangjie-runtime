@@ -47,73 +47,36 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    LocalRefFieldContainer refFields;
+    // Heap-src: E-class ReadReference (assertion-only). Non-heap dst: StorePlain, never coloured heal.
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
-            [this, obj, &refFields, dst, src, size](RefField<false>& field) {
-                if (reinterpret_cast<MAddress>(&field) < src || reinterpret_cast<MAddress>(&field) >= (src + size)) {
-                    return;
-                }
+            [this, obj](RefField<false>& field) {
                 (void)ReadReference(obj, field);
-                MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(&HeapSlotAt<>(dst + offset));
             },
             src, src + size);
     }
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    // Colour self-heal on the stack copy (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
-    // PostTrace ReadReference is an E-class assertion-only entry and must not be used to heal.
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        // Bound kSelfHealAttempts: no colour lattice (ATOMIC_READ_PROTOCOL Q2).
-        for (int attempts = 0;;) {
-            RefField<> oldField(dstRef);
-            BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-            if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-                return;
-            }
-            BaseObject* loadGood = theCollector.make_load_good(oldField);
-            RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
-                return;
-            }
-            if (++attempts >= kSelfHealAttempts) {
-                return;
-            }
-        }
-    });
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(
         src,
-        [this, &refFields, dst, src](RefField<>& srcField) {
+        [this](RefField<>& srcField) {
             (void)ReadReference(nullptr, srcField);
-            MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-            refFields.Push(&HeapSlotAt<>(dst + offset));
         },
         src, src + size);
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        // Bound kSelfHealAttempts: no colour lattice (ATOMIC_READ_PROTOCOL Q2).
-        for (int attempts = 0;;) {
-            RefField<> oldField(dstRef);
-            BaseObject* oldTarget = to_object(oldField.GetTargetObject());
-            if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-                return;
-            }
-            BaseObject* loadGood = theCollector.make_load_good(oldField);
-            RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-            if (dstRef.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
-                return;
-            }
-            if (++attempts >= kSelfHealAttempts) {
-                return;
-            }
-        }
+    if (!Heap::IsHeapAddress(dst)) {
+        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        return;
+    }
+    // Heap dst residual path (should be rare for ReadStaticStruct): peel via ReadReference only.
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& dstRef) {
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
