@@ -3365,35 +3365,37 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const bool forceSerial = forceSerialEnv;
         const bool useParallel = threadPool != nullptr && !forceSerial;
 
-        // pass1 root fix (before PrepareForwardTable) — serial sandwich stays;
-        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
-        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
-        FixMinorRootSlots();
-        PreforwardDiscoveredExternObjects();
-        PreforwardAllResurrectExportFromObjects();
-        postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
-
+        // iorfix: PrepareForwardTable FIRST so liveInfo0 exists, then pre-grant while
+        // every from region is still FORWARDABLE, THEN pass1 Fix/Forward.
+        // Prior order ran FixMinorRootSlots before pregrant; that RouteRegion→ROUTED
+        // freezes liveByteCount so Ensure on liveobj edges is tooLate (iorsource 5/5 ROUTED).
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
         fwdTable.PrepareForwardTable();
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
 
-        // installdomain: serial pre-grant while every from region is still FORWARDABLE.
-        // Must finish before any Fix/Forward can RouteRegion→ROUTED (else liveByteCount
-        // geometry freezes without the late survivor). Walk remset + reachable + roots
-        // (same surface as fixForwardedReferences) and also grant the holder itself.
-        // iorfix: do NOT ResolveMinorReference here — that can RouteRegion mid-pregrant
-        // and abort IsGhostFromRegion; domain membership for late edges is closed by the
-        // product post-mark fixpoint (before PrepareForwardable) instead.
+        // installdomain / iorfix: serial pre-grant on FORWARDABLE ghost face only.
+        // Raw field read (no ResolveMinorReference — Resolve can RouteRegion).
+        // Multi-round field walk: grant may paint a young whose fields hold further
+        // unmarked from-objects (same shape as FixMinor liveobj IOR edges).
         {
             auto ensureObj = [this](BaseObject* t) {
+                if (t == nullptr || !Heap::IsHeapAddress(t)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", t)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(t);
+                    if (host != nullptr && host != t) {
+                        EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
+                    }
+                    return;
+                }
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), t);
             };
             auto ensureField = [&ensureObj](RefField<>& field) {
                 RefField<> value(field);
                 ensureObj(to_object(value.GetTargetObject()));
             };
-            // Holders first (currentObject will ForwardObject them).
             for (BaseObject* object : reachableVec) {
                 ensureObj(object);
             }
@@ -3402,19 +3404,26 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     ensureField(HeapSlotAt<>(slot));
                 }
             }
-            for (BaseObject* object : reachableVec) {
-                if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                    continue;
+            constexpr size_t kPregrantRounds = 4;
+            for (size_t round = 0; round < kPregrantRounds; ++round) {
+                size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
+                for (BaseObject* object : reachableVec) {
+                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                        continue;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
+                        continue;
+                    }
+                    if (!object->IsValidObject() || !object->HasRefField()) {
+                        continue;
+                    }
+                    object->ForEachRefField(ensureField);
                 }
-                if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
-                    continue;
+                size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
+                if (grantAfter == grantBefore) {
+                    break;
                 }
-                if (!object->IsValidObject() || !object->HasRefField()) {
-                    continue;
-                }
-                object->ForEachRefField(ensureField);
             }
-            // Roots after PrepareForwardable (pass2 surface).
             RootVisitor rootEnsure = [this, &ensureObj](ObjectRef& root) {
                 zaddress_unsafe observed = root.LoadPlain();
                 HeapSlot<> bits(to_zpointer(raw(observed)));
@@ -3431,11 +3440,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
             size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
             size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
-            // Always emit (RTLOG_ERROR) so measure captures positive control without VLOG gate.
             LOG(RTLOG_ERROR,
                 "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
                 grant, already, tooLate, skip);
         }
+
+        // pass1 root fix after domain grant — serial sandwich stays;
+        // only the post-map fixForwardedReferences body is parallelized (⑦ bulk).
+        // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
+        FixMinorRootSlots();
+        PreforwardDiscoveredExternObjects();
+        PreforwardAllResurrectExportFromObjects();
+        postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
 
         // Reset CAS counters for this fix window (positive-control visibility).
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
