@@ -27,16 +27,22 @@ namespace MapleRuntime {
 //   [GCLOG] v=2 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
 //   [GCLOG] v=2 rec=phase seq= name= us=
+//   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
 // relying on line adjacency. Enabled with MRT_GC_LOG=1; the cost when off is one relaxed load.
+// Crash records are independent of MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
     static constexpr uint32_t SCHEMA_VERSION = 2;
+    // Crash records advance the schema; cycle/phase stay at v=2 for existing readers.
+    static constexpr uint32_t CRASH_SCHEMA_VERSION = 3;
     // 128: longest phase name in the tree is well under this; longer ones are truncated.
     // v2: dur/start are nanoseconds (were labelled us), phase names are folded to one token,
     // and the cycle record moved so minors emit one too.
     static constexpr size_t MAX_PHASE_NAME = 128;
+    // Fixed-capacity last-FATAL slot for crash assert= field. No TLS, no lock, no heap.
+    static constexpr size_t FATAL_SLOT_CAP = 512;
 
     static bool Enabled()
     {
@@ -87,6 +93,51 @@ public:
                  static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
     }
 
+    // Remember the most recent FATAL log body (text after the level letter). Called from
+    // FormatLog immediately before abort. AS-oriented: memcpy into a fixed slot, no lock.
+    // Spaces / newlines in the body are folded to '_' so assert= stays one token.
+    static void RememberFatal(const char* text, size_t len)
+    {
+        if (text == nullptr || len == 0) {
+            return;
+        }
+        size_t n = len < FATAL_SLOT_CAP - 1 ? len : FATAL_SLOT_CAP - 1;
+        char* slot = FatalSlot();
+        for (size_t i = 0; i < n; ++i) {
+            char c = text[i];
+            if (c == ' ' || c == '\n' || c == '\r' || c == '\t') {
+                slot[i] = '_';
+            } else {
+                slot[i] = c;
+            }
+        }
+        slot[n] = '\0';
+        FatalLen().store(n, std::memory_order_release);
+    }
+
+    // Copy current fatal text into out (NUL-terminated). Returns length, or 0 if empty.
+    // Safe to call from a signal handler: only relaxed/acquire loads + stack memcpy.
+    static size_t CopyFatal(char* out, size_t outCap)
+    {
+        if (out == nullptr || outCap == 0) {
+            return 0;
+        }
+        size_t n = FatalLen().load(std::memory_order_acquire);
+        if (n == 0) {
+            out[0] = '\0';
+            return 0;
+        }
+        if (n >= outCap) {
+            n = outCap - 1;
+        }
+        const char* slot = FatalSlot();
+        for (size_t i = 0; i < n; ++i) {
+            out[i] = slot[i];
+        }
+        out[n] = '\0';
+        return n;
+    }
+
     // Resident set in KB, read from /proc/self/statm. Returns 0 where the file is unavailable,
     // which a reader must treat as "not measured" rather than as zero residency.
     static size_t ResidentKB()
@@ -120,6 +171,18 @@ private:
     {
         static std::atomic<uint64_t> counter{ 0 };
         return counter;
+    }
+
+    static char* FatalSlot()
+    {
+        static char slot[FATAL_SLOT_CAP] = {};
+        return slot;
+    }
+
+    static std::atomic<size_t>& FatalLen()
+    {
+        static std::atomic<size_t> len{ 0 };
+        return len;
     }
 
     static bool ReadEnabledFromEnv()
