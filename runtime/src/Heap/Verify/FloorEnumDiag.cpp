@@ -27,8 +27,14 @@ struct MinorSnap {
     std::unordered_set<BaseObject*> reachable;
     std::unordered_set<MAddress> remsetSlots;
     std::unordered_set<BaseObject*> indepReachable;
+    // floortarget: young targets reachable via holder edges at CapturePreEvacuate
+    // (same face grant would walk). Used to answer contradiction ①.
+    std::unordered_set<BaseObject*> grantVisibleYoung;
     bool indepRan = false;
     size_t minorIndex = 0;
+    size_t grantVisibleN = 0;
+    size_t reachableN = 0;
+    size_t remsetN = 0;
 };
 
 std::mutex g_mu;
@@ -78,6 +84,42 @@ void BuildIndepReachable(
     }
 }
 
+// Same holder face as postallocgap grant: walk reachableVec fields + remset slots,
+// collect young targets (whether marked or not). Answers "would grant have seen this edge".
+void BuildGrantVisibleYoung(
+    const std::vector<BaseObject*>& reachableVec,
+    const std::unordered_set<MAddress>& remsetSlots,
+    const std::function<BaseObject*(RefField<>&)>& resolveField,
+    std::unordered_set<BaseObject*>& out)
+{
+    out.clear();
+    auto consider = [&](BaseObject* target) {
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (region == nullptr || !region->IsYoungRegion()) {
+            return;
+        }
+        out.insert(target);
+    };
+    for (BaseObject* object : reachableVec) {
+        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+            continue;
+        }
+        if (!object->IsValidObject() || !object->HasRefField()) {
+            continue;
+        }
+        object->ForEachRefField([&](RefField<>& field) { consider(resolveField(field)); });
+    }
+    for (MAddress slot : remsetSlots) {
+        if (!Heap::IsHeapAddress(slot)) {
+            continue;
+        }
+        consider(resolveField(HeapSlotAt<>(slot)));
+    }
+}
+
 } // namespace
 
 bool DiagEnabled()
@@ -117,8 +159,12 @@ void ClearSnap()
     g_snap.reachable.clear();
     g_snap.remsetSlots.clear();
     g_snap.indepReachable.clear();
+    g_snap.grantVisibleYoung.clear();
     g_snap.indepRan = false;
     g_snap.minorIndex = 0;
+    g_snap.grantVisibleN = 0;
+    g_snap.reachableN = 0;
+    g_snap.remsetN = 0;
 }
 
 void CapturePreEvacuate(
@@ -139,23 +185,29 @@ void CapturePreEvacuate(
         }
     }
     local.remsetSlots = remsetSlots;
+    local.reachableN = local.reachable.size();
+    local.remsetN = local.remsetSlots.size();
+    BuildGrantVisibleYoung(reachableVec, remsetSlots, resolveField, local.grantVisibleYoung);
+    local.grantVisibleN = local.grantVisibleYoung.size();
     bool doIndep = IndepEnabled() && (EveryN() == 0 || (minorIndex % EveryN()) == 0 || minorIndex == 1);
     if (doIndep) {
         BuildIndepReachable(visitRoots, resolveField, local.indepReachable);
         local.indepRan = true;
         g_indepRuns.fetch_add(1, std::memory_order_relaxed);
     }
-    size_t reachN = local.reachable.size();
-    size_t remN = local.remsetSlots.size();
+    size_t reachN = local.reachableN;
+    size_t remN = local.remsetN;
     unsigned indepRan = static_cast<unsigned>(local.indepRan);
     size_t indepSz = local.indepReachable.size();
+    size_t grantN = local.grantVisibleN;
     {
         std::lock_guard<std::mutex> lock(g_mu);
         g_snap = std::move(local);
     }
     LOG(RTLOG_ERROR,
-        "[GCV2][floorenum] snap minor=%zu reachable=%zu remset=%zu indepRan=%u indepSize=%zu",
-        minorIndex, reachN, remN, indepRan, indepSz);
+        "[GCV2][floorenum] snap minor=%zu reachable=%zu remset=%zu grantVisYoung=%zu "
+        "indepRan=%u indepSize=%zu",
+        minorIndex, reachN, remN, grantN, indepRan, indepSz);
 }
 
 void NoteCrossGen(bool recorded)
@@ -168,6 +220,15 @@ void NoteCrossGen(bool recorded)
     } else {
         g_xgenSkip.fetch_add(1, std::memory_order_relaxed);
     }
+}
+
+void NotePreForwardSnap(size_t fromRegions, size_t markedYoungSample)
+{
+    if (!DiagEnabled()) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[GCV2][floortarget] prefwd fromRegions=%zu markedYoungSample=%zu",
+        fromRegions, markedYoungSample);
 }
 
 void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slotAddr,
@@ -202,6 +263,25 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
     size_t indepSize = 0;
     unsigned indepRan = 0;
 
+    // floortarget target-side lifecycle columns
+    unsigned tgtInReach = 0;
+    unsigned tgtGrantVis = 0;
+    unsigned tgtBmMark = 0;   // current liveInfo IsMarkedObject
+    unsigned tgtLive0 = 0;    // ghost liveInfo0 IsSurvivedObject (should be 0 here)
+    unsigned tgtCurLive = 0;  // current liveInfo IsSurvivedObject
+    unsigned tgtYoung = 0;
+    unsigned tgtType = 0;
+    unsigned tgtFrom = 0;
+    unsigned tgtRoute = 0;
+    unsigned tgtIsTrace = 0;
+    unsigned tgtInCSet = 0; // IsFromRegion | FORWARDABLE|ROUTING|ROUTED
+    unsigned tgtIsTraceAtAlloc = 0;
+    unsigned tgtEverWasTrace = 0;
+    unsigned tgtClearTraceCnt = 0;
+    size_t tgtOffset = 0;
+    size_t tgtLiveBytes = 0;
+    int tgtIndep = -1;
+
     {
         std::lock_guard<std::mutex> lock(g_mu);
         minorIndex = g_snap.minorIndex;
@@ -217,6 +297,17 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
             }
             if (g_snap.indepRan) {
                 hostIndep = g_snap.indepReachable.count(hostObj) != 0 ? 1 : 0;
+            }
+        }
+        if (fromObj != nullptr) {
+            if (g_snap.reachable.count(fromObj) != 0) {
+                tgtInReach = 1;
+            }
+            if (g_snap.grantVisibleYoung.count(fromObj) != 0) {
+                tgtGrantVis = 1;
+            }
+            if (g_snap.indepRan) {
+                tgtIndep = g_snap.indepReachable.count(fromObj) != 0 ? 1 : 0;
             }
         }
     }
@@ -242,10 +333,34 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
     if (fromObj != nullptr && Heap::IsHeapAddress(reinterpret_cast<MAddress>(fromObj))) {
         RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
         if (tr != nullptr) {
+            tgtYoung = static_cast<unsigned>(tr->IsYoungRegion());
+            tgtType = static_cast<unsigned>(tr->GetRegionType());
+            tgtFrom = static_cast<unsigned>(tr->IsFromRegion());
+            tgtRoute = static_cast<unsigned>(tr->GetRouteState());
+            tgtIsTrace = static_cast<unsigned>(tr->IsTraceRegion());
+            tgtLiveBytes = tr->GetLiveByteCount();
+            tgtOffset = tr->GetAddressOffset(reinterpret_cast<MAddress>(fromObj));
+            tgtBmMark = static_cast<unsigned>(tr->IsMarkedObject(fromObj));
+            LiveInfo* cur = tr->GetLiveInfo();
+            if (cur != nullptr) {
+                tgtCurLive = static_cast<unsigned>(cur->IsSurvivedObject(tgtOffset));
+            }
+            LiveInfo* ghost = tr->GetLiveInfo0ForProbe();
+            if (ghost != nullptr) {
+                tgtLive0 = static_cast<unsigned>(ghost->IsSurvivedObject(tgtOffset));
+            }
+            RegionInfo::RouteState rs = tr->GetRouteState();
+            if (tr->IsFromRegion() || rs == RegionInfo::RouteState::FORWARDABLE ||
+                rs == RegionInfo::RouteState::ROUTING || rs == RegionInfo::RouteState::ROUTED) {
+                tgtInCSet = 1;
+            }
             AllocPhaseDiag::Lookup ap = AllocPhaseDiag::Find(fromObj, tr->GetRegionStart());
             tgtAllocFound = static_cast<unsigned>(ap.found);
             tgtAllocMut = ap.mutatorPhase;
             tgtAllocHeap = ap.heapPhase;
+            tgtIsTraceAtAlloc = static_cast<unsigned>(ap.isTraceAtAlloc);
+            tgtEverWasTrace = static_cast<unsigned>(ap.everWasTrace);
+            tgtClearTraceCnt = static_cast<unsigned>(ap.clearTraceCnt);
         }
     }
 
@@ -257,11 +372,46 @@ void LogNullRouteSample(BaseObject* fromObj, BaseObject* hostObj, uintptr_t slot
     } else if (hostInReachable == 0 && hostIndep == 1) {
         hint = "B_mark_underwalk";
     } else if (hostInReachable == 1) {
-        hint = "host_in_reachable_check_target";
+        if (tgtGrantVis == 1 && tgtBmMark == 0) {
+            hint = "target_grant_seen_unmarked"; // ⓐ/ⓒ: grant would see; mark bit missing
+        } else if (tgtGrantVis == 0 && tgtBmMark == 0) {
+            hint = "target_not_grant_visible"; // ⓑ/ⓓ: edge not on grant face at snap
+        } else if (tgtBmMark == 1 && tgtLive0 == 0) {
+            hint = "target_marked_live0_empty"; // ghost/snapshot desync
+        } else {
+            hint = "host_in_reachable_check_target";
+        }
     } else if (hostIndep < 0 && hostInReachable == 0) {
         hint = "host_unmarked_indep_unknown";
     }
 
+    LOG(RTLOG_ERROR,
+        "[GCV2][floortarget] n=%zu minor=%zu target=%p host=%p edgeSrc=%s caller=%s "
+        "A:inReach=%u bmMark=%u young=%u "
+        "B:slot=%#zx "
+        "C:indep=%d indepRan=%u indepSz=%zu "
+        "D:hostType=%u hostAge=%u hostFree=%u hostGarbage=%u hostGhost=%u "
+        "slotRemset=%u hostAllocFound=%u hostMut=%u(%s) hostHeap=%u(%s) "
+        "T:tgtInReach=%u tgtGrantVis=%u tgtBmMark=%u tgtCurLive=%u tgtLive0=%u "
+        "tgtYoung=%u tgtType=%u tgtFrom=%u tgtRoute=%u tgtInCSet=%u tgtIsTrace=%u "
+        "tgtOff=%zu tgtLiveB=%zu tgtIndep=%d "
+        "tgtAllocFound=%u tgtMut=%u(%s) tgtHeap=%u(%s) "
+        "tgtIsTraceAtAlloc=%u tgtEverWasTrace=%u tgtClearTrace=%u "
+        "xgenRec=%zu xgenSkip=%zu hint=%s",
+        n, minorIndex, fromObj, hostObj, edgeSrc != nullptr ? edgeSrc : "none",
+        caller != nullptr ? caller : "none", hostInReachable, hostBitmapMarked, hostYoung,
+        static_cast<size_t>(slotAddr), hostIndep, indepRan, indepSize, hostType, hostAge,
+        hostFree, hostGarbage, hostGhost, slotInRemset, hostAllocFound,
+        static_cast<unsigned>(hostAllocMut), AllocPhaseDiag::PhaseName(hostAllocMut),
+        static_cast<unsigned>(hostAllocHeap), AllocPhaseDiag::PhaseName(hostAllocHeap),
+        tgtInReach, tgtGrantVis, tgtBmMark, tgtCurLive, tgtLive0, tgtYoung, tgtType, tgtFrom,
+        tgtRoute, tgtInCSet, tgtIsTrace, tgtOffset, tgtLiveBytes, tgtIndep, tgtAllocFound,
+        static_cast<unsigned>(tgtAllocMut), AllocPhaseDiag::PhaseName(tgtAllocMut),
+        static_cast<unsigned>(tgtAllocHeap), AllocPhaseDiag::PhaseName(tgtAllocHeap),
+        tgtIsTraceAtAlloc, tgtEverWasTrace, tgtClearTraceCnt,
+        g_xgenRecord.load(std::memory_order_relaxed), g_xgenSkip.load(std::memory_order_relaxed),
+        hint);
+    // Keep floorenum line for cross-lane histogram compatibility.
     LOG(RTLOG_ERROR,
         "[GCV2][floorenum] n=%zu minor=%zu target=%p host=%p edgeSrc=%s caller=%s "
         "A:inReach=%u bmMark=%u young=%u "
