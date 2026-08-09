@@ -1672,36 +1672,53 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     } else {
         result = Heap::GetBarrier().ReadReference(obj, *field);
     }
+    // Log only when ret is null AND GC is in concurrent fix window (Mode A phases).
+    // Idle null Option reads exhaust a flat 64-cap before Mode A; phase-filter keeps
+    // the sample budget for the crash window.
     if (result == nullptr && ReadnullProbeEnabled()) {
-        size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
-        if (n < 64) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            const MAddress rawAfter =
-                field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
-            const unsigned fieldInHeap =
-                field != nullptr && Heap::IsHeapAddress(reinterpret_cast<void*>(field)) ? 1u : 0u;
-            const unsigned holderInHeap =
-                obj != nullptr && Heap::IsHeapAddress(obj) ? 1u : 0u;
-            // 甲: raw address bits already 0; 乙: non-null raw decoded to null by barrier;
-            // 丙 candidate: field not in heap / holder not in heap (address-side).
-            const char* kind = "jia";
-            if (addrBefore != 0) {
-                kind = "yi";
-            } else if (rawBefore != 0) {
-                kind = "yi_coloured_null";
-            } else if (!fieldInHeap || (obj != nullptr && !holderInHeap)) {
-                kind = "bing_addr";
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        // Mode A crash window: PREFORWARD/FORWARD name as enum_fix/trace_fix
+        // (Collector::GetGCPhaseName + FoldToken). Also admit concurrent mark.
+        const bool inModeAWindow =
+            phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD ||
+            phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
+            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+            phase == GCPhase::GC_PHASE_POST_TRACE;
+        if (inModeAWindow) {
+            size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
+            if (n < 128) {
+                const MAddress rawAfter =
+                    field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
+                const unsigned fieldInHeap =
+                    field != nullptr && Heap::IsHeapAddress(reinterpret_cast<void*>(field)) ? 1u : 0u;
+                const unsigned holderInHeap =
+                    obj != nullptr && Heap::IsHeapAddress(obj) ? 1u : 0u;
+                const MAddress off =
+                    (obj != nullptr && field != nullptr)
+                        ? (reinterpret_cast<MAddress>(field) - reinterpret_cast<MAddress>(obj))
+                        : 0;
+                // 甲: raw address bits already 0; 乙: non-null raw decoded to null by barrier;
+                // 丙 candidate: field not in heap / holder not in heap (address-side).
+                const char* kind = "jia";
+                if (addrBefore != 0) {
+                    kind = "yi";
+                } else if (rawBefore != 0) {
+                    kind = "yi_coloured_null";
+                } else if (!fieldInHeap || (obj != nullptr && !holderInHeap)) {
+                    kind = "bing_addr";
+                }
+                std::fprintf(stderr,
+                             "[GCV2][nullslot] path=read_ref_null n=%zu field=%p raw_before=%#lx "
+                             "addr_before=%#lx ret=%p raw_after=%#lx holder=%p off=%#lx is_global=%u "
+                             "field_in_heap=%u holder_in_heap=%u phase=%s(%u) kind=%s\n",
+                             n, static_cast<void*>(field), static_cast<unsigned long>(rawBefore),
+                             static_cast<unsigned long>(addrBefore), static_cast<void*>(result),
+                             static_cast<unsigned long>(rawAfter), static_cast<void*>(obj),
+                             static_cast<unsigned long>(off), isGlobal ? 1u : 0u, fieldInHeap,
+                             holderInHeap, Collector::GetGCPhaseName(phase),
+                             static_cast<unsigned>(phase), kind);
+                std::fflush(stderr);
             }
-            std::fprintf(stderr,
-                         "[GCV2][nullslot] path=read_ref_null n=%zu field=%p raw_before=%#lx "
-                         "addr_before=%#lx ret=%p raw_after=%#lx holder=%p is_global=%u "
-                         "field_in_heap=%u holder_in_heap=%u phase=%s(%u) kind=%s\n",
-                         n, static_cast<void*>(field), static_cast<unsigned long>(rawBefore),
-                         static_cast<unsigned long>(addrBefore), static_cast<void*>(result),
-                         static_cast<unsigned long>(rawAfter), static_cast<void*>(obj),
-                         isGlobal ? 1u : 0u, fieldInHeap, holderInHeap,
-                         Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), kind);
-            std::fflush(stderr);
         }
     }
     return result;
