@@ -91,6 +91,11 @@ std::atomic<size_t> g_nullslotF3{ 0 };
 std::atomic<size_t> g_nullslotResolve{ 0 };
 std::atomic<size_t> g_nullslotRemset{ 0 };
 std::atomic<size_t> g_nullslotResolveRoot{ 0 };
+// rootdrop entry accounting (always-on atomics; LOG only when MRT_GCV2_NULLSLOT=1).
+std::atomic<size_t> g_resolveRootEntry{ 0 };
+std::atomic<size_t> g_resolveRootOld{ 0 };
+std::atomic<size_t> g_resolveRootHealNull{ 0 };
+std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
 
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
                        std::atomic<size_t>* pathCount)
@@ -2022,7 +2027,25 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
     zaddress_unsafe observed = root.LoadPlain();
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* object = to_object(observedBits.GetTargetObject());
-    if (!IsOldPointer(observedBits)) {
+    const bool isOld = IsOldPointer(observedBits);
+    {
+        size_t en = g_resolveRootEntry.fetch_add(1, std::memory_order_relaxed);
+        if (isOld) {
+            g_resolveRootOld.fetch_add(1, std::memory_order_relaxed);
+        }
+        // Entry sample: prove FixMinorRootSlots reaches this function before Mode A.
+        if (NullslotProbeEnabled() && en < 32) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            std::fprintf(stderr,
+                         "[GCV2][nullslot] path=resolve_root_entry n=%zu root=%p obj=%p raw=%#zx "
+                         "isOld=%u phase=%s(%u)\n",
+                         en, static_cast<void*>(&root), object, static_cast<size_t>(raw(observed)),
+                         static_cast<unsigned>(isOld), Collector::GetGCPhaseName(phase),
+                         static_cast<unsigned>(phase));
+            std::fflush(stderr);
+        }
+    }
+    if (!isOld) {
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
@@ -2086,6 +2109,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
              "(drop; full-GC root residue after Flip)",
              &root, static_cast<size_t>(raw(observed)), object, to);
     }
+    g_resolveRootHealNull.fetch_add(1, std::memory_order_relaxed);
     HealRoot(root, zaddress::null);
     return nullptr;
 }
@@ -3185,6 +3209,19 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
 
 void WCollector::FixMinorRootSlots()
 {
+    size_t callN = g_fixMinorRootSlotsCalls.fetch_add(1, std::memory_order_relaxed);
+    const size_t entryBefore = g_resolveRootEntry.load(std::memory_order_relaxed);
+    const size_t oldBefore = g_resolveRootOld.load(std::memory_order_relaxed);
+    const size_t nullBefore = g_resolveRootHealNull.load(std::memory_order_relaxed);
+    if (NullslotProbeEnabled() && callN < 32) {
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        std::fprintf(stderr,
+                     "[GCV2][nullslot] path=fix_minor_roots begin n=%zu phase=%s(%u) "
+                     "entry=%zu old=%zu healNull=%zu\n",
+                     callN, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), entryBefore, oldBefore,
+                     nullBefore);
+        std::fflush(stderr);
+    }
     RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
@@ -3195,6 +3232,18 @@ void WCollector::FixMinorRootSlots()
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
+    if (NullslotProbeEnabled() && callN < 32) {
+        std::fprintf(stderr,
+                     "[GCV2][nullslot] path=fix_minor_roots end n=%zu dEntry=%zu dOld=%zu dHealNull=%zu "
+                     "entry=%zu old=%zu healNull=%zu\n",
+                     callN, g_resolveRootEntry.load(std::memory_order_relaxed) - entryBefore,
+                     g_resolveRootOld.load(std::memory_order_relaxed) - oldBefore,
+                     g_resolveRootHealNull.load(std::memory_order_relaxed) - nullBefore,
+                     g_resolveRootEntry.load(std::memory_order_relaxed),
+                     g_resolveRootOld.load(std::memory_order_relaxed),
+                     g_resolveRootHealNull.load(std::memory_order_relaxed));
+        std::fflush(stderr);
+    }
 }
 
 // fixinput: FixMinorObjectSlots reader-side accounting (default on, cheap atomics).
