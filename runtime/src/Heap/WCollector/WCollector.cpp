@@ -3436,13 +3436,51 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             collectorResources.GetFinalizerProcessor().VisitRawPointers(rootEnsure);
             Heap::GetHeap().VisitAllExportRoots(rootEnsure);
 
+            // iorfix: edge-face grant alone leaves grant=0 (floortarget tgtGrantVis=0) while
+            // FixMinor liveobj still hits unmarked young. Close domain for tip-valid objects
+            // in already-ghost from candidates only (PrepareForwardable sets ghost iff
+            // liveByteCount>0). Do NOT paint non-ghost from: MarkObject+AddLiveByteCount
+            // without ghost bit trips RouteRegion IsGhostFromRegion (430cee65 smoke).
+            size_t regionGrant = 0;
+            size_t regionSeen = 0;
+            for (RegionInfo* region : minorCandidateRegions) {
+                if (region == nullptr || !region->IsFromRegion()) {
+                    continue;
+                }
+                if (!region->IsGhostFromRegion()) {
+                    continue;
+                }
+                if (region->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
+                    continue;
+                }
+                region->VisitAllObjects([this, &regionGrant, &regionSeen](BaseObject* obj) {
+                    ++regionSeen;
+                    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+                        return;
+                    }
+                    if (!Collector::PlausibleManagedObjectGate("installdomain.region_grant", obj)) {
+                        return;
+                    }
+                    if (!obj->IsValidObject()) {
+                        return;
+                    }
+                    size_t before = g_installDomainGrant.load(std::memory_order_relaxed);
+                    EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
+                    size_t after = g_installDomainGrant.load(std::memory_order_relaxed);
+                    if (after > before) {
+                        ++regionGrant;
+                    }
+                });
+            }
+
             size_t grant = g_installDomainGrant.load(std::memory_order_relaxed);
             size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
             size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
             size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
             LOG(RTLOG_ERROR,
-                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
-                grant, already, tooLate, skip);
+                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu "
+                "regionGrant=%zu regionSeen=%zu",
+                grant, already, tooLate, skip, regionGrant, regionSeen);
         }
 
         // pass1 root fix after domain grant — serial sandwich stays;
