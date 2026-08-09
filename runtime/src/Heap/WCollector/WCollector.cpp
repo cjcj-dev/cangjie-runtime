@@ -1031,7 +1031,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     // GetMTable(rdi=0) and sibling null-field SEGV under in_par_fix.
     // Same non-heap arm as ResolveMinorReference (never CAS null on non-heap).
     if (latest != nullptr && !Heap::IsHeapAddress(latest)) {
-        RefField<> newField = RootSlotWriteback(latest, &field);
+        RefField<> newField = RootSlotWriteback(latest, field);
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
             (void)field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
         }
@@ -1102,7 +1102,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     // survive the next flip's test, and writing a bare pointer would put back the very trust state
     // this phase removes. This is the self-heal half of the barrier, the same shape as ZGC's
     // self_heal (jdk zBarrier.inline.hpp:330-340), except we already had the resolve step.
-    RefField<> newField = RootSlotWriteback(latest, &field);
+    RefField<> newField = RootSlotWriteback(latest, field);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
@@ -1895,7 +1895,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             BaseObject* to = FindToVersion(object);
             if (to != nullptr && Heap::IsHeapAddress(to)) {
                 MAddress expected = raw(value.GetFieldValue());
-                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, &field));
+                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
                 return to;
             }
         }
@@ -1915,7 +1915,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, &field));
+            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
             return to;
         }
     }
@@ -1925,7 +1925,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             object->IsValidObject()) {
             // installdomain: identity arm is the A-only fork (IsValidObject without liveInfo0).
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(object, &field));
+            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(object, field));
             return object;
         }
     }
@@ -3026,7 +3026,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
     // Plain on heap was the trust-state install that AssertColouredWriteIfEnabled fires on.
-    RefField<> newField = RootSlotWriteback(current, &field);
+    RefField<> newField = RootSlotWriteback(current, field);
     MAddress oldVal = raw(oldField.GetFieldValue());
     MAddress newVal = raw(newField.GetFieldValue());
     if (oldVal == newVal) {

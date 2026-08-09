@@ -351,9 +351,28 @@ protected:
         return on;
     }
 
-    RefField<> RootSlotWriteback(BaseObject* target, const void* slot) const
+    // TRUST_STATE_KILL_PLAN Phase 1 item 2: named overloads replace address-guess wash.
+    // HeapSlot → always current colour (Phase C). RootSlot/DerivedSlot → plain when
+    // PLAIN_ROOTS on (ZGC uncolored root). Callers must pass the real slot type.
+    //
+    // nullslot non-heap arm: FixOldTaggedRefField recolour-only path uses the HeapSlot
+    // overload (field is a heap RefField). Non-heap *targets* still recolour — never CAS null.
+    RefField<> RootSlotWriteback(BaseObject* target, const RefField<>& /*slot*/) const
     {
-        if (PlainRootsEnabled() && !Heap::IsHeapAddress(slot)) {
+        return GetAndTryTagRefField(target);
+    }
+
+    RefField<> RootSlotWriteback(BaseObject* target, const RootSlot& /*slot*/) const
+    {
+        if (PlainRootsEnabled()) {
+            return RefField<>(target);
+        }
+        return GetAndTryTagRefField(target);
+    }
+
+    RefField<> RootSlotWriteback(BaseObject* target, const DerivedSlot& /*slot*/) const
+    {
+        if (PlainRootsEnabled()) {
             return RefField<>(target);
         }
         return GetAndTryTagRefField(target);
