@@ -10,6 +10,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/Verify/FloorEnumDiag.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -460,12 +461,14 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_NO_YOUNG, false);
         }
+        FloorEnumDiag::NoteCrossGen(false);
         return;
     }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NULL_OR_NONHEAP, false);
         }
+        FloorEnumDiag::NoteCrossGen(false);
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
@@ -473,6 +476,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_REF_NOT_YOUNG, false);
         }
+        FloorEnumDiag::NoteCrossGen(false);
         return;
     }
     // Heap holder: only record old→young (source not young).
@@ -491,6 +495,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             return;
         }
         theRememberedSet.Record(fieldAddress);
+        FloorEnumDiag::NoteCrossGen(true);
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
         }

@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <cstring>
 #include <algorithm>
 #include <iterator>
@@ -44,6 +45,8 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/NullRouteCaller.h"
+#include "Heap/Verify/FloorEnumDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -2809,6 +2812,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
@@ -2873,6 +2877,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+        NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
@@ -2889,7 +2894,10 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
 
 void WCollector::FixMinorRootSlots()
 {
-    RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
+        (void)FixMinorEvacuatedSlot(root);
+    };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
     // stack slots still holding from-copies become the next full's F5 input.
@@ -2903,10 +2911,22 @@ void WCollector::FixMinorRootSlots()
 
 void WCollector::FixMinorObjectSlots(BaseObject* object)
 {
+    // markHost defaults to object (same when not yet forwarded). Callers that
+    // forward first pass the from-space identity so floorenum snap membership matches.
+    FixMinorObjectSlots(object, object);
+}
+
+void WCollector::FixMinorObjectSlots(BaseObject* object, BaseObject* markHost)
+{
     if (!object->HasRefField()) {
         return;
     }
-    object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+    BaseObject* edgeHost = markHost != nullptr ? markHost : object;
+    object->ForEachRefField([this, edgeHost](RefField<>& field) {
+        NullRouteCaller::ScopedEdge _edge(
+            "liveobj", edgeHost, reinterpret_cast<uintptr_t>(&field));
+        (void)FixMinorEvacuatedSlot(field);
+    });
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -2916,25 +2936,29 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 {
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    auto rootFix = [this](ObjectRef& root) {
+        NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
+        (void)FixMinorEvacuatedSlot(root);
+    };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         MutatorManager::Instance().VisitAllMutators(
             [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
     }));
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) {
-        RootVisitor rawRootVisitor = [this](ObjectRef& root) { (void)FixMinorEvacuatedSlot(root); };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+        RootVisitor rawRootVisitor = rootFix;
         Heap::GetHeap().VisitAllExportRoots(rawRootVisitor);
     }));
 }
@@ -2970,12 +2994,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                                                                            size_t beginSlot, size_t endSlot,
                                                                            size_t& objectsTaken) {
         for (size_t i = beginObj; i < endObj; ++i) {
-            FixMinorObjectSlots(currentObject(reachableVec[i]));
+            BaseObject* fromHost = reachableVec[i];
+            FixMinorObjectSlots(currentObject(fromHost), fromHost);
             ++objectsTaken;
         }
         for (size_t i = beginSlot; i < endSlot; ++i) {
             MAddress slot = remsetVec[i];
             if (Heap::IsHeapAddress(slot)) {
+                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
@@ -2986,10 +3012,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
         for (BaseObject* object : reachableVec) {
-            FixMinorObjectSlots(currentObject(object));
+            FixMinorObjectSlots(currentObject(object), object);
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
+                NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
@@ -4261,8 +4288,23 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     size_t allocatedBefore = space.AllocatedBytes();
+    // floorenum: snapshot mark-face + optional independent full-root closure before fix.
+    {
+        auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
+            for (BaseObject* object : allocationRoots) {
+                visitor(object);
+            }
+            VisitMinorRoots(visitor);
+        };
+        auto resolveField = [this](RefField<>& field) -> BaseObject* {
+            return ResolveMinorReference(field);
+        };
+        FloorEnumDiag::CapturePreEvacuate(minorTotalRuns + 1, reachableVec, liveRememberedSlots,
+                                          visitRoots, resolveField);
+    }
     // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
     EvacuateYoungRegions(reachableVec, liveRememberedSlots);
+    FloorEnumDiag::ClearSnap();
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;

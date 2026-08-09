@@ -14,6 +14,7 @@ set(SRC_LIST
     "MinorGCALot.cpp"
     "RemsetPhaseProbe.cpp"
     "DiffPathExplainer.cpp"
+    "FloorEnumDiag.cpp"
     "TraceClear.cpp"
     "TagReuseProbe.cpp"
     "StackFrameOracle.cpp"
