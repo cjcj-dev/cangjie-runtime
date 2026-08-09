@@ -159,6 +159,34 @@ std::atomic<uint64_t> g_decTargetOther{ 0 };
 std::atomic<uint64_t> g_decRecorded{ 0 };
 std::atomic<uint64_t> g_decSkippedHolderYoung{ 0 };
 
+// fullclear: promote-time target gen stamp vs census-time target gen on miss.
+// Gate MRT_GCV2_FULLCLEAR_PROBE=1. Stamp lives across full clear (like write stamp).
+struct PromoteStampSlot {
+    std::atomic<uintptr_t> field{ 0 };
+    std::atomic<uint8_t> targetGen{ 0 };
+    std::atomic<uint8_t> recorded{ 0 };
+};
+PromoteStampSlot* g_promoteStamps = nullptr;
+size_t g_promoteStampCap = 0;
+size_t g_promoteStampMask = 0;
+std::atomic<uint32_t> g_promoteStampInited{ 0 };
+std::atomic<uint64_t> g_promoteStampNotes{ 0 };
+std::atomic<uint64_t> g_promoteStampWraps{ 0 };
+std::atomic<uint64_t> g_promoteStampProbeFail{ 0 };
+// census miss matrix: promoteGen × censusGen (4×4) + promote-recorded flags
+std::atomic<uint64_t> g_fcMissPromoteXCensus[4][4] = {};
+std::atomic<uint64_t> g_fcMissPromoteRec[4] = {};
+std::atomic<uint64_t> g_fcMissPromoteSkip[4] = {};
+std::atomic<uint64_t> g_fcMissNoPromoteStamp{ 0 };
+std::atomic<uint64_t> g_fcBarePromoteXCensus[4][4] = {};
+std::atomic<uint64_t> g_fcBareNoPromoteStamp{ 0 };
+std::atomic<uint64_t> g_fcCensusMissTotal{ 0 };
+std::atomic<uint64_t> g_fcCensusBareTotal{ 0 };
+// promote-time only (all walks, not only miss)
+std::atomic<uint64_t> g_fcPromoteTargetGen[4] = {};
+std::atomic<uint64_t> g_fcPromoteRecorded{ 0 };
+std::atomic<uint64_t> g_fcPromoteSeen{ 0 };
+
 struct RaSlot {
     std::atomic<uintptr_t> pc{ 0 };
     std::atomic<uint64_t> count{ 0 };
@@ -194,6 +222,154 @@ void EnsureStampTable()
         g_stampMask = g_stampCap - 1;
     }
     g_stampInited.store(1, std::memory_order_release);
+}
+
+bool FullClearProbeOn()
+{
+    static const bool on = EnvIsOne("MRT_GCV2_FULLCLEAR_PROBE");
+    return on;
+}
+
+size_t HashField(MAddress field);
+
+void EnsurePromoteStampTable()
+{
+    if (g_promoteStampInited.load(std::memory_order_acquire) == 1) {
+        return;
+    }
+    uint32_t expected = 0;
+    if (!g_promoteStampInited.compare_exchange_strong(expected, 2, std::memory_order_acq_rel)) {
+        while (g_promoteStampInited.load(std::memory_order_acquire) != 1) {
+        }
+        return;
+    }
+    size_t bits = EnvSizeT("MRT_GCV2_IDLEEDGE_STAMP_BITS", 18);
+    if (bits < 16) {
+        bits = 16;
+    }
+    if (bits > 22) {
+        bits = 22;
+    }
+    g_promoteStampCap = size_t(1) << bits;
+    g_promoteStampMask = g_promoteStampCap - 1;
+    g_promoteStamps = new (std::nothrow) PromoteStampSlot[g_promoteStampCap];
+    if (g_promoteStamps == nullptr) {
+        static PromoteStampSlot fallback[kStampCapDefault];
+        g_promoteStamps = fallback;
+        g_promoteStampCap = kStampCapDefault;
+        g_promoteStampMask = g_promoteStampCap - 1;
+    }
+    g_promoteStampInited.store(1, std::memory_order_release);
+}
+
+void StorePromoteStamp(MAddress fieldAddress, uint8_t targetGen, bool recorded)
+{
+    EnsurePromoteStampTable();
+    if (g_promoteStamps == nullptr || g_promoteStampCap == 0) {
+        return;
+    }
+    size_t idx = HashField(fieldAddress) & g_promoteStampMask;
+    for (size_t probe = 0; probe < kProbeMax; ++probe) {
+        size_t i = (idx + probe) & g_promoteStampMask;
+        PromoteStampSlot& slot = g_promoteStamps[i];
+        uintptr_t cur = slot.field.load(std::memory_order_acquire);
+        if (cur == 0) {
+            uintptr_t expected = 0;
+            if (slot.field.compare_exchange_strong(expected, fieldAddress, std::memory_order_acq_rel)) {
+                slot.targetGen.store(targetGen, std::memory_order_relaxed);
+                slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+                g_promoteStampNotes.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            cur = expected;
+        }
+        if (cur == fieldAddress) {
+            slot.targetGen.store(targetGen, std::memory_order_relaxed);
+            slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+            g_promoteStampWraps.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+    g_promoteStampProbeFail.fetch_add(1, std::memory_order_relaxed);
+}
+
+struct PromoteStampLookup {
+    bool found = false;
+    uint8_t targetGen = 0;
+    bool recorded = false;
+};
+
+PromoteStampLookup LoadPromoteStamp(MAddress fieldAddress)
+{
+    PromoteStampLookup r;
+    if (g_promoteStamps == nullptr || g_promoteStampCap == 0) {
+        return r;
+    }
+    size_t idx = HashField(fieldAddress) & g_promoteStampMask;
+    for (size_t probe = 0; probe < kProbeMax; ++probe) {
+        size_t i = (idx + probe) & g_promoteStampMask;
+        PromoteStampSlot& slot = g_promoteStamps[i];
+        uintptr_t cur = slot.field.load(std::memory_order_acquire);
+        if (cur == 0) {
+            return r;
+        }
+        if (cur == fieldAddress) {
+            r.found = true;
+            r.targetGen = slot.targetGen.load(std::memory_order_relaxed);
+            r.recorded = slot.recorded.load(std::memory_order_relaxed) != 0;
+            return r;
+        }
+    }
+    return r;
+}
+
+uint8_t CensusTargetGenOf(BaseObject* target)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return kGenNonHeap;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region == nullptr) {
+        return kGenUnknown;
+    }
+    return region->IsYoungRegion() ? kGenYoung : kGenOld;
+}
+
+void NoteFullClearMiss(MAddress fieldAddress, BaseObject* target, bool bare)
+{
+    if (!FullClearProbeOn()) {
+        return;
+    }
+    EnsurePromoteStampTable();
+    uint8_t censusGen = CensusTargetGenOf(target);
+    if (censusGen > 3) {
+        censusGen = kGenUnknown;
+    }
+    g_fcCensusMissTotal.fetch_add(1, std::memory_order_relaxed);
+    if (bare) {
+        g_fcCensusBareTotal.fetch_add(1, std::memory_order_relaxed);
+    }
+    PromoteStampLookup st = LoadPromoteStamp(fieldAddress);
+    if (!st.found) {
+        g_fcMissNoPromoteStamp.fetch_add(1, std::memory_order_relaxed);
+        if (bare) {
+            g_fcBareNoPromoteStamp.fetch_add(1, std::memory_order_relaxed);
+        }
+        return;
+    }
+    uint8_t pg = st.targetGen;
+    if (pg > 3) {
+        pg = kGenUnknown;
+    }
+    g_fcMissPromoteXCensus[pg][censusGen].fetch_add(1, std::memory_order_relaxed);
+    if (st.recorded) {
+        g_fcMissPromoteRec[pg].fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_fcMissPromoteSkip[pg].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (bare) {
+        g_fcBarePromoteXCensus[pg][censusGen].fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 size_t HashField(MAddress field)
@@ -454,7 +630,7 @@ void NoteGenOnMiss(const StampLookup& st, bool bare)
     }
 }
 
-void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder)
+void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder, BaseObject* target)
 {
     ++stats.remsetMiss;
     StampLookup st = LoadStamp(fieldAddress);
@@ -464,10 +640,12 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder)
         NoteBareHolder(holder);
         NoteBareOffset(holder, fieldAddress);
         NoteGenOnMiss(st, true);
+        NoteFullClearMiss(fieldAddress, target, true);
         PushSample(stats, fieldAddress);
         return;
     }
     NoteGenOnMiss(st, false);
+    NoteFullClearMiss(fieldAddress, target, false);
     if (st.phase < kPhaseBuckets) {
         ++stats.missByPhase[st.phase];
     } else {
@@ -492,6 +670,22 @@ bool Enabled()
 {
     static const bool on = EnvIsOne("MRT_GCV2_IDLEEDGE");
     return on;
+}
+
+void NotePromoteTimeTarget(MAddress fieldAddress, uint8_t targetGen, bool recorded)
+{
+    if (!FullClearProbeOn() || fieldAddress == 0) {
+        return;
+    }
+    if (targetGen > 3) {
+        targetGen = kGenUnknown;
+    }
+    g_fcPromoteSeen.fetch_add(1, std::memory_order_relaxed);
+    g_fcPromoteTargetGen[targetGen].fetch_add(1, std::memory_order_relaxed);
+    if (recorded) {
+        g_fcPromoteRecorded.fetch_add(1, std::memory_order_relaxed);
+    }
+    StorePromoteStamp(fieldAddress, targetGen, recorded);
 }
 
 void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, uint8_t holderGen,
@@ -570,7 +764,7 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
                 if (remsetSnap.count(slot) != 0) {
                     ++stats.remsetHit;
                 } else {
-                    ClassifyMiss(stats, slot, holder);
+                    ClassifyMiss(stats, slot, holder, target);
                 }
             });
         },
@@ -844,6 +1038,87 @@ void DumpProcessTotals(const char* tag)
          static_cast<unsigned long long>(decTo), static_cast<unsigned long long>(decTx),
          static_cast<unsigned long long>(decRec), static_cast<unsigned long long>(decSkipY),
          static_cast<unsigned long long>(decHsum));
+
+    if (FullClearProbeOn()) {
+        uint64_t pSeen = g_fcPromoteSeen.load(std::memory_order_relaxed);
+        uint64_t pRec = g_fcPromoteRecorded.load(std::memory_order_relaxed);
+        uint64_t pY = g_fcPromoteTargetGen[kGenYoung].load(std::memory_order_relaxed);
+        uint64_t pO = g_fcPromoteTargetGen[kGenOld].load(std::memory_order_relaxed);
+        uint64_t pN = g_fcPromoteTargetGen[kGenNonHeap].load(std::memory_order_relaxed);
+        uint64_t pU = g_fcPromoteTargetGen[kGenUnknown].load(std::memory_order_relaxed);
+        uint64_t missTot = g_fcCensusMissTotal.load(std::memory_order_relaxed);
+        uint64_t bareTot = g_fcCensusBareTotal.load(std::memory_order_relaxed);
+        uint64_t noStamp = g_fcMissNoPromoteStamp.load(std::memory_order_relaxed);
+        uint64_t bareNoStamp = g_fcBareNoPromoteStamp.load(std::memory_order_relaxed);
+        // true miss = census young while promote was already non-young (old/null)
+        uint64_t barePromOld = g_fcBarePromoteXCensus[kGenOld][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t barePromNull =
+            g_fcBarePromoteXCensus[kGenNonHeap][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t barePromYoung =
+            g_fcBarePromoteXCensus[kGenYoung][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t barePromUnk =
+            g_fcBarePromoteXCensus[kGenUnknown][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t missPromOld = g_fcMissPromoteXCensus[kGenOld][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t missPromNull =
+            g_fcMissPromoteXCensus[kGenNonHeap][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t missPromYoung =
+            g_fcMissPromoteXCensus[kGenYoung][kGenYoung].load(std::memory_order_relaxed);
+        uint64_t missPromUnk =
+            g_fcMissPromoteXCensus[kGenUnknown][kGenYoung].load(std::memory_order_relaxed);
+        // spurious: promote-time already not young ⇒ remset should not have it then
+        uint64_t bareSpurious = barePromOld + barePromNull;
+        uint64_t missSpurious = missPromOld + missPromNull;
+        // real gap: promote-time young (should have been recorded) but census miss
+        uint64_t bareReal = barePromYoung;
+        uint64_t missReal = missPromYoung;
+        VLOG(REPORT,
+             "[GCV2][fullclear][PROMOTE_GEN] tag=%s seen=%llu rec=%llu targetYoung=%llu "
+             "targetOld=%llu targetNull=%llu targetUnk=%llu stampNotes=%llu stampWraps=%llu "
+             "stampFail=%llu",
+             tag == nullptr ? "?" : tag, static_cast<unsigned long long>(pSeen),
+             static_cast<unsigned long long>(pRec), static_cast<unsigned long long>(pY),
+             static_cast<unsigned long long>(pO), static_cast<unsigned long long>(pN),
+             static_cast<unsigned long long>(pU),
+             static_cast<unsigned long long>(g_promoteStampNotes.load(std::memory_order_relaxed)),
+             static_cast<unsigned long long>(g_promoteStampWraps.load(std::memory_order_relaxed)),
+             static_cast<unsigned long long>(g_promoteStampProbeFail.load(std::memory_order_relaxed)));
+        VLOG(REPORT,
+             "[GCV2][fullclear][MISS_MATRIX] tag=%s missTot=%llu bareTot=%llu noPromoteStamp=%llu "
+             "bareNoStamp=%llu | bare: promYoung=%llu promOld=%llu promNull=%llu promUnk=%llu "
+             "spurious=%llu real=%llu | miss: promYoung=%llu promOld=%llu promNull=%llu "
+             "promUnk=%llu spurious=%llu real=%llu",
+             tag == nullptr ? "?" : tag, static_cast<unsigned long long>(missTot),
+             static_cast<unsigned long long>(bareTot), static_cast<unsigned long long>(noStamp),
+             static_cast<unsigned long long>(bareNoStamp),
+             static_cast<unsigned long long>(barePromYoung),
+             static_cast<unsigned long long>(barePromOld),
+             static_cast<unsigned long long>(barePromNull),
+             static_cast<unsigned long long>(barePromUnk),
+             static_cast<unsigned long long>(bareSpurious), static_cast<unsigned long long>(bareReal),
+             static_cast<unsigned long long>(missPromYoung),
+             static_cast<unsigned long long>(missPromOld),
+             static_cast<unsigned long long>(missPromNull),
+             static_cast<unsigned long long>(missPromUnk),
+             static_cast<unsigned long long>(missSpurious), static_cast<unsigned long long>(missReal));
+        for (size_t pg = 0; pg < 4; ++pg) {
+            for (size_t cg = 0; cg < 4; ++cg) {
+                uint64_t c = g_fcMissPromoteXCensus[pg][cg].load(std::memory_order_relaxed);
+                uint64_t b = g_fcBarePromoteXCensus[pg][cg].load(std::memory_order_relaxed);
+                if (c == 0 && b == 0) {
+                    continue;
+                }
+                VLOG(REPORT,
+                     "[GCV2][fullclear][MISS_CELL] tag=%s promote=%s census=%s miss=%llu bare=%llu "
+                     "recAtPromote=%llu skipAtPromote=%llu",
+                     tag == nullptr ? "?" : tag, genName(pg), genName(cg),
+                     static_cast<unsigned long long>(c), static_cast<unsigned long long>(b),
+                     static_cast<unsigned long long>(
+                         pg < 4 ? g_fcMissPromoteRec[pg].load(std::memory_order_relaxed) : 0),
+                     static_cast<unsigned long long>(
+                         pg < 4 ? g_fcMissPromoteSkip[pg].load(std::memory_order_relaxed) : 0));
+            }
+        }
+    }
 
     struct RaP {
         uint64_t c;
