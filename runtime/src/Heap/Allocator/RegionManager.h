@@ -216,9 +216,9 @@ public:
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
-            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion).
+            // twoflags + postallocgap: POST_TRACE+ and RECLAIM_SATB (TRACE uses isTraceRegion).
             if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-                phase == GC_PHASE_FORWARD) {
+                phase == GC_PHASE_FORWARD || phase == GC_PHASE_RECLAIM_SATB_NODE) {
                 region->SetNotRelocatableThisCycle(1);
             }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
@@ -261,9 +261,9 @@ public:
             recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
             region->SetTraceRegionFlag(0);
         }
-        // twoflags: POST_TRACE+ only (independent of isTraceRegion).
+        // twoflags + postallocgap: POST_TRACE+ and RECLAIM_SATB (independent of isTraceRegion).
         if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
-            phase == GC_PHASE_FORWARD) {
+            phase == GC_PHASE_FORWARD || phase == GC_PHASE_RECLAIM_SATB_NODE) {
             region->SetNotRelocatableThisCycle(1);
         }
 

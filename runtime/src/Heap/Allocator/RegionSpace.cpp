@@ -265,14 +265,24 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         } else {
             reg = RegionInfo::TryGetRegionInfoAt(addr);
         }
-        // twoflags: POST_TRACE+ allocs have no mark/isTrace coverage — stamp CSet exclusion.
+        // twoflags + postallocgap: post-mark allocs have no mark/isTrace coverage —
+        // stamp CSet exclusion for both major Assemble and minor PrepareYoung.
         // TRACE-phase new regions already get isTraceRegion (implicit black). Do not stamp
         // TRACE (would exclude most young regions until next major → minor starvation).
-        // ⛔ No CLEAR_SATB (minor shares it). Orthogonal to isTraceRegion / ShouldEnqueue.
+        // ⛔ No CLEAR_SATB (minor shares it). RECLAIM_SATB is post-GC tail (nullroute samples).
+        // Orthogonal to isTraceRegion / ShouldEnqueue.
         if (reg != nullptr && !reg->IsNotRelocatableThisCycle()) {
             GCPhase heapP = Heap::GetHeap().GetGCPhase();
-            if (heapP == GCPhase::GC_PHASE_POST_TRACE || heapP == GCPhase::GC_PHASE_PREFORWARD ||
-                heapP == GCPhase::GC_PHASE_FORWARD) {
+            GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
+            Mutator* m = Mutator::GetMutator();
+            if (m != nullptr) {
+                mutP = m->GetMutatorPhase();
+            }
+            auto needsStamp = [](GCPhase p) {
+                return p == GCPhase::GC_PHASE_POST_TRACE || p == GCPhase::GC_PHASE_PREFORWARD ||
+                    p == GCPhase::GC_PHASE_FORWARD || p == GCPhase::GC_PHASE_RECLAIM_SATB_NODE;
+            };
+            if (needsStamp(heapP) || needsStamp(mutP)) {
                 reg->SetNotRelocatableThisCycle(1);
             }
         }

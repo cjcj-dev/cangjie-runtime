@@ -1545,10 +1545,11 @@ private:
             BitField<uint16_t> regionStateBitField;
         };
         RouteState routeState; // todo: put in RouteInfo
-        // twoflags: orthogonal to isTraceRegion.
+        // twoflags + postallocgap: orthogonal to isTraceRegion.
         // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
-        // notRelocatableThisCycle = allocated after mark start this cycle → not a
-        // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
+        // notRelocatableThisCycle = region received post-mark alloc (POST_TRACE|
+        // PREFORWARD|FORWARD|RECLAIM_SATB) → not a major or minor CSet candidate until
+        // next PrepareTrace (full mark covers it). Never read by ShouldEnqueue.
         uint8_t notRelocatableThisCycle = 0;
         ZGenerationId _generation_id;
         RwLock rwLock;
