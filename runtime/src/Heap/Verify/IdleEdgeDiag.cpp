@@ -122,6 +122,19 @@ std::atomic<uint64_t> g_attrRawArray{ 0 };
 std::atomic<uint64_t> g_attrOther{ 0 };
 std::atomic<uint64_t> g_attrUnknown{ 0 };
 
+// Bare miss by (holder type, slot offset relative to holder). Same gate as BARE_BY_TYPE.
+constexpr size_t kOffBuckets = 128;
+struct OffSlot {
+    std::atomic<uint64_t> count{ 0 };
+    char name[kAttrNameLen]{};
+    std::atomic<uint32_t> offset{ 0 };
+    std::atomic<uint8_t> used{ 0 };
+    std::atomic<uint8_t> isRawArray{ 0 };
+};
+OffSlot g_off[kOffBuckets] = {};
+std::atomic<uint64_t> g_offUnknown{ 0 };
+std::atomic<uint64_t> g_offNeg{ 0 };
+
 struct RaSlot {
     std::atomic<uintptr_t> pc{ 0 };
     std::atomic<uint64_t> count{ 0 };
@@ -270,6 +283,53 @@ void NoteRa(void* ra)
     }
 }
 
+void NoteBareOffset(BaseObject* holder, MAddress fieldAddress)
+{
+    if (holder == nullptr || fieldAddress == 0) {
+        g_offUnknown.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    uintptr_t base = reinterpret_cast<uintptr_t>(holder);
+    uintptr_t slot = static_cast<uintptr_t>(fieldAddress);
+    if (slot < base) {
+        g_offNeg.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    uint32_t off = static_cast<uint32_t>(slot - base);
+    TypeInfo* ti = holder->GetTypeInfo();
+    bool raw = holder->IsRawArray();
+    const char* name = (ti != nullptr) ? ti->GetName() : nullptr;
+    if (name == nullptr) {
+        name = raw ? "<RawArray>" : "<unknown>";
+    }
+    size_t h = 1469598103934665603ull;
+    for (const char* p = name; *p; ++p) {
+        h ^= static_cast<unsigned char>(*p);
+        h *= 1099511628211ull;
+    }
+    h ^= static_cast<size_t>(off) + 0x9e3779b9u + (h << 6) + (h >> 2);
+    size_t idx = h % kOffBuckets;
+    for (size_t p = 0; p < 24; ++p) {
+        size_t i = (idx + p) % kOffBuckets;
+        if (g_off[i].used.load(std::memory_order_acquire) == 0) {
+            uint8_t exp = 0;
+            if (g_off[i].used.compare_exchange_strong(exp, 1, std::memory_order_acq_rel)) {
+                std::strncpy(g_off[i].name, name, kAttrNameLen - 1);
+                g_off[i].name[kAttrNameLen - 1] = '\0';
+                g_off[i].offset.store(off, std::memory_order_relaxed);
+                g_off[i].isRawArray.store(raw ? 1 : 0, std::memory_order_relaxed);
+                g_off[i].count.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+        if (g_off[i].offset.load(std::memory_order_relaxed) == off &&
+            std::strncmp(g_off[i].name, name, kAttrNameLen) == 0) {
+            g_off[i].count.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+    }
+}
+
 void NoteBareHolder(BaseObject* holder)
 {
     if (holder == nullptr) {
@@ -348,6 +408,7 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder)
         ++stats.missBare;
         ++stats.missByPhase[0];
         NoteBareHolder(holder);
+        NoteBareOffset(holder, fieldAddress);
         PushSample(stats, fieldAddress);
         return;
     }
@@ -576,6 +637,45 @@ void DumpProcessTotals(const char* tag)
         VLOG(REPORT, "[GCV2][idleedge][BARE_BY_TYPE] tag=%s rank=%zu count=%llu (%.1f%% of bare) rawArray=%d type=%s",
              tag == nullptr ? "?" : tag, i + 1, static_cast<unsigned long long>(top[i].c), pct, top[i].raw,
              top[i].n);
+    }
+
+    struct OffP {
+        uint64_t c;
+        const char* n;
+        uint32_t off;
+        int raw;
+    };
+    OffP otop[kOffBuckets];
+    size_t notop = 0;
+    for (size_t i = 0; i < kOffBuckets; ++i) {
+        uint64_t c = g_off[i].count.load(std::memory_order_relaxed);
+        if (c == 0 || g_off[i].used.load(std::memory_order_relaxed) == 0) {
+            continue;
+        }
+        otop[notop++] = OffP{ c, g_off[i].name, g_off[i].offset.load(std::memory_order_relaxed),
+                              static_cast<int>(g_off[i].isRawArray.load()) };
+    }
+    for (size_t i = 0; i < notop; ++i) {
+        for (size_t j = i + 1; j < notop; ++j) {
+            if (otop[j].c > otop[i].c) {
+                OffP t = otop[i];
+                otop[i] = otop[j];
+                otop[j] = t;
+            }
+        }
+    }
+    size_t showOff = notop < 24 ? notop : 24;
+    VLOG(REPORT,
+         "[GCV2][idleedge][BARE_BY_OFF] tag=%s nKeys=%zu offUnknown=%llu offNeg=%llu bare=%llu",
+         tag == nullptr ? "?" : tag, notop, static_cast<unsigned long long>(g_offUnknown.load()),
+         static_cast<unsigned long long>(g_offNeg.load()), static_cast<unsigned long long>(bare));
+    for (size_t i = 0; i < showOff; ++i) {
+        double pct = bare == 0 ? 0.0 : (100.0 * static_cast<double>(otop[i].c) / static_cast<double>(bare));
+        VLOG(REPORT,
+             "[GCV2][idleedge][BARE_BY_OFF] tag=%s rank=%zu count=%llu (%.1f%% of bare) rawArray=%d "
+             "offset=0x%x (%u) type=%s",
+             tag == nullptr ? "?" : tag, i + 1, static_cast<unsigned long long>(otop[i].c), pct, otop[i].raw,
+             otop[i].off, otop[i].off, otop[i].n);
     }
 
     struct RaP {
