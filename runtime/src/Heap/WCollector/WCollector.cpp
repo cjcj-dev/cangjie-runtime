@@ -5845,20 +5845,19 @@ void WCollector::ProcessFinalizers()
     fp.Notify();
 }
 
-// waitfwd / permhole: consumer-side wait for geometric route tip. Called only when
-// RouteObject returned a heap to with !IsValidObject (tip null). Publisher is
-// ForwardObjectExclusive: toObj = RouteObject; CopyObject; fence; Unlock FORWARDED
-// so either to becomes tip-valid during copy, or from becomes FORWARDED after publish.
+// permhole receiptization (steer1): RouteObject is geometric (ROUTED before Copy fills
+// tip). A tip-valid to is a *receipt* (copy happened). A geometric to with tip==0 is only
+// a plan — never hand it to make_load_good / IdleBarrier self-heal (THIRD_mutator hang).
 //
-// Never fall back to `from` on a still-planned geometric hole — eeebaaf3 unconditional
-// return-from and waitfwd v1 "narrow" from-fallback both poison early cjpm path
-// construction (IllegalArgumentException path [0,0,0] ~1s).
-//
-// permhole: a permanent hole (region/object already published, tip still null) or a
-// bounded spin that never sees tip-valid must not hand a null tip to make_load_good /
-// IdleBarrier self-heal (THIRD_mutator busy-loop). Fail with CHECK_DETAIL so the
-// first hit is a diagnostic abort (region/from/to/route/phase), not an undiagnosable hang.
-// Mid-copy waits stay bounded (kMaxSpins); infinite wait is forbidden.
+// Contract of this wait:
+//   ① return tip-valid to (receipt), or
+//   ② return from while region still mid-route (from is a live object; mutator continues),
+//   ③ never return a null-tip geometric address, and never CAS one into a slot.
+// Distinct from 4e75f2cc: that path is RouteObject *miss* (no plan) on a ghost about to
+// be reclaimed — returning from there reinstalls a dying address. Here RouteObject *hit*
+// with no tip yet: while still ROUTED/ROUTING, from is not yet CollectRegion'd.
+// After object/region publish (FORWARDED|COMPACTED) tip must exist if the plan was real;
+// missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
 // Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
@@ -5876,35 +5875,31 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     }
 
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-    // Bound mid-copy waits. Permanent holes must not spin forever (would swap hang for hang).
-    // Publisher path is short (CopyObject + unlock); a few thousand yields covers it.
+    // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
+    // is an invariant break (CHECK below), not a longer spin.
     constexpr int kMaxSpins = 4096;
-    auto failNullTip = [&](const char* reason, int spins, BaseObject* geometricTo) -> BaseObject* {
+    auto permanentHole = [&](const char* reason, int spins, BaseObject* geometricTo) -> BaseObject* {
         if (diagOn) {
             giveUpCount.fetch_add(1, std::memory_order_relaxed);
         }
         RegionInfo::RouteState rs =
             forwarding != nullptr ? forwarding->GetRouteState() : RegionInfo::RouteState::NORMAL;
         GCPhase phase = GetGCPhase();
-        MAddress fromAddr = reinterpret_cast<MAddress>(from);
-        MAddress toAddr = reinterpret_cast<MAddress>(geometricTo);
         MAddress regStart = forwarding != nullptr ? forwarding->GetRegionStart() : 0;
         MAddress regEnd = forwarding != nullptr ? forwarding->GetRegionEnd() : 0;
         unsigned rtype = forwarding != nullptr ? static_cast<unsigned>(forwarding->GetRegionType()) : 0;
         unsigned young = forwarding != nullptr ? static_cast<unsigned>(forwarding->IsYoungRegion()) : 0;
         size_t live = forwarding != nullptr ? forwarding->GetLiveByteCount() : 0;
         bool fromFwd = from != nullptr && from->IsForwarded();
-        // RTLOG_FATAL aborts after printing — never return a null-tip pointer.
         CHECK_DETAIL(false,
                      "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
                      "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu "
-                     "from=%p fromFwd=%u to=%p tipValid=0 — refuse null-tip to mutator",
+                     "from=%p fromFwd=%u to=%p tipValid=0 — publish without receipt",
                      reason, spins, static_cast<int>(phase), static_cast<unsigned>(rs), forwarding,
                      static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live, from,
                      static_cast<unsigned>(fromFwd), geometricTo);
-        (void)fromAddr;
-        (void)toAddr;
-        return geometricTo != nullptr ? geometricTo : from;
+        // Unreachable after FATAL; keep from (never geometric null-tip) if CHECK is non-abort builds.
+        return from;
     };
 
     for (int spins = 0; spins < kMaxSpins; ++spins) {
@@ -5912,7 +5907,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (diagOn) {
                 tipReadyCount.fetch_add(1, std::memory_order_relaxed);
             }
-            return to;
+            return to; // receipt
         }
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
@@ -5921,10 +5916,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
                 }
-                return again;
+                return again; // receipt after object FORWARDED
             }
-            // Object-level FORWARDED published but tip still null → permanent hole.
-            return failNullTip("object_FORWARDED_tip_null", spins, again != nullptr ? again : to);
+            // Published FORWARDED without a tip-valid to = permanent hole (not mid-copy).
+            return permanentHole("object_FORWARDED_tip_null", spins, again != nullptr ? again : to);
         }
         RegionInfo::RouteState rs = forwarding->GetRouteState();
         if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
@@ -5936,19 +5931,25 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 }
                 return again;
             }
-            // Region-wide publish done, tip still null → permanent hole.
-            return failNullTip(
+            return permanentHole(
                 rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
-                spins, again != nullptr ? again : (to != nullptr ? to : from));
+                spins, again != nullptr ? again : to);
         }
         sched_yield();
         to = space.GetRegionManager().RouteObject(from, forwarding);
         if (to == nullptr) {
-            // Route vanished mid-wait; geometric plan gone — keep from (not a tip filter).
+            // Plan gone mid-wait — keep from (valid object; not a geometric guess).
+            if (diagOn) {
+                giveUpCount.fetch_add(1, std::memory_order_relaxed);
+            }
             return from;
         }
     }
-    return failNullTip("spin_timeout_tip_null", kMaxSpins, to != nullptr ? to : from);
+    // Still ROUTED/ROUTING after bound: do not hand geometric null-tip; from is still live.
+    if (diagOn) {
+        giveUpCount.fetch_add(1, std::memory_order_relaxed);
+    }
+    return from;
 }
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
