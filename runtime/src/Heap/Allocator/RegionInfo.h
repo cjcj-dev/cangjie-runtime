@@ -34,6 +34,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
+#include "Heap/Verify/EatArmDiag.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -829,6 +830,14 @@ public:
                 const char* v = std::getenv("MRT_GCV2_NULLROUTE_DIAG");
                 return v != nullptr && v[0] == '1' && v[1] == '\0';
             }();
+            // eatarm: only ROUTED/FORWARDABLE/ROUTING (same exclusive arm as IOR CHECK).
+            if (EatArmDiag::Enabled()) {
+                RouteState rsEat = GetRouteState();
+                if (rsEat == RouteState::ROUTED || rsEat == RouteState::FORWARDABLE ||
+                    rsEat == RouteState::ROUTING) {
+                    EatArmDiag::NoteIorTarget(fromObj, EatArmDiag::GetFixHost(), offset);
+                }
+            }
             if (nullRouteDiag) {
                 // Prefer ROUTED (exclusive CHECK arm). Skip FORWARDED flood that
                 // exhausts the sample budget before the size=16 region-end hits.
