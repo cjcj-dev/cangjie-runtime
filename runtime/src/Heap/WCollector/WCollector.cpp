@@ -3631,6 +3631,13 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
+    // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
+    // Drop the edge; do not reinstall the from address that is about to be reclaimed.
+    if (current == nullptr) {
+        MAddress oldVal = raw(field.GetFieldValue());
+        (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(0));
+        return false;
+    }
     // ForwardObject may return the same interior if gated; re-check before colouring.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
         MAddress oldVal = raw(field.GetFieldValue());
@@ -3696,6 +3703,10 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
+    }
+    if (current == nullptr) {
+        HealRoot(root, from_object(nullptr));
+        return false;
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
         HealRoot(root, from_object(current));
@@ -5923,7 +5934,17 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
-    return (to != nullptr) ? to : obj;
+    if (to != nullptr) {
+        return to;
+    }
+    // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
+    // to-version is not a stable address. Returning `obj` here reinstalls a from
+    // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
+    // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
+    if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+        return nullptr;
+    }
+    return obj;
 }
 
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
