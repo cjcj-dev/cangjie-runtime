@@ -48,6 +48,7 @@
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
+#include "Heap/Verify/SealCheck.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -2141,6 +2142,7 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         MAddress regionStart = region->GetRegionStart();
         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
         if (objSize > 0 && offset + objSize <= regionSize) {
+            SealCheck::NotePaint(region, offset, objSize, "EnsureRouteDomainMembership.ghost");
             (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
         }
     }

@@ -38,6 +38,7 @@
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDom.h"
+#include "Heap/Verify/SealCheck.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -130,6 +131,16 @@ public:
     }
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
+
+    // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
+    bool IsMarkFaceSealed() const
+    {
+        return __atomic_load_n(&metadata.markFaceSealed, std::memory_order_acquire) != 0;
+    }
+    void SetMarkFaceSealed(bool v)
+    {
+        __atomic_store_n(&metadata.markFaceSealed, static_cast<uint8_t>(v ? 1 : 0), std::memory_order_release);
+    }
 
     uint64_t GetSnapshotEpoch() const
     {
@@ -451,6 +462,7 @@ public:
         size_t offset = objAddr - regionStart;
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject");
         bool marked = writeBm->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
         (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
@@ -475,6 +487,7 @@ public:
         size_t offset = objAddr - regionStart;
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
         bool marked = writeBm->MarkBits(offset, objSize, regionSize);
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
         (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
@@ -498,6 +511,7 @@ public:
         CheckObjectSize(obj, objSize, regionStart, regionEnd);
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::ResurrectObject");
         bool marked = bitmap->MarkBits(offset, objSize, regionSize);
         CHECK(bitmap->IsMarked(offset));
         return marked;
@@ -519,6 +533,8 @@ public:
         size_t regionSize = regionEnd - regionStart;
         CHECK(regionSize > 0);
         RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
+        // enqueue face is not the route geometry face; still report if mark-face sealed.
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::EnqueueObject");
         bool marked = bitmap->MarkBits(offset, objSize, regionSize);
         CHECK(bitmap->IsMarked(offset));
         return marked;
@@ -1029,6 +1045,8 @@ public:
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
         metadata.routeState = FORWARDABLE;
+        // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
+        SetMarkFaceSealed(false);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
@@ -1105,6 +1123,7 @@ public:
             array[i].SetInGhostRegion(0);
         }
         SetRouteState(NORMAL);
+        SetMarkFaceSealed(false);
     }
 
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
@@ -1172,6 +1191,7 @@ public:
         metadata.retainedLiveInfoCoveredUpTo = 0;
         // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        SetMarkFaceSealed(false);
     }
 
     // Structural: drop any liveInfo/liveInfo0/retained that land in [rangeStart, rangeStart+rangeSize).
@@ -1683,6 +1703,8 @@ private:
         // notRelocatableThisCycle = allocated after mark start this cycle → not a
         // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
         uint8_t notRelocatableThisCycle = 0;
+        // sealcheck: 1 after RouteRegion enters ROUTING (geometry face frozen).
+        uint8_t markFaceSealed = 0;
         ZGenerationId _generation_id;
         RwLock rwLock;
     };
@@ -1876,6 +1898,7 @@ private:
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
         SetYoungRegionFlag(0);
+        SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
         SetUnitRole(uClass);
     }
