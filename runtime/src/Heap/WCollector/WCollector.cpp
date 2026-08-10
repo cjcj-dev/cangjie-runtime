@@ -2672,8 +2672,33 @@ public:
                 if (isYoung) {
                     bool wasMarked = collector->MarkObject(object);
                     if (wasMarked) {
-                        // eatarm D6: already marked → no field re-scan (T under this holder lost).
+                        // ghostroute: residual unmarked young only (no FYS re-push of marked).
                         EatArmDiag::NoteWasMarkedSkipFields(object);
+                        if (object->HasRefField() && !object->IsWeakRef()) {
+                            object->ForEachRefField([collector, this](RefField<>& field) {
+                                BaseObject* target = collector->ResolveMinorReference(field);
+                                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                                    return;
+                                }
+                                if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child",
+                                                                          target)) {
+                                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                                    if (host == nullptr || host == target) {
+                                        return;
+                                    }
+                                    target = host;
+                                }
+                                RegionInfo* tr =
+                                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                                if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                                    return;
+                                }
+                                workStack.push_back(target);
+                            });
+                        }
+                        if (shared.pool != nullptr) {
+                            TryForkTask();
+                        }
                         continue;
                     }
                     ++nMarked;
@@ -2694,6 +2719,31 @@ public:
                     bool wasMarked = collector->MarkObject(object);
                     if (wasMarked) {
                         EatArmDiag::NoteWasMarkedSkipFields(object);
+                        if (object->HasRefField() && !object->IsWeakRef()) {
+                            object->ForEachRefField([collector, this](RefField<>& field) {
+                                BaseObject* target = collector->ResolveMinorReference(field);
+                                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                                    return;
+                                }
+                                if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child",
+                                                                          target)) {
+                                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                                    if (host == nullptr || host == target) {
+                                        return;
+                                    }
+                                    target = host;
+                                }
+                                RegionInfo* tr =
+                                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                                if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                                    return;
+                                }
+                                workStack.push_back(target);
+                            });
+                        }
+                        if (shared.pool != nullptr) {
+                            TryForkTask();
+                        }
                         continue;
                     }
                     ++nMarked;
@@ -2876,8 +2926,33 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     if (markCostMode != 0) {
                         ++g_markInternalCost.alreadyMarkedN;
                     }
-                    // eatarm D6: wasMarked → leave fields untraced this visit.
+                    // eatarm D6: wasMarked used to skip field walk entirely.
+                    // ghostroute: Ensure/MarkNewObject/alloc-black can paint without scanning
+                    // fields → children stay live0Surv=0 → FixMinor liveobj → exclusive
+                    // CHECK invalid_object_route. Residual-scan unmarked young only
+                    // (FYS pushTarget would re-push marked peers → infinite stack).
                     EatArmDiag::NoteWasMarkedSkipFields(object);
+                    if (!object->HasRefField() || object->IsWeakRef()) {
+                        continue;
+                    }
+                    object->ForEachRefField([this, &workStack](RefField<>& field) {
+                        BaseObject* target = ResolveMinorReference(field);
+                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                            return;
+                        }
+                        if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child", target)) {
+                            BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                            if (host == nullptr || host == target) {
+                                return;
+                            }
+                            target = host;
+                        }
+                        RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                        if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                            return;
+                        }
+                        workStack.push_back(target);
+                    });
                     continue;
                 }
                 if (markCostMode != 0) {
@@ -2902,8 +2977,28 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         } else {
             if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
                               g_minorLedgerCost.objInsNs)) {
-                // Dedup hit: may be young already-claimed or non-young; treat as skip-fields.
+                // Dedup hit: residual unmarked young only (paint-without-scan / Ensure).
                 EatArmDiag::NoteWasMarkedSkipFields(object);
+                if (isYoung && object->HasRefField() && !object->IsWeakRef()) {
+                    object->ForEachRefField([this, &workStack](RefField<>& field) {
+                        BaseObject* target = ResolveMinorReference(field);
+                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                            return;
+                        }
+                        if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child", target)) {
+                            BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                            if (host == nullptr || host == target) {
+                                return;
+                            }
+                            target = host;
+                        }
+                        RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                        if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                            return;
+                        }
+                        workStack.push_back(target);
+                    });
+                }
                 continue;
             }
             if (isYoung) {
