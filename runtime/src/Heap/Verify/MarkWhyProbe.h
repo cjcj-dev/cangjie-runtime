@@ -30,7 +30,8 @@ public:
     static void NoteMarkBitmapAlloc(RegionInfo* region, RegionBitmap* allocated);
 
     // After MarkBits: compare writeBm vs GetMarkBitmap(), offsets, capacity, phase.
-    // Returns IsMarkedObject(offset) result (caller may still CHECK).
+    // Returns false when the probe is off -- both call sites discard the result, so the disabled
+    // build must not pay for a bitmap read. See the .cpp for why.
     static bool NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, size_t offsetWrite, size_t objSize,
                                   size_t regionSizeArg, RegionBitmap* writeBm, bool markBitsReturnedAlreadyMarked,
                                   const char* site);

@@ -411,8 +411,13 @@ bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, 
                                      size_t regionSizeArg, RegionBitmap* writeBm, bool markBitsReturnedAlreadyMarked,
                                      const char* site)
 {
+    // Both call sites discard the result ((void)... in RegionInfo.h:453,477), and this sits in the
+    // marking hot path, so the disabled build must not pay for a bitmap read it will throw away.
+    // Same shape as the idlewrite gate fix (7f37316e): the gate goes before the work, not before
+    // the printing. If a caller ever needs the read-back value, it should take it from
+    // IsMarkedObject directly rather than from a diagnostic that is off by default.
     if (!Enabled() || region == nullptr) {
-        return region != nullptr && region->IsMarkedObject(offsetWrite);
+        return false;
     }
     static std::atomic<bool> armedLogged{false};
     if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
