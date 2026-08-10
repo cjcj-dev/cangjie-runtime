@@ -2068,10 +2068,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             return obj->IsForwarded();
         });
 
-    // tipnull arm R (receipt only, no densify): FORWARDED only after every liveInfo0
-    // size-walk survivor is object-FORWARDED. Prior unconditional SetRouteState(FORWARDED)
-    // after VisitLive true published empty geometric to → region_FORWARDED_tip_null.
-    auto allSurvivorsForwarded = [region]() -> bool {
+    // tipnull v5 full coverage: FORWARDED only if every liveInfo0 *live bit* is covered by
+    // a size-walk start that is object-FORWARDED (Copy wrote tip). Prior allSurvivorsForwarded
+    // only checked size-walk starts; multi-bit MarkBits interiors/orphans still Admitted
+    // without ever being Copy'd → region_FORWARDED_tip_null (arm R refuse=0).
+    // Incomplete: DispelGhost (no geometric plan) + Exempt — never FORWARDED empty, never
+    // ROUTED forever (TIMEOUT), never soft-null after Collect (SEGV si_addr=0x8).
+    auto allLiveBitsHaveReceipt = [region]() -> bool {
         LiveInfo* ghost = region->GetLiveInfo0ForProbe();
         auto survivedAt = [region, ghost](size_t offset) -> bool {
             if (ghost != nullptr) {
@@ -2092,25 +2095,66 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         if (!region->IsSmallRegion()) {
             return true;
         }
-        uintptr_t position = region->GetRegionStart();
-        size_t offset = 0;
+        uintptr_t regionStart = region->GetRegionStart();
         uintptr_t allocPtr = region->GetRegionAllocPtr();
+        size_t regionBytes = allocPtr > regionStart ? (allocPtr - regionStart) : 0;
+        // Pass 1: size-walk starts that are survived must be object-FORWARDED.
+        uintptr_t position = regionStart;
         while (position < allocPtr) {
             BaseObject* o = from_region_addr(position);
+            size_t offset = position - regionStart;
             if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", o)) {
-                return !survivedAt(offset);
+                // Cannot walk further; any later survived bit is uncovered → fail.
+                for (size_t rest = offset; rest < regionBytes; rest += kMarkedBytesPerBit) {
+                    if (survivedAt(rest)) {
+                        return false;
+                    }
+                }
+                return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*o);
+            if (allocSize == 0) {
+                return false;
+            }
             if (survivedAt(offset) && !o->IsForwarded()) {
                 return false;
             }
             position += allocSize;
-            offset += allocSize;
+        }
+        // Pass 2: every survived 8B bit must lie in some size-walk object whose start
+        // is object-FORWARDED (covers multi-bit interiors of densify MarkBits ranges).
+        // Orphans (survived bit not inside any size-walk object) ⇒ fail.
+        position = regionStart;
+        size_t walkOff = 0;
+        while (position < allocPtr) {
+            BaseObject* o = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-cover", o)) {
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*o);
+            if (allocSize == 0) {
+                break;
+            }
+            bool startFwd = o->IsForwarded();
+            for (size_t d = 0; d < allocSize; d += kMarkedBytesPerBit) {
+                size_t bitOff = walkOff + d;
+                if (survivedAt(bitOff) && !startFwd) {
+                    return false;
+                }
+            }
+            position += allocSize;
+            walkOff += allocSize;
+        }
+        // Bits past last walkable object must not be survived (orphans / unwalkable tail).
+        for (size_t rest = walkOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
+            if (survivedAt(rest)) {
+                return false;
+            }
         }
         return true;
     };
 
-    if (!forwarded || !allSurvivorsForwarded()) {
+    if (!forwarded || !allLiveBitsHaveReceipt()) {
         forwarded = region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
             if (obj->IsForwarded()) {
                 return true;
@@ -2120,11 +2164,26 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         });
     }
 
-    CHECK_DETAIL(forwarded && allSurvivorsForwarded(),
-                 "[GCV2][tipnull] ForwardRegion incomplete region=%p start=%#zx live=%zu "
-                 "route=%u — refuse FORWARDED without receipts",
-                 region, region->GetRegionStart(), region->GetLiveByteCount(),
-                 static_cast<unsigned>(region->GetRouteState()));
+    if (!forwarded || !allLiveBitsHaveReceipt()) {
+        static std::atomic<size_t> abandonN{ 0 };
+        size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipnull] abandon-route region=%p start=%#zx live=%zu route=%u n=%zu "
+                "— live bit without receipt; DispelGhost (no FORWARDED)",
+                region, region->GetRegionStart(), region->GetLiveByteCount(),
+                static_cast<unsigned>(region->GetRouteState()), n);
+        }
+        if (youngRegion) {
+            region->PreserveRetainedLiveInfo();
+            (void)RecordPromotedCrossGenEdges(region);
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+        region->DispelGhostFromRegion();
+        ExemptFromRegion(region);
+        return;
+    }
     {
         static const bool probe = []() {
             const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
