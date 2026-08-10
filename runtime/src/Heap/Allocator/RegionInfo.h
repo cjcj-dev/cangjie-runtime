@@ -31,7 +31,6 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
-#include "Heap/Collector/Collector.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -842,25 +841,7 @@ public:
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
         LiveInfo* ghostLiveInfo = metadata.liveInfo0;
-        // tipnull: multi-bit MarkBits lets interiors pass IsSurvivedObject. Only size-walk
-        // starts are Copy targets. Reject: not survived; non-plausible header; covered by
-        // a previous size-walk start's MarkBits range (offset-8 survived + prev GetSize covers).
-        bool admitMiss = (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset));
-        if (!admitMiss && !Collector::PlausibleManagedObjectGate("AdmitForRoute", fromObj)) {
-            admitMiss = true;
-        }
-        if (!admitMiss && offset >= kMarkedBytesPerBit &&
-            ghostLiveInfo->IsSurvivedObject(offset - kMarkedBytesPerBit)) {
-            BaseObject* prev =
-                from_region_addr(GetRegionStart() + (offset - kMarkedBytesPerBit));
-            if (Collector::PlausibleManagedObjectGate("AdmitForRoute-prev", prev)) {
-                size_t prevSz = prev->GetSize();
-                if (prevSz > kMarkedBytesPerBit) {
-                    admitMiss = true; // interior of previous multi-slot object
-                }
-            }
-        }
-        if (admitMiss) {
+        if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
             // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
             // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
             static const bool nullRouteDiag = []() {
