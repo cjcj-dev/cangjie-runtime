@@ -12,7 +12,9 @@ repo=$(git -C "$script_dir" rev-parse --show-toplevel)
 pre_ref=${1:-1a1d013102dca33b4c006964e27883f1efde4af8}
 post_ref=${2:-HEAD}
 rounds=${3:-20}
-cpuset=${MUTATOR_LOCK_CPUSET:-0-3}
+cpuset=${MUTATOR_LOCK_CPUSET:-}
+# fail-closed: see the other probes -- no default cpuset.
+[[ -n "$cpuset" ]] || { echo "set MUTATOR_LOCK_CPUSET to cores you have claimed" >&2; exit 2; }
 harness="$repo/runtime/tests/mutator_lock_liveness_harness.cpp"
 probe_tmp=$(mktemp -d /tmp/armlivelock-probe.XXXXXX)
 
