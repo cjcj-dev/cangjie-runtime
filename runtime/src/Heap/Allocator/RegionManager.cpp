@@ -1700,79 +1700,103 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // → ReadRefField(null,+8). Only densify when walk reaches allocPtr.
     if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
         !region->IsKnownEmpty()) {
+        // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
+        // DEFAULT_STACK_SIZE 512KiB guard MAPERR (si_addr=rbp-0x20058). Heap via malloc
+        // (not managed heap — no GC re-entry). 8192 == default 64KB region / ALLOC_ALIGN=8
+        // max starts; larger regionSize can exceed it — exact nStarts, no silent truncate.
         LiveInfo* ghost = region->GetLiveInfo0ForProbe();
         RegionBitmap* mb = ghost->markBitmap;
         RegionBitmap* rb = ghost->resurrectBitmap;
-        constexpr size_t kMaxStarts = 8192;
-        size_t startOff[kMaxStarts];
-        size_t startSz[kMaxStarts];
+        uintptr_t regionStart = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
         size_t nStarts = 0;
         size_t liveBytes = 0;
-        uintptr_t position = region->GetRegionStart();
-        uintptr_t allocPtr = region->GetRegionAllocPtr();
-        bool fullWalk = true;
+        uintptr_t position = regionStart;
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
-                // Cannot continue densify without size; keep starts recorded so far.
                 break;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (allocSize == 0) {
                 break;
             }
-            size_t offset = position - region->GetRegionStart();
+            size_t offset = position - regionStart;
             if (ghost->IsSurvivedObject(offset)) {
-                if (nStarts >= kMaxStarts) {
-                    break;
-                }
-                startOff[nStarts] = offset;
-                startSz[nStarts] = allocSize;
                 ++nStarts;
                 liveBytes += allocSize;
             }
             position += allocSize;
         }
-        // tipwho walkBreak: partial walk still densifies walked starts so orphans past
-        // walkBreak lose their liveInfo0 bits (Admit miss → keep from). Never densify
-        // when nStarts==0 (would wipe entire face → SEGV si_addr=0x8).
+        // Partial walk still densifies walked starts (orphans past break lose bits).
+        // nStarts==0: never clear (would wipe face → SEGV si_addr=0x8).
         if (nStarts > 0) {
-            auto clearAll = [](RegionBitmap* bm) {
-                if (bm == nullptr) {
-                    return;
+            size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            if (startOff != nullptr && startSz != nullptr) {
+                size_t filled = 0;
+                position = regionStart;
+                while (position < allocPtr && filled < nStarts) {
+                    BaseObject* obj = from_region_addr(position);
+                    if (!Collector::PlausibleManagedObjectGate("tipnull-densify-fill", obj)) {
+                        break;
+                    }
+                    size_t allocSize = RegionSpace::GetAllocSize(*obj);
+                    if (allocSize == 0) {
+                        break;
+                    }
+                    size_t offset = position - regionStart;
+                    if (ghost->IsSurvivedObject(offset)) {
+                        startOff[filled] = offset;
+                        startSz[filled] = allocSize;
+                        ++filled;
+                    }
+                    position += allocSize;
                 }
-                size_t wc = bm->wordCnt.load(std::memory_order_acquire);
-                for (size_t i = 0; i < wc; ++i) {
-                    bm->markWords[i].store(0, std::memory_order_relaxed);
+                if (filled > 0) {
+                    auto clearAll = [](RegionBitmap* bm) {
+                        if (bm == nullptr) {
+                            return;
+                        }
+                        size_t wc = bm->wordCnt.load(std::memory_order_acquire);
+                        for (size_t i = 0; i < wc; ++i) {
+                            bm->markWords[i].store(0, std::memory_order_relaxed);
+                        }
+                        for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
+                            bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                        }
+                        bm->liveBytes.store(0, std::memory_order_relaxed);
+                    };
+                    clearAll(mb);
+                    clearAll(rb);
+                    size_t regionSize = region->GetGhostRegionSize();
+                    if (regionSize == 0) {
+                        regionSize = region->GetRegionSize();
+                    }
+                    size_t liveBytesFilled = 0;
+                    for (size_t i = 0; i < filled; ++i) {
+                        liveBytesFilled += startSz[i];
+                        if (mb != nullptr) {
+                            (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                        }
+                    }
+                    region->ResetLiveByteCount();
+                    if (liveBytesFilled > 0) {
+                        region->AddLiveByteCount(liveBytesFilled);
+                    }
+                    static std::atomic<size_t> densifyN{ 0 };
+                    size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (dn <= 32) {
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu "
+                            "walkEnd=%#zx alloc=%#zx n=%zu (heap)",
+                            region, filled, liveBytesFilled, static_cast<size_t>(position),
+                            static_cast<size_t>(allocPtr), dn);
+                    }
                 }
-                for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
-                    bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
-                }
-                bm->liveBytes.store(0, std::memory_order_relaxed);
-            };
-            clearAll(mb);
-            clearAll(rb);
-            size_t regionSize = region->GetGhostRegionSize();
-            if (regionSize == 0) {
-                regionSize = region->GetRegionSize();
             }
-            for (size_t i = 0; i < nStarts; ++i) {
-                if (mb != nullptr) {
-                    (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
-                }
-            }
-            region->ResetLiveByteCount();
-            if (liveBytes > 0) {
-                region->AddLiveByteCount(liveBytes);
-            }
-            static std::atomic<size_t> densifyN{ 0 };
-            size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (dn <= 32) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu walkEnd=%#zx alloc=%#zx n=%zu",
-                    region, nStarts, liveBytes, static_cast<size_t>(position),
-                    static_cast<size_t>(allocPtr), dn);
-            }
+            std::free(startOff);
+            std::free(startSz);
         }
     }
     size_t fromBytes = region->GetLiveByteCount();
