@@ -37,6 +37,10 @@ struct RegionBitmap {
     struct BitMaskInfo {
         size_t headWordIdx;
         uint64_t headMaskBits;
+        // Single bit for the object start (offset/8). "Already marked" must mean this bit,
+        // not any bit in the multi-byte head mask — otherwise a neighbor mark makes MarkBits
+        // return already without setting the start bit, and CHECK(IsMarkedObject) ABRTs.
+        uint64_t startBitMask;
         size_t tailWordCnt; // count of mask words excludes the start mask
         uint64_t lastMaskBits;
     };
@@ -46,6 +50,7 @@ struct RegionBitmap {
         size_t headWordIdx = (start / kMarkedBytesPerBit) / kBitsPerWord;
         size_t headMaskBitStart = (start / kMarkedBytesPerBit) % kBitsPerWord;
         maskInfo.headWordIdx = headWordIdx;
+        maskInfo.startBitMask = static_cast<uint64_t>(1) << headMaskBitStart;
 
         size_t headBitCnt = kBitsPerWord - headMaskBitStart;
         size_t maskBitCnt = byteCnt / kMarkedBytesPerBit;
@@ -69,12 +74,13 @@ struct RegionBitmap {
     bool ApplyBitMaskInfo(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
     {
         uint64_t old = markWords[maskInfo.headWordIdx].load();
-        bool isMarked = ((old & maskInfo.headMaskBits) != 0);
+        // Already = start bit only (same predicate as IsMarked / IsMarkedObject).
+        bool isMarked = ((old & maskInfo.startBitMask) != 0);
         if (isMarked) {
             return isMarked;
         }
         old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits);
-        isMarked = ((old & maskInfo.headMaskBits) != 0);
+        isMarked = ((old & maskInfo.startBitMask) != 0);
         if (isMarked) {
             return isMarked;
         }

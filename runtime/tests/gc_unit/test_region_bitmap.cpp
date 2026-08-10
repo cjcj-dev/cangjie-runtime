@@ -72,6 +72,36 @@ GC_TEST(RegionBitmap, MarkBitsIdempotentAndDisjoint)
     fx.FreePlanted(live);
 }
 
+// o2mark: neighbor bit in the same head word must not make MarkBits return "already"
+// without setting the object start bit (IsMarkedObject CHECK family).
+GC_TEST(RegionBitmap, MarkBitsAlreadyIsStartBitOnly)
+{
+    constexpr size_t kBig = 65536;
+    size_t bytes = RegionBitmap::GetRegionBitmapSize(kBig);
+    void* mem = std::calloc(1, bytes);
+    GC_EXPECT_TRUE(mem != nullptr);
+    auto* bm = new (mem) RegionBitmap(kBig);
+
+    // Neighbor object at offset 8 (bit 1).
+    GC_EXPECT_FALSE(bm->MarkBits(8, 8, kBig));
+    GC_EXPECT_TRUE(bm->IsMarked(8));
+    GC_EXPECT_FALSE(bm->IsMarked(0));
+
+    // Large mark at offset 0 spans bit 0 and bit 1. Old already-test used any head-mask
+    // bit ⇒ returned true without setting bit 0. Start-bit already ⇒ must write bit 0.
+    bool already = bm->MarkBits(0, 16, kBig);
+    GC_EXPECT_FALSE(already);
+    GC_EXPECT_TRUE(bm->IsMarked(0));
+    GC_EXPECT_TRUE(bm->IsMarked(8));
+
+    // True already: start bit set ⇒ second MarkBits is idempotent.
+    GC_EXPECT_TRUE(bm->MarkBits(0, 16, kBig));
+    GC_EXPECT_TRUE(bm->IsMarked(0));
+
+    bm->~RegionBitmap();
+    std::free(bm);
+}
+
 // Offset near region end (65504/65520 family when region is 64KiB): still in bitCover.
 GC_TEST(RegionBitmap, NearEndOffsetsInCover)
 {
