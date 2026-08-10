@@ -42,6 +42,7 @@
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Mutator/MutatorManager.h"
@@ -79,8 +80,7 @@ namespace {
 bool NullslotProbeEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_NULLSLOT");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+        return DiagGate::LegacyOrToken("MRT_GCV2_NULLSLOT", "nullslot");
     }();
     return on;
 }
@@ -3652,8 +3652,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             size_t already = g_installDomainAlready.load(std::memory_order_relaxed);
             size_t tooLate = g_installDomainTooLate.load(std::memory_order_relaxed);
             size_t skip = g_installDomainSkip.load(std::memory_order_relaxed);
+            // grant=0 is healthy when already≫0: Ensure found face already survived.
+            // 0 ≠ failure. tooLate>0 is the bad signal. (fysgrant / iorcover)
             LOG(RTLOG_ERROR,
-                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu",
+                "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu "
+                "note=grant0_means_already_in_domain_not_failure",
                 grant, already, tooLate, skip);
         }
 

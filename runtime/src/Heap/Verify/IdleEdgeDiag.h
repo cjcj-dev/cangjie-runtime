@@ -18,9 +18,16 @@ class BaseObject;
 // only census / FYS would recover — the Idle bare-store window plus other write
 // gaps.
 //
-// Gate: MRT_GCV2_IDLEEDGE=1 (default off). No TLS.
+// Gate (default off; product path early-return before counters):
+//   MRT_GCV2_IDLEEDGE=1  OR  MRT_GCV2_DIAG contains idleedge|all
 // Cost control: MRT_GCV2_IDLEEDGE_EVERY=<N> (1-based invoke skip, default 1)
 // Sample cap:   MRT_GCV2_IDLEEDGE_MAX_SAMPLES=<N> (default 8)
+// Stamp size:   MRT_GCV2_IDLEEDGE_STAMP_BITS=<16..22> (default 18)
+// Self-test:    MRT_GCV2_IDLEEDGE_SELFTEST=1 / MRT_GCV2_DIAG_SELFTEST=1 / DIAG+=selftest
+// No TLS.
+//
+// Counter health expectations are emitted once as [GCV2][diag][LEGEND] and each
+// census as [GCV2][diag][HEALTH]; stamp occupancy >50% shouts INSTRUMENT_SATURATED.
 //
 // When gated off every entry is a no-op (gates-off equivalence).
 
@@ -44,10 +51,15 @@ void CensusPrePinnedStamp(size_t minorRunIndex);
 void DumpProcessTotals(const char* tag);
 
 // fullclear: stamp promote-time target generation for a field slot.
-// Gate: MRT_GCV2_FULLCLEAR_PROBE=1 (default off). Early-return before any counter.
+// Gate: MRT_GCV2_FULLCLEAR_PROBE=1 OR MRT_GCV2_DIAG contains fullclear|all.
+// Early-return before any counter.
 // targetGen: 0=unknown 1=young 2=old 3=null/nonheap.
 // recorded: whether promote path called RememberedSet::Record.
 void NotePromoteTimeTarget(MAddress fieldAddress, uint8_t targetGen, bool recorded);
+
+// Positive-control arm: force stamp stress + synthetic miss classification.
+// Gate: selftest envs (see DiagGate). Safe no-op when off.
+void RunSelfTest();
 
 } // namespace IdleEdgeDiag
 } // namespace MapleRuntime
