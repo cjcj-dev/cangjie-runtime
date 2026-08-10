@@ -28,3 +28,23 @@ void ExplicitRootColourBypass(RootSlot& root, zpointer coloured)
     StorePlain(root, to_zaddress(raw(coloured)));
 }
 #endif
+
+// ── WriteStaticStruct 收口（reldrylinux）────────────────────────────────────
+// 静态/全局批量写的 post-copy fixup 现在经 GCTib::ForEachRootSlot 交出 RootSlot。
+// 以下两种「把带色值写进静态槽」的写法必须【编译失败】。正臂 = 整个 runtime 编得过。
+
+#if defined(MRT_NEGATIVE_STATIC_STRUCT_CAS_COLOURED)
+void WrongStaticStructCas(RootSlot& slot, zpointer coloured)
+{
+    // RootSlot 没有 CompareExchange —— 静态槽不是 HeapSlot，且 CAS 坐在 relroroot 的只读页面上。
+    slot.CompareExchange(coloured, coloured);
+}
+#endif
+
+#if defined(MRT_NEGATIVE_STATIC_STRUCT_STORE_COLOURED)
+void WrongStaticStructStore(RootSlot& slot, zpointer coloured)
+{
+    // StorePlain 只收 zaddress；zpointer 不可转换（本文件顶部的 static_assert 已钉死）。
+    StorePlain(slot, coloured);
+}
+#endif

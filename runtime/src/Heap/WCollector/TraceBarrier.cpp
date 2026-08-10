@@ -192,15 +192,7 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
     std::atomic_thread_fence(std::memory_order_seq_cst);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
-        RefField<> oldField(refField);
-        MAddress oldValue = raw(oldField.GetFieldValue());
-        BaseObject* untagged = ReadReference(nullptr, oldField);
-        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != raw(newField.GetFieldValue())) {
-            refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
-        }
-    });
+    ResolveStaticStructRoots(dst, gctib);
     RecordStaticCrossGenEdges(dst, gctib);
     DLOG(TRACE, "write static struct@[%#zx, %#zx) with [%#zx, %#zx)", dst, dst + dstLen, src, src + srcLen);
 

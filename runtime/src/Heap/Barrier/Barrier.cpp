@@ -125,18 +125,10 @@ void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
-    // R9 bulk：静态槽 barrier 可见；post-copy 补色 = EnumBarrier.cpp:192-200。
+    // R9 bulk：静态槽 barrier 可见；post-copy 解析转发（STACK_ROOTS_STAY_PLAIN：写回 plain）。
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
-        RefField<> oldField(refField);
-        MAddress oldValue = raw(oldField.GetFieldValue());
-        BaseObject* untagged = ReadReference(nullptr, oldField);
-        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != raw(newField.GetFieldValue())) {
-            refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
-        }
-    });
+    ResolveStaticStructRoots(dst, gctib);
 #if defined(CANGJIE_TSAN_SUPPORT)
     size_t copyLen = (dstLen < srcLen ? dstLen : srcLen);
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
@@ -386,6 +378,35 @@ void Barrier::FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t si
             StorePlain(RootSlotAt(dst + offset), from_object(target));
         },
         src, src + size);
+}
+
+// Post-copy fixup for a bulk write into static/global storage.
+//
+// What it must do: the bytes just memcpy'd may name stale (pre-forwarding) objects, so each ref
+// word is resolved through the phase read barrier and the current version is stored back.
+//
+// What it must NOT do: store a *coloured* value. Static words are roots -- StaticRootTable
+// registers them as RootSlot (TracingCollector.cpp:225-243) and WCollector::EnumAndTagRawRoot
+// heals them with StorePlain (WCollector.cpp:962-1001, "the root storage itself is never exposed
+// as a HeapSlot"). Colouring here is overwritten plain by the next root enumeration, and CAS on a
+// static slot sits on the relroroot hazard (B-4 ⑤: those pages can be RELRO r--p).
+//
+// The read barrier may self-heal the slot it is handed; it is handed a *local copy* so the heal
+// cannot leak colour back into the static word.
+void Barrier::ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const
+{
+    gctib.ForEachRootSlot(dst, [this](RootSlot& slot) {
+        zaddress_unsafe observed = slot.LoadPlain();
+        if (is_null(observed)) {
+            return;
+        }
+        // Legacy coloured roots still exist at external ABI edges; decode, never store back.
+        HeapSlot<> observedBits(to_zpointer(raw(observed)));
+        BaseObject* resolved = ReadReference(nullptr, observedBits);
+        if (raw(observed) != reinterpret_cast<MAddress>(resolved)) {
+            StorePlain(slot, from_object(resolved));
+        }
+    });
 }
 
 void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
