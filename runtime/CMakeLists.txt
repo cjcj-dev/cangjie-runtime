@@ -823,6 +823,107 @@ if (IOS_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MATCHES 1 OR IOS_SIMULATOR_FLAG MAT
     endif()
 endif()
 
+# ── slot-type discipline gate ────────────────────────────────────────────────
+# 22615583 added runtime/tests/slot_type_split_compile_probe.cpp and nothing ever
+# compiled it; the same is true of all seven runtime/tests/run_*.sh probes (grep:
+# 0 references outside themselves). A guard that is present but never runs looks
+# exactly like a guard that passes, so this wires the probe into the build that
+# everyone already does instead of adding a parallel gate nobody invokes.
+#
+# Three arms, because a non-zero exit does NOT distinguish "the type stopped it"
+# from "the include path was wrong" -- both fail. Every negative therefore also
+# has to name the symbol the discipline is supposed to hide.
+#
+# Cost: one try_compile per arm at configure time only.
+set(SLOT_PROBE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/slot_type_split_compile_probe.cpp)
+if (EXISTS ${SLOT_PROBE_SRC})
+    # Reuse the build's own directory-scope include dirs so a moved header does not
+    # need a second edit here. src/ is added explicitly because the runtime adds it
+    # per-target, not at directory scope -- the control arm caught exactly this
+    # omission the first time this gate ran.
+    get_property(SLOT_PROBE_INCS DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
+    list(APPEND SLOT_PROBE_INCS ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set(SLOT_PROBE_INC_ARG "${SLOT_PROBE_INCS}")
+
+    # The probe has no main(); build a static library so try_compile never links.
+    # Otherwise every arm "fails" at the link step and the negatives look like they
+    # passed for the wrong reason -- the same trap the control arm exists to catch.
+    set(SLOT_PROBE_SAVED_TARGET_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+    # arm 1: control -- must compile. This is the arm that catches a broken probe
+    # setup; without it a missing header reads as "all negatives passed".
+    try_compile(SLOT_PROBE_CONTROL_OK ${CMAKE_CURRENT_BINARY_DIR}/slotprobe/control
+        SOURCES ${SLOT_PROBE_SRC}
+        CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${SLOT_PROBE_INC_ARG}"
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OUTPUT_VARIABLE SLOT_PROBE_CONTROL_OUT)
+    if (NOT SLOT_PROBE_CONTROL_OK)
+        message(FATAL_ERROR
+            "SLOT_TYPE_PROBE control arm FAILED to compile -- the probe apparatus is broken, "
+            "so the negative arms below prove nothing. Output:\n${SLOT_PROBE_CONTROL_OUT}")
+    endif()
+
+    # arm 2: witness -- a documented, deliberate bypass that must keep compiling.
+    try_compile(SLOT_PROBE_WITNESS_OK ${CMAKE_CURRENT_BINARY_DIR}/slotprobe/witness
+        SOURCES ${SLOT_PROBE_SRC}
+        CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${SLOT_PROBE_INC_ARG}"
+        COMPILE_DEFINITIONS -DMRT_EXPLICIT_ROOT_COLOUR_BYPASS
+        CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+        OUTPUT_VARIABLE SLOT_PROBE_WITNESS_OUT)
+    if (NOT SLOT_PROBE_WITNESS_OK)
+        message(FATAL_ERROR
+            "SLOT_TYPE_PROBE witness arm (MRT_EXPLICIT_ROOT_COLOUR_BYPASS) stopped compiling. "
+            "That bypass is documented as reachable; if it is now blocked, update the probe "
+            "rather than deleting this check. Output:\n${SLOT_PROBE_WITNESS_OUT}")
+    endif()
+
+    # arm 3: negatives -- "<macro>|<token the diagnostic must contain>".
+    set(SLOT_PROBE_NEGATIVES
+        "MRT_NEGATIVE_ROOT_COLOURED_WRITE|StorePlain"
+        "MRT_NEGATIVE_STATIC_STRUCT_CAS_COLOURED|CompareExchange"
+        "MRT_NEGATIVE_HEAP_CAS_PLAIN_DESIRED|HeapSlot"
+        "MRT_NEGATIVE_DERIVED_RAW_STORE|StoreDerived"
+        "MRT_NEGATIVE_READONLY_ROOT_WRITE|StorePlain")
+    set(SLOT_PROBE_NEG_COUNT 0)
+    foreach(entry IN LISTS SLOT_PROBE_NEGATIVES)
+        string(REPLACE "|" ";" parts "${entry}")
+        list(GET parts 0 macro)
+        list(GET parts 1 token)
+        try_compile(one_ok ${CMAKE_CURRENT_BINARY_DIR}/slotprobe/${macro}
+            SOURCES ${SLOT_PROBE_SRC}
+            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${SLOT_PROBE_INC_ARG}"
+            COMPILE_DEFINITIONS -D${macro}
+            CXX_STANDARD 17 CXX_STANDARD_REQUIRED ON
+            OUTPUT_VARIABLE one_out)
+        if (one_ok)
+            message(FATAL_ERROR
+                "SLOT_TYPE_PROBE ${macro}: this wrong spelling COMPILED. The slot-type "
+                "discipline it guards has been weakened -- see ops/design/SLOT_TYPE_SPLIT.md.")
+        endif()
+        string(FIND "${one_out}" "${token}" tok_at)
+        if (tok_at EQUAL -1)
+            message(FATAL_ERROR
+                "SLOT_TYPE_PROBE ${macro}: failed to compile, but the diagnostic never mentions "
+                "'${token}' -- so it probably failed for an unrelated reason (a missing header "
+                "gives a non-zero exit too). Output:\n${one_out}")
+        endif()
+        math(EXPR SLOT_PROBE_NEG_COUNT "${SLOT_PROBE_NEG_COUNT}+1")
+    endforeach()
+
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${SLOT_PROBE_SAVED_TARGET_TYPE}")
+
+    # Proof-of-life: without a line naming the counts, a gate that silently stops
+    # running is indistinguishable from a gate that passes.
+    message(STATUS
+        "SLOT_TYPE_PROBE=PASS control=1 witness=1 negatives=${SLOT_PROBE_NEG_COUNT} "
+        "(each rejected AND diagnosed on the expected symbol)")
+else()
+    message(FATAL_ERROR
+        "SLOT_TYPE_PROBE: ${SLOT_PROBE_SRC} is missing. Deleting the probe silently retires the "
+        "three-slot discipline; remove this block deliberately if that is the intent.")
+endif()
+
 endif() # BUILD_RUNTIME
 
 # GC unit tests — independent of BUILD_RUNTIME product link; default OFF.
