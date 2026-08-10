@@ -835,6 +835,65 @@ endif()
 # has to name the symbol the discipline is supposed to hide.
 #
 # Cost: one try_compile per arm at configure time only.
+# ── runtime/tests accounting ─────────────────────────────────────────────────
+# Every file under tests/ must appear in tests/PROBES.manifest with a status.
+# This does not force a probe to run -- it forces someone to say, on one line,
+# that it does not. Adding an unrun probe stays possible; adding one *silently*
+# does not, which is how this directory reached 21 items with 1 of them running.
+#
+# Deliberately a pure name-vs-manifest diff: it can only fire when a file is added
+# or removed without touching the manifest, so it cannot become a noise source.
+set(TESTS_MANIFEST ${CMAKE_CURRENT_SOURCE_DIR}/tests/PROBES.manifest)
+if (EXISTS ${TESTS_MANIFEST})
+    file(STRINGS ${TESTS_MANIFEST} MANIFEST_LINES REGEX "^[A-Za-z]")
+    set(MANIFEST_FILES "")
+    set(N_CONFIGURE 0)
+    set(N_MANUAL 0)
+    set(N_ORPHAN 0)
+    foreach(line IN LISTS MANIFEST_LINES)
+        string(REGEX MATCH "^([^ \t]+)[ \t]+([^ \t]+)" _m "${line}")
+        list(APPEND MANIFEST_FILES "${CMAKE_MATCH_1}")
+        if (CMAKE_MATCH_2 STREQUAL "configure")
+            math(EXPR N_CONFIGURE "${N_CONFIGURE}+1")
+        elseif (CMAKE_MATCH_2 STREQUAL "manual")
+            math(EXPR N_MANUAL "${N_MANUAL}+1")
+        elseif (CMAKE_MATCH_2 STREQUAL "orphan")
+            math(EXPR N_ORPHAN "${N_ORPHAN}+1")
+        else()
+            message(FATAL_ERROR
+                "PROBES.manifest: '${CMAKE_MATCH_1}' has unknown status '${CMAKE_MATCH_2}' "
+                "(expected configure|manual|orphan).")
+        endif()
+        if (NOT EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/${CMAKE_MATCH_1})
+            message(FATAL_ERROR
+                "PROBES.manifest lists '${CMAKE_MATCH_1}', which no longer exists. Remove the "
+                "line deliberately -- a stale manifest hides the next unrun probe.")
+        endif()
+    endforeach()
+
+    file(GLOB TESTS_PRESENT RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/tests
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cj
+         ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.sh)
+    foreach(f IN LISTS TESTS_PRESENT)
+        list(FIND MANIFEST_FILES "${f}" idx)
+        if (idx EQUAL -1)
+            message(FATAL_ERROR
+                "runtime/tests/${f} is not in tests/PROBES.manifest. Add a line saying whether "
+                "anything runs it (configure|manual|orphan) and what it needs. A probe nobody "
+                "runs is indistinguishable from a probe that passes.")
+        endif()
+    endforeach()
+
+    # Print the debt, not just PASS: orphan>0 is a standing bill, and a number that
+    # nobody ever sees is a number nobody ever pays.
+    message(STATUS
+        "TESTS_MANIFEST=PASS configure=${N_CONFIGURE} manual=${N_MANUAL} orphan=${N_ORPHAN} "
+        "(manual/orphan do NOT run in this build)")
+else()
+    message(FATAL_ERROR "tests/PROBES.manifest is missing; runtime/tests would go unaccounted again.")
+endif()
+
 set(SLOT_PROBE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/slot_type_split_compile_probe.cpp)
 if (EXISTS ${SLOT_PROBE_SRC})
     # Reuse the build's own directory-scope include dirs so a moved header does not

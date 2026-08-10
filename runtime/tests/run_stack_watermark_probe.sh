@@ -7,7 +7,10 @@ set -euo pipefail
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 repo=$(git -C "$script_dir" rev-parse --show-toplevel)
-cpuset=${GCV2_CPUSET:-0-63}
+cpuset=${GCV2_CPUSET:-}
+# fail-closed: a hard-coded default used to taskset onto cores another lane had
+# claimed (0-63 / 96-127 / 112-127 are all inside the reservable range).
+[[ -n "$cpuset" ]] || { echo "set GCV2_CPUSET to cores you have claimed" >&2; exit 2; }
 probe_tmp=$(mktemp -d /tmp/gcv2-stackmark-probe.XXXXXX)
 
 cleanup()

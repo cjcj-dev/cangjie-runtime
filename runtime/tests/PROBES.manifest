@@ -1,0 +1,43 @@
+# runtime/tests inventory.
+#
+# Why this file exists: as of 8f13560c this directory held 21 items and exactly one
+# of them ran. Seven probes had runner scripts that nothing invoked, five files had
+# no runner at all, and tests/gc_unit is behind a default-OFF option. A probe that is
+# present but never runs looks exactly like a probe that passes.
+#
+# runtime/CMakeLists.txt fails the build if a file here is missing from this list, or
+# if a line here names a file that is gone. Adding a probe that nothing runs is still
+# allowed -- it just has to be said out loud, on one line, with a reason.
+#
+# status:
+#   configure  run by runtime/CMakeLists.txt on every configure (no extra step)
+#   manual     runnable, but needs something a configure cannot have: a built runtime
+#              SO, an explicit cpuset, or fault injection. Invoked by a gate, not by
+#              the build. MUST name what it needs.
+#   orphan     no runner at all. Debt: either give it one or delete it.
+#
+# <file>                                  <status>   <what it needs / why it is here>
+
+slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
+
+run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
+run_stack_exposure_probe.sh               manual     built runtime SO + cpuset; 6 cases
+run_stack_grow_probe.sh                   manual     built runtime SO + cpuset; 6 cases
+run_object_size_guard_probe.sh            manual     built runtime SO + cpuset + fault injection
+run_generational_barrier_nvi_probe.sh     manual     built runtime SO + cpuset; runtime-side six-phase NVI dispatch
+run_varray_write_barrier_probe.sh         manual     built runtime SO + cpuset; positive control for G-C1/C2/C3
+run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
+
+stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
+stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
+stack_grow_harness.cpp                    manual     harness for run_stack_grow_probe.sh
+object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
+generational_barrier_nvi_harness.cpp      manual     harness for run_generational_barrier_nvi_probe.sh
+varray_write_barrier_harness.cpp          manual     harness for run_varray_write_barrier_probe.sh
+mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
+
+c3epoch_state_machine_probe.cpp           orphan     no runner; C3 epoch/store-good state machine (463ac52c)
+epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake
+epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress
+remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::EraseRange
+varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefField false-negative unit
