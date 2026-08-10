@@ -1092,10 +1092,11 @@ U32 TypeInfoManager::GetTypeSize(TypeInfo* ti)
 
 uintptr_t TypeInfoManager::Allocate(size_t size)
 {
-// TypeInfo related content needs four-byte aligned to prevent fields from being overwritten incorrectly.
-#ifdef __arm__
-    size = MRT_ALIGN(size, sizeof(uint32_t));
-#endif
+    // ATTR_PACKED(4) documents 4-byte layout; PlausibleManagedObjectGate / StateWord
+    // require tip & (ADDRESS_ALIGN_MASK=7) == 0 (8-byte). Align arena steps to 8 on all
+    // platforms so tip addresses stay gate-plausible (tipwho: mis8≈908/920 without this).
+    // 8 also satisfies 4. sizeof(TypeInfo)=96 is already 8-aligned; name/args pads ≤7 B each.
+    size = MRT_ALIGN(size, 8);
     uintptr_t addr = position.fetch_add(size);
     if (addr + size > endAddress) {
         NewMMap(mapMemory);
