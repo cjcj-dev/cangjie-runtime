@@ -45,6 +45,7 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -4715,6 +4716,7 @@ void WCollector::DoYoungGarbageCollection()
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
     IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
     EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
+    FysDesignDiag::OnMinorBegin(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -4835,6 +4837,17 @@ void WCollector::DoYoungGarbageCollection()
     }
     g_markInternalCost.Report("mark_closure");
     g_markInternalCost.Reset();
+    // fysdesign: O→Y edges on FYS-claimed holders vs remset membership (default off).
+    if (FysDesignDiag::Enabled()) {
+        static thread_local WCollector* tlsCollector = nullptr;
+        tlsCollector = this;
+        auto resolvePtr = [](RefField<>& field) -> BaseObject* {
+            return tlsCollector->ResolveMinorReference(field);
+        };
+        FysDesignDiag::Census(reachableVec, rememberedSlots, fullYoungScan, resolvePtr);
+        FysDesignDiag::Report("post_root_mark");
+        tlsCollector = nullptr;
+    }
     MinorSlotSet liveRememberedSlots;
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
