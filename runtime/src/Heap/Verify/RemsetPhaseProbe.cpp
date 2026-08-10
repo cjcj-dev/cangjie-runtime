@@ -26,7 +26,7 @@ constexpr size_t kReasonBuckets = 8;
 struct SlotStamp {
     uint8_t phase = 0;
     uint8_t barClass = 0;
-    uint8_t reason = REASON_UNKNOWN;
+    uint8_t reason = static_cast<uint8_t>(SkipReason::Unknown);
     uint8_t recorded = 0;
 };
 
@@ -71,7 +71,7 @@ void IncBar(std::array<std::atomic<uint64_t>, kBarBuckets>& arr, size_t idx)
 void IncReason(std::array<std::atomic<uint64_t>, kReasonBuckets>& arr, size_t idx)
 {
     if (idx >= kReasonBuckets) {
-        idx = REASON_UNKNOWN;
+        idx = static_cast<size_t>(SkipReason::Unknown);
     }
     arr[idx].fetch_add(1, std::memory_order_relaxed);
 }
@@ -170,19 +170,19 @@ const char* BarrierClassName(BarrierClass bc)
 const char* SkipReasonName(SkipReason r)
 {
     switch (r) {
-        case REASON_RECORDED:
+        case SkipReason::Recorded:
             return "recorded";
-        case REASON_NO_YOUNG:
+        case SkipReason::NoYoung:
             return "no_young";
-        case REASON_REF_NULL_OR_NONHEAP:
+        case SkipReason::RefNullOrNonheap:
             return "ref_null_or_nonheap";
-        case REASON_REF_NOT_YOUNG:
+        case SkipReason::RefNotYoung:
             return "ref_not_young";
-        case REASON_HOLDER_NULL_OR_NONHEAP:
+        case SkipReason::HolderNullOrNonheap:
             return "holder_null_or_nonheap";
-        case REASON_HOLDER_YOUNG:
+        case SkipReason::HolderYoung:
             return "holder_young";
-        case REASON_NO_STAMP:
+        case SkipReason::NoStamp:
             return "no_barrier_record";
         default:
             return "unknown";
@@ -232,7 +232,7 @@ void NoteMissing(MAddress fieldAddress)
     }
     if (!found) {
         gMissingNoStamp.fetch_add(1, std::memory_order_relaxed);
-        IncReason(gMissingByReason, REASON_NO_STAMP);
+        IncReason(gMissingByReason, static_cast<size_t>(SkipReason::NoStamp));
         // Count under UNDEF phase / Undef bar for distribution tables.
         Inc(gMissingByPhase, 0);
         IncBar(gMissingByBar, BAR_UNDEF);

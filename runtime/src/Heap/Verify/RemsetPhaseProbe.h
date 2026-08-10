@@ -10,10 +10,6 @@
 #include "Common/TypeDef.h"
 #include "Heap/Collector/Collector.h"
 
-#ifdef REASON_UNKNOWN
-#undef REASON_UNKNOWN
-#endif
-
 namespace MapleRuntime {
 namespace RemsetPhaseProbe {
 
@@ -21,16 +17,25 @@ namespace RemsetPhaseProbe {
 // MRT_GCPHASE_PROBE=1 remains accepted for compatibility with earlier evidence scripts.
 
 // skipReason for NoteWrite / MISSING attribution (observation-only names).
-enum SkipReason : uint8_t {
-    REASON_RECORDED = 0,
-    REASON_NO_YOUNG = 1,
-    REASON_REF_NULL_OR_NONHEAP = 2,
-    REASON_REF_NOT_YOUNG = 3,
-    REASON_HOLDER_NULL_OR_NONHEAP = 4,
-    REASON_HOLDER_YOUNG = 5,
-    REASON_UNKNOWN = 6,
-    REASON_NO_STAMP = 7, // MISSING slot never seen by RecordCrossGenEdge
+enum class SkipReason : uint8_t {
+    Recorded = 0,
+    NoYoung = 1,
+    RefNullOrNonheap = 2,
+    RefNotYoung = 3,
+    HolderNullOrNonheap = 4,
+    HolderYoung = 5,
+    Unknown = 6,
+    NoStamp = 7, // MISSING slot never seen by RecordCrossGenEdge
 };
+
+// Compatibility names used by the write barrier; the Windows-colliding
+// REASON_UNKNOWN name is intentionally not exposed.
+constexpr SkipReason REASON_RECORDED = SkipReason::Recorded;
+constexpr SkipReason REASON_NO_YOUNG = SkipReason::NoYoung;
+constexpr SkipReason REASON_REF_NULL_OR_NONHEAP = SkipReason::RefNullOrNonheap;
+constexpr SkipReason REASON_REF_NOT_YOUNG = SkipReason::RefNotYoung;
+constexpr SkipReason REASON_HOLDER_NULL_OR_NONHEAP = SkipReason::HolderNullOrNonheap;
+constexpr SkipReason REASON_HOLDER_YOUNG = SkipReason::HolderYoung;
 
 // Barrier class derived from InstallBarrier phase mapping (not a separate type).
 enum BarrierClass : uint8_t {
