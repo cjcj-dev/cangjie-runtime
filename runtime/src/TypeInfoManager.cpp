@@ -572,6 +572,28 @@ void TypeInfoManager::CreatedTypeInfoImpl(GenericTiDesc* &tiDesc, TypeTemplate* 
 {
     CString typeInfoName = tt->GetTypeInfoName(argSize, args);
     TypeInfo* newTypeInfo = reinterpret_cast<TypeInfo*>(Allocate(sizeof(TypeInfo)));
+    // tipwho ti_arena probe (read-only counters): mis8 must be 0 after 8-align Allocate.
+    {
+        static std::atomic<size_t> g_tiArenaN{ 0 };
+        static std::atomic<size_t> g_tiArenaMis8{ 0 };
+        static std::atomic<size_t> g_tiArenaMis4{ 0 };
+        uintptr_t a = reinterpret_cast<uintptr_t>(newTypeInfo);
+        size_t n = g_tiArenaN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((a & 7U) != 0) {
+            g_tiArenaMis8.fetch_add(1, std::memory_order_relaxed);
+        }
+        if ((a & 3U) != 0) {
+            g_tiArenaMis4.fetch_add(1, std::memory_order_relaxed);
+        }
+        bool milestone = (n & (n - 1)) == 0;
+        if (n <= 8 || milestone || (a & 7U) != 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipwho] ti_arena n=%zu ti=%p low3=%u mis8=%zu mis4=%zu",
+                n, newTypeInfo, static_cast<unsigned>(a & 7U),
+                g_tiArenaMis8.load(std::memory_order_relaxed),
+                g_tiArenaMis4.load(std::memory_order_relaxed));
+        }
+    }
     size_t nameSize = typeInfoName.Length() + 1;
     uintptr_t nameAddr = Allocate(nameSize);
     MapleRuntime::MemoryCopy(nameAddr, nameSize, reinterpret_cast<uintptr_t>(typeInfoName.Str()), nameSize);
