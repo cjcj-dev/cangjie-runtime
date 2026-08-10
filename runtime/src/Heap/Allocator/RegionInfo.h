@@ -31,6 +31,7 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -999,17 +1000,33 @@ public:
             }
             return OptionalRouteTicket();
         }
-        // tipnull start-only: if previous 8B slot is survived and its object size covers us, we are interior.
-        if (offset >= kMarkedBytesPerBit &&
-            ghostLiveInfo->IsSurvivedObject(offset - kMarkedBytesPerBit)) {
-            BaseObject* prev =
-                from_region_addr(GetRegionStart() + (offset - kMarkedBytesPerBit));
-            // Only size-walk when header is plausible (avoid SEGV on garbage prev).
-            if (prev != nullptr && prev->IsValidObject()) {
-                size_t prevSz = prev->GetSize();
-                if (prevSz > kMarkedBytesPerBit) {
-                    return OptionalRouteTicket();
+        // tipnull: multi-bit MarkBits admits interiors. Confirm offset is a size-walk start
+        // under the ghost face (same walk VisitLive uses). No GetSize on unvalidated prev.
+        {
+            uintptr_t walk = GetRegionStart();
+            uintptr_t alloc = GetRegionAllocPtr();
+            bool isStart = false;
+            while (walk < alloc) {
+                size_t off = walk - GetRegionStart();
+                if (off == offset) {
+                    isStart = true;
+                    break;
                 }
+                if (off > offset) {
+                    break;
+                }
+                BaseObject* o = from_region_addr(walk);
+                if (!Collector::PlausibleManagedObjectGate("AdmitForRoute-walk", o)) {
+                    break;
+                }
+                size_t sz = o->GetSize();
+                if (sz == 0) {
+                    break;
+                }
+                walk += sz;
+            }
+            if (!isStart) {
+                return OptionalRouteTicket();
             }
         }
         return OptionalRouteTicket(fromObj);
