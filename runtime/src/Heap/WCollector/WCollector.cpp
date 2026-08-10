@@ -6045,13 +6045,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    // tipnull densify: route domain = size-walk ∩ prior survivors. Admit miss here is
-    // out-of-domain (orphan mark dropped before geometry), not invariant break — soft-null
-    // like gate reject. CHECK was holesrc densify failure mode under CI.
-    if (toObj == nullptr) {
-        obj->UnlockObject(ObjectState::NORMAL);
-        return nullptr;
-    }
+    CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);

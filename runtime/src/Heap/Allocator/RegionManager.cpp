@@ -489,8 +489,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     }
     // tipnull: AdmitForRoute/GetRoute use liveInfo0 after PrepareForwardableRegion.
     // Evacuation must walk the same face — current liveInfo can diverge and skip
-    // survivors that RouteObject still admits, then ForwardRegion publishes FORWARDED
-    // with geometric null-tip (region_FORWARDED_tip_null, routeState=5).
+    // survivors that RouteObject still admits → FORWARDED with geometric null tip.
     LiveInfo* ghostFace = metadata.liveInfo0;
     auto survivedAt = [this, ghostFace](size_t offset) -> bool {
         if (ghostFace != nullptr) {
@@ -1676,78 +1675,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-    // tipnull densify (clear-first): orphan marks off size-walk inflate geometry and
-    // Admit null-tip slots. Clear ghost bitmaps, then MarkBits only size-walk starts that
-    // were survived on the old face and still pass the object gate. Unwalkable tail is
-    // left unmarked (Admit miss) so FORWARDED cannot publish holes. Not holesrc densify
-    // (no inventing new survivors).
-    if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
-        !region->IsKnownEmpty()) {
-        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-        RegionBitmap* mb = ghost->markBitmap;
-        RegionBitmap* rb = ghost->resurrectBitmap;
-        constexpr size_t kMaxStarts = 4096;
-        size_t startOff[kMaxStarts];
-        size_t startSz[kMaxStarts];
-        size_t nStarts = 0;
-        size_t liveBytes = 0;
-        uintptr_t position = region->GetRegionStart();
-        uintptr_t allocPtr = region->GetRegionAllocPtr();
-        // Snapshot prior face before clear.
-        while (position < allocPtr && nStarts < kMaxStarts) {
-            BaseObject* obj = from_region_addr(position);
-            if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
-                break; // tail left unmarked after clear
-            }
-            size_t allocSize = RegionSpace::GetAllocSize(*obj);
-            if (allocSize == 0) {
-                break;
-            }
-            size_t offset = position - region->GetRegionStart();
-            if (ghost->IsSurvivedObject(offset)) {
-                startOff[nStarts] = offset;
-                startSz[nStarts] = allocSize;
-                ++nStarts;
-                liveBytes += allocSize;
-            }
-            position += allocSize;
-        }
-        auto clearAll = [](RegionBitmap* bm) {
-            if (bm == nullptr) {
-                return;
-            }
-            size_t wc = bm->wordCnt.load(std::memory_order_acquire);
-            for (size_t i = 0; i < wc; ++i) {
-                bm->markWords[i].store(0, std::memory_order_relaxed);
-            }
-            for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
-                bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
-            }
-            bm->liveBytes.store(0, std::memory_order_relaxed);
-        };
-        clearAll(mb);
-        clearAll(rb);
-        size_t regionSize = region->GetGhostRegionSize();
-        if (regionSize == 0) {
-            regionSize = region->GetRegionSize();
-        }
-        for (size_t i = 0; i < nStarts; ++i) {
-            if (mb != nullptr) {
-                (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
-            }
-        }
-        region->ResetLiveByteCount();
-        if (liveBytes > 0) {
-            region->AddLiveByteCount(liveBytes);
-        }
-        static std::atomic<size_t> densifyN{ 0 };
-        size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (dn <= 16) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu regionSize=%zu n=%zu",
-                region, nStarts, liveBytes, regionSize, dn);
-        }
-    }
     size_t fromBytes = region->GetLiveByteCount();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
@@ -2058,45 +1985,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         });
 
     CHECK(forwarded);
-    // tipnull: second pass — any liveInfo0 size-walk start still without object FORWARDED
-    // gets another ForwardObject before region FORWARDED publish. Domain alignment
-    // (VisitLive uses liveInfo0 above) is the primary fix; this closes soft-miss races.
-    {
-        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-        if (ghost != nullptr && region->IsSmallRegion()) {
-            uintptr_t position = region->GetRegionStart();
-            size_t offset = 0;
-            uintptr_t allocPtr = region->GetRegionAllocPtr();
-            while (position < allocPtr) {
-                BaseObject* obj = from_region_addr(position);
-                if (!Collector::PlausibleManagedObjectGate("ForwardRegion-2nd", obj)) {
-                    // Densify should have unmarked unwalkable tails; if not, do not CHECK-abort
-                    // under CI — leave rest; Admit may still hit. Prefer fail closed via
-                    // incomplete path below rather than silent FORWARDED.
-                    break;
-                }
-                size_t allocSize = RegionSpace::GetAllocSize(*obj);
-                if (ghost->IsSurvivedObject(offset) && !obj->IsForwarded()) {
-                    BaseObject* toObj = collector.ForwardObject(obj);
-                    if (toObj == nullptr || !obj->IsForwarded()) {
-                        // Cannot copy: drop from route domain so Admit misses after FORWARDED.
-                        // Clearing start bit only (MarkBits range is multi-bit; re-clear via
-                        // zeroing start mask is incomplete for multi-word objects — densify
-                        // already limited domain to walk starts; miss here is rare).
-                        static std::atomic<size_t> dropN{ 0 };
-                        size_t n = dropN.fetch_add(1, std::memory_order_relaxed) + 1;
-                        if (n <= 16) {
-                            LOG(RTLOG_ERROR,
-                                "[GCV2][tipnull] drop-uncopied region=%p obj=%p offset=%zu n=%zu",
-                                region, obj, offset, n);
-                        }
-                    }
-                }
-                position += allocSize;
-                offset += allocSize;
-            }
-        }
-    }
     {
         static const bool probe = []() {
             const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
