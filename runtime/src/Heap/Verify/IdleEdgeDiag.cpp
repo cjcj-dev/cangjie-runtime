@@ -255,15 +255,16 @@ void EmitInstrumentHealth(const char* where, size_t remsetSize, size_t oldToYoun
     uint64_t wraps = g_stampWraps.load(std::memory_order_relaxed);
     uint64_t notes = g_stampNotes.load(std::memory_order_relaxed);
     bool saturated = (occPct > 50.0) || (probeFail > 0 && notes > 0 && probeFail * 100 > notes);
-    // Always same volume as progress when instrument is on; saturated is LOUDER.
-    VLOG(REPORT,
-         "[GCV2][diag][HEALTH] where=%s stampCap=%zu stampOcc=%zu stampOccPct=%.1f "
-         "stampNotes=%llu stampWraps=%llu stampProbeFail=%llu remsetSize=%zu "
-         "oldToYoungEdges=%zu trustworthy=%s",
-         where == nullptr ? "?" : where, g_stampCap, occ, occPct,
-         static_cast<unsigned long long>(notes), static_cast<unsigned long long>(wraps),
-         static_cast<unsigned long long>(probeFail), remsetSize, oldToYoungEdges,
-         saturated ? "NO" : "YES");
+    // HEALTH is RTLOG_ERROR so it matches progress volume (VLOG(REPORT) is file-gated
+    // and silent under DEFAULT_MRT_REPORT=0 — that hid table saturation for a whole night).
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][HEALTH] where=%s stampCap=%zu stampOcc=%zu stampOccPct=%.1f "
+        "stampNotes=%llu stampWraps=%llu stampProbeFail=%llu remsetSize=%zu "
+        "oldToYoungEdges=%zu trustworthy=%s",
+        where == nullptr ? "?" : where, g_stampCap, occ, occPct,
+        static_cast<unsigned long long>(notes), static_cast<unsigned long long>(wraps),
+        static_cast<unsigned long long>(probeFail), remsetSize, oldToYoungEdges,
+        saturated ? "NO" : "YES");
     if (saturated) {
         LOG(RTLOG_ERROR,
             "[GCV2][diag][INSTRUMENT_SATURATED] where=%s stampOccPct=%.1f (threshold 50) "
