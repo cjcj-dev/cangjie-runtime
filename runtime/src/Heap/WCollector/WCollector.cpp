@@ -5957,13 +5957,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
-    // GetSize/CopyObject them. tipnull: return nullptr (not obj) so ForwardRegion's
-    // VisitLive cannot treat an uncopied ghost survivor as success and still publish
-    // FORWARDED — that was the permanent-hole producer (region_FORWARDED_tip_null).
+    // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
+    // tipnull: VisitLiveObjects now returns false on gate reject when ghost survivors
+    // remain, so this soft-return cannot alone publish FORWARDED with holes.
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
-        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
-            return nullptr;
-        }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
