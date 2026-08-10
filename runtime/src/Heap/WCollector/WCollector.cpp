@@ -25,6 +25,7 @@
 #include <unordered_set>
 #include <vector>
 #include <unistd.h>
+#include <dlfcn.h>
 
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "Base/SysCall.h"
@@ -98,6 +99,230 @@ std::atomic<size_t> g_fysgrantOldInVec{ 0 };       // non-young holders in vec (
 std::atomic<size_t> g_fysgrantMinorN{ 0 };
 } // namespace
 
+// ── nullholder probe (⛔ do not merge) — file-scope under MapleRuntime ──
+namespace nullholder_probe {
+constexpr size_t kCap = 4096;
+struct SlotRec {
+    std::atomic<uintptr_t> field{ 0 };
+    std::atomic<uintptr_t> holder{ 0 };
+    std::atomic<uint32_t> seq{ 0 };
+    char path[24] {};
+};
+alignas(64) SlotRec g_ring[kCap];
+std::atomic<uint32_t> g_seq{ 0 };
+std::atomic<size_t> g_notes{ 0 };
+std::atomic<size_t> g_hits{ 0 };
+std::atomic<size_t> g_misses{ 0 };
+std::atomic<size_t> g_nullEntries{ 0 };
+std::atomic<size_t> g_derivedNotes{ 0 };
+// TLS: last ReadRefField that returned null on this thread (H1 chain step 2→3).
+struct LastNullRet {
+    uintptr_t field = 0;
+    uintptr_t holder = 0;
+    uint32_t softHit = 0; // 1 if that field was in soft-null ring
+    char softPath[24] {};
+};
+thread_local LastNullRet t_lastNull;
+
+bool Enabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_NULLHOLDER");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+void Note(const char* path, void* field, void* holder)
+{
+    if (!Enabled() || field == nullptr) {
+        return;
+    }
+    uint32_t s = g_seq.fetch_add(1, std::memory_order_relaxed) + 1;
+    size_t i = static_cast<size_t>(s - 1) % kCap;
+    SlotRec& r = g_ring[i];
+    r.field.store(reinterpret_cast<uintptr_t>(field), std::memory_order_relaxed);
+    r.holder.store(reinterpret_cast<uintptr_t>(holder), std::memory_order_relaxed);
+    r.seq.store(s, std::memory_order_relaxed);
+    // path is a static literal ("f3_fix_oldtag" etc.); copy bounded.
+    if (path != nullptr) {
+        size_t n = 0;
+        while (n + 1 < sizeof(r.path) && path[n] != '\0') {
+            r.path[n] = path[n];
+            ++n;
+        }
+        r.path[n] = '\0';
+    } else {
+        r.path[0] = '\0';
+    }
+    g_notes.fetch_add(1, std::memory_order_relaxed);
+}
+
+// Exact field-pointer hit. Returns true if found; fills pathOut/ageOut.
+bool Hit(void* field, char* pathOut, size_t pathCap, size_t* ageOut)
+{
+    if (!Enabled() || field == nullptr) {
+        return false;
+    }
+    const uintptr_t key = reinterpret_cast<uintptr_t>(field);
+    const uint32_t cur = g_seq.load(std::memory_order_relaxed);
+    bool found = false;
+    uint32_t bestSeq = 0;
+    const char* bestPath = "";
+    for (size_t i = 0; i < kCap; ++i) {
+        const SlotRec& r = g_ring[i];
+        if (r.field.load(std::memory_order_relaxed) != key) {
+            continue;
+        }
+        uint32_t s = r.seq.load(std::memory_order_relaxed);
+        if (s == 0) {
+            continue;
+        }
+        if (!found || s > bestSeq) {
+            found = true;
+            bestSeq = s;
+            bestPath = r.path;
+        }
+    }
+    if (!found) {
+        g_misses.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+    g_hits.fetch_add(1, std::memory_order_relaxed);
+    if (ageOut != nullptr) {
+        *ageOut = (cur >= bestSeq) ? static_cast<size_t>(cur - bestSeq) : 0;
+    }
+    if (pathOut != nullptr && pathCap > 0) {
+        size_t n = 0;
+        while (n + 1 < pathCap && bestPath[n] != '\0') {
+            pathOut[n] = bestPath[n];
+            ++n;
+        }
+        pathOut[n] = '\0';
+    }
+    return true;
+}
+
+// Record a null *return* from ReadRefField (value side).
+void NoteNullReturn(void* field, void* holder)
+{
+    if (!Enabled()) {
+        return;
+    }
+    char pathBuf[24] = "none";
+    size_t age = 0;
+    const bool soft = Hit(field, pathBuf, sizeof(pathBuf), &age);
+    t_lastNull.field = reinterpret_cast<uintptr_t>(field);
+    t_lastNull.holder = reinterpret_cast<uintptr_t>(holder);
+    t_lastNull.softHit = soft ? 1u : 0u;
+    size_t n = 0;
+    while (n + 1 < sizeof(t_lastNull.softPath) && pathBuf[n] != '\0') {
+        t_lastNull.softPath[n] = pathBuf[n];
+        ++n;
+    }
+    t_lastNull.softPath[n] = '\0';
+    if (soft) {
+        g_derivedNotes.fetch_add(1, std::memory_order_relaxed);
+        // Also ring-note as value-side softnull for crash-time exact field match (rare).
+        Note("read_ref_null", field, holder);
+    }
+}
+
+// AS-safe-ish: stack walk + write(2). Nested fault accepted.
+void EmitEntry(void* obj, void* field, uintptr_t retPc0, uintptr_t rbp)
+{
+    if (!Enabled()) {
+        return;
+    }
+    // Only care about null holder (B-bucket shape).
+    if (obj != nullptr) {
+        return;
+    }
+    g_nullEntries.fetch_add(1, std::memory_order_relaxed);
+    char pathBuf[24] = "none";
+    size_t age = 0;
+    // Exact match on field arg (usually miss: field is NULL+off, not soft-null slot).
+    const int hitExact = Hit(field, pathBuf, sizeof(pathBuf), &age) ? 1 : 0;
+    // H1 chain: previous ReadRefField on this thread returned null, optionally from soft-null slot.
+    const int tlsSoft = (t_lastNull.softHit != 0) ? 1 : 0;
+    const int tlsAny = (t_lastNull.field != 0) ? 1 : 0;
+    const char* tlsPath = t_lastNull.softPath[0] != '\0' ? t_lastNull.softPath : "none";
+    // rbp chain: up to 8 frames, [fp+8]=ret.
+    uintptr_t frames[8] = {};
+    size_t nFr = 0;
+    uintptr_t fp = rbp;
+    for (; nFr < 8 && fp > 0x1000UL; ++nFr) {
+        const uintptr_t* p = reinterpret_cast<const uintptr_t*>(fp);
+        frames[nFr] = p[1]; // return address
+        uintptr_t next = p[0];
+        if (next <= fp) {
+            break;
+        }
+        fp = next;
+    }
+    char line[1200];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][nullholder] entry obj=%p field=%p hit_exact=%d path=%s age=%zu "
+                      "tls_any=%d tls_soft=%d tls_path=%s tls_field=%#lx tls_holder=%#lx "
+                      "notes=%zu hits=%zu misses=%zu null_entries=%zu derived=%zu ret0=%#lx "
+                      "f1=%#lx f2=%#lx f3=%#lx f4=%#lx f5=%#lx f6=%#lx f7=%#lx f8=%#lx\n",
+                      obj, field, hitExact, pathBuf, age, tlsAny, tlsSoft, tlsPath,
+                      static_cast<unsigned long>(t_lastNull.field),
+                      static_cast<unsigned long>(t_lastNull.holder),
+                      g_notes.load(std::memory_order_relaxed),
+                      g_hits.load(std::memory_order_relaxed),
+                      g_misses.load(std::memory_order_relaxed),
+                      g_nullEntries.load(std::memory_order_relaxed),
+                      g_derivedNotes.load(std::memory_order_relaxed),
+                      static_cast<unsigned long>(retPc0),
+                      static_cast<unsigned long>(frames[0]),
+                      static_cast<unsigned long>(frames[1]),
+                      static_cast<unsigned long>(frames[2]),
+                      static_cast<unsigned long>(frames[3]),
+                      static_cast<unsigned long>(frames[4]),
+                      static_cast<unsigned long>(frames[5]),
+                      static_cast<unsigned long>(frames[6]),
+                      static_cast<unsigned long>(frames[7]));
+    if (n > 0) {
+        (void)write(STDERR_FILENO, line, static_cast<size_t>(n));
+    }
+    // Also resolve ret0 + f1..f4 via dladdr (not AS-safe; best-effort before SEGV).
+    auto emitSym = [](const char* tag, uintptr_t pc) {
+        if (pc == 0) {
+            return;
+        }
+        Dl_info dli {};
+        char sline[256];
+        int sn;
+        if (dladdr(reinterpret_cast<void*>(pc), &dli) != 0 && dli.dli_fbase != nullptr) {
+            const char* base = dli.dli_fname != nullptr ? dli.dli_fname : "?";
+            // basename only
+            const char* slash = std::strrchr(base, '/');
+            if (slash != nullptr) {
+                base = slash + 1;
+            }
+            const char* sym = dli.dli_sname != nullptr ? dli.dli_sname : "none";
+            unsigned long off = static_cast<unsigned long>(pc - reinterpret_cast<uintptr_t>(dli.dli_fbase));
+            sn = sprintf_s(sline, sizeof(sline),
+                           "[GCV2][nullholder] frame %s pc=%#lx mod=%s off=0x%lx sym=%s\n",
+                           tag, static_cast<unsigned long>(pc), base, off, sym);
+        } else {
+            sn = sprintf_s(sline, sizeof(sline),
+                           "[GCV2][nullholder] frame %s pc=%#lx mod=unknown\n",
+                           tag, static_cast<unsigned long>(pc));
+        }
+        if (sn > 0) {
+            (void)write(STDERR_FILENO, sline, static_cast<size_t>(sn));
+        }
+    };
+    emitSym("ret0", retPc0);
+    emitSym("f1", frames[0]);
+    emitSym("f2", frames[1]);
+    emitSym("f3", frames[2]);
+    emitSym("f4", frames[3]);
+}
+} // namespace nullholder_probe
+
 // nullslot: count product paths that CAS-install nullptr into a ref field.
 // MRT_GCV2_NULLSLOT=1 → LOG each write (cap 64/path) + totals; default off.
 // rootdrop: same gate also arms path=resolve_root_null (RootSlot HealRoot null).
@@ -120,9 +345,12 @@ std::atomic<size_t> g_resolveRootOld{ 0 };
 std::atomic<size_t> g_resolveRootHealNull{ 0 };
 std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
 
+
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
                        std::atomic<size_t>* pathCount)
 {
+    // Always feed soft-null ring when nullholder probe is on (bounded; independent of log cap).
+    nullholder_probe::Note(path, field, holder);
     size_t n = pathCount->fetch_add(1, std::memory_order_relaxed);
     if (!NullslotProbeEnabled() || n >= 64) {
         return;
@@ -200,10 +428,32 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
                  "toRtype=%u toRoute=%u toYoung=%u toMarked=%d toValid=%d toWhy=%s\n",
                  n, rootSlot, from, to, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase), fromRtype,
                  fromRoute, fromYoung, fromMarked, fromValid, fromWhy, toRtype, toRoute, toYoung, toMarked, toValid,
-                 toWhy);
+                  toWhy);
     std::fflush(stderr);
 }
 } // namespace
+
+// nullholder public API (probe-only; ⛔ do not merge). Outside anon NS.
+void NoteSoftNullSlot(const char* path, void* field, void* holder)
+{
+    nullholder_probe::Note(path, field, holder);
+}
+
+bool SoftNullSlotHit(void* field, char* pathOut, size_t pathCap, size_t* ageOut)
+{
+    return nullholder_probe::Hit(field, pathOut, pathCap, ageOut);
+}
+
+void NoteSoftNullDerivedReturn(void* field, void* holder, uintptr_t retPc)
+{
+    nullholder_probe::NoteNullReturn(field, holder);
+    (void)retPc;
+}
+
+void EmitNullholderEntryProbe(void* obj, void* field, uintptr_t retPc0, uintptr_t rbp)
+{
+    nullholder_probe::EmitEntry(obj, field, retPc0, rbp);
+}
 
 void ReportForwardRaceCounts()
 {

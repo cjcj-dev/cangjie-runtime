@@ -25,6 +25,13 @@ class ScopedStopTheWorld;
 // Gate = MRT_GCV2_NULLSLOT (default off).
 void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 
+// nullholder (probe-only, ⛔ do not merge): bounded soft-null slot table +
+// ReadRefField(null,...) entry correlation for H1 vs H2. Gate MRT_GCV2_NULLHOLDER=1.
+void NoteSoftNullSlot(const char* path, void* field, void* holder);
+bool SoftNullSlotHit(void* field, char* pathOut, size_t pathCap, size_t* ageOut);
+void NoteSoftNullDerivedReturn(void* field, void* holder, uintptr_t retPc);
+void EmitNullholderEntryProbe(void* obj, void* field, uintptr_t retPc0, uintptr_t rbp);
+
 class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
