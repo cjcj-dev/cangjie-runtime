@@ -378,7 +378,9 @@ void EmitInstrumentHealth(const char* where, size_t remsetSize, size_t oldToYoun
 {
     size_t occ = CountStampOccupied();
     double occPct = g_stampCap == 0 ? 0.0 : 100.0 * static_cast<double>(occ) / static_cast<double>(g_stampCap);
-    // Prefer epoch (since last clear) for saturation; fall back to process totals if epoch empty.
+    // Prefer epoch (since last clear) for saturation. After a clear, epoch is empty and
+    // occ is 0 — that is healthy, not saturated. Never fall back to process totals for
+    // the sat decision: selftest flood would otherwise poison every post-clear HEALTH.
     uint64_t epochFail = g_stampEpochProbeFail.load(std::memory_order_relaxed);
     uint64_t epochWraps = g_stampEpochWraps.load(std::memory_order_relaxed);
     uint64_t epochNotes = g_stampEpochNotes.load(std::memory_order_relaxed);
@@ -386,9 +388,8 @@ void EmitInstrumentHealth(const char* where, size_t remsetSize, size_t oldToYoun
     uint64_t probeFail = g_stampProbeFail.load(std::memory_order_relaxed);
     uint64_t wraps = g_stampWraps.load(std::memory_order_relaxed);
     uint64_t notes = g_stampNotes.load(std::memory_order_relaxed);
-    uint64_t failForSat = epochNotes > 0 ? epochFail : probeFail;
-    uint64_t notesForSat = epochNotes > 0 ? epochNotes : notes;
-    bool saturated = (occPct > 50.0) || (failForSat > 0 && notesForSat > 0 && failForSat * 100 > notesForSat);
+    bool saturated = (occPct > 50.0) ||
+        (epochNotes > 0 && epochFail > 0 && epochFail * 100 > epochNotes);
     // HEALTH is RTLOG_ERROR so it matches progress volume (VLOG(REPORT) is file-gated
     // and silent under DEFAULT_MRT_REPORT=0 — that hid table saturation for a whole night).
     LOG(RTLOG_ERROR,
