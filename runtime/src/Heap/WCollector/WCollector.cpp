@@ -361,6 +361,93 @@ struct MinorLedgerCost {
 
 thread_local MinorLedgerCost g_minorLedgerCost;
 
+// markperf: young.mark_closure internal partition (default off).
+// MRT_GCV2_MARK_COST=1 → NanoSeconds sub-buckets inside TraceYoungClosureSerial.
+// MRT_GCV2_MARK_COST=2 → counts only (no per-edge timer).
+// Forces serial path when enabled so partitions sum to mark_closure wall.
+struct MarkInternalCost {
+    uint64_t totalNs = 0;
+    uint64_t popGateNs = 0;
+    uint64_t markBitmapNs = 0;
+    uint64_t scanArrayNs = 0;
+    uint64_t scanObjNs = 0;
+    uint64_t resolvePushNs = 0;
+    uint64_t ledgerNs = 0;
+    uint64_t popN = 0;
+    uint64_t skipNotHeapN = 0;
+    uint64_t skipGateN = 0;
+    uint64_t alreadyMarkedN = 0;
+    uint64_t claimYoungN = 0;
+    uint64_t claimOldN = 0;
+    uint64_t leafN = 0;
+    uint64_t arrayN = 0;
+    uint64_t ordinaryN = 0;
+    uint64_t largeN = 0; // size >= 8KiB among scanned-with-refs
+    uint64_t weakN = 0;
+    uint64_t edgeN = 0;
+    uint64_t edgeYoungPushN = 0;
+    uint64_t bytesScanned = 0;
+
+    static int Mode()
+    {
+        static const int mode = []() {
+            const char* v = std::getenv("MRT_GCV2_MARK_COST");
+            if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
+                return 0;
+            }
+            if (std::strcmp(v, "2") == 0 || std::strcmp(v, "count") == 0) {
+                return 2;
+            }
+            return 1;
+        }();
+        return mode;
+    }
+
+    void Reset() { *this = MarkInternalCost{}; }
+
+    void Report(const char* tag) const
+    {
+        if (Mode() == 0) {
+            return;
+        }
+        // resolve_push is nested inside scan_* (called from ForEachRefField visitor).
+        const uint64_t scanGross = scanArrayNs + scanObjNs;
+        const uint64_t resolve = resolvePushNs;
+        const uint64_t scanExcl =
+            (scanGross > resolve) ? (scanGross - resolve) : 0;
+        const uint64_t scanArrayExcl =
+            (scanArrayNs > 0 && scanGross > 0)
+                ? (scanArrayNs * scanExcl / scanGross)
+                : 0;
+        const uint64_t scanObjExcl = (scanExcl > scanArrayExcl) ? (scanExcl - scanArrayExcl) : 0;
+        const uint64_t accounted = popGateNs + markBitmapNs + scanExcl + resolve + ledgerNs;
+        VLOG(REPORT,
+             "[GCV2][mark-cost] tag=%s mode=%d total_ns=%llu accounted_ns=%llu residual_ns=%lld "
+             "pop_gate_ns=%llu mark_bitmap_ns=%llu scan_array_excl_ns=%llu scan_obj_excl_ns=%llu "
+             "resolve_push_ns=%llu ledger_ns=%llu scan_array_gross_ns=%llu scan_obj_gross_ns=%llu "
+             "pop_n=%llu skip_not_heap=%llu skip_gate=%llu already_marked=%llu "
+             "claim_young=%llu claim_old=%llu leaf=%llu array=%llu ordinary=%llu large=%llu weak=%llu "
+             "edge_n=%llu edge_young_push=%llu bytes_scanned=%llu",
+             tag, Mode(), static_cast<unsigned long long>(totalNs),
+             static_cast<unsigned long long>(accounted),
+             static_cast<long long>(static_cast<int64_t>(totalNs) - static_cast<int64_t>(accounted)),
+             static_cast<unsigned long long>(popGateNs), static_cast<unsigned long long>(markBitmapNs),
+             static_cast<unsigned long long>(scanArrayExcl), static_cast<unsigned long long>(scanObjExcl),
+             static_cast<unsigned long long>(resolve), static_cast<unsigned long long>(ledgerNs),
+             static_cast<unsigned long long>(scanArrayNs), static_cast<unsigned long long>(scanObjNs),
+             static_cast<unsigned long long>(popN), static_cast<unsigned long long>(skipNotHeapN),
+             static_cast<unsigned long long>(skipGateN), static_cast<unsigned long long>(alreadyMarkedN),
+             static_cast<unsigned long long>(claimYoungN), static_cast<unsigned long long>(claimOldN),
+             static_cast<unsigned long long>(leafN), static_cast<unsigned long long>(arrayN),
+             static_cast<unsigned long long>(ordinaryN), static_cast<unsigned long long>(largeN),
+             static_cast<unsigned long long>(weakN), static_cast<unsigned long long>(edgeN),
+             static_cast<unsigned long long>(edgeYoungPushN),
+             static_cast<unsigned long long>(bytesScanned));
+    }
+};
+
+thread_local MarkInternalCost g_markInternalCost;
+
 // T2 closure-equality probe (setbitmap2): default off.
 // MRT_GCV2_CLOSURE_HASH=1 → dump normalized hash of product reachableVec (diagnostic only).
 // MRT_GCV2_CLOSURE_HASH=2 → in-process dual claim: product path + independent legacy set walk
@@ -2611,42 +2698,124 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
     // FYS=0: skip reachableSlots inserts (lookups never fire; T1 measured pure write cost).
     const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
-    auto pushTarget = [this, fullYoungScan, &workStack](RefField<>& field) {
+    const int markCostMode = MarkInternalCost::Mode();
+    const uint64_t tSerial0 = (markCostMode == 1) ? TimeUtil::NanoSeconds() : 0;
+    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
+        if (markCostMode == 1) {
+            uint64_t t0 = TimeUtil::NanoSeconds();
+            BaseObject* target = ResolveMinorReference(field);
+            if (fullYoungScan) {
+                if (Heap::IsHeapAddress(target)) {
+                    workStack.push_back(target);
+                    ++g_markInternalCost.edgeYoungPushN;
+                }
+            } else {
+                size_t before = workStack.size();
+                PushYoungObject(target, workStack, "closure_edge");
+                if (workStack.size() > before) {
+                    ++g_markInternalCost.edgeYoungPushN;
+                }
+            }
+            g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
+            ++g_markInternalCost.edgeN;
+            return;
+        }
+        if (markCostMode == 2) {
+            ++g_markInternalCost.edgeN;
+        }
         BaseObject* target = ResolveMinorReference(field);
         if (fullYoungScan) {
             if (Heap::IsHeapAddress(target)) {
                 workStack.push_back(target);
+                if (markCostMode == 2) {
+                    ++g_markInternalCost.edgeYoungPushN;
+                }
             }
         } else {
+            size_t before = (markCostMode == 2) ? workStack.size() : 0;
             PushYoungObject(target, workStack, "closure_edge");
+            if (markCostMode == 2 && workStack.size() > before) {
+                ++g_markInternalCost.edgeYoungPushN;
+            }
         }
     };
     while (!workStack.empty()) {
-        BaseObject* object = workStack.back();
-        workStack.pop_back();
-        if (!Heap::IsHeapAddress(object)) {
-            continue;
-        }
-        // markfloor / introot: RawArray+8 interiors pass IsValidObject (tip=length≠null)
-        // then HasRefField/GetSize SEGV. Recover host; skip interior itself.
-        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
-            BaseObject* host = Collector::TryRecoverInteriorBase(object);
-            if (host != nullptr && host != object) {
-                workStack.push_back(host);
+        BaseObject* object = nullptr;
+        if (markCostMode == 1) {
+            uint64_t t0 = TimeUtil::NanoSeconds();
+            object = workStack.back();
+            workStack.pop_back();
+            ++g_markInternalCost.popN;
+            if (!Heap::IsHeapAddress(object)) {
+                ++g_markInternalCost.skipNotHeapN;
+                g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
+                continue;
             }
-            continue;
+            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+                BaseObject* host = Collector::TryRecoverInteriorBase(object);
+                if (host != nullptr && host != object) {
+                    workStack.push_back(host);
+                }
+                ++g_markInternalCost.skipGateN;
+                g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
+                continue;
+            }
+            CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+            g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
+        } else {
+            object = workStack.back();
+            workStack.pop_back();
+            if (markCostMode == 2) {
+                ++g_markInternalCost.popN;
+            }
+            if (!Heap::IsHeapAddress(object)) {
+                if (markCostMode == 2) {
+                    ++g_markInternalCost.skipNotHeapN;
+                }
+                continue;
+            }
+            // markfloor / introot: RawArray+8 interiors pass IsValidObject (tip=length≠null)
+            // then HasRefField/GetSize SEGV. Recover host; skip interior itself.
+            if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+                BaseObject* host = Collector::TryRecoverInteriorBase(object);
+                if (host != nullptr && host != object) {
+                    workStack.push_back(host);
+                }
+                if (markCostMode == 2) {
+                    ++g_markInternalCost.skipGateN;
+                }
+                continue;
+            }
+            CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         }
-        CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
         const bool isYoung = region->IsYoungRegion();
 
         if (useBitmapLedger) {
             if (isYoung) {
                 // MarkObject returns true if already marked → skip re-visit.
-                if (MarkObject(object)) {
+                // Two diagnostics land on the same branch and neither subsumes the other:
+                // markperf times the bitmap write and counts already-marked visits, eatarm
+                // records that an already-marked object leaves its fields untraced. Both are
+                // gated (markCostMode / EatArmDiag) so the default build pays for neither.
+                bool wasMarked = false;
+                if (markCostMode == 1) {
+                    uint64_t t0 = TimeUtil::NanoSeconds();
+                    wasMarked = MarkObject(object);
+                    g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
+                } else {
+                    wasMarked = MarkObject(object);
+                }
+                if (wasMarked) {
+                    if (markCostMode != 0) {
+                        ++g_markInternalCost.alreadyMarkedN;
+                    }
                     // eatarm D6: wasMarked → leave fields untraced this visit.
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     continue;
+                }
+                if (markCostMode != 0) {
+                    ++g_markInternalCost.claimYoungN;
                 }
                 reachableVec.push_back(object);
             } else {
@@ -2659,6 +2828,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     EatArmDiag::NoteNonYoungDedupSkipFields(object);
                     continue;
                 }
+                if (markCostMode != 0) {
+                    ++g_markInternalCost.claimOldN;
+                }
                 reachableVec.push_back(object);
             }
         } else {
@@ -2669,17 +2841,34 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 continue;
             }
             if (isYoung) {
-                (void)MarkObject(object);
+                if (markCostMode == 1) {
+                    uint64_t t0 = TimeUtil::NanoSeconds();
+                    (void)MarkObject(object);
+                    g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
+                } else {
+                    (void)MarkObject(object);
+                }
+                if (markCostMode != 0) {
+                    ++g_markInternalCost.claimYoungN;
+                }
             } else if (!fullYoungScan) {
                 continue;
+            } else if (markCostMode != 0) {
+                ++g_markInternalCost.claimOldN;
             }
             reachableVec.push_back(object);
         }
 
         if (!object->HasRefField()) {
+            if (markCostMode != 0) {
+                ++g_markInternalCost.leafN;
+            }
             continue;
         }
         if (UNLIKELY(object->IsWeakRef())) {
+            if (markCostMode != 0) {
+                ++g_markInternalCost.weakN;
+            }
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             (void)LedgerInsert(weakSlots, reinterpret_cast<MAddress>(&referentField), g_minorLedgerCost.weakInsN,
                                g_minorLedgerCost.weakInsNew, g_minorLedgerCost.weakInsNs);
@@ -2691,16 +2880,56 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (referentRegion->IsYoungRegion()) {
                 WeakRefBuffer::Instance().Insert(object);
             }
-            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            if (markCostMode == 1) {
+                uint64_t t0 = TimeUtil::NanoSeconds();
+                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+                g_markInternalCost.scanObjNs += TimeUtil::NanoSeconds() - t0;
+            } else {
+                referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            }
             continue;
         }
-        object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
-            if (recordSlots) {
-                (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
-                                   g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+        const bool isArray = object->IsRawArray();
+        size_t objSize = 0;
+        if (markCostMode != 0) {
+            objSize = object->GetSize();
+            g_markInternalCost.bytesScanned += objSize;
+            if (isArray) {
+                ++g_markInternalCost.arrayN;
+            } else {
+                ++g_markInternalCost.ordinaryN;
             }
-            pushTarget(field);
-        });
+            if (objSize >= 8192) {
+                ++g_markInternalCost.largeN;
+            }
+        }
+        if (markCostMode == 1) {
+            uint64_t t0 = TimeUtil::NanoSeconds();
+            object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
+                if (recordSlots) {
+                    (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
+                                       g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                }
+                pushTarget(field);
+            });
+            uint64_t dt = TimeUtil::NanoSeconds() - t0;
+            if (isArray) {
+                g_markInternalCost.scanArrayNs += dt;
+            } else {
+                g_markInternalCost.scanObjNs += dt;
+            }
+        } else {
+            object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
+                if (recordSlots) {
+                    (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
+                                       g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                }
+                pushTarget(field);
+            });
+        }
+    }
+    if (markCostMode == 1) {
+        g_markInternalCost.totalNs += TimeUtil::NanoSeconds() - tSerial0;
     }
 }
 
@@ -2843,7 +3072,9 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    const bool useParallel = threadPool != nullptr && !forceSerialEnv;
+    // markperf probe only instruments serial path; force serial when MARK_COST≠0.
+    const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
+    const bool useParallel = threadPool != nullptr && !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
         VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
@@ -4595,12 +4826,15 @@ void WCollector::DoYoungGarbageCollection()
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running)");
     }
     g_minorLedgerCost.Reset();
+    g_markInternalCost.Reset();
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         MRT_PHASE_TIMER("young.mark_closure");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    g_markInternalCost.Report("mark_closure");
+    g_markInternalCost.Reset();
     MinorSlotSet liveRememberedSlots;
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
@@ -4626,6 +4860,7 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    g_markInternalCost.Report("mark_from_remset");
     if (youngConcMark) {
         // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
         CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
