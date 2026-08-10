@@ -500,8 +500,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-            // Stop without calling func: same as "no more live objects we can name".
-            return true;
+            return !survivedAt(0);
         }
         return func(obj);
     }
@@ -516,6 +515,12 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
             // On reject: stop walk (return true = "until false" not triggered by visitor).
             // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+                // tipnull: remaining liveInfo0 survivors must not look like success.
+                for (size_t rest = offset; rest < (allocPtr - GetRegionStart()); rest += kMarkedBytesPerBit) {
+                    if (survivedAt(rest)) {
+                        return false;
+                    }
+                }
                 return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
@@ -2060,9 +2065,30 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     }
                 });
             }
-            return toObj != nullptr;
+            // tipnull: uncopied soft-return is not success.
+            return toObj != nullptr && (obj->IsForwarded() || toObj != obj);
         });
 
+    if (!forwarded) {
+        // tipnull: incomplete copy set — do not publish FORWARDED (permanent hole).
+        static std::atomic<size_t> incompleteN{ 0 };
+        size_t n = incompleteN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 16) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipnull] incomplete ForwardRegion region=%p start=%#zx live=%zu n=%zu",
+                region, region->GetRegionStart(), region->GetLiveByteCount(), n);
+        }
+        if (youngRegion) {
+            region->PreserveRetainedLiveInfo();
+            (void)RecordPromotedCrossGenEdges(region);
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+        // Drop route plan so WaitRoutedTipReady cannot see FORWARDED+null-tip.
+        region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+        ExemptFromRegion(region);
+        return;
+    }
     CHECK(forwarded);
     {
         static const bool probe = []() {

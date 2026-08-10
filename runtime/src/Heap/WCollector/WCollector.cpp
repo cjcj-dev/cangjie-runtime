@@ -5966,6 +5966,10 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // tipnull: VisitLiveObjects now returns false on gate reject when ghost survivors
     // remain, so this soft-return cannot alone publish FORWARDED with holes.
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        // tipnull: uncopied ghost must fail VisitLive visitor, not soft-succeed.
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            return nullptr;
+        }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
