@@ -10,6 +10,23 @@
 #include "Common/TypeDef.h"
 #include "Heap/Collector/Collector.h"
 
+// On Windows this header is parsed *after* <windows.h>, which reaches it as
+//   VerifyRememberedSet.cpp
+//     -> Heap/Allocator/RegionSpace.h -> Mutator/Mutator.h
+//     -> os/Windows/UnwindWin.h -> os/Windows/WinModuleManager.h -> <windows.h>
+// and <windows.h> defines a family of REASON_* macros (winreg.h:200 defines
+// REASON_UNKNOWN, which expands through reason.h down to the integer literal
+// 0x000000ff).  A macro-expanded enumerator name fails as "expected identifier"
+// pointing at winreg.h, which is a long way from the mistake.  Trip here
+// instead, at the declaration site, if a platform header ever claims one of the
+// names below.
+#if defined(REASON_RECORDED) || defined(REASON_NO_YOUNG) || \
+    defined(REASON_REF_NULL_OR_NONHEAP) || defined(REASON_REF_NOT_YOUNG) || \
+    defined(REASON_HOLDER_NULL_OR_NONHEAP) || defined(REASON_HOLDER_YOUNG)
+#error "a platform header defines one of the REASON_* names declared below; \
+rename the alias rather than #undef-ing the platform macro"
+#endif
+
 namespace MapleRuntime {
 namespace RemsetPhaseProbe {
 
