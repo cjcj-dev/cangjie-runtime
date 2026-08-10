@@ -37,7 +37,10 @@ public:
     BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override { return RefField<>(obj); }
+    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
+    {
+        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
+    }
 };
 
 class TestBarrier final : public Barrier {
@@ -119,9 +122,10 @@ bool ExerciseBarrier(const char* name, BarrierType& barrier, RegionFixture& fixt
 bool ExerciseNineEntries(TestBarrier& barrier, RegionFixture& fixture, RememberedSet& rememberedSet)
 {
     bool passed = true;
-    RefField<> sourceField(fixture.youngObject);
+    RefField<> sourceField(to_zpointer(reinterpret_cast<MAddress>(fixture.youngObject)));
     std::vector<unsigned char> genericSource(TYPEINFO_PTR_SIZE + sizeof(RefField<>));
-    new (genericSource.data() + TYPEINFO_PTR_SIZE) RefField<>(fixture.youngObject);
+    new (genericSource.data() + TYPEINFO_PTR_SIZE)
+        RefField<>(to_zpointer(reinterpret_cast<MAddress>(fixture.youngObject)));
     auto check = [&](const char* name) {
         bool one = ExpectOneRecord(name, rememberedSet, reinterpret_cast<MAddress>(fixture.field));
         std::cout << "ENTRY_RECORDS name=" << name << " count=" << (one ? 1 : 0) << '\n';
