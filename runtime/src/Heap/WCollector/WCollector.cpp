@@ -3590,6 +3590,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.ref_fix");
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
+        // flipwire P1: opt-in minor young-remap flip (ZGC relocate_start). Default OFF.
+        // Env MRT_GCV2_MINOR_YOUNG_FLIP=1 only; still STW-centralized ref_fix (no P2).
+        static const bool minorYoungFlip = []() {
+            const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (minorYoungFlip) {
+            flip_young_relocate_start();
+        }
+
         GCThreadPool* threadPool = GetThreadPool();
         static const bool forceSerialEnv = []() {
             const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
