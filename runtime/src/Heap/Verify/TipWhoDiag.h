@@ -1,0 +1,48 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#ifndef MRT_TIP_WHO_DIAG_H
+#define MRT_TIP_WHO_DIAG_H
+
+#include <cstddef>
+#include <cstdint>
+
+namespace MapleRuntime {
+class BaseObject;
+class RegionInfo;
+
+// tipwho: classify survivors that reach region FORWARDED without a tip receipt.
+//
+// Gate (default off; product path early-return BEFORE any work):
+//   MRT_GCV2_TIPWHO=1
+// Sample cap: MRT_GCV2_TIPWHO_MAX=<N> (default 64)
+//
+// Sites:
+//   NoteSoftReturn  — ForwardObject returned without object FORWARDED (or null)
+//   NoteVisitGate   — VisitLiveObjectsUntilFalse Plausible reject mid-walk
+//   NotePrePublish  — census before SetRouteState(FORWARDED)
+//   NotePermHole    — WaitRoutedTipReady permanent-hole path (enrich from)
+
+namespace TipWhoDiag {
+
+bool Enabled();
+
+// branch: short tag for soft-return arm (e.g. "fwd_plausible", "fwd_null_ghost", "fwd_keep_from")
+void NoteSoftReturn(BaseObject* obj, RegionInfo* region, const char* branch, BaseObject* toObj);
+
+// VisitLive gate rejected obj at position; walk returns true without visiting rest.
+void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t position);
+
+// Before FORWARDED: count size-walk starts vs object-FORWARDED vs multi-bit interiors.
+void NotePrePublish(RegionInfo* region);
+
+// Permanent hole: classify `from` that still admits a geometric to with null tip.
+void NotePermHole(BaseObject* from, RegionInfo* region, BaseObject* geometricTo, const char* reason);
+
+} // namespace TipWhoDiag
+} // namespace MapleRuntime
+
+#endif // MRT_TIP_WHO_DIAG_H

@@ -47,6 +47,7 @@
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
+#include "Heap/Verify/TipWhoDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Mutator/MutatorManager.h"
@@ -5910,6 +5911,8 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         unsigned young = forwarding != nullptr ? static_cast<unsigned>(forwarding->IsYoungRegion()) : 0;
         size_t live = forwarding != nullptr ? forwarding->GetLiveByteCount() : 0;
         bool fromFwd = from != nullptr && from->IsForwarded();
+        // tipwho: classify the from that hit permanent hole (no control-flow change).
+        TipWhoDiag::NotePermHole(from, forwarding, geometricTo, reason);
         CHECK_DETAIL(false,
                      "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
                      "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu "
@@ -5976,6 +5979,10 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        if (TipWhoDiag::Enabled()) {
+            RegionInfo* r = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            TipWhoDiag::NoteSoftReturn(obj, r, "fwd_plausible", obj);
+        }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
@@ -5987,7 +5994,15 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+        if (TipWhoDiag::Enabled()) {
+            RegionInfo* r = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            TipWhoDiag::NoteSoftReturn(obj, r, "fwd_null_ghost", nullptr);
+        }
         return nullptr;
+    }
+    if (TipWhoDiag::Enabled()) {
+        RegionInfo* r = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        TipWhoDiag::NoteSoftReturn(obj, r, "fwd_keep_from", obj);
     }
     return obj;
 }

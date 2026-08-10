@@ -25,6 +25,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/TipWhoDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -491,6 +492,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
             // Stop without calling func: same as "no more live objects we can name".
+            TipWhoDiag::NoteVisitGate(obj, this, 0, GetRegionStart());
             return true;
         }
         return func(obj);
@@ -506,6 +508,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
             // On reject: stop walk (return true = "until false" not triggered by visitor).
             // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+                TipWhoDiag::NoteVisitGate(obj, this, offset, position);
                 return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
@@ -2013,6 +2016,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                      static_cast<unsigned>(youngRegion));
             }
         }
+        // tipwho: census before FORWARDED publish (no control-flow change).
+        TipWhoDiag::NotePrePublish(region);
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         if (youngRegion) {
             if (promotedRecords != 0) {

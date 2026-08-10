@@ -27,6 +27,7 @@ set(SRC_LIST
     "DiagGate.cpp"
     "RouteDom.cpp"
     "SealCheck.cpp"
+    "TipWhoDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
