@@ -24,6 +24,7 @@
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
+#include "Heap/Verify/SealCheck.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -623,6 +624,9 @@ public:
 
             CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
             if (fromRegionInfo->TryLockRouting(oldState)) {
+                // sealcheck E_seal (per-region): face freezes before geometry read.
+                // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
+                SealCheck::NoteSeal(fromRegionInfo);
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
                     return true;
