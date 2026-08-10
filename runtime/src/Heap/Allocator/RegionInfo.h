@@ -819,7 +819,10 @@ public:
     // Out-of-domain inputs must get an observable negative (nullptr), never a
     // syntactically-valid but empty to-slot or a toRegion2Idx INVALID abort.
     // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; REPORT-toregion2idx-probe §4.2.
-    BaseObject* GetRoute(BaseObject* fromObj)
+    // GetRouteGeometry: packed to-address for exclusive Copy (pre object-level FORWARDED).
+    // GetRoute: same geometry; hangpub object-level tip filter was tried and SEGV'd
+    // (return-null while from still mapped as to → mutator si_addr=0x20). Kept as alias.
+    BaseObject* GetRouteGeometry(BaseObject* fromObj)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
@@ -984,6 +987,8 @@ public:
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         return from_region_addr(toAddr);
     }
+
+    BaseObject* GetRoute(BaseObject* fromObj) { return GetRouteGeometry(fromObj); }
 
     ZGenerationId generation_id() const { return metadata._generation_id; }
 

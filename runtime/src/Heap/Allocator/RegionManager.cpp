@@ -1661,6 +1661,43 @@ void RegionManager::RequestForRegion(size_t size)
     prevRegionAllocTime = TimeUtil::NanoSeconds();
 }
 
+void RegionManager::ForwardRoutedRegionObjects(RegionInfo* region)
+{
+    // Geometry already installed by RouteOrCompactRegionImpl; region is ROUTING.
+    // Must NOT call RouteRegion/ForwardObject (re-enter RouteRegion spins on ROUTING).
+    CHECK(region->IsRoutingState());
+    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    (void)region->VisitLiveObjectsUntilFalse([&collector, region](BaseObject* obj) {
+        if (!Collector::PlausibleManagedObjectGate("ForwardRoutedRegionObjects", obj)) {
+            return true;
+        }
+        for (;;) {
+            StateWord oldWord = obj->GetStateWord();
+            if (obj->IsForwarded()) {
+                return true;
+            }
+            if (oldWord.IsLockedWord()) {
+                sched_yield();
+                continue;
+            }
+            if (!obj->TryLockObject(oldWord)) {
+                continue;
+            }
+            size_t size = RegionSpace::GetAllocSize(*obj);
+            BaseObject* toObj = region->GetRouteGeometry(obj);
+            if (toObj == nullptr) {
+                obj->UnlockObject(ObjectState::NORMAL);
+                return false;
+            }
+            collector.CopyObject(*obj, *toObj, size);
+            toObj->SetStateCode(ObjectState::NORMAL);
+            std::atomic_thread_fence(std::memory_order_release);
+            obj->UnlockObject(ObjectState::FORWARDED);
+            return true;
+        }
+    });
+}
+
 bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());

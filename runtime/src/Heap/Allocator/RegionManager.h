@@ -573,6 +573,8 @@ public:
     void ClearNotRelocatableThisCycleFlags();
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
+    // hangpub: CopyObject all survivors while region is still ROUTING (before geometry visible).
+    void ForwardRoutedRegionObjects(RegionInfo* region);
 
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -617,7 +619,13 @@ public:
             CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
             if (fromRegionInfo->TryLockRouting(oldState)) {
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
+                    // hangpub: geometry was published as ROUTED before any CopyObject, so
+                    // relocate_or_remap could hand mutators null-tip RECENT_FULL slots.
+                    // Mirror CompactRegion: fill tips under ROUTING (peers spin above),
+                    // then publish FORWARDED (superset of ROUTED). Official Cangjie also
+                    // ROUTED-before-Copy; this is an intentional local fix for the hang.
+                    ForwardRoutedRegionObjects(fromRegionInfo);
+                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::FORWARDED);
                     return true;
                 } else {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
