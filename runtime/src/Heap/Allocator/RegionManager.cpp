@@ -1675,6 +1675,85 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
+    // tipnull densify (full-walk only): orphan marks off size-walk inflate liveByteCount/
+    // preLiveBytes and Admit geometric to that VisitLive never fills → FORWARDED tip null.
+    // Only densify when size-walk reaches allocPtr; partial walk must NOT clear (that wiped
+    // domains under CI enum and caused densify starts=0). Not hangpub/waitfwd.
+    if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
+        !region->IsKnownEmpty()) {
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        RegionBitmap* mb = ghost->markBitmap;
+        RegionBitmap* rb = ghost->resurrectBitmap;
+        constexpr size_t kMaxStarts = 8192;
+        size_t startOff[kMaxStarts];
+        size_t startSz[kMaxStarts];
+        size_t nStarts = 0;
+        size_t liveBytes = 0;
+        uintptr_t position = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        bool fullWalk = true;
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
+                fullWalk = false;
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                fullWalk = false;
+                break;
+            }
+            size_t offset = position - region->GetRegionStart();
+            if (ghost->IsSurvivedObject(offset)) {
+                if (nStarts >= kMaxStarts) {
+                    fullWalk = false;
+                    break;
+                }
+                startOff[nStarts] = offset;
+                startSz[nStarts] = allocSize;
+                ++nStarts;
+                liveBytes += allocSize;
+            }
+            position += allocSize;
+        }
+        if (fullWalk && position == allocPtr) {
+            auto clearAll = [](RegionBitmap* bm) {
+                if (bm == nullptr) {
+                    return;
+                }
+                size_t wc = bm->wordCnt.load(std::memory_order_acquire);
+                for (size_t i = 0; i < wc; ++i) {
+                    bm->markWords[i].store(0, std::memory_order_relaxed);
+                }
+                for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
+                    bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                }
+                bm->liveBytes.store(0, std::memory_order_relaxed);
+            };
+            clearAll(mb);
+            clearAll(rb);
+            size_t regionSize = region->GetGhostRegionSize();
+            if (regionSize == 0) {
+                regionSize = region->GetRegionSize();
+            }
+            for (size_t i = 0; i < nStarts; ++i) {
+                if (mb != nullptr) {
+                    (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                }
+            }
+            region->ResetLiveByteCount();
+            if (liveBytes > 0) {
+                region->AddLiveByteCount(liveBytes);
+            }
+            static std::atomic<size_t> densifyN{ 0 };
+            size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (dn <= 16) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu n=%zu",
+                    region, nStarts, liveBytes, dn);
+            }
+        }
+    }
     size_t fromBytes = region->GetLiveByteCount();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
