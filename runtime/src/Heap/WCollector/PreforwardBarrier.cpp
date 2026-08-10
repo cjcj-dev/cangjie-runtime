@@ -53,7 +53,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
     }
 }
 
-BaseObject* PreforwardBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
+BaseObject* PreforwardBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {

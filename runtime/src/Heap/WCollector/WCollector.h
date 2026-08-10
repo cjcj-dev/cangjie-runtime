@@ -413,6 +413,7 @@ private:
     using MinorRegionSet = std::unordered_set<RegionInfo*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
 
+    bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target) const;
     BaseObject* ResolveMinorReference(RefField<>& field) const;
     BaseObject* ResolveMinorReference(RootSlot& root) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);

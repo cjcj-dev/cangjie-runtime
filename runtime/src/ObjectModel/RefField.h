@@ -238,6 +238,11 @@ private:
     friend void HealRoot(RootSlot&, zaddress, std::memory_order);
 };
 
+// Read-only root capability. This is intentionally const-qualified rather than a
+// second storage representation: static/RELRO reads need no metadata migration,
+// while RootSlot write APIs cannot accept this type.
+using ReadOnlyRootSlot = const RootSlot;
+
 inline void StorePlain(RootSlot& slot, zaddress value,
                        std::memory_order order = std::memory_order_relaxed)
 {
