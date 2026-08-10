@@ -32,7 +32,6 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
-#include "Heap/WCollector/WCollector.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -1658,6 +1657,12 @@ bool ReadnullProbeEnabled()
 }
 std::atomic<size_t> g_readRefNullN{ 0 };
 } // namespace
+
+// nullholder probe decls (⛔ do not merge) — avoid including WCollector.h (RegionSpace path).
+namespace MapleRuntime {
+void EmitNullholderEntryProbe(void* obj, void* field, uintptr_t retPc0, uintptr_t rbp);
+void NoteSoftNullDerivedReturn(void* field, void* holder, uintptr_t retPc);
+}
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
