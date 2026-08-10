@@ -215,10 +215,10 @@ public:
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
     //
-    // satbfix: RouteObject can return a to-address in an active region whose TypeInfo tip is
-    // null (RECENT_FULL hole). Handing that to make_load_good / IdleBarrier makes the mutator
-    // chase a dead tip forever (THIRD_mutator_same_fn hang) even when F3 no longer CAS-nulls.
-    // Reject invalid to tips; keep from when it is still a plausible object (ghosts until Unbind).
+    // satbfix: if RouteObject yields an active-region address whose TypeInfo tip is null
+    // (RECENT_FULL hole), do not hand that tip to make_load_good. Prefer a still-valid from
+    // (ghosts until Unbind). If from is also invalid, still refuse the hole tip — returning it
+    // is what turns F3 leave-alone into the same-fn hang (mutator table base rax=8).
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         if (!Heap::IsHeapAddress(obj)) {
@@ -237,7 +237,11 @@ public:
             RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
             if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
                 !to->IsValidObject()) {
-                return obj;
+                // Prefer a still-valid from; never return the hole tip; never return a dead from.
+                if (obj != nullptr && obj->IsValidObject()) {
+                    return obj;
+                }
+                return nullptr;
             }
         }
         return to;
