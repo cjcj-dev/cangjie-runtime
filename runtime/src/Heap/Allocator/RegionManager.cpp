@@ -518,7 +518,9 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
                     w0 = p[0];
                     w1 = p[1];
                 }
-                TipWhoDiag::NoteVisitGate(obj, this, 0, GetRegionStart(), reason, tipAddr, w0, w1, 0, 0);
+                unsigned surv0 = IsSurvivedObject(0) ? 1U : 0U;
+                TipWhoDiag::NoteVisitGate(obj, this, 0, GetRegionStart(), reason, tipAddr, w0, w1, 0, 0, surv0, 0,
+                                          0, 0, 0, 0);
             }
             return true;
         }
@@ -528,6 +530,12 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         uintptr_t position = GetRegionStart();
         size_t offset = 0;
         uintptr_t allocPtr = GetRegionAllocPtr();
+        // isitastart: track prior size-walk step for 乙1/乙2 (prev size wrong?).
+        size_t prevOff = 0;
+        size_t prevSz = 0;
+        uintptr_t prevTip = 0;
+        unsigned prevSurv = 0;
+        size_t walkSteps = 0;
 
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
@@ -574,12 +582,22 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
                             ++survAfter;
                         }
                     }
+                    unsigned survAtBreak = IsSurvivedObject(offset) ? 1U : 0U;
                     TipWhoDiag::NoteVisitGate(obj, this, offset, position, reason, tipAddr, w0, w1, nextSurv,
-                                              survAfter);
+                                              survAfter, survAtBreak, walkSteps, prevOff, prevSz, prevTip, prevSurv);
                 }
                 return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            // Record this step as "prev" for the next iteration / break.
+            {
+                TypeInfo* pTip = obj->GetTypeInfo();
+                prevOff = offset;
+                prevSz = allocSize;
+                prevTip = reinterpret_cast<uintptr_t>(pTip);
+                prevSurv = IsSurvivedObject(offset) ? 1U : 0U;
+                ++walkSteps;
+            }
             position += allocSize;
             if (IsSurvivedObject(offset) && !func(obj)) { return false; }
             offset += allocSize;

@@ -214,7 +214,9 @@ void NoteSoftReturn(BaseObject* obj, RegionInfo* region, const char* branch, Bas
 }
 
 void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t position, const char* reason,
-                   uintptr_t tipAddr, uint64_t tipWord0, uint64_t tipWord1, size_t nextSurvOff, size_t survAfter)
+                   uintptr_t tipAddr, uint64_t tipWord0, uint64_t tipWord1, size_t nextSurvOff, size_t survAfter,
+                   unsigned survAtBreak, size_t walkSteps, size_t prevOff, size_t prevSz, uintptr_t prevTip,
+                   unsigned prevSurv)
 {
     if (!Enabled()) {
         return;
@@ -222,7 +224,7 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
     g_visitGateN.fetch_add(1, std::memory_order_relaxed);
     // Always log when there are survived bits past the break (the permanent-hole shape);
     // otherwise apply sample cap.
-    bool interesting = (survAfter > 0);
+    bool interesting = (survAfter > 0) || (offset == 6424) || (survAtBreak != 0);
     if (!interesting && !SampleOk()) {
         return;
     }
@@ -243,20 +245,29 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
     if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         objState = static_cast<unsigned>(obj->GetObjectState().GetStateCode());
     }
-    // site: RegionManager.cpp VisitLiveObjectsUntilFalse small-region loop —
-    // gate reject → return true (line ~510-512 product; walkBreak = this offset).
+    // By construction of VisitLive size-walk, offset == sum of prior GetAllocSize steps.
+    // isStart_mark = surv bit at break; isStart_walk = always 1 if we arrived via size sum.
+    // 乙2 if survAtBreak=0 (walk landed where mark never claimed a start).
+    // 乙1 if survAtBreak=1 (mark agrees this is a start; tip itself is bad).
+    unsigned offAlign8 = (offset % 8 == 0) ? 1U : 0U;
+    unsigned prevSzAlign8 = (prevSz % 8 == 0) ? 1U : 0U;
     LOG(RTLOG_ERROR,
         "[GCV2][tipwho] walk_break site=VisitLiveObjectsUntilFalse:PlausibleGate "
         "line=RegionManager.cpp:510 reason=%s obj=%p region=%p rstart=%#zx off=%zu pos=%#zx "
         "allocOff=%zu rs=%u young=%u live=%zu tip=%#zx tipW0=%#llx tipW1=%#llx objState=%u "
-        "nextSurvOff=%zu survAfter=%zu size_read=NOT_CALLED",
+        "nextSurvOff=%zu survAfter=%zu size_read=NOT_CALLED "
+        "survAtBreak=%u offAlign8=%u walkSteps=%zu prevOff=%zu prevSz=%zu prevSzAlign8=%u "
+        "prevTip=%#zx prevSurv=%u isStart_walk=1 isStart_mark=%u",
         reason != nullptr ? reason : "?", obj, region, rstart, offset, position, allocOff, rs, young, live,
         static_cast<size_t>(tipAddr), static_cast<unsigned long long>(tipWord0),
-        static_cast<unsigned long long>(tipWord1), objState, nextSurvOff, survAfter);
+        static_cast<unsigned long long>(tipWord1), objState, nextSurvOff, survAfter, survAtBreak, offAlign8,
+        walkSteps, prevOff, prevSz, prevSzAlign8, prevTip, prevSurv, survAtBreak);
     // Attribute the first survived bit past the break (classic 6424→19400).
     if (nextSurvOff > 0) {
         NotePaintLookup(region, nextSurvOff, "walk_break.nextSurv");
     }
+    // Attribute the break offset itself (乙1: paint start bit; 乙2: miss or multi-bit cover).
+    NotePaintLookup(region, offset, "walk_break.atBreak");
 }
 
 void NotePaint(RegionInfo* region, BaseObject* obj, size_t offset, size_t objSize, const char* site, void* ra0,

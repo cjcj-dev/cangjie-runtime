@@ -34,11 +34,12 @@ bool Enabled();
 void NoteSoftReturn(BaseObject* obj, RegionInfo* region, const char* branch, BaseObject* toObj);
 
 // VisitLive gate rejected obj at position; walk returns true without visiting rest.
-// reason: product gate arm (null-tip / tip-small-int / tip-in-heap / dead-region / non-heap).
-// tipWord0/1: first 16B of object header raw (little-endian host words).
+// isitastart: also records survAtBreak / prev step (prevOff,prevSz,prevTip,prevSurv) /
+// walkSteps so 乙1 vs 乙2 can be decided from one line.
 void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t position,
                    const char* reason, uintptr_t tipAddr, uint64_t tipWord0, uint64_t tipWord1,
-                   size_t nextSurvOff, size_t survAfter);
+                   size_t nextSurvOff, size_t survAfter, unsigned survAtBreak, size_t walkSteps,
+                   size_t prevOff, size_t prevSz, uintptr_t prevTip, unsigned prevSurv);
 
 // Before FORWARDED: count size-walk starts vs object-FORWARDED vs multi-bit interiors.
 void NotePrePublish(RegionInfo* region);
