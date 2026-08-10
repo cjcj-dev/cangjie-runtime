@@ -55,6 +55,9 @@ RestoreContextForEH:
     mov  r0, sp
     bl  MRT_RestoreContext
 
+    // r0 = landing pad. Save; zero AAPCS return regs for N2CStub (see x86_64_linux).
+    mov  r3, r0
+
     // Restore all callee saved register.
     ldr  r4, [sp]
     ldr  r5, [sp, #4]
@@ -78,6 +81,10 @@ RestoreContextForEH:
     mov  sp, r1
 
     // jump to landingpad.
-    bx  r0
+    mov  r0, #0
+    mov  r1, #0
+    mov  r2, #0
+    // r3 still holds landing pad
+    bx  r3
     .cfi_endproc
     .size RestoreContextForEH, .-RestoreContextForEH
