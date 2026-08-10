@@ -25,6 +25,7 @@ namespace MapleRuntime {
 #define ARM32_MARKED_FLAG_BITS  2
 #endif
 class BaseObject;
+class WCollector;
 
 // COLOUR_WRITEBACK_AUDIT §六 判据 1：堆内非 null 写必须带色。定义在 RefField.inline.h /
 // BaseObject.cpp；默认关（MRT_GCV2_ASSERT_COLOURED_WRITES=1 打开）。
@@ -120,14 +121,6 @@ public:
     // 凭什么: zpointer 就是槽里的带色位模式，与 MAddress 同宽。
     explicit HeapSlot(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
     HeapSlot(const HeapSlot& ref) : fieldVal(ref.fieldVal) {}
-    explicit HeapSlot(const BaseObject* obj) : fieldVal(0)
-    {
-#ifdef __arm__
-        address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
-#else
-        address = reinterpret_cast<MAddress>(obj);
-#endif
-    }
 #ifdef __arm__
     HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid) : isTagged(tagged), tagID(tagid)
     {
@@ -161,6 +154,20 @@ public:
     HeapSlot& operator=(const HeapSlot&&) = delete;
 
 private:
+    // heapdesired: plain BaseObject* carrier is not a public heap-CAS desired.
+    // Only WCollector (GetAndTryTagRefField / RootSlotWriteback plain-root arm /
+    // null install) may mint it. Outside code that needs a plain value must say
+    // so via zpointer/MAddress or the colour-carrying constructors above —
+    // RefField<>(obj) as CompareExchange desired is a compile error.
+    explicit HeapSlot(const BaseObject* obj) : fieldVal(0)
+    {
+#ifdef __arm__
+        address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
+#else
+        address = reinterpret_cast<MAddress>(obj);
+#endif
+    }
+    friend class WCollector;
 #ifdef __arm__
     using RefFieldValue = U32;
 #else

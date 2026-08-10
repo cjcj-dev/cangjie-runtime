@@ -32,7 +32,10 @@ public:
     BaseObject* FindToVersion(BaseObject*) const override { return nullptr; }
     bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const override { return false; }
     bool IsOldPointer(RefField<>&) const override { return false; }
-    RefField<> GetAndTryTagRefField(BaseObject* obj) const override { return RefField<>(obj); }
+    RefField<> GetAndTryTagRefField(BaseObject* obj) const override
+    {
+        return RefField<>(to_zpointer(reinterpret_cast<MAddress>(obj)));
+    }
 };
 
 class TestBarrier final : public Barrier {
@@ -196,7 +199,7 @@ int main()
               << " result=" << ((hasRef && primNoRef) ? "PASS" : "FAIL") << '\n';
     bool passed = hasRef && primNoRef;
 
-    RefField<> sourceField(fixture.youngObject);
+    RefField<> sourceField(to_zpointer(reinterpret_cast<MAddress>(fixture.youngObject)));
     MAddress dst = reinterpret_cast<MAddress>(fixture.field);
     MAddress src = reinterpret_cast<MAddress>(&sourceField);
     size_t sz = sizeof(RefField<>);
