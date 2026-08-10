@@ -127,12 +127,19 @@ void EmitCounterLegend()
         "[GCV2][diag][LEGEND] missBare · old→young edge with no write stamp · "
         "healthy=load-dep (same order as oldToYoungEdges only if write side closed) · "
         "falseHigh=stamp collision reclass + promOld→censusYoung spur (fullclear) · "
-        "falseLow=over-stamping");
+        "falseLow=over-stamping · compat=neverSeen+displaced (stampfix)");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][LEGEND] missBareNeverSeen · bare and key not in eviction set · "
+        "healthy=true write-side gap (never entered RecordCrossGenEdge this minor) · "
+        "falseHigh=evict set overflow undercounts displaced · falseLow=n/a");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][LEGEND] missBareDisplaced · bare but key was force-overwritten · "
+        "healthy=0 when stamp table not saturated within minor · "
+        "falseHigh=n/a · falseLow=evict set missed key");
     LOG(RTLOG_ERROR,
         "[GCV2][diag][LEGEND] missRecordedLost · stamp recorded=1 but slot not in remset · "
-        "healthy=often 0; spikes on young-after-drain windows · "
-        "falseHigh=stamp never cleared across minor (remset drained, stamp lives) · "
-        "falseLow=collision overwrote recorded bit");
+        "healthy=often 0 after per-minor stamp clear (stampfix) · "
+        "falseHigh=stale stamp if clear disabled · falseLow=collision overwrote recorded bit");
     LOG(RTLOG_ERROR,
         "[GCV2][diag][LEGEND] missPhaseLe8 · miss whose write phase ≤ INIT · "
         "healthy=load-dep (Idle bare window) · falseHigh=phase mis-stamp · falseLow=n/a");
@@ -155,7 +162,14 @@ void EmitCounterLegend()
         "healthy=low relative to stampNotes · falseHigh=table saturation · falseLow=n/a");
     LOG(RTLOG_ERROR,
         "[GCV2][diag][LEGEND] stampOccPct · occupied stamp slots / cap · "
-        "healthy=<50%%; >50%% ⇒ INSTRUMENT_SATURATED · falseHigh=n/a · falseLow=n/a");
+        "healthy=<50%% after per-minor clear; >50%% ⇒ INSTRUMENT_SATURATED · "
+        "falseHigh=n/a · falseLow=n/a");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][LEGEND] stampClears · write-stamp table clears after census · "
+        "healthy=≈minorsCensused · falseHigh=n/a · falseLow=clear path not wired");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][LEGEND] stampEvicted · force-overwrite displaced prior keys · "
+        "healthy=0 within minor under STAMP_BITS=22 · falseHigh=table too small · falseLow=n/a");
     LOG(RTLOG_ERROR,
         "[GCV2][diag][LEGEND] promotegap.* · promote re-reg field walks (seen/rec/node10*) · "
         "healthy=rec≤seen; node10rec when target still young · falseHigh=n/a · "
