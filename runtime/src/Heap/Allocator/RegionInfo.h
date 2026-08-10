@@ -815,6 +815,7 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
+
     // RouteInfo is a geometric plan valid only for survivors (route domain).
     // Out-of-domain inputs must get an observable negative (nullptr), never a
     // syntactically-valid but empty to-slot or a toRegion2Idx INVALID abort.

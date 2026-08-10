@@ -573,6 +573,8 @@ public:
     void ClearNotRelocatableThisCycleFlags();
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
+    // holesrc: CopyObject all survivors while region is still ROUTING.
+    void ForwardRoutedRegionObjects(RegionInfo* region);
 
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -617,7 +619,9 @@ public:
             CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
             if (fromRegionInfo->TryLockRouting(oldState)) {
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
-                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
+                    // holesrc: fill reserved to-slots before geometry is visible (publish order).
+                    ForwardRoutedRegionObjects(fromRegionInfo);
+                    fromRegionInfo->SetRouteState(RegionInfo::RouteState::FORWARDED);
                     return true;
                 } else {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
