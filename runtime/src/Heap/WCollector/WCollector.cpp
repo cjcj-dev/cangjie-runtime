@@ -5189,6 +5189,87 @@ void WCollector::ProcessFinalizers()
     fp.Notify();
 }
 
+// waitfwd: consumer-side wait for geometric route tip. Called only when RouteObject
+// returned a heap to with !IsValidObject (tip null). Publisher is ForwardObjectExclusive:
+//   toObj = RouteObject; CopyObject; fence; Unlock FORWARDED
+// so either to becomes tip-valid during copy, or from becomes FORWARDED after publish.
+//
+// ⛔ Never fall back to `from` here — eeebaaf3 unconditional return-from and the
+// waitfwd v1 "narrow" from-fallback both poison early cjpm path construction
+// (IllegalArgumentException path [0,0,0] ~1s). Mid-copy holes become tip-valid after
+// FORWARDED; permanent holes keep returning geometric `to` (status quo, not worse).
+//
+// Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
+BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
+{
+    static std::atomic<uint64_t> enterCount{0};
+    static std::atomic<uint64_t> tipReadyCount{0};
+    static std::atomic<uint64_t> giveUpCount{0};
+    static int diagOn = -1;
+    if (diagOn < 0) {
+        const char* v = std::getenv("MRT_GCV2_WAITFWD");
+        diagOn = (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
+    }
+    if (diagOn) {
+        enterCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    // Bound mid-copy waits. Permanent holes must not spin forever (would swap hang for hang).
+    // Publisher path is short (CopyObject + unlock); a few thousand yields covers it.
+    constexpr int kMaxSpins = 4096;
+    for (int spins = 0; spins < kMaxSpins; ++spins) {
+        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
+            if (diagOn) {
+                tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            return to;
+        }
+        if (from->IsForwarded()) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
+            if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
+                if (diagOn) {
+                    tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                return again;
+            }
+            // Object-level FORWARDED published but tip still null → permanent hole.
+            // Return geometric to (never from).
+            if (diagOn) {
+                giveUpCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            return again != nullptr ? again : to;
+        }
+        RegionInfo::RouteState rs = forwarding->GetRouteState();
+        if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+            std::atomic_thread_fence(std::memory_order_acquire);
+            BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
+            if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
+                if (diagOn) {
+                    tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                return again;
+            }
+            // Region-wide publish done, tip still null → permanent hole; return geometric to.
+            if (diagOn) {
+                giveUpCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            return again != nullptr ? again : (to != nullptr ? to : from);
+        }
+        sched_yield();
+        to = space.GetRegionManager().RouteObject(from, forwarding);
+        if (to == nullptr) {
+            // Route vanished mid-wait; geometric plan gone — keep from (not a tip filter).
+            return from;
+        }
+    }
+    if (diagOn) {
+        giveUpCount.fetch_add(1, std::memory_order_relaxed);
+    }
+    return to != nullptr ? to : from;
+}
+
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not

@@ -214,6 +214,11 @@ public:
     // outside the selected generation's forwarding table is already safe; a matching entry routes
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
+    //
+    // waitfwd: RouteObject is geometric (ROUTED before CopyObject fills the tip). Handing a
+    // null-tip to make_load_good → IdleBarrier self-heal is the THIRD_mutator same-fn hang.
+    // Spin briefly until tip-valid / object FORWARDED; never return-from on a hole tip
+    // (eeebaaf3 and waitfwd-v1 from-fallback both poison early path[0,0,0]).
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         if (!Heap::IsHeapAddress(obj)) {
@@ -225,7 +230,13 @@ public:
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
-        return to == nullptr ? obj : to;
+        if (to == nullptr) {
+            return obj;
+        }
+        if (LIKELY(!Heap::IsHeapAddress(to) || to->IsValidObject())) {
+            return to;
+        }
+        return WaitRoutedTipReady(obj, to, forwarding);
     }
 
     void AddRawPointerObject(BaseObject* obj) override
@@ -296,6 +307,9 @@ public:
 protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
+
+    // waitfwd: spin until geometric to has a tip or from is FORWARDED (see relocate_or_remap).
+    BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 
