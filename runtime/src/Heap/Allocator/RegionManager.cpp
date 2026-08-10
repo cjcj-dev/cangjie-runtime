@@ -514,12 +514,9 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
             // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
             // tipnull: gate reject with remaining ghost survivors is not walk success.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                for (size_t rest = offset; rest < (allocPtr - GetRegionStart()); rest += kMarkedBytesPerBit) {
-                    if (survivedAt(rest)) {
-                        return false;
-                    }
-                }
-                return true;
+                // tipnull: fail only if this size-walk offset is a survivor start.
+                // Do not 8-byte-scan rest (MarkBits interiors look survived).
+                return !survivedAt(offset);
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             position += allocSize;
