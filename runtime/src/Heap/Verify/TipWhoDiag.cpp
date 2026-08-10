@@ -193,13 +193,17 @@ void NoteSoftReturn(BaseObject* obj, RegionInfo* region, const char* branch, Bas
         rstart, offset, allocOff, rs, young, live, survived, objFwd, hostStart, hostSz, walkStarts, walkBreakOff);
 }
 
-void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t position)
+void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t position, const char* reason,
+                   uintptr_t tipAddr, uint64_t tipWord0, uint64_t tipWord1, size_t nextSurvOff, size_t survAfter)
 {
     if (!Enabled()) {
         return;
     }
     g_visitGateN.fetch_add(1, std::memory_order_relaxed);
-    if (!SampleOk()) {
+    // Always log when there are survived bits past the break (the permanent-hole shape);
+    // otherwise apply sample cap.
+    bool interesting = (survAfter > 0);
+    if (!interesting && !SampleOk()) {
         return;
     }
     size_t rstart = region != nullptr ? region->GetRegionStart() : 0;
@@ -207,6 +211,7 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
     unsigned rs = 0;
     unsigned young = 0;
     size_t live = 0;
+    unsigned objState = 0;
     if (region != nullptr) {
         if (region->GetRegionAllocPtr() > rstart) {
             allocOff = region->GetRegionAllocPtr() - rstart;
@@ -215,17 +220,19 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
         young = static_cast<unsigned>(region->IsYoungRegion());
         live = region->GetLiveByteCount();
     }
-    const char* kind = "?";
-    size_t hostStart = 0;
-    size_t hostSz = 0;
-    size_t walkStarts = 0;
-    size_t walkBreakOff = 0;
-    ClassifyOffset(region, offset, kind, hostStart, hostSz, walkStarts, walkBreakOff);
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+        objState = static_cast<unsigned>(obj->GetObjectState().GetStateCode());
+    }
+    // site: RegionManager.cpp VisitLiveObjectsUntilFalse small-region loop —
+    // gate reject → return true (line ~510-512 product; walkBreak = this offset).
     LOG(RTLOG_ERROR,
-        "[GCV2][tipwho] visit_gate n=%zu kind=%s obj=%p region=%p rstart=%#zx off=%zu pos=%#zx "
-        "allocOff=%zu rs=%u young=%u live=%zu hostStart=%zu hostSz=%zu walkStarts=%zu",
-        g_visitGateN.load(std::memory_order_relaxed), kind, obj, region, rstart, offset, position, allocOff, rs,
-        young, live, hostStart, hostSz, walkStarts);
+        "[GCV2][tipwho] walk_break site=VisitLiveObjectsUntilFalse:PlausibleGate "
+        "line=RegionManager.cpp:510 reason=%s obj=%p region=%p rstart=%#zx off=%zu pos=%#zx "
+        "allocOff=%zu rs=%u young=%u live=%zu tip=%#zx tipW0=%#llx tipW1=%#llx objState=%u "
+        "nextSurvOff=%zu survAfter=%zu size_read=NOT_CALLED",
+        reason != nullptr ? reason : "?", obj, region, rstart, offset, position, allocOff, rs, young, live,
+        static_cast<size_t>(tipAddr), static_cast<unsigned long long>(tipWord0),
+        static_cast<unsigned long long>(tipWord1), objState, nextSurvOff, survAfter);
 }
 
 void NotePrePublish(RegionInfo* region)

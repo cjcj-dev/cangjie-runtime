@@ -492,7 +492,34 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
             // Stop without calling func: same as "no more live objects we can name".
-            TipWhoDiag::NoteVisitGate(obj, this, 0, GetRegionStart());
+            if (TipWhoDiag::Enabled()) {
+                TypeInfo* tip = obj != nullptr ? obj->GetTypeInfo() : nullptr;
+                uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                const char* reason = "unknown";
+                if (obj == nullptr) {
+                    reason = "null-obj";
+                } else if (!Heap::IsHeapAddress(obj)) {
+                    reason = "non-heap";
+                } else if (IsFreeRegion() || IsGarbageRegion()) {
+                    reason = "dead-region";
+                } else if (tipAddr == 0) {
+                    reason = "null-tip";
+                } else if (tipAddr < 0x1000U) {
+                    reason = "tip-small-int";
+                } else if ((tipAddr & 0x7U) != 0) {
+                    reason = "tip-misaligned";
+                } else if (Heap::IsHeapAddress(tipAddr)) {
+                    reason = "tip-in-heap";
+                }
+                uint64_t w0 = 0;
+                uint64_t w1 = 0;
+                if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+                    auto* p = reinterpret_cast<const uint64_t*>(obj);
+                    w0 = p[0];
+                    w1 = p[1];
+                }
+                TipWhoDiag::NoteVisitGate(obj, this, 0, GetRegionStart(), reason, tipAddr, w0, w1, 0, 0);
+            }
             return true;
         }
         return func(obj);
@@ -508,7 +535,48 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
             // On reject: stop walk (return true = "until false" not triggered by visitor).
             // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                TipWhoDiag::NoteVisitGate(obj, this, offset, position);
+                if (TipWhoDiag::Enabled()) {
+                    TypeInfo* tip = obj != nullptr ? obj->GetTypeInfo() : nullptr;
+                    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                    const char* reason = "unknown";
+                    if (obj == nullptr) {
+                        reason = "null-obj";
+                    } else if (!Heap::IsHeapAddress(obj)) {
+                        reason = "non-heap";
+                    } else if (IsFreeRegion() || IsGarbageRegion()) {
+                        reason = "dead-region";
+                    } else if (tipAddr == 0) {
+                        reason = "null-tip";
+                    } else if (tipAddr < 0x1000U) {
+                        reason = "tip-small-int";
+                    } else if ((tipAddr & 0x7U) != 0) {
+                        reason = "tip-misaligned";
+                    } else if (Heap::IsHeapAddress(tipAddr)) {
+                        reason = "tip-in-heap";
+                    }
+                    uint64_t w0 = 0;
+                    uint64_t w1 = 0;
+                    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
+                        auto* p = reinterpret_cast<const uint64_t*>(obj);
+                        w0 = p[0];
+                        w1 = p[1];
+                    }
+                    // After break: count remaining survived bits (8B steps) without size-walk.
+                    size_t nextSurv = 0;
+                    size_t survAfter = 0;
+                    size_t allocOff = static_cast<size_t>(allocPtr - GetRegionStart());
+                    size_t scan = offset + 8;
+                    for (; scan < allocOff; scan += 8) {
+                        if (IsSurvivedObject(scan)) {
+                            if (survAfter == 0) {
+                                nextSurv = scan;
+                            }
+                            ++survAfter;
+                        }
+                    }
+                    TipWhoDiag::NoteVisitGate(obj, this, offset, position, reason, tipAddr, w0, w1, nextSurv,
+                                              survAfter);
+                }
                 return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
