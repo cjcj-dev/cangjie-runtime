@@ -217,10 +217,9 @@ public:
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
     //
-    // waitfwd: RouteObject is geometric (ROUTED before CopyObject fills the tip). Handing a
-    // null-tip to make_load_good → IdleBarrier self-heal is the THIRD_mutator same-fn hang.
-    // Spin briefly until tip-valid / object FORWARDED; never return-from on a hole tip
-    // (eeebaaf3 and waitfwd-v1 from-fallback both poison early path[0,0,0]).
+    // permhole receiptization: RouteObject is geometric (ROUTED before Copy fills tip).
+    // Only a tip-valid to is a receipt; null-tip geometric to must not reach self-heal.
+    // WaitRoutedTipReady returns receipt, or from while mid-route, or CHECKs permanent hole.
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         if (!Heap::IsHeapAddress(obj)) {
@@ -236,7 +235,7 @@ public:
             return obj;
         }
         if (LIKELY(!Heap::IsHeapAddress(to) || to->IsValidObject())) {
-            return to;
+            return to; // receipt (or non-heap)
         }
         return WaitRoutedTipReady(obj, to, forwarding);
     }
