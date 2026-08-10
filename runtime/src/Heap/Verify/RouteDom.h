@@ -14,18 +14,20 @@ namespace MapleRuntime {
 class BaseObject;
 class RegionInfo;
 
-// routedom: observe whether GetRoute is asked for objects outside the mark domain.
+// routedom: observe geometric GetRoute domain membership at object-start granularity.
 //
 // Gate (default off; product path early-return BEFORE any work):
 //   MRT_GCV2_VERIFY_ROUTEDOM=1
-// Positive control (invert mark predicate → name every routed object):
+// Positive control (invert mark predicate → name every routed object as sample):
 //   MRT_GCV2_VERIFY_ROUTEDOM_INVERT=1
-// Sample cap on violation lines: MRT_GCV2_VERIFY_ROUTEDOM_MAX=<N> (default 64)
+// Sample cap on detail lines: MRT_GCV2_VERIFY_ROUTEDOM_MAX=<N> (default 64)
 //
-// Call site: RegionInfo::GetRoute after survivor gate, before RouteInfo::GetRoute(preLiveBytes).
-// Predicate: RegionInfo::IsMarkedObject(obj) (unmodified). Invert only for positive control.
-// On violation: log obj · region · size · TypeInfo · preLiveBytes · toAddr · nextMarkedToAddr
-// Summary (atexit + optional Dump): ROUTEDOM total=N alias=M unmarked=U invert=I
+// Call site: RegionInfo::GetRoute AFTER survivor gate, after RouteInfo::GetRoute(preLiveBytes).
+// Classification of every geometric route:
+//   START     — fromObj is the start of a marked object
+//   INTERIOR  — fromObj falls inside a marked object's [start, start+size) but is not start
+// Summary: ROUTEDOM total=N start=S interior=I
+// INTERIOR samples also log hostStart · hostDelta · hostTip · hostToAddr
 
 namespace RouteDom {
 
