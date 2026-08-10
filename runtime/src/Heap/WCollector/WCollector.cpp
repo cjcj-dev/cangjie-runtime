@@ -44,6 +44,7 @@
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -2518,6 +2519,8 @@ public:
                 if (isYoung) {
                     bool wasMarked = collector->MarkObject(object);
                     if (wasMarked) {
+                        // eatarm D6: already marked → no field re-scan (T under this holder lost).
+                        EatArmDiag::NoteWasMarkedSkipFields(object);
                         continue;
                     }
                     ++nMarked;
@@ -2527,6 +2530,7 @@ public:
                     continue;
                 } else {
                     if (!localNonYoungSeen.insert(object).second) {
+                        EatArmDiag::NoteNonYoungDedupSkipFields(object);
                         continue;
                     }
                     CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -2536,6 +2540,7 @@ public:
                 if (isYoung) {
                     bool wasMarked = collector->MarkObject(object);
                     if (wasMarked) {
+                        EatArmDiag::NoteWasMarkedSkipFields(object);
                         continue;
                     }
                     ++nMarked;
@@ -2545,6 +2550,7 @@ public:
                 } else if (!fullYoungScan) {
                     continue;
                 } else if (!localNonYoungSeen.insert(object).second) {
+                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
                     continue;
                 }
                 CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -2638,6 +2644,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (isYoung) {
                 // MarkObject returns true if already marked → skip re-visit.
                 if (MarkObject(object)) {
+                    // eatarm D6: wasMarked → leave fields untraced this visit.
+                    EatArmDiag::NoteWasMarkedSkipFields(object);
                     continue;
                 }
                 reachableVec.push_back(object);
@@ -2648,6 +2656,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 }
                 if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
                                   g_minorLedgerCost.objInsNs)) {
+                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
                     continue;
                 }
                 reachableVec.push_back(object);
@@ -2655,6 +2664,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         } else {
             if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
                               g_minorLedgerCost.objInsNs)) {
+                // Dedup hit: may be young already-claimed or non-young; treat as skip-fields.
+                EatArmDiag::NoteWasMarkedSkipFields(object);
                 continue;
             }
             if (isYoung) {
@@ -3078,6 +3089,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 if (statsOut != nullptr) {
                     ++statsOut->skippedFysFilter;
                 }
+                // eatarm D5: FYS remset filter — raw target for T identity (no Resolve side-effects).
+                if (EatArmDiag::Enabled()) {
+                    HeapSlot<>* dropField = &HeapSlotAt<>(slot);
+                    RefField<> dropPeek(*dropField);
+                    BaseObject* dropT = to_object(dropPeek.GetTargetObject());
+                    EatArmDiag::NoteFysRemsetSkip(slot, dropT);
+                }
                 continue;
             }
         } else if (!keepByRetainedSnapshot) {
@@ -3381,7 +3399,9 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     if (!object->HasRefField()) {
         return;
     }
+    EatArmDiag::SetFixHost(object);
     object->ForEachRefField([this](RefField<>& field) { (void)FixMinorEvacuatedSlot(field); });
+    EatArmDiag::SetFixHost(nullptr);
 }
 
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
@@ -4463,6 +4483,7 @@ void WCollector::DoYoungGarbageCollection()
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
     IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
+    EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -4901,9 +4922,12 @@ void WCollector::DoYoungGarbageCollection()
                 if (!object->HasRefField()) {
                     continue;
                 }
-                object->ForEachRefField([this, &blackmarkExtra](RefField<>& field) {
+                object->ForEachRefField([this, &blackmarkExtra, object](RefField<>& field) {
                     BaseObject* target = ResolveMinorReference(field);
                     if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        EatArmDiag::NoteFixpointEdge(object, target,
+                                                    target == nullptr ? EatArmDiag::FixpointReason::TARGET_NULL
+                                                                      : EatArmDiag::FixpointReason::TARGET_NONHEAP);
                         return;
                     }
                     if (!Collector::PlausibleManagedObjectGate("iorfix.fixpoint.target", target)) {
@@ -4911,16 +4935,20 @@ void WCollector::DoYoungGarbageCollection()
                         if (host != nullptr && host != target) {
                             target = host;
                         } else {
+                            EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::PLAUSIBLE_FAIL);
                             return;
                         }
                     }
                     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (region == nullptr || !region->IsYoungRegion()) {
+                        EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::NOT_YOUNG);
                         return;
                     }
                     if (region->IsMarkedObject(target)) {
+                        EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ALREADY_MARKED);
                         return;
                     }
+                    EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ADMIT);
                     blackmarkExtra.push_back(target);
                 });
             }
@@ -4942,6 +4970,7 @@ void WCollector::DoYoungGarbageCollection()
                  totalExtra, rounds, reachableVec.size());
         }
     }
+    EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
     // setbitmap2: optional closure equality probe (default off).
     // mode=1: dump product ptr-set hash; mode=2: in-process dual legacy set walk on same roots.
     ClosureHashProbe::ReportDump(minorTotalRuns + 1, reachableVec, useBitmapLedger, fullYoungScan);
