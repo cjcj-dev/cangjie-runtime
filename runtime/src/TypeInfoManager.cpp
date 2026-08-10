@@ -7,10 +7,13 @@
 
 #include "TypeInfoManager.h"
 #include "Base/CString.h"
+#include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectManager.inline.h"
 #include "Sync/Sync.h"
+
+#include <atomic>
 
 namespace MapleRuntime {
 void TypeGCInfo::FillTypeGCInfo(TypeInfo* ti, CString &gcTibStr, U32 &curSize)
@@ -572,6 +575,47 @@ void TypeInfoManager::CreatedTypeInfoImpl(GenericTiDesc* &tiDesc, TypeTemplate* 
 {
     CString typeInfoName = tt->GetTypeInfoName(argSize, args);
     TypeInfo* newTypeInfo = reinterpret_cast<TypeInfo*>(Allocate(sizeof(TypeInfo)));
+    // tiarena: arena bump has no align on non-ARM (Allocate only MRT_ALIGN under __arm__).
+    // Probe: if (addr&7)!=0, TypeInfo* starts misaligned → Plausible tip-misaligned at birth.
+    {
+        static std::atomic<size_t> g_tiArenaN{ 0 };
+        static std::atomic<size_t> g_tiArenaMis8{ 0 };
+        static std::atomic<size_t> g_tiArenaMis4{ 0 };
+        static std::atomic<bool> g_tiSizeLogged{ false };
+        uintptr_t a = reinterpret_cast<uintptr_t>(newTypeInfo);
+        size_t n = g_tiArenaN.fetch_add(1, std::memory_order_relaxed) + 1;
+        unsigned low3 = static_cast<unsigned>(a & 7U);
+        unsigned low2 = static_cast<unsigned>(a & 3U);
+        if (low3 != 0) {
+            g_tiArenaMis8.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (low2 != 0) {
+            g_tiArenaMis4.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!g_tiSizeLogged.exchange(true, std::memory_order_relaxed)) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipwho] ti_arena sizeof(TypeInfo)=%zu mod8=%zu arm_align_ifdef=%d",
+                sizeof(TypeInfo), sizeof(TypeInfo) % 8,
+#ifdef __arm__
+                1
+#else
+                0
+#endif
+            );
+        }
+        // Always sample first 64; always sample misaligned; milestones at power-of-two.
+        bool milestone = (n & (n - 1)) == 0;
+        if (n <= 64 || low3 != 0 || milestone) {
+            size_t nameSizeProbe = typeInfoName.Length() + 1;
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipwho] ti_arena n=%zu ti=%p low3=%u low2=%u nameLen=%zu name=%s "
+                "mis8=%zu mis4=%zu",
+                n, newTypeInfo, low3, low2, nameSizeProbe,
+                typeInfoName.Str() != nullptr ? typeInfoName.Str() : "?",
+                g_tiArenaMis8.load(std::memory_order_relaxed),
+                g_tiArenaMis4.load(std::memory_order_relaxed));
+        }
+    }
     size_t nameSize = typeInfoName.Length() + 1;
     uintptr_t nameAddr = Allocate(nameSize);
     MapleRuntime::MemoryCopy(nameAddr, nameSize, reinterpret_cast<uintptr_t>(typeInfoName.Str()), nameSize);
