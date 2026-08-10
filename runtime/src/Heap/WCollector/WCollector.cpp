@@ -1182,60 +1182,104 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         }
         return;
     }
-    bool latestLive = false;
+    // Classify latest for the dead-residue arm. Two different failures share
+    // !latestLive and must NOT share the same write:
+    //
+    //   true dead (region null/free/garbage, or latest null): one-gen-stale
+    //   remset/root residue after Flip — soft-null so major F5 is not hit on a
+    //   detector path (e8e092f6).
+    //
+    //   invalid_object in an *active* region (RECENT_FULL etc.): FindToVersion /
+    //   RouteObject returned a to-address whose TypeInfo tip is null (heap-hole
+    //   shape: reserved to-space not filled — HEAP_HOLE_AUDIT_0805 H1). Nulling
+    //   that slot zeros a field of a still-valid holder (nullslot run16:
+    //   holderValid=1, rtype=2, latestValid=0) → mutator si=0x18 / same-fn hang
+    //   under colourrt/satbspin. Prefer a still-valid from (ghosts live until
+    //   Unbind); otherwise leave the old-tag alone (9870d148 leave-alone).
+    //   Never invent null on that arm.
+    RegionInfo* latestRegion = nullptr;
+    bool latestInActiveRegion = false;
+    bool latestValidObj = false;
     if (Heap::IsHeapAddress(latest)) {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
-        latestLive = region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
-                     latest->IsValidObject();
+        latestRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+        latestInActiveRegion = latestRegion != nullptr && !latestRegion->IsFreeRegion() &&
+                               !latestRegion->IsGarbageRegion();
+        if (latestInActiveRegion) {
+            latestValidObj = latest->IsValidObject();
+        }
     }
+    bool latestLive = latestInActiveRegion && latestValidObj;
     if (!latestLive) {
-        // Dead one-gen-stale residue (common right after Flip of the just-tagged
-        // generation, or remset residue). Null the slot instead of fail-closed:
-        // F5 still guards major FindLatestVersion consumers.
-        // Restricted to heap addresses: non-heap handled above.
-        static std::atomic<size_t> g_f3DeadLogged{ 0 };
-        size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
-        if (n < 16) {
-            VLOG(REPORT,
-                 "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
-                 holder, &field, fromObj, latest);
+        const char* reason = "unknown";
+        unsigned rtype = 0;
+        int latestValid = -1;
+        if (latest == nullptr) {
+            reason = "latest_null";
+        } else if (!Heap::IsHeapAddress(latest)) {
+            reason = "latest_not_heap";
+        } else if (latestRegion == nullptr) {
+            reason = "region_null";
+        } else if (latestRegion->IsFreeRegion()) {
+            reason = "region_free";
+            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+        } else if (latestRegion->IsGarbageRegion()) {
+            reason = "region_garbage";
+            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+        } else {
+            latestValid = latestValidObj ? 1 : 0;
+            reason = latestValid ? "valid_but_not_live" : "invalid_object";
+            rtype = static_cast<unsigned>(latestRegion->GetRegionType());
         }
-        {
-            const char* reason = "unknown";
-            unsigned rtype = 0;
-            int latestValid = -1;
-            if (latest == nullptr) {
-                reason = "latest_null";
-            } else if (!Heap::IsHeapAddress(latest)) {
-                reason = "latest_not_heap";
-            } else {
-                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
-                if (region == nullptr) {
-                    reason = "region_null";
-                } else if (region->IsFreeRegion()) {
-                    reason = "region_free";
-                    rtype = static_cast<unsigned>(region->GetRegionType());
-                } else if (region->IsGarbageRegion()) {
-                    reason = "region_garbage";
-                    rtype = static_cast<unsigned>(region->GetRegionType());
-                } else {
-                    latestValid = latest->IsValidObject() ? 1 : 0;
-                    reason = latestValid ? "valid_but_not_live" : "invalid_object";
-                    rtype = static_cast<unsigned>(region->GetRegionType());
+        size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
+        if (NullslotProbeEnabled() && whyN < 64) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
+                "holder=%p field=%p from=%p latest=%p",
+                whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
+        }
+
+        // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
+        if (latestInActiveRegion && !latestValidObj) {
+            bool fromLive = false;
+            if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj != latest) {
+                RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
+                fromLive = fromRegion != nullptr && !fromRegion->IsFreeRegion() &&
+                           !fromRegion->IsGarbageRegion() && fromObj->IsValidObject();
+            }
+            if (fromLive) {
+                static std::atomic<size_t> g_f3BadTipFrom{ 0 };
+                size_t n = g_f3BadTipFrom.fetch_add(1, std::memory_order_relaxed);
+                if (n < 16) {
+                    VLOG(REPORT,
+                         "[GCV2][F3-badtip] holder=%p field=%p from=%p latest=%p — recolour from",
+                         holder, &field, fromObj, latest);
                 }
+                latest = fromObj;
+                // Fall through to RootSlotWriteback(latest).
+            } else {
+                static std::atomic<size_t> g_f3BadTipSkip{ 0 };
+                size_t n = g_f3BadTipSkip.fetch_add(1, std::memory_order_relaxed);
+                if (n < 16) {
+                    VLOG(REPORT,
+                         "[GCV2][F3-badtip] holder=%p field=%p from=%p latest=%p — leave old-tag",
+                         holder, &field, fromObj, latest);
+                }
+                return;
             }
-            size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
-            if (NullslotProbeEnabled() && whyN < 64) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
-                    "holder=%p field=%p from=%p latest=%p",
-                    whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
+        } else {
+            // True dead residue: soft-null (e8e092f6).
+            static std::atomic<size_t> g_f3DeadLogged{ 0 };
+            size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
+            if (n < 16) {
+                VLOG(REPORT,
+                     "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
+                     holder, &field, fromObj, latest);
             }
+            NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
+            RefField<> nullField(nullptr);
+            (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+            return;
         }
-        NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
-        RefField<> nullField(nullptr);
-        (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
-        return;
     }
     // Phase C heap: write the current colour back, not a bare pointer.
     // plainroots non-heap root slots: write plain latest (ZGC uncolored root heal).
@@ -2051,17 +2095,22 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     // gone, header zeroed). F5 would abort a detector path; here we soft-resolve:
     //   routed to-version → RootSlotWriteback(to)
     //   unmoved valid from → RootSlotWriteback(from)
-    //   dead/stale → null the slot (caller drops the edge)
+    //   true dead (free/garbage/null) → null the slot (caller drops the edge)
+    //   active-region bad tip → leave alone / return from (never invent null)
     // N2: CAS (FYS=1 multi-writer safe; product default FYS=1).
     // hangfloor: use RootSlotWriteback so heap remset/fields keep Phase C colour.
     MAddress expected = raw(value.GetFieldValue());
     BaseObject* to = FindToVersion(object);
+    bool toActiveBadTip = false;
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
-            to->IsValidObject()) {
-            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
-            return to;
+        if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion()) {
+            if (to->IsValidObject()) {
+                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
+                return to;
+            }
+            // Active region, tip invalid — same family as F3 invalid_object (rtype=2).
+            toActiveBadTip = true;
         }
     }
     if (Heap::IsHeapAddress(object)) {
@@ -2078,6 +2127,18 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     // object", not "dead residue". Return as-is; never CAS (slot may be RO static root).
     // See reports/REPORT-zcdnull.md — CAS-null on RO static SEGV (si_addr=&field).
     if (object != nullptr && !Heap::IsHeapAddress(object)) {
+        return object;
+    }
+    // Active-region bad tip with no valid from: leave the old-tag alone (satbfix).
+    // Mutator read path still routes; inventing null zeros live holder fields.
+    if (toActiveBadTip) {
+        static std::atomic<size_t> g_resolveBadTipSkip{ 0 };
+        size_t n = g_resolveBadTipSkip.fetch_add(1, std::memory_order_relaxed);
+        if (n < 16) {
+            VLOG(REPORT,
+                 "[GCV2][minor-badtip] field=%p from=%p to=%p — leave old-tag",
+                 &field, object, to);
+        }
         return object;
     }
     static std::atomic<size_t> g_staleOldTagLogged{ 0 };
