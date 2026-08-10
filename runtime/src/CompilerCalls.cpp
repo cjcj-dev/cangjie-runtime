@@ -1659,10 +1659,9 @@ std::atomic<size_t> g_readRefNullN{ 0 };
 } // namespace
 
 // nullholder probe decls (⛔ do not merge) — avoid including WCollector.h (RegionSpace path).
-namespace MapleRuntime {
+// Already inside namespace MapleRuntime.
 void EmitNullholderEntryProbe(void* obj, void* field, uintptr_t retPc0, uintptr_t rbp);
 void NoteSoftNullDerivedReturn(void* field, void* holder, uintptr_t retPc);
-}
 
 extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* field)
 {
@@ -1674,7 +1673,7 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
 #if defined(__x86_64__) && !defined(__APPLE__)
         rbp = reinterpret_cast<uintptr_t>(__builtin_frame_address(0));
 #endif
-        MapleRuntime::EmitNullholderEntryProbe(obj, field, retPc0, rbp);
+        EmitNullholderEntryProbe(obj, field, retPc0, rbp);
     }
     const bool isGlobal = IsGlobalStruct(obj, reinterpret_cast<MAddress>(field));
     // Snapshot raw slot BEFORE barrier may self-heal (CAS) the field.
@@ -1690,7 +1689,7 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     }
     // H1 chain: null return may become next call's holder.
     if (result == nullptr) {
-        MapleRuntime::NoteSoftNullDerivedReturn(field, obj, 0);
+        NoteSoftNullDerivedReturn(field, obj, 0);
     }
     // Log only when ret is null AND GC is in concurrent fix window (Mode A phases).
     // Idle null Option reads exhaust a flat 64-cap before Mode A; phase-filter keeps
