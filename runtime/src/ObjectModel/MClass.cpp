@@ -1254,6 +1254,21 @@ struct TypeInfoLayoutCheck {
     static void CheckInterpreterMirror()
     {
         static_assert(sizeof(DYN_TypeInfo) == sizeof(TypeInfo), "DYN_TypeInfo size must match TypeInfo");
+        // Alignment was the one property of the mirror nothing here checked, and
+        // it is declared in two files that must move together: TypeInfo carries
+        // ATTR_PACKED in MClass.h, DYN_TypeInfo carries TYPE_INFO_ATTRS in the
+        // public header Interpreter/RuntimeTypes.h. Raising one alone leaves
+        // sizeof and every offset identical, so the checks below all pass while
+        // the two structs disagree about where they may be placed.
+        static_assert(alignof(DYN_TypeInfo) == alignof(TypeInfo),
+            "DYN_TypeInfo alignment must match TypeInfo -- raise ATTR_PACKED in MClass.h and "
+            "TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h together");
+        // The collector treats a tip that is not 8-byte aligned as not-a-TypeInfo
+        // (StateWord::ADDRESS_ALIGN_MASK, consumed at Collector.cpp:104 and :304
+        // and asserted fatally at Mutator.cpp:597 and :754). Declaring less than
+        // that is what let the arena hand out addresses the collector rejects.
+        static_assert(alignof(TypeInfo) >= StateWord::ADDRESS_ALIGN_MASK + 1,
+            "TypeInfo declares weaker alignment than the collector requires of a tip");
         static_assert(__builtin_offsetof(DYN_TypeInfo, typeInfoName) == __builtin_offsetof(TypeInfo, typeInfoName),
             "typeInfoName offset mismatch");
         static_assert(
