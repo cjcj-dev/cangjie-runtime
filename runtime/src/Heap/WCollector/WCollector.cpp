@@ -1152,11 +1152,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
-        // tipnull densify: out-of-domain ghost soft-nulls; keep from (still live).
-        if (toVersion == nullptr) {
-            HealRoot(root, from_object(oldObj));
-            return oldObj;
-        }
+        CHECK(toVersion != nullptr);
         HealRoot(root, from_object(toVersion));
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
@@ -5980,7 +5976,7 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
-        // tipnull: soft-return of uncopied ghost made VisitLive look complete (FORWARDED hole).
+        // tipnull arm R: uncopied movable ghost is not VisitLive success.
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
             return nullptr;
         }
@@ -6068,11 +6064,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    // tipnull densify: out-of-domain after start-only rebuild — soft-null not CHECK.
-    if (toObj == nullptr) {
-        obj->UnlockObject(ObjectState::NORMAL);
-        return nullptr;
-    }
+    CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
