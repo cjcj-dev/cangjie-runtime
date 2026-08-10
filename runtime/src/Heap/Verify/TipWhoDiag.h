@@ -55,6 +55,12 @@ void NotePaint(RegionInfo* region, BaseObject* obj, size_t offset, size_t objSiz
 // At walk_break: look up paint for nextSurvOff (and log).
 void NotePaintLookup(RegionInfo* region, size_t queryOff, const char* context);
 
+// Birth of object header tip (SetClassInfo). Records tip at construction.
+void NoteBirth(BaseObject* obj, TypeInfo* tip, size_t size, const char* site);
+
+// At walk_break: look up birth tip for obj (when tip became garbage?).
+void NoteBirthLookup(BaseObject* obj, uintptr_t tipNow, const char* context);
+
 } // namespace TipWhoDiag
 } // namespace MapleRuntime
 

@@ -8,12 +8,14 @@
 #include "Base/Log.h"
 #include "MObject.inline.h"
 #include "Inspector/CjAllocData.h"
+#include "Heap/Verify/TipWhoDiag.h"
 namespace MapleRuntime {
 MObject* MObject::NewObject(TypeInfo* ti, MSize size, AllocType allocType)
 {
     auto addr = HeapManager::Allocate(size, allocType);
     if (LIKELY(addr != NULL_ADDRESS)) {
         (void)SetClassInfo(addr, ti);
+        TipWhoDiag::NoteBirth(from_alloc_addr(addr), ti, size, "NewObject");
     } else {
         return nullptr;
     }
@@ -31,6 +33,7 @@ MObject* MObject::NewPinnedObject(TypeInfo* ti, MSize size)
     auto addr = HeapManager::Allocate(size, AllocType::PINNED_OBJECT);
     if (LIKELY(addr != NULL_ADDRESS)) {
         (void)SetClassInfo(addr, ti);
+        TipWhoDiag::NoteBirth(from_alloc_addr(addr), ti, size, "NewPinnedObject");
     } else {
         return nullptr;
     }
@@ -48,6 +51,7 @@ MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
     auto addr = HeapManager::Allocate(size);
     if (LIKELY(addr != NULL_ADDRESS)) {
         (void)SetClassInfo(addr, const_cast<TypeInfo*>(ti));
+        TipWhoDiag::NoteBirth(from_alloc_addr(addr), const_cast<TypeInfo*>(ti), size, "NewFinalizer");
         from_alloc_addr(addr)->OnFinalizerCreated();
     } else {
         return nullptr;

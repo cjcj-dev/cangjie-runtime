@@ -35,6 +35,8 @@ std::atomic<size_t> g_uncopiedStarts{ 0 };
 std::atomic<size_t> g_interiorMarks{ 0 };
 std::atomic<size_t> g_orphanMarks{ 0 };
 std::atomic<size_t> g_paintN{ 0 };
+std::atomic<size_t> g_birthN{ 0 };
+std::atomic<size_t> g_birthBadN{ 0 };
 
 // Ring of recent MarkObject paints for orphan-bit attribution.
 struct PaintRec {
@@ -52,6 +54,25 @@ struct PaintRec {
 constexpr size_t kPaintRing = 4096;
 PaintRec g_paintRing[kPaintRing];
 std::atomic<size_t> g_paintSeq{ 0 };
+
+// Birth tips: last SetClassInfo for an object address (deadhead).
+struct BirthRec {
+    uintptr_t obj;
+    uintptr_t tip;
+    size_t size;
+    size_t gcCount;
+    unsigned phase;
+    unsigned tipAlignOk;
+    char site[32];
+};
+constexpr size_t kBirthRing = 16384;
+BirthRec g_birthRing[kBirthRing];
+std::atomic<size_t> g_birthSeq{ 0 };
+
+bool TipAlignOk(uintptr_t tip)
+{
+    return tip != 0 && tip >= 0x1000U && (tip & 0x7U) == 0 && !Heap::IsHeapAddress(tip);
+}
 
 size_t MaxSamples()
 {
@@ -262,6 +283,8 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
         static_cast<size_t>(tipAddr), static_cast<unsigned long long>(tipWord0),
         static_cast<unsigned long long>(tipWord1), objState, nextSurvOff, survAfter, survAtBreak, offAlign8,
         walkSteps, prevOff, prevSz, prevSzAlign8, prevTip, prevSurv, survAtBreak);
+    // deadhead: was tip good at SetClassInfo birth?
+    NoteBirthLookup(obj, tipAddr, "walk_break");
     // Attribute the first survived bit past the break (classic 6424→19400).
     if (nextSurvOff > 0) {
         NotePaintLookup(region, nextSurvOff, "walk_break.nextSurv");
@@ -297,6 +320,76 @@ void NotePaint(RegionInfo* region, BaseObject* obj, size_t offset, size_t objSiz
         rec.site[0] = '\0';
     }
     g_paintN.fetch_add(1, std::memory_order_relaxed);
+}
+
+void NoteBirth(BaseObject* obj, TypeInfo* tip, size_t size, const char* site)
+{
+    if (!Enabled() || obj == nullptr) {
+        return;
+    }
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    size_t seq = g_birthSeq.fetch_add(1, std::memory_order_relaxed);
+    BirthRec& rec = g_birthRing[seq % kBirthRing];
+    rec.obj = reinterpret_cast<uintptr_t>(obj);
+    rec.tip = tipAddr;
+    rec.size = size;
+    rec.gcCount = g_gcCount;
+    rec.phase = static_cast<unsigned>(Heap::GetHeap().GetGCPhase());
+    rec.tipAlignOk = TipAlignOk(tipAddr) ? 1U : 0U;
+    if (site != nullptr) {
+        size_t i = 0;
+        for (; i + 1 < sizeof(rec.site) && site[i] != '\0'; ++i) {
+            rec.site[i] = site[i];
+        }
+        rec.site[i] = '\0';
+    } else {
+        rec.site[0] = '\0';
+    }
+    g_birthN.fetch_add(1, std::memory_order_relaxed);
+    if (rec.tipAlignOk == 0) {
+        size_t n = g_birthBadN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipwho] birth_bad n=%zu obj=%p tip=%#zx size=%zu phase=%u(%s) gc=%zu site=%s",
+                n, obj, tipAddr, size, rec.phase,
+                Collector::GetGCPhaseName(static_cast<GCPhase>(rec.phase)), rec.gcCount, rec.site);
+        }
+    }
+}
+
+void NoteBirthLookup(BaseObject* obj, uintptr_t tipNow, const char* context)
+{
+    if (!Enabled() || obj == nullptr) {
+        return;
+    }
+    uintptr_t key = reinterpret_cast<uintptr_t>(obj);
+    size_t seq = g_birthSeq.load(std::memory_order_relaxed);
+    size_t n = seq < kBirthRing ? seq : kBirthRing;
+    for (size_t i = 0; i < n; ++i) {
+        size_t idx = (seq - 1 - i) % kBirthRing;
+        const BirthRec& rec = g_birthRing[idx];
+        if (rec.obj != key) {
+            continue;
+        }
+        unsigned nowOk = TipAlignOk(tipNow) ? 1U : 0U;
+        unsigned same = (rec.tip == tipNow) ? 1U : 0U;
+        LOG(RTLOG_ERROR,
+            "[GCV2][tipwho] birth_hit ctx=%s obj=%p birthTip=%#zx birthOk=%u birthSz=%zu "
+            "birthPhase=%u(%s) birthGc=%zu birthSite=%s tipNow=%#zx nowOk=%u same=%u "
+            "curPhase=%u(%s) curGc=%zu birthN=%zu birthBadN=%zu",
+            context != nullptr ? context : "?", obj, rec.tip, rec.tipAlignOk, rec.size, rec.phase,
+            Collector::GetGCPhaseName(static_cast<GCPhase>(rec.phase)), rec.gcCount, rec.site, tipNow, nowOk,
+            same, static_cast<unsigned>(Heap::GetHeap().GetGCPhase()),
+            Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), g_gcCount,
+            g_birthN.load(std::memory_order_relaxed), g_birthBadN.load(std::memory_order_relaxed));
+        return;
+    }
+    LOG(RTLOG_ERROR,
+        "[GCV2][tipwho] birth_miss ctx=%s obj=%p tipNow=%#zx nowOk=%u birthN=%zu ring=%zu "
+        "curPhase=%u(%s) curGc=%zu",
+        context != nullptr ? context : "?", obj, tipNow, TipAlignOk(tipNow) ? 1U : 0U,
+        g_birthN.load(std::memory_order_relaxed), n, static_cast<unsigned>(Heap::GetHeap().GetGCPhase()),
+        Collector::GetGCPhaseName(Heap::GetHeap().GetGCPhase()), g_gcCount);
 }
 
 void NotePaintLookup(RegionInfo* region, size_t queryOff, const char* context)

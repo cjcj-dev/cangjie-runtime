@@ -13,6 +13,7 @@
 #include "ExceptionManager.h"
 #include "Heap/Barrier/Barrier.inline.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/TipWhoDiag.h"
 #include "HeapManager.inline.h"
 // module internal interfaces
 #include "MArray.h"
@@ -132,6 +133,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
     auto address = HeapManager::Allocate(arraySize, allocType);
     if (LIKELY(address != NULL_ADDRESS)) {
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
+        TipWhoDiag::NoteBirth(newArray, &arrayClass, arraySize, "NewArray");
         newArray->SetLength(nElems);
 #if defined(__OHOS__) && (__OHOS__ == 1)
         if (CjAllocData::GetCjAllocData()->IsRecording()) {
