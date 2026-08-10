@@ -1676,6 +1676,85 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
+    // tipnull densify: rebuild liveInfo0 from size-walk ∩ prior survivor face.
+    // Orphan marks (survived off walk steps) inflate liveByteCount / preLiveBytes and
+    // Admit geometric to slots VisitLive never fills → FORWARDED + tip null.
+    // Distinct from holesrc densify: only drop orphans, re-MarkBits walk starts that
+    // were already survived — never invent new survivors (that caused invalid_object_route).
+    if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
+        !region->IsKnownEmpty()) {
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        RegionBitmap* mb = ghost->markBitmap;
+        RegionBitmap* rb = ghost->resurrectBitmap;
+        // Phase 1: record (offset, size) for size-walk starts that are survived on old face.
+        constexpr size_t kMaxStarts = 4096;
+        size_t startOff[kMaxStarts];
+        size_t startSz[kMaxStarts];
+        size_t nStarts = 0;
+        size_t liveBytes = 0;
+        uintptr_t position = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        bool walkOk = true;
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
+                walkOk = false;
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                walkOk = false;
+                break;
+            }
+            size_t offset = position - region->GetRegionStart();
+            if (ghost->IsSurvivedObject(offset)) {
+                if (nStarts < kMaxStarts) {
+                    startOff[nStarts] = offset;
+                    startSz[nStarts] = allocSize;
+                    ++nStarts;
+                }
+                liveBytes += allocSize;
+            }
+            position += allocSize;
+        }
+        if (walkOk && nStarts < kMaxStarts) {
+            auto clearAll = [](RegionBitmap* bm) {
+                if (bm == nullptr) {
+                    return;
+                }
+                size_t wc = bm->wordCnt.load(std::memory_order_acquire);
+                for (size_t i = 0; i < wc; ++i) {
+                    bm->markWords[i].store(0, std::memory_order_relaxed);
+                }
+                for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
+                    bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                }
+                bm->liveBytes.store(0, std::memory_order_relaxed);
+            };
+            clearAll(mb);
+            clearAll(rb);
+            size_t regionSize = region->GetGhostRegionSize();
+            if (regionSize == 0) {
+                regionSize = region->GetRegionSize();
+            }
+            for (size_t i = 0; i < nStarts; ++i) {
+                if (mb != nullptr) {
+                    (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                }
+            }
+            region->ResetLiveByteCount();
+            if (liveBytes > 0) {
+                region->AddLiveByteCount(liveBytes);
+            }
+            static std::atomic<size_t> densifyN{ 0 };
+            size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (dn <= 8) {
+                VLOG(REPORT,
+                     "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu regionSize=%zu n=%zu",
+                     region, nStarts, liveBytes, regionSize, dn);
+            }
+        }
+    }
     size_t fromBytes = region->GetLiveByteCount();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
@@ -1982,7 +2061,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     }
                 });
             }
-            return toObj != nullptr;
+            // tipnull: soft-return of uncopied from is not success (was permanent-hole producer).
+            return toObj != nullptr && (obj->IsForwarded() || toObj != obj);
         });
 
     CHECK(forwarded);
@@ -1998,15 +2078,23 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             while (position < allocPtr) {
                 BaseObject* obj = from_region_addr(position);
                 if (!Collector::PlausibleManagedObjectGate("ForwardRegion-2nd", obj)) {
+                    // Cannot invent size; if ghost claims survivors at/after here, refuse FORWARDED.
+                    for (size_t rest = offset; rest < (allocPtr - region->GetRegionStart());
+                         rest += kMarkedBytesPerBit) {
+                        CHECK_DETAIL(!ghost->IsSurvivedObject(rest),
+                                     "[GCV2][tipnull] gate-stop with liveInfo0 survivor before FORWARDED "
+                                     "region=%p offset=%zu rest=%zu",
+                                     region, offset, rest);
+                    }
                     break;
                 }
                 size_t allocSize = RegionSpace::GetAllocSize(*obj);
                 if (ghost->IsSurvivedObject(offset) && !obj->IsForwarded()) {
                     BaseObject* toObj = collector.ForwardObject(obj);
-                    CHECK_DETAIL(toObj != nullptr && (obj->IsForwarded() || toObj != obj),
+                    CHECK_DETAIL(toObj != nullptr && obj->IsForwarded(),
                                  "[GCV2][tipnull] uncopied liveInfo0 survivor before FORWARDED "
-                                 "region=%p obj=%p offset=%zu",
-                                 region, obj, offset);
+                                 "region=%p obj=%p offset=%zu to=%p",
+                                 region, obj, offset, toObj);
                 }
                 position += allocSize;
                 offset += allocSize;
