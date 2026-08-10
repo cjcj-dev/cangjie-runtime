@@ -6064,7 +6064,11 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
+    // tipnull: after densify/Admit start-only, Route miss is out-of-domain not CHECK.
+    if (toObj == nullptr) {
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
