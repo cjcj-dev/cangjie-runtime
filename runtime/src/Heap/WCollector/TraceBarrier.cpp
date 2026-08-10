@@ -7,6 +7,7 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/EdgeMissDiag.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -119,10 +120,19 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
     }
 
     Mutator* mutator = Mutator::GetMutator();
+    unsigned satbOld = 0;
+    unsigned satbNew = 0;
     if (rememberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(rememberedObject);
+        satbOld = 1;
     }
     RememberNewReference(mutator, ref);
+    if (ref != nullptr) {
+        satbNew = 1;
+    }
+    if (EdgeMissDiag::Enabled()) {
+        EdgeMissDiag::NoteWrite(obj, &field, rememberedObject, ref, "trace", satbOld, satbNew);
+    }
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);

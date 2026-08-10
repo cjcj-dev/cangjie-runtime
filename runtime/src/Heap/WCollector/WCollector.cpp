@@ -48,6 +48,7 @@
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TipWhoDiag.h"
+#include "Heap/Verify/EdgeMissDiag.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Mutator/MutatorManager.h"
@@ -665,6 +666,10 @@ bool WCollector::MarkObject(BaseObject* obj) const
         size_t off = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
         TipWhoDiag::NotePaint(region, obj, off, objectSize, "WCollector::MarkObject",
                               __builtin_return_address(0), __builtin_return_address(1));
+    }
+    // edgemiss: first-mark timestamp for post-mark-write vs miss-follow (MRT_GCV2_EDGEMISS=1).
+    if (!marked && EdgeMissDiag::Enabled()) {
+        EdgeMissDiag::NoteMark(obj);
     }
     if (!marked) {
         region->AddLiveByteCount(objectSize);
@@ -1420,6 +1425,10 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                 holderValid, holderMarked, holderRtype, holderRoute, holderYoung, holderHasBm,
                 fromMarked, fromRoute, fromYoung, fromGhost, fromHasBm, fromLiveBytes,
                 findToHit, latestMarked, latestRoute, latestYoung, latestGhost);
+            // edgemiss: write-vs-mark stamp for this (holder,field,from) edge.
+            if (EdgeMissDiag::Enabled()) {
+                (void)EdgeMissDiag::LookupAtF3(holder, &field, fromObj, holderMarked, fromMarked);
+            }
         }
 
         // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.

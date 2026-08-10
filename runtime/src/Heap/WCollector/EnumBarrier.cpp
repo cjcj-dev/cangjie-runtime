@@ -7,6 +7,7 @@
 
 #include "EnumBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Verify/EdgeMissDiag.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -109,11 +110,18 @@ void EnumBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, Ba
         remeberedObject = to_object(tmpField.GetTargetObject());
     }
     Mutator* mutator = Mutator::GetMutator();
+    unsigned satbOld = 0;
+    unsigned satbNew = 0;
     if (remeberedObject != nullptr) {
         mutator->RememberObjectInSatbBuffer(remeberedObject);
+        satbOld = 1;
     }
     if (ref != nullptr) {
         mutator->RememberObjectInSatbBuffer(ref);
+        satbNew = 1;
+    }
+    if (EdgeMissDiag::Enabled()) {
+        EdgeMissDiag::NoteWrite(obj, &field, remeberedObject, ref, "enum", satbOld, satbNew);
     }
     DLOG(BARRIER, "write obj %p ref@%p: 0x%zx -> %p", obj, &field, remeberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
