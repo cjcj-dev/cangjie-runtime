@@ -5845,15 +5845,20 @@ void WCollector::ProcessFinalizers()
     fp.Notify();
 }
 
-// waitfwd: consumer-side wait for geometric route tip. Called only when RouteObject
-// returned a heap to with !IsValidObject (tip null). Publisher is ForwardObjectExclusive:
-//   toObj = RouteObject; CopyObject; fence; Unlock FORWARDED
+// waitfwd / permhole: consumer-side wait for geometric route tip. Called only when
+// RouteObject returned a heap to with !IsValidObject (tip null). Publisher is
+// ForwardObjectExclusive: toObj = RouteObject; CopyObject; fence; Unlock FORWARDED
 // so either to becomes tip-valid during copy, or from becomes FORWARDED after publish.
 //
-// Never fall back to `from` here — eeebaaf3 unconditional return-from and the
-// waitfwd v1 "narrow" from-fallback both poison early cjpm path construction
-// (IllegalArgumentException path [0,0,0] ~1s). Mid-copy holes become tip-valid after
-// FORWARDED; permanent holes keep returning geometric `to` (status quo, not worse).
+// Never fall back to `from` on a still-planned geometric hole — eeebaaf3 unconditional
+// return-from and waitfwd v1 "narrow" from-fallback both poison early cjpm path
+// construction (IllegalArgumentException path [0,0,0] ~1s).
+//
+// permhole: a permanent hole (region/object already published, tip still null) or a
+// bounded spin that never sees tip-valid must not hand a null tip to make_load_good /
+// IdleBarrier self-heal (THIRD_mutator busy-loop). Fail with CHECK_DETAIL so the
+// first hit is a diagnostic abort (region/from/to/route/phase), not an undiagnosable hang.
+// Mid-copy waits stay bounded (kMaxSpins); infinite wait is forbidden.
 //
 // Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
@@ -5874,6 +5879,34 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     // Bound mid-copy waits. Permanent holes must not spin forever (would swap hang for hang).
     // Publisher path is short (CopyObject + unlock); a few thousand yields covers it.
     constexpr int kMaxSpins = 4096;
+    auto failNullTip = [&](const char* reason, int spins, BaseObject* geometricTo) -> BaseObject* {
+        if (diagOn) {
+            giveUpCount.fetch_add(1, std::memory_order_relaxed);
+        }
+        RegionInfo::RouteState rs =
+            forwarding != nullptr ? forwarding->GetRouteState() : RegionInfo::RouteState::NORMAL;
+        GCPhase phase = GetGCPhase();
+        MAddress fromAddr = reinterpret_cast<MAddress>(from);
+        MAddress toAddr = reinterpret_cast<MAddress>(geometricTo);
+        MAddress regStart = forwarding != nullptr ? forwarding->GetRegionStart() : 0;
+        MAddress regEnd = forwarding != nullptr ? forwarding->GetRegionEnd() : 0;
+        unsigned rtype = forwarding != nullptr ? static_cast<unsigned>(forwarding->GetRegionType()) : 0;
+        unsigned young = forwarding != nullptr ? static_cast<unsigned>(forwarding->IsYoungRegion()) : 0;
+        size_t live = forwarding != nullptr ? forwarding->GetLiveByteCount() : 0;
+        bool fromFwd = from != nullptr && from->IsForwarded();
+        // RTLOG_FATAL aborts after printing — never return a null-tip pointer.
+        CHECK_DETAIL(false,
+                     "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
+                     "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu "
+                     "from=%p fromFwd=%u to=%p tipValid=0 — refuse null-tip to mutator",
+                     reason, spins, static_cast<int>(phase), static_cast<unsigned>(rs), forwarding,
+                     static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live, from,
+                     static_cast<unsigned>(fromFwd), geometricTo);
+        (void)fromAddr;
+        (void)toAddr;
+        return geometricTo != nullptr ? geometricTo : from;
+    };
+
     for (int spins = 0; spins < kMaxSpins; ++spins) {
         if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
             if (diagOn) {
@@ -5891,11 +5924,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 return again;
             }
             // Object-level FORWARDED published but tip still null → permanent hole.
-            // Return geometric to (never from).
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            return again != nullptr ? again : to;
+            return failNullTip("object_FORWARDED_tip_null", spins, again != nullptr ? again : to);
         }
         RegionInfo::RouteState rs = forwarding->GetRouteState();
         if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
@@ -5907,11 +5936,10 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 }
                 return again;
             }
-            // Region-wide publish done, tip still null → permanent hole; return geometric to.
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            return again != nullptr ? again : (to != nullptr ? to : from);
+            // Region-wide publish done, tip still null → permanent hole.
+            return failNullTip(
+                rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
+                spins, again != nullptr ? again : (to != nullptr ? to : from));
         }
         sched_yield();
         to = space.GetRegionManager().RouteObject(from, forwarding);
@@ -5920,10 +5948,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             return from;
         }
     }
-    if (diagOn) {
-        giveUpCount.fetch_add(1, std::memory_order_relaxed);
-    }
-    return to != nullptr ? to : from;
+    return failNullTip("spin_timeout_tip_null", kMaxSpins, to != nullptr ? to : from);
 }
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
