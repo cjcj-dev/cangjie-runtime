@@ -16,6 +16,8 @@
 #include "Common/ColourTypes.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
 
@@ -32,6 +34,24 @@ std::atomic<size_t> g_permN{ 0 };
 std::atomic<size_t> g_uncopiedStarts{ 0 };
 std::atomic<size_t> g_interiorMarks{ 0 };
 std::atomic<size_t> g_orphanMarks{ 0 };
+std::atomic<size_t> g_paintN{ 0 };
+
+// Ring of recent MarkObject paints for orphan-bit attribution.
+struct PaintRec {
+    uintptr_t region;
+    uintptr_t rstart;
+    uintptr_t obj;
+    size_t offset;
+    size_t objSize;
+    size_t gcCount;
+    unsigned phase;
+    void* ra0;
+    void* ra1;
+    char site[40];
+};
+constexpr size_t kPaintRing = 4096;
+PaintRec g_paintRing[kPaintRing];
+std::atomic<size_t> g_paintSeq{ 0 };
 
 size_t MaxSamples()
 {
@@ -233,6 +253,76 @@ void NoteVisitGate(BaseObject* obj, RegionInfo* region, size_t offset, size_t po
         reason != nullptr ? reason : "?", obj, region, rstart, offset, position, allocOff, rs, young, live,
         static_cast<size_t>(tipAddr), static_cast<unsigned long long>(tipWord0),
         static_cast<unsigned long long>(tipWord1), objState, nextSurvOff, survAfter);
+    // Attribute the first survived bit past the break (classic 6424→19400).
+    if (nextSurvOff > 0) {
+        NotePaintLookup(region, nextSurvOff, "walk_break.nextSurv");
+    }
+}
+
+void NotePaint(RegionInfo* region, BaseObject* obj, size_t offset, size_t objSize, const char* site, void* ra0,
+               void* ra1)
+{
+    if (!Enabled() || region == nullptr) {
+        return;
+    }
+    size_t seq = g_paintSeq.fetch_add(1, std::memory_order_relaxed);
+    PaintRec& rec = g_paintRing[seq % kPaintRing];
+    rec.region = reinterpret_cast<uintptr_t>(region);
+    rec.rstart = region->GetRegionStart();
+    rec.obj = reinterpret_cast<uintptr_t>(obj);
+    rec.offset = offset;
+    rec.objSize = objSize;
+    rec.gcCount = g_gcCount;
+    rec.phase = static_cast<unsigned>(Heap::GetHeap().GetGCPhase());
+    rec.ra0 = ra0;
+    rec.ra1 = ra1;
+    if (site != nullptr) {
+        size_t i = 0;
+        for (; i + 1 < sizeof(rec.site) && site[i] != '\0'; ++i) {
+            rec.site[i] = site[i];
+        }
+        rec.site[i] = '\0';
+    } else {
+        rec.site[0] = '\0';
+    }
+    g_paintN.fetch_add(1, std::memory_order_relaxed);
+}
+
+void NotePaintLookup(RegionInfo* region, size_t queryOff, const char* context)
+{
+    if (!Enabled() || region == nullptr) {
+        return;
+    }
+    uintptr_t regKey = reinterpret_cast<uintptr_t>(region);
+    uintptr_t rstart = region->GetRegionStart();
+    size_t seq = g_paintSeq.load(std::memory_order_relaxed);
+    size_t n = seq < kPaintRing ? seq : kPaintRing;
+    // Newest first.
+    for (size_t i = 0; i < n; ++i) {
+        size_t idx = (seq - 1 - i) % kPaintRing;
+        const PaintRec& rec = g_paintRing[idx];
+        if (rec.region != regKey && rec.rstart != rstart) {
+            continue;
+        }
+        // Exact start bit, or multi-bit range covering queryOff.
+        bool hit = (rec.offset == queryOff) ||
+            (rec.offset < queryOff && queryOff < rec.offset + rec.objSize);
+        if (!hit) {
+            continue;
+        }
+        unsigned multi = (rec.offset != queryOff) ? 1U : 0U;
+        LOG(RTLOG_ERROR,
+            "[GCV2][tipwho] paint_hit ctx=%s queryOff=%zu paintOff=%zu paintSz=%zu multiBit=%u "
+            "obj=%#zx region=%#zx rstart=%#zx site=%s phase=%u(%s) gc=%zu ra0=%p ra1=%p paintN=%zu",
+            context != nullptr ? context : "?", queryOff, rec.offset, rec.objSize, multi, rec.obj, rec.region,
+            rec.rstart, rec.site, rec.phase, Collector::GetGCPhaseName(static_cast<GCPhase>(rec.phase)),
+            rec.gcCount, rec.ra0, rec.ra1, g_paintN.load(std::memory_order_relaxed));
+        return;
+    }
+    LOG(RTLOG_ERROR,
+        "[GCV2][tipwho] paint_miss ctx=%s queryOff=%zu region=%p rstart=%#zx paintN=%zu ring=%zu",
+        context != nullptr ? context : "?", queryOff, region, rstart, g_paintN.load(std::memory_order_relaxed),
+        n);
 }
 
 void NotePrePublish(RegionInfo* region)

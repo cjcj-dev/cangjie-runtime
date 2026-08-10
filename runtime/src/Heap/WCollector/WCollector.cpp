@@ -660,6 +660,12 @@ bool WCollector::MarkObject(BaseObject* obj) const
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
     bool marked = region->MarkObject(obj, objectSize);
+    // tipwho: paint ring for orphan-bit attribution (MRT_GCV2_TIPWHO=1; no control-flow change).
+    if (TipWhoDiag::Enabled()) {
+        size_t off = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        TipWhoDiag::NotePaint(region, obj, off, objectSize, "WCollector::MarkObject",
+                              __builtin_return_address(0), __builtin_return_address(1));
+    }
     if (!marked) {
         region->AddLiveByteCount(objectSize);
         (void)region;

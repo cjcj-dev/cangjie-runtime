@@ -46,6 +46,14 @@ void NotePrePublish(RegionInfo* region);
 // Permanent hole: classify `from` that still admits a geometric to with null tip.
 void NotePermHole(BaseObject* from, RegionInfo* region, BaseObject* geometricTo, const char* reason);
 
+// Mark-side paint ring: who called MarkObject/MarkBits for (region, offset).
+// site: short tag e.g. "WCollector::MarkObject"
+void NotePaint(RegionInfo* region, BaseObject* obj, size_t offset, size_t objSize, const char* site,
+               void* ra0, void* ra1);
+
+// At walk_break: look up paint for nextSurvOff (and log).
+void NotePaintLookup(RegionInfo* region, size_t queryOff, const char* context);
+
 } // namespace TipWhoDiag
 } // namespace MapleRuntime
 
