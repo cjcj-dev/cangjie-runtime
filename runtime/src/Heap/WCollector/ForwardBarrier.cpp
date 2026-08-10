@@ -35,7 +35,12 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
-                loadGood = theCollector.ForwardObject(loadGood);
+                BaseObject* fwd = theCollector.ForwardObject(loadGood);
+                // tipnull: ForwardObject may null on soft miss; never hand null to mutator
+                // for a live non-null ref (self-heal would CAS null into the slot).
+                if (fwd != nullptr) {
+                    loadGood = fwd;
+                }
             }
         }
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
@@ -105,7 +110,12 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
-                loadGood = theCollector.ForwardObject(loadGood);
+                BaseObject* fwd = theCollector.ForwardObject(loadGood);
+                // tipnull: ForwardObject may null on soft miss; never hand null to mutator
+                // for a live non-null ref (self-heal would CAS null into the slot).
+                if (fwd != nullptr) {
+                    loadGood = fwd;
+                }
             }
         }
         // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
