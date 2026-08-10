@@ -65,7 +65,8 @@ struct BirthRec {
     unsigned tipAlignOk;
     char site[32];
 };
-constexpr size_t kBirthRing = 16384;
+// CI first GC has ~25k+ births before forward; keep a full window for walk_break lookup.
+constexpr size_t kBirthRing = 65536;
 BirthRec g_birthRing[kBirthRing];
 std::atomic<size_t> g_birthSeq{ 0 };
 
