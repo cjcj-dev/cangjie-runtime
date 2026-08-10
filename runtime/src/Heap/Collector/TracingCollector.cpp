@@ -301,10 +301,9 @@ public:
             if (!wasMarked) {
                 nNewlyMarked++;
                 if (!obj->HasRefField()) {
-                    continue;
-                }
-                // Skip marking the weakRef itself, but trace its children node
-                if (UNLIKELY(obj->IsWeakRef())) {
+                    // fall through to TryForkTask
+                } else if (UNLIKELY(obj->IsWeakRef())) {
+                    // Skip marking the weakRef itself, but trace its children node
                     HeapSlot<>& referentField =
                         HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
                     BaseObject* referent =
@@ -317,6 +316,14 @@ public:
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
+            } else if (obj->HasRefField() && !obj->IsWeakRef()) {
+                // markclosure / ghostroute major sibling: paint-without-scan
+                // (MarkNewObject, pin reuse, alloc-black) sets the mark bit but never
+                // walks fields. ConcurrentMarkingWork used to early-continue on
+                // wasMarked and permanently drop children → live holder + fM=0
+                // (edgemiss HM1 miss_follow_no_write). Residual TraceObjectRefFields
+                // only pushes !IsMarkedObject targets (no re-push of marked peers).
+                collector.TraceObjectRefFields(obj, workStack);
             }
             // try to fork new task if needed.
             if (threadPool != nullptr) {
