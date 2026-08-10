@@ -487,9 +487,8 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     if (IsKnownEmpty()) {
         return true;
     }
-    // tipnull: AdmitForRoute/GetRoute use liveInfo0 after PrepareForwardableRegion.
-    // Evacuation must walk the same face — current liveInfo can diverge and skip
-    // survivors that RouteObject still admits → FORWARDED with geometric null tip.
+    // tipnull: Admit/GetRoute use liveInfo0 after PrepareForwardableRegion. Evacuation must
+    // walk the same face so FORWARDED cannot cover an Admit domain that was never Copy'd.
     LiveInfo* ghostFace = metadata.liveInfo0;
     auto survivedAt = [this, ghostFace](size_t offset) -> bool {
         if (ghostFace != nullptr) {
@@ -500,6 +499,7 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+            // tipnull: incomplete vs ghost survivors is failure (not silent success).
             return !survivedAt(0);
         }
         return func(obj);
@@ -512,10 +512,8 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
-            // On reject: stop walk (return true = "until false" not triggered by visitor).
-            // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
+            // tipnull: gate reject with remaining ghost survivors is not walk success.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                // tipnull: remaining liveInfo0 survivors must not look like success.
                 for (size_t rest = offset; rest < (allocPtr - GetRegionStart()); rest += kMarkedBytesPerBit) {
                     if (survivedAt(rest)) {
                         return false;
@@ -1680,85 +1678,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-    // tipnull densify (full-walk only): orphan marks off size-walk inflate liveByteCount/
-    // preLiveBytes and Admit geometric to that VisitLive never fills → FORWARDED tip null.
-    // Only densify when size-walk reaches allocPtr; partial walk must NOT clear (that wiped
-    // domains under CI enum and caused densify starts=0). Not hangpub/waitfwd.
-    if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
-        !region->IsKnownEmpty()) {
-        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-        RegionBitmap* mb = ghost->markBitmap;
-        RegionBitmap* rb = ghost->resurrectBitmap;
-        constexpr size_t kMaxStarts = 8192;
-        size_t startOff[kMaxStarts];
-        size_t startSz[kMaxStarts];
-        size_t nStarts = 0;
-        size_t liveBytes = 0;
-        uintptr_t position = region->GetRegionStart();
-        uintptr_t allocPtr = region->GetRegionAllocPtr();
-        bool fullWalk = true;
-        while (position < allocPtr) {
-            BaseObject* obj = from_region_addr(position);
-            if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
-                fullWalk = false;
-                break;
-            }
-            size_t allocSize = RegionSpace::GetAllocSize(*obj);
-            if (allocSize == 0) {
-                fullWalk = false;
-                break;
-            }
-            size_t offset = position - region->GetRegionStart();
-            if (ghost->IsSurvivedObject(offset)) {
-                if (nStarts >= kMaxStarts) {
-                    fullWalk = false;
-                    break;
-                }
-                startOff[nStarts] = offset;
-                startSz[nStarts] = allocSize;
-                ++nStarts;
-                liveBytes += allocSize;
-            }
-            position += allocSize;
-        }
-        if (fullWalk && position == allocPtr) {
-            auto clearAll = [](RegionBitmap* bm) {
-                if (bm == nullptr) {
-                    return;
-                }
-                size_t wc = bm->wordCnt.load(std::memory_order_acquire);
-                for (size_t i = 0; i < wc; ++i) {
-                    bm->markWords[i].store(0, std::memory_order_relaxed);
-                }
-                for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
-                    bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
-                }
-                bm->liveBytes.store(0, std::memory_order_relaxed);
-            };
-            clearAll(mb);
-            clearAll(rb);
-            size_t regionSize = region->GetGhostRegionSize();
-            if (regionSize == 0) {
-                regionSize = region->GetRegionSize();
-            }
-            for (size_t i = 0; i < nStarts; ++i) {
-                if (mb != nullptr) {
-                    (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
-                }
-            }
-            region->ResetLiveByteCount();
-            if (liveBytes > 0) {
-                region->AddLiveByteCount(liveBytes);
-            }
-            static std::atomic<size_t> densifyN{ 0 };
-            size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (dn <= 16) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu n=%zu",
-                    region, nStarts, liveBytes, dn);
-            }
-        }
-    }
     size_t fromBytes = region->GetLiveByteCount();
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
@@ -2039,6 +1958,51 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     Collector& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t promotedRecords = 0;
+    // tipnull / ZGC parity: no third arm "published complete without receipts".
+    // FORWARDED is only set after every liveInfo0 survivor has object-level FORWARDED
+    // (CopyObject wrote tip). VisitLive true alone is not completion — soft-return of
+    // uncopied from used to make CHECK(forwarded) pass with geometric null-tip holes.
+    auto allSurvivorsForwarded = [region]() -> bool {
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        auto survivedAt = [region, ghost](size_t offset) -> bool {
+            if (ghost != nullptr) {
+                return ghost->IsSurvivedObject(offset);
+            }
+            return region->IsSurvivedObject(offset);
+        };
+        if (region->IsLargeRegion()) {
+            if (!survivedAt(0)) {
+                return true;
+            }
+            return from_region_addr(region->GetRegionStart())->IsForwarded();
+        }
+        if (!region->IsSmallRegion()) {
+            return true;
+        }
+        uintptr_t position = region->GetRegionStart();
+        size_t offset = 0;
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", obj)) {
+                for (size_t rest = offset; rest < (allocPtr - region->GetRegionStart());
+                     rest += kMarkedBytesPerBit) {
+                    if (survivedAt(rest)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (survivedAt(offset) && !obj->IsForwarded()) {
+                return false;
+            }
+            position += allocSize;
+            offset += allocSize;
+        }
+        return true;
+    };
+
     bool forwarded = region->VisitLiveObjectsUntilFalse(
         [&collector, youngRegion, &rememberedSet, &promotedRecords](BaseObject* obj) {
             BaseObject* toObj = collector.ForwardObject(obj);
@@ -2065,18 +2029,34 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     }
                 });
             }
-            // tipnull: uncopied soft-return is not success.
-            return toObj != nullptr && (obj->IsForwarded() || toObj != obj);
+            // Receipt = object FORWARDED (Copy wrote tip). Soft-keep of from is not success.
+            return obj->IsForwarded();
         });
 
-    if (!forwarded) {
-        // tipnull: incomplete copy set — do not publish FORWARDED (permanent hole).
-        static std::atomic<size_t> incompleteN{ 0 };
-        size_t n = incompleteN.fetch_add(1, std::memory_order_relaxed) + 1;
+    // Second pass: force remaining survivors (concurrent race / first soft miss).
+    if (!forwarded || !allSurvivorsForwarded()) {
+        (void)region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+            if (obj->IsForwarded()) {
+                return true;
+            }
+            (void)collector.ForwardObject(obj);
+            return obj->IsForwarded();
+        });
+    }
+
+    // tipnull / ZGC: eliminate intermediate "published without receipts".
+    // If survivors still lack object-FORWARDED after re-walk, abandon the geometric plan:
+    // DispelGhost → NORMAL + no ghost so GetRoute/Admit soft-miss and mutators keep from
+    // (valid objects). Never FORWARDED/COMPACTED with null tip; never park forever on ROUTED.
+    if (!allSurvivorsForwarded()) {
+        static std::atomic<size_t> abandonN{ 0 };
+        size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 16) {
             LOG(RTLOG_ERROR,
-                "[GCV2][tipnull] incomplete ForwardRegion region=%p start=%#zx live=%zu n=%zu",
-                region, region->GetRegionStart(), region->GetLiveByteCount(), n);
+                "[GCV2][tipnull] ForwardRegion abandon-route region=%p start=%#zx live=%zu "
+                "route=%u n=%zu — DispelGhost; keep from",
+                region, region->GetRegionStart(), region->GetLiveByteCount(),
+                static_cast<unsigned>(region->GetRouteState()), n);
         }
         if (youngRegion) {
             region->PreserveRetainedLiveInfo();
@@ -2084,12 +2064,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
-        // Leave ROUTED (not FORWARDED/COMPACTED): WaitRoutedTipReady treats mid-route as
-        // return-from after bound spins, never permanent-hole CHECK. Exempt so carrier kept.
+        region->DispelGhostFromRegion();
         ExemptFromRegion(region);
         return;
     }
+
     CHECK(forwarded);
+    CHECK(allSurvivorsForwarded());
     {
         static const bool probe = []() {
             const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
