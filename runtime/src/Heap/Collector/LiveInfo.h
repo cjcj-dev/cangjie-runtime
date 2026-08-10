@@ -200,20 +200,6 @@ struct LiveInfo {
     RegionBitmap* resurrectBitmap = nullptr;
     RegionBitmap* enqueueBitmap = nullptr;
 
-    uint64_t GetPreLiveBytes(size_t offset, size_t regionSize)
-    {
-        RegionBitmap::PreMaskInfo maskInfo;
-        RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
-        uint64_t liveBytes = 0;
-        if (markBitmap != nullptr) {
-            liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
-        }
-        if (resurrectBitmap != nullptr) {
-            liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
-        }
-        return liveBytes;
-    }
-
     bool IsSurvivedObject(size_t offset) const
     {
         return (markBitmap != nullptr && markBitmap->IsMarked(offset)) ||
@@ -230,6 +216,24 @@ struct LiveInfo {
     {
         return (markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
             (resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
+    }
+
+private:
+    // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
+    // Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    friend class RegionInfo;
+    uint64_t GetPreLiveBytes(size_t offset, size_t regionSize)
+    {
+        RegionBitmap::PreMaskInfo maskInfo;
+        RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
+        uint64_t liveBytes = 0;
+        if (markBitmap != nullptr) {
+            liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
+        }
+        if (resurrectBitmap != nullptr) {
+            liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
+        }
+        return liveBytes;
     }
 };
 

@@ -161,7 +161,7 @@ Covering FindCoveringBackward(RegionInfo* region, size_t targetOffset)
         c.hostSize = sz;
         c.delta = targetOffset - candOff;
         c.hostTip = tip;
-        uint64_t pre = region->GetPreLiveBytesInGhostRegion(regionStart + candOff);
+        uint64_t pre = region->GetPreLiveBytesInGhostRegionForProbe(regionStart + candOff);
         c.hostToAddr = static_cast<uintptr_t>(region->GetRoutePlanAddr(pre));
         return c;
     }
@@ -192,7 +192,7 @@ uintptr_t NextMarkedToAddr(RegionInfo* region, size_t fromOffset, size_t fromSiz
             continue;
         }
         if (region->IsMarkedObject(cand)) {
-            uint64_t pre = region->GetPreLiveBytesInGhostRegion(cursor);
+            uint64_t pre = region->GetPreLiveBytesInGhostRegionForProbe(cursor);
             return static_cast<uintptr_t>(region->GetRoutePlanAddr(pre));
         }
         cursor += candSize;
