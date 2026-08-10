@@ -2196,9 +2196,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
-        // Drop geometric plan before clearing ghost so mutators cannot GetRoute a
-        // null-tip to during abandon (WaitRoutedTipReady permanent-hole / soft-null SEGV).
-        region->SetRouteInfo(0);
+        // DispelGhost → NORMAL + clear ghost bit: GetGhostFromRegionAt null ⇒ RouteObject
+        // miss ⇒ mutator keeps from (valid). Do not SetRouteInfo(0): that sets
+        // toRegion2Idx=INVALID and GetRoute CHECKs when preLive >= to1used (wb gate).
         region->DispelGhostFromRegion();
         ExemptFromRegion(region);
         return;
