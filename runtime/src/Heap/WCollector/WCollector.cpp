@@ -3680,7 +3680,8 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 }
 
 void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
-                                       const MinorSlotSet& rememberedSlots)
+                                       const MinorSlotSet& rememberedSlots,
+                                       std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     auto postEvacPoint = [this](const char* point, bool runHeap = true) {
@@ -3741,6 +3742,92 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
             }
         }
+    };
+
+    auto fixHeapParallelOnly = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
+        // Heap+remset only (roots already fixed under STW). Used by concurrent ref_fix window.
+        const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
+        const size_t nObj = reachableVec.size();
+        const size_t nSlot = remsetVec.size();
+        const int32_t helperNum = pool->GetMaxThreadNum();
+        int32_t heapWorkers = helperNum + 1;
+        {
+            const char* wEnv = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (wEnv != nullptr && wEnv[0] != '\0') {
+                int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
+                if (want >= 1 && want < heapWorkers) {
+                    heapWorkers = want;
+                }
+            }
+        }
+        if (heapWorkers < 1) {
+            heapWorkers = 1;
+        }
+        std::vector<size_t> objectsTaken(static_cast<size_t>(heapWorkers), 0);
+        std::atomic<size_t> objCursor{ 0 };
+        std::atomic<size_t> slotCursor{ 0 };
+        const size_t objChunk = std::max<size_t>(64, (nObj + static_cast<size_t>(heapWorkers) * 4 - 1) /
+                                                        (static_cast<size_t>(heapWorkers) * 4 + 1));
+        const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
+                                                         (static_cast<size_t>(heapWorkers) * 4 + 1));
+        for (int32_t w = 0; w < heapWorkers; ++w) {
+            size_t* taken = &objectsTaken[static_cast<size_t>(w)];
+            pool->AddWork(new (std::nothrow) LambdaWork(
+                [fixHeapSlice, &objCursor, &slotCursor, nObj, nSlot, objChunk, slotChunk, taken](size_t) {
+                    for (;;) {
+                        size_t o0 = nObj;
+                        size_t o1 = nObj;
+                        size_t s0 = nSlot;
+                        size_t s1 = nSlot;
+                        bool got = false;
+                        if (objCursor.load(std::memory_order_relaxed) < nObj) {
+                            o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
+                            if (o0 < nObj) {
+                                o1 = std::min(o0 + objChunk, nObj);
+                                got = true;
+                            } else {
+                                o0 = o1 = nObj;
+                            }
+                        }
+                        if (slotCursor.load(std::memory_order_relaxed) < nSlot) {
+                            s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
+                            if (s0 < nSlot) {
+                                s1 = std::min(s0 + slotChunk, nSlot);
+                                got = true;
+                            } else {
+                                s0 = s1 = nSlot;
+                            }
+                        }
+                        if (!got) {
+                            break;
+                        }
+                        fixHeapSlice(o0, o1, s0, s1, *taken);
+                    }
+                }));
+        }
+        pool->Start();
+        pool->WaitFinish();
+        const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
+        CHECK_DETAIL(dispelAtExit == dispelAtEntry,
+                     "T-D ghost dispel during concurrent heap ref_fix entry=%zu exit=%zu",
+                     dispelAtEntry, dispelAtExit);
+        size_t active = 0;
+        std::string takenStr;
+        for (size_t i = 0; i < objectsTaken.size(); ++i) {
+            if (objectsTaken[i] != 0) {
+                ++active;
+            }
+            if (i != 0) {
+                takenStr += ',';
+            }
+            takenStr += std::to_string(objectsTaken[i]);
+        }
+        VLOG(REPORT,
+             "[GCV2][reffix][conc_heap] workers_active=%zu workers_scheduled=%d objects_taken=[%s] "
+             "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu concurrent=1",
+             active, heapWorkers, takenStr.c_str(), nObj, nSlot,
+             g_minorRefCasOk.load(std::memory_order_relaxed),
+             g_minorRefCasFail.load(std::memory_order_relaxed));
     };
 
     auto fixForwardedReferencesParallel = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
@@ -3860,12 +3947,25 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
 
         // flipwire P1: opt-in minor young-remap flip (ZGC relocate_start). Default OFF.
-        // Env MRT_GCV2_MINOR_YOUNG_FLIP=1 only; still STW-centralized ref_fix (no P2).
+        // Env MRT_GCV2_MINOR_YOUNG_FLIP=1; still STW-centralized heap fix unless P2.
         static const bool minorYoungFlip = []() {
             const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
             return v != nullptr && std::strcmp(v, "1") == 0;
         }();
-        if (minorYoungFlip) {
+        // P2: concurrent heap ref_fix after STW root fix. Requires flip so pre-flip from-face
+        // colour fails is_load_good (Idle/Preforward self-heal). Default OFF.
+        // Env MRT_GCV2_MINOR_CONC_REF_FIX=1 (implies flip once). Needs live STW handle.
+        static const bool minorConcRefFixEnv = []() {
+            const char* v = std::getenv("MRT_GCV2_MINOR_CONC_REF_FIX");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        const bool minorConcRefFix = minorConcRefFixEnv && stw != nullptr && *stw != nullptr;
+        if (minorConcRefFixEnv && !minorConcRefFix) {
+            VLOG(REPORT,
+                 "[GCV2][reffix][conc] requested but no STW handle — fallback centralized STW ref_fix");
+        }
+        const bool doYoungFlip = minorYoungFlip || minorConcRefFix;
+        if (doYoungFlip) {
             flip_young_relocate_start();
         }
 
@@ -4034,7 +4134,30 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
         g_minorRefCasOk.store(0, std::memory_order_relaxed);
 
-        if (!useParallel) {
+        if (minorConcRefFix) {
+            // ZGC shape: pause_relocate_start (flip+roots done) → concurrent_relocate (heap).
+            // Mutators resume under PreforwardBarrier; load-bad from-face self-heals via make_load_good.
+            TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+            stw->reset();
+            VLOG(REPORT,
+                 "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1",
+                 reachableVec.size(), remsetVec.size());
+            if (!useParallel) {
+                size_t taken = 0;
+                fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
+                VLOG(REPORT,
+                     "[GCV2][reffix][conc_heap] workers_active=1 workers_scheduled=1 objects_taken=[%zu] "
+                     "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu concurrent=1 serial=1",
+                     taken, reachableVec.size(), remsetVec.size(),
+                     g_minorRefCasOk.load(std::memory_order_relaxed),
+                     g_minorRefCasFail.load(std::memory_order_relaxed));
+            } else {
+                fixHeapParallelOnly(threadPool);
+            }
+            *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
+                                                        GCPhase::GC_PHASE_PREFORWARD);
+            VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
+        } else if (!useParallel) {
             VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial pool_unavailable");
             // pass1 roots already done; only heap+remset+pass2 roots remain.
             // Mirror serial fixForwardedReferences but roots again (same as before).
@@ -5385,7 +5508,8 @@ void WCollector::DoYoungGarbageCollection()
 
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
-    EvacuateYoungRegions(reachableVec, liveRememberedSlots);
+    // Pass STW so MRT_GCV2_MINOR_CONC_REF_FIX can release after root fix (P2).
+    EvacuateYoungRegions(reachableVec, liveRememberedSlots, &stw);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;

@@ -10,6 +10,7 @@
 #include "Common/ColourMask.h"
 #include <cstdlib>
 #include <cstring>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -17,6 +18,7 @@
 #include "Collector/CopyCollector.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 namespace MapleRuntime {
+class ScopedStopTheWorld;
 
 // paramzero: crash-time dump of Mode-A frame slot + heap CAS-null counters.
 // Declared here so SignalManager can call without including WCollector.cpp guts.
@@ -446,7 +448,10 @@ private:
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
-    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots);
+    // stw: optional STW handle for MRT_GCV2_MINOR_CONC_REF_FIX=1 (release after root fix,
+    // re-STW before copy/finish). nullptr keeps product STW-centralized ref_fix.
+    void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
+                              std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     void ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec, const MinorObjectSet& allocationRoots);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
     // Gated by MRT_GCMARKGAP_PROBE=1 (default off).
