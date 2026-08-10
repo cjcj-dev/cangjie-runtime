@@ -1321,7 +1321,7 @@ EXPORTS
     _ZN12MapleRuntime12GCThreadPoolD2Ev @1315
     _ZN12MapleRuntime12GetCallerRspERNS_16WinModuleManagerERKNS_12MachineFrameE @1316
     _ZN12MapleRuntime12IdleEdgeDiag17DumpProcessTotalsEPKc @1317
-    _ZN12MapleRuntime12IdleEdgeDiag19NoteBarrierDecisionEyNS_7GCPhaseEbhh @1318
+    _ZN12MapleRuntime12IdleEdgeDiag19NoteBarrierDecisionEyNS_7GCPhaseEbhhhh @1318
     _ZN12MapleRuntime12IdleEdgeDiag20CensusPrePinnedStampEy @1319
     _ZN12MapleRuntime12IdleEdgeDiag7EnabledEv @1320
     _ZN12MapleRuntime12InitLogLevelEv @1321

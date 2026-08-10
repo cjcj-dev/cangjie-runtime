@@ -36,11 +36,16 @@ namespace IdleEdgeDiag {
 bool Enabled();
 
 // holderGen/targetGen: 0=unknown 1=young 2=old 3=nonheap (promoteedge).
+// skipReason (idlewrite; same numbering as RemsetPhaseProbe::SkipReason):
+//   0=recorded 1=no_young 2=ref_null_or_nonheap 3=ref_not_young
+//   4=holder_null_or_nonheap 5=holder_young 6=unknown 7=no_stamp(miss-only)
+// holderObjGen: generation of `obj` argument when present (else 0); used to detect
+// field-addr gen vs object-header gen mismatch at the early-exit site.
 // Called from Barrier::RecordCrossGenEdge when an edge is evaluated.
-// Records write-time GC phase + gen for later miss attribution.
+// Records write-time GC phase + gen + skip arm for later miss attribution.
 // Fail-open: no-op when gate off.
 void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, uint8_t holderGen,
-                         uint8_t targetGen);
+                         uint8_t targetGen, uint8_t skipReason = 0, uint8_t holderObjGen = 0);
 
 // STW census: snapshot remset, walk all non-young holders, count old→young
 // edges vs remset membership. Call immediately BEFORE RecordPinnedCrossGenEdges
