@@ -841,6 +841,8 @@ public:
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
         LiveInfo* ghostLiveInfo = metadata.liveInfo0;
+        // tipnull: multi-bit MarkBits → interiors pass IsSurvivedObject. Only size-walk
+        // starts are Copy targets. Reject offset covered by previous start's size.
         if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
             // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
             // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
@@ -996,6 +998,19 @@ public:
                 }
             }
             return OptionalRouteTicket();
+        }
+        // tipnull start-only: if previous 8B slot is survived and its object size covers us, we are interior.
+        if (offset >= kMarkedBytesPerBit &&
+            ghostLiveInfo->IsSurvivedObject(offset - kMarkedBytesPerBit)) {
+            BaseObject* prev =
+                from_region_addr(GetRegionStart() + (offset - kMarkedBytesPerBit));
+            // Only size-walk when header is plausible (avoid SEGV on garbage prev).
+            if (prev != nullptr && prev->IsValidObject()) {
+                size_t prevSz = prev->GetSize();
+                if (prevSz > kMarkedBytesPerBit) {
+                    return OptionalRouteTicket();
+                }
+            }
         }
         return OptionalRouteTicket(fromObj);
     }

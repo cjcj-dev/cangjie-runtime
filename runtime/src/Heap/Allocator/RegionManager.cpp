@@ -1716,7 +1716,11 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             }
             position += allocSize;
         }
-        if (fullWalk && position == allocPtr) {
+        // Never clear when full walk found zero starts but old face had live bytes:
+        // that would wipe interior-only marks then FORWARDED/Collect while mutators
+        // still hold from → ReadRefField(null) SEGV si_addr=0x8.
+        uint64_t oldLive = region->GetLiveByteCount();
+        if (fullWalk && position == allocPtr && (nStarts > 0 || oldLive == 0)) {
             auto clearAll = [](RegionBitmap* bm) {
                 if (bm == nullptr) {
                     return;
