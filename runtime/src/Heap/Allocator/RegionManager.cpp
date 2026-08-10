@@ -23,6 +23,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
@@ -67,8 +68,8 @@ std::atomic<uint64_t> g_pgDumpSeq { 0 };
 bool PromoteGapProbeOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_PROMOTEGAP_PROBE");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+        return DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promote") ||
+            DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promotegap");
     }();
     return on;
 }

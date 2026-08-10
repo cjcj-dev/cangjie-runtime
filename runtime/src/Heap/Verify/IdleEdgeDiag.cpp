@@ -13,12 +13,14 @@
 #include <cstring>
 #include <unordered_set>
 
+#include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/DiagGate.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 
@@ -226,8 +228,51 @@ void EnsureStampTable()
 
 bool FullClearProbeOn()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_FULLCLEAR_PROBE");
+    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_FULLCLEAR_PROBE", "fullclear");
     return on;
+}
+
+// Scan open-address stamp table for occupancy (instrument health, not product).
+size_t CountStampOccupied()
+{
+    if (g_stamps == nullptr || g_stampCap == 0) {
+        return 0;
+    }
+    size_t occ = 0;
+    for (size_t i = 0; i < g_stampCap; ++i) {
+        if (g_stamps[i].field.load(std::memory_order_relaxed) != 0) {
+            ++occ;
+        }
+    }
+    return occ;
+}
+
+void EmitInstrumentHealth(const char* where, size_t remsetSize, size_t oldToYoungEdges)
+{
+    size_t occ = CountStampOccupied();
+    double occPct = g_stampCap == 0 ? 0.0 : 100.0 * static_cast<double>(occ) / static_cast<double>(g_stampCap);
+    uint64_t probeFail = g_stampProbeFail.load(std::memory_order_relaxed);
+    uint64_t wraps = g_stampWraps.load(std::memory_order_relaxed);
+    uint64_t notes = g_stampNotes.load(std::memory_order_relaxed);
+    bool saturated = (occPct > 50.0) || (probeFail > 0 && notes > 0 && probeFail * 100 > notes);
+    // HEALTH is RTLOG_ERROR so it matches progress volume (VLOG(REPORT) is file-gated
+    // and silent under DEFAULT_MRT_REPORT=0 — that hid table saturation for a whole night).
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][HEALTH] where=%s stampCap=%zu stampOcc=%zu stampOccPct=%.1f "
+        "stampNotes=%llu stampWraps=%llu stampProbeFail=%llu remsetSize=%zu "
+        "oldToYoungEdges=%zu trustworthy=%s",
+        where == nullptr ? "?" : where, g_stampCap, occ, occPct,
+        static_cast<unsigned long long>(notes), static_cast<unsigned long long>(wraps),
+        static_cast<unsigned long long>(probeFail), remsetSize, oldToYoungEdges,
+        saturated ? "NO" : "YES");
+    if (saturated) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][diag][INSTRUMENT_SATURATED] where=%s stampOccPct=%.1f (threshold 50) "
+            "stampProbeFail=%llu stampWraps=%llu stampCap=%zu "
+            "ACTION=raise MRT_GCV2_IDLEEDGE_STAMP_BITS (max 22) or distrust missBare reclass",
+            where == nullptr ? "?" : where, occPct, static_cast<unsigned long long>(probeFail),
+            static_cast<unsigned long long>(wraps), g_stampCap);
+    }
 }
 
 size_t HashField(MAddress field);
@@ -668,7 +713,10 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
 
 bool Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_IDLEEDGE");
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        return DiagGate::LegacyOrToken("MRT_GCV2_IDLEEDGE", "idleedge");
+    }();
     return on;
 }
 
@@ -724,6 +772,11 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
         return;
     }
     EnsureStampTable();
+    DiagGate::EmitCounterLegend();
+    static std::atomic<uint32_t> selfTestOnce{ 0 };
+    if (DiagGate::SelfTestOn() && selfTestOnce.exchange(1, std::memory_order_acq_rel) == 0) {
+        RunSelfTest();
+    }
     static std::atomic<size_t> invokeCount{ 0 };
     size_t invoke = invokeCount.fetch_add(1, std::memory_order_relaxed) + 1;
     size_t every = EnvSizeT("MRT_GCV2_IDLEEDGE_EVERY", 1);
@@ -815,6 +868,8 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
          reinterpret_cast<void*>(stats.missSamples[0]),
          reinterpret_cast<void*>(stats.missSamples[1]), reinterpret_cast<void*>(stats.missSamples[2]),
          reinterpret_cast<void*>(stats.missSamples[3]));
+
+    EmitInstrumentHealth("census", stats.remsetSize, stats.edgesTotal);
 
     for (size_t i = 0; i < kPhaseBuckets; ++i) {
         if (stats.missByPhase[i] == 0) {
@@ -1149,6 +1204,129 @@ void DumpProcessTotals(const char* tag)
              tag == nullptr ? "?" : tag, i + 1, static_cast<unsigned long long>(rt[i].c),
              reinterpret_cast<void*>(rt[i].pc));
     }
+
+    EmitInstrumentHealth(tag == nullptr ? "totals" : tag, 0, static_cast<size_t>(edges));
+}
+
+void RunSelfTest()
+{
+    // Positive controls: prove counters move when conditions are forced.
+    // Does NOT mutate product remset/heap — only instrument tables + local stats.
+    EnsureStampTable();
+    DiagGate::EmitCounterLegend();
+
+    const size_t nForce = (g_stampCap > 0 ? g_stampCap : kStampCapDefault) + 64;
+    uint64_t notes0 = g_stampNotes.load(std::memory_order_relaxed);
+    uint64_t wraps0 = g_stampWraps.load(std::memory_order_relaxed);
+    uint64_t fail0 = g_stampProbeFail.load(std::memory_order_relaxed);
+
+    // 1) stampWraps / stampProbeFail / occupancy: flood open-address table.
+    for (size_t i = 0; i < nForce; ++i) {
+        MAddress fake = static_cast<MAddress>(0x1000ull + i * 0x18ull);
+        StoreStamp(fake, static_cast<uint8_t>(GC_PHASE_IDLE), /*recorded=*/false, kGenOld, kGenYoung);
+    }
+    uint64_t notes1 = g_stampNotes.load(std::memory_order_relaxed);
+    uint64_t wraps1 = g_stampWraps.load(std::memory_order_relaxed);
+    uint64_t fail1 = g_stampProbeFail.load(std::memory_order_relaxed);
+    size_t occ = CountStampOccupied();
+    double occPct = g_stampCap == 0 ? 0.0 : 100.0 * static_cast<double>(occ) / static_cast<double>(g_stampCap);
+
+    bool okNotes = notes1 > notes0;
+    bool okWrapOrFail = (wraps1 > wraps0) || (fail1 > fail0) || (occPct > 50.0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=stampNotes forcedDelta=%llu ok=%d "
+        "healthyExpect=>0 when barrier notes",
+        static_cast<unsigned long long>(notes1 - notes0), okNotes ? 1 : 0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=stampWraps|stampProbeFail|occ "
+        "wrapsDelta=%llu failDelta=%llu occPct=%.1f ok=%d "
+        "healthyExpect=wraps/fail rise or occ>50 under flood",
+        static_cast<unsigned long long>(wraps1 - wraps0),
+        static_cast<unsigned long long>(fail1 - fail0), occPct, okWrapOrFail ? 1 : 0);
+
+    // 2) missBare / missRecordedLost / phase buckets via ClassifyMiss on synthetic stamps.
+    CensusStats local;
+    MAddress bareSlot = static_cast<MAddress>(0xBEEF0000ull);
+    // Ensure bareSlot has no stamp (use address outside flood if possible).
+    ClassifyMiss(local, bareSlot, nullptr, nullptr);
+    bool okBare = local.missBare > 0;
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missBare forced=%zu ok=%d "
+        "healthyExpect=>0 when heap edge lacks stamp",
+        local.missBare, okBare ? 1 : 0);
+
+    MAddress lostSlot = static_cast<MAddress>(0x1000ull); // first flood key, recorded=false — re-stamp recorded
+    StoreStamp(lostSlot, static_cast<uint8_t>(GC_PHASE_FORWARD), /*recorded=*/true, kGenOld, kGenYoung);
+    CensusStats local2;
+    ClassifyMiss(local2, lostSlot, nullptr, nullptr);
+    bool okLost = local2.missRecordedLost > 0;
+    bool okGt8 = local2.missPhaseGt8 > 0;
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missRecordedLost forced=%zu ok=%d "
+        "healthyExpect=>0 when stamp.recorded=1 but slot not in remset snap",
+        local2.missRecordedLost, okLost ? 1 : 0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missPhaseGt8 forced=%zu ok=%d "
+        "healthyExpect=>0 when write phase=FORWARD",
+        local2.missPhaseGt8, okGt8 ? 1 : 0);
+
+    MAddress le8Slot = static_cast<MAddress>(0x1000ull + 0x18ull);
+    StoreStamp(le8Slot, static_cast<uint8_t>(GC_PHASE_IDLE), /*recorded=*/true, kGenOld, kGenYoung);
+    CensusStats local3;
+    ClassifyMiss(local3, le8Slot, nullptr, nullptr);
+    bool okLe8 = local3.missPhaseLe8 > 0;
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missPhaseLe8 forced=%zu ok=%d "
+        "healthyExpect=>0 when write phase=IDLE",
+        local3.missPhaseLe8, okLe8 ? 1 : 0);
+
+    // 3) remsetSize / oldToYoungEdges are walk-derived — cannot force without heap.
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=remsetSize status=NO_FORCE "
+        "reason=needs live RememberedSet::Snapshot; prove via load census remsetSize>0");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=oldToYoungEdges status=NO_FORCE "
+        "reason=needs heap ForEachObj walk; prove via load census edges>0");
+
+    // 4) fullclear matrix cells — stamp promote table if gate on.
+    if (FullClearProbeOn()) {
+        uint64_t m0 = g_fcCensusBareTotal.load(std::memory_order_relaxed);
+        NotePromoteTimeTarget(static_cast<MAddress>(0xC0FFEE00ull), kGenOld, false);
+        NoteFullClearMiss(static_cast<MAddress>(0xC0FFEE00ull), nullptr, true);
+        // target null → censusGen nonheap; force young by calling with a fake path:
+        // NoteFullClearMiss uses CensusTargetGenOf(target); nullptr → nonheap.
+        // Still proves promote stamp path + noStamp path not stuck.
+        uint64_t m1 = g_fcCensusBareTotal.load(std::memory_order_relaxed);
+        bool okFc = m1 > m0;
+        LOG(RTLOG_ERROR,
+            "[GCV2][diag][SELFTEST] counter=fullclear.censusBare forcedDelta=%llu ok=%d "
+            "healthyExpect=>0 under FULLCLEAR_PROBE",
+            static_cast<unsigned long long>(m1 - m0), okFc ? 1 : 0);
+    } else {
+        LOG(RTLOG_ERROR,
+            "[GCV2][diag][SELFTEST] counter=fullclear.* status=SKIPPED gate_off "
+            "enable=MRT_GCV2_FULLCLEAR_PROBE=1 or MRT_GCV2_DIAG=fullclear");
+    }
+
+    // 5) grant/already/tooLate — product Ensure path; cannot force here without region.
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=grant status=NO_FORCE "
+        "reason=EnsureRouteDomainMembership needs live region; "
+        "read legend: grant=0 means already-in-domain NOT failure "
+        "(prove via pregrant already>>0 tooLate=0)");
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=promotegap.* status=NO_FORCE "
+        "reason=lives in RegionManager promote walk; enable PROMOTEGAP_PROBE under load");
+
+    EmitInstrumentHealth("selftest", /*remsetSize=*/0, /*oldToYoungEdges=*/0);
+
+    int pass = (okNotes ? 1 : 0) + (okWrapOrFail ? 1 : 0) + (okBare ? 1 : 0) + (okLost ? 1 : 0) +
+        (okGt8 ? 1 : 0) + (okLe8 ? 1 : 0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] summary forcedPass=%d/6 "
+        "noForce=remsetSize,oldToYoungEdges,grant,promotegap "
+        "rule=do_not_conclude_from_counter_without_positive_arm",
+        pass);
 }
 
 } // namespace IdleEdgeDiag

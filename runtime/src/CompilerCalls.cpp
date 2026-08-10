@@ -31,6 +31,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/DiagGate.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -1650,8 +1651,7 @@ namespace {
 bool ReadnullProbeEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_NULLSLOT");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_NULLSLOT", "nullslot");
     }();
     return on;
 }
