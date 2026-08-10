@@ -574,11 +574,15 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
+    // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
-            return toAddr;
+            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
+            if (!ticket) {
+                return nullptr;
+            }
+            return fromRegionInfo->GetRoute(ticket.value());
         }
         return nullptr;
     }
@@ -592,8 +596,11 @@ public:
 
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
-            return toAddr;
+            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
+            if (!ticket) {
+                return nullptr;
+            }
+            return fromRegionInfo->GetRoute(ticket.value());
         }
         return nullptr;
     }

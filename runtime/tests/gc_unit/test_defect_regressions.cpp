@@ -87,8 +87,8 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     region->SetRouteInfo(0x20000000u, 4096);
     region->SetRouteState(RegionInfo::RouteState::ROUTED);
 
-    GC_EXPECT_TRUE(region->GetRoute(objA) != nullptr);
-    GC_EXPECT_TRUE(region->GetRoute(objB) == nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objA) != nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
 
     // Late "grant" paints only a *new* current liveInfo — not the frozen ghost face.
     // This is RouteRegion-before-pregrant: geometry frozen, B never in domain.
@@ -103,8 +103,8 @@ GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
     size_t offB = region->GetAddressOffset(reinterpret_cast<MAddress>(objB));
     (void)lateBm->MarkBits(offB, 8, regionSize);
     GC_EXPECT_TRUE(late->IsSurvivedObject(offB));
-    // Domain still frozen on ghost without B ⇒ GetRoute must miss.
-    GC_EXPECT_TRUE(region->GetRoute(objB) == nullptr);
+    // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
 
     region->metadata.liveInfo0 = nullptr;
     region->metadata.liveInfo = nullptr;

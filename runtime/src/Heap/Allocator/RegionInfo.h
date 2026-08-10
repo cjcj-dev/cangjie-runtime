@@ -30,6 +30,7 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
@@ -152,11 +153,10 @@ public:
         return CompareExchangeRouteState(curState, RouteState::ROUTING);
     }
 
-    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
+    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
     {
-        DCHECK(metadata.liveInfo0 != nullptr);
-        size_t offset = GetAddressOffset(address);
-        return metadata.liveInfo0->GetPreLiveBytes(offset, GetGhostRegionSize());
+        return GetPreLiveBytesInGhostRegion(address);
     }
 
     RegionInfo()
@@ -816,11 +816,10 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
-    // RouteInfo is a geometric plan valid only for survivors (route domain).
-    // Out-of-domain inputs must get an observable negative (nullptr), never a
-    // syntactically-valid but empty to-slot or a toRegion2Idx INVALID abort.
-    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; REPORT-toregion2idx-probe §4.2.
-    BaseObject* GetRoute(BaseObject* fromObj)
+    // Sole mint of RouteTicket. Guard logic = former GetRoute(BaseObject*) domain check
+    // (IsSurvivedObject on liveInfo0). Miss = empty OptionalRouteTicket; never silent derive.
+    // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
+    ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
@@ -979,8 +978,17 @@ public:
                     }
                 }
             }
-            return nullptr;
+            return OptionalRouteTicket();
         }
+        return OptionalRouteTicket(fromObj);
+    }
+
+    // Geometric derive; domain is guaranteed by RouteTicket. No survivor re-check.
+    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; ops/design/ROUTE_DOMAIN.md §2.
+    BaseObject* GetRoute(RouteTicket t)
+    {
+        BaseObject* fromObj = t.From();
+        MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         // routedom: observe mark-domain at geometric GetRoute call site (default off).
@@ -988,6 +996,21 @@ public:
             RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
         }
         return from_region_addr(toAddr);
+    }
+
+    // Deleted: asking for a route with a bare BaseObject* is unspellable.
+    // Call AdmitForRoute first; product miss arms name nullopt; probes use GetRouteForProbe.
+    BaseObject* GetRoute(BaseObject* fromObj) = delete;
+
+    // Probe/diagnostics only — same Admit+derive as product, never a public bypass.
+    // Precedent: GetLiveInfo0ForProbe. Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    BaseObject* GetRouteForProbe(BaseObject* fromObj)
+    {
+        OptionalRouteTicket ticket = AdmitForRoute(fromObj);
+        if (!ticket) {
+            return nullptr;
+        }
+        return GetRoute(ticket.value());
     }
 
     // Probe-only: pure RouteInfo geometry for a preLiveBytes rank (no survivor gate).
@@ -1500,6 +1523,15 @@ public:
     }
 
 private:
+    // Product geometry only — reachable from GetRoute(RouteTicket). External product
+    // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
+    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    {
+        DCHECK(metadata.liveInfo0 != nullptr);
+        size_t offset = GetAddressOffset(address);
+        return metadata.liveInfo0->GetPreLiveBytes(offset, GetGhostRegionSize());
+    }
+
     ALWAYS_INLINE void CheckObjectSize(
         const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
     {

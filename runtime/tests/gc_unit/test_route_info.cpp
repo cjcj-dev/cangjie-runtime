@@ -41,7 +41,7 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     region->SetRouteInfo(0x20000000u, 4096);
 
     // No ghost liveInfo0 → reject even if route geometry is set.
-    GC_EXPECT_TRUE(region->GetRoute(obj) == nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(obj) == nullptr);
 
     LiveInfo* live = fx.PlantLiveInfo(region);
     size_t regionSize = region->GetRegionSize();
@@ -49,18 +49,18 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
     // Marked but ghost still null → still reject.
     (void)bm->MarkBits(offset, 8, regionSize);
-    GC_EXPECT_TRUE(region->GetRoute(obj) == nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(obj) == nullptr);
 
     // Bind ghost; still unmarked offset stays null — re-use unmarked sibling.
     BaseObject* sibling = fx.PlaceObject(reinterpret_cast<MAddress>(obj) + 128);
     region->metadata.liveInfo0 = live;
     region->metadata.regionEnd0 = region->GetRegionEnd();
-    GC_EXPECT_TRUE(region->GetRoute(sibling) == nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(sibling) == nullptr);
 
-    // Survivor in domain → product route geometry (RouteInfo::GetRoute via RegionInfo::GetRoute).
-    BaseObject* to = region->GetRoute(obj);
+    // Survivor in domain → product route geometry (RouteInfo::GetRoute via Admit+GetRoute).
+    BaseObject* to = region->GetRouteForProbe(obj);
     GC_EXPECT_TRUE(to != nullptr);
-    uintptr_t pre = region->GetPreLiveBytesInGhostRegion(reinterpret_cast<MAddress>(obj));
+    uintptr_t pre = region->GetPreLiveBytesInGhostRegionForProbe(reinterpret_cast<MAddress>(obj));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to), 0x20000000u + pre);
 
     region->metadata.liveInfo0 = nullptr;
