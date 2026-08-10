@@ -4135,28 +4135,67 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         g_minorRefCasOk.store(0, std::memory_order_relaxed);
 
         if (minorConcRefFix) {
-            // ZGC shape: pause_relocate_start (flip+roots done) → concurrent_relocate (heap).
-            // Mutators resume under PreforwardBarrier; load-bad from-face self-heals via make_load_good.
+            // ZGC shape: pause_relocate_start (flip+roots) → concurrent_relocate (object copy)
+            // → mutator load-barrier self-heal. ZGC does NOT concurrent field-walk for
+            // centralized fix; slots heal via barrier, pages free only after relocate done.
+            // Prior P2 ran FixMinorObjectSlots concurrently → ForEachBitmapWord SEGV
+            // (rdi=0 / null GCTib) under mutator races (fixinput reject 10k+, si_code=MAPERR).
+            // Conc window = ForwardObject only on reachableVec; full slot fix under re-STW.
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
+            // Conc window: mutators resume under PreforwardBarrier and self-heal load-bad
+            // from-faces (ZGC load-barrier). GC does NOT concurrent-forward or concurrent
+            // field-walk here — both raced (ForEachBitmapWord rdi=0 / TypeInfo+8 MAPERR;
+            // O2 NEW 11/20 after forward_only). Slot fix + residual ForwardFromSpace stay STW.
             stw->reset();
             VLOG(REPORT,
-                 "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1",
+                 "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
+                 "mode=mutator_self_heal",
                  reachableVec.size(), remsetVec.size());
+            // Brief yield so mutators actually run; without this the re-STW can re-enter
+            // before any mutator progress (still correct, but no concurrent work done).
+            sched_yield();
+            *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
+                                                        GCPhase::GC_PHASE_PREFORWARD);
+            VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
+
+            // STW slot fix after concurrent forward (roots may have been dirtied by mutators).
+            g_minorRefCasFail.store(0, std::memory_order_relaxed);
+            g_minorRefCasOk.store(0, std::memory_order_relaxed);
+            FixMinorRootSlots();
+            PreforwardDiscoveredExternObjects();
+            PreforwardAllResurrectExportFromObjects();
+            // Pre-release remset snapshot + edges mutators recorded into the active remset
+            // during the concurrent window (Snapshot is non-destructive).
+            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
+            {
+                std::unordered_set<MAddress> concRemset =
+                    Heap::GetHeap().GetRememberedSet().Snapshot();
+                remsetVec.reserve(remsetVec.size() + concRemset.size());
+                for (MAddress slot : concRemset) {
+                    remsetVec.push_back(slot);
+                }
+                VLOG(REPORT,
+                     "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
+            }
             if (!useParallel) {
                 size_t taken = 0;
                 fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
                 VLOG(REPORT,
-                     "[GCV2][reffix][conc_heap] workers_active=1 workers_scheduled=1 objects_taken=[%zu] "
-                     "nObj=%zu nSlot=%zu cas_ok=%zu cas_fail=%zu concurrent=1 serial=1",
+                     "[GCV2][reffix][conc_stw] slot_fix objects_taken=%zu nObj=%zu nSlot=%zu "
+                     "cas_ok=%zu cas_fail=%zu",
                      taken, reachableVec.size(), remsetVec.size(),
                      g_minorRefCasOk.load(std::memory_order_relaxed),
                      g_minorRefCasFail.load(std::memory_order_relaxed));
             } else {
                 fixHeapParallelOnly(threadPool);
+                VLOG(REPORT,
+                     "[GCV2][reffix][conc_stw] slot_fix nObj=%zu nSlot=%zu "
+                     "cas_ok=%zu cas_fail=%zu parallel=1",
+                     reachableVec.size(), remsetVec.size(),
+                     g_minorRefCasOk.load(std::memory_order_relaxed),
+                     g_minorRefCasFail.load(std::memory_order_relaxed));
             }
-            *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
-                                                        GCPhase::GC_PHASE_PREFORWARD);
-            VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
         } else if (!useParallel) {
             VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial pool_unavailable");
             // pass1 roots already done; only heap+remset+pass2 roots remain.
