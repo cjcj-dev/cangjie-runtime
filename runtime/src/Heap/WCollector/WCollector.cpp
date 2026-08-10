@@ -1152,7 +1152,12 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
-        CHECK(toVersion != nullptr);
+        // tipnull v5: Admit start-only may soft-null mid-route; keep from (DispelGhost
+        // on incomplete keeps from live; never soft-null after FORWARDED+Collect).
+        if (toVersion == nullptr) {
+            HealRoot(root, from_object(oldObj));
+            return oldObj;
+        }
         HealRoot(root, from_object(toVersion));
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
