@@ -86,101 +86,88 @@ struct Covering {
     size_t delta = 0;
     TypeInfo* hostTip = nullptr;
     uintptr_t hostToAddr = 0;
-    uintptr_t nextMarkedTo = 0;
 };
 
-// Size-walk ghost region for the marked object covering `targetOffset`.
-// START when covering.start == target; INTERIOR when covering.start < target < start+size.
-Covering FindCovering(RegionInfo* region, size_t targetOffset)
+bool PlausibleStart(BaseObject* obj, TypeInfo*& outTip, size_t& outSize)
+{
+    outTip = nullptr;
+    outSize = 0;
+    if (obj == nullptr || !Heap::IsHeapAddress(reinterpret_cast<MAddress>(obj))) {
+        return false;
+    }
+    if (!obj->IsValidObject()) {
+        return false;
+    }
+    TypeInfo* ti = obj->GetTypeInfo();
+    if (ti == nullptr || !ti->IsVaildType()) {
+        return false;
+    }
+    size_t sz = RegionSpace::GetAllocSize(*obj);
+    if (sz == 0 || (sz & 7u) != 0) {
+        return false;
+    }
+    outTip = ti;
+    outSize = sz;
+    return true;
+}
+
+// Walk backward from targetOffset to find a marked object start covering it.
+// MarkBits paints multi-byte ranges, so IsMarkedObject(interior) can be true;
+// START requires a plausible object header at that address.
+Covering FindCoveringBackward(RegionInfo* region, size_t targetOffset)
 {
     Covering c;
     if (region == nullptr) {
         return c;
     }
     MAddress regionStart = region->GetRegionStart();
+    // Bound search: max small-object search window (region unit is typically 64K).
     size_t ghostSz = region->GetGhostRegionSize();
-    MAddress regionEnd = ghostSz > 0 ? regionStart + ghostSz : region->GetRegionEnd();
-    MAddress cursor = regionStart;
-    size_t guard = 0;
-    constexpr size_t kMaxWalk = 8192;
-    BaseObject* prevMarked = nullptr;
-    size_t prevMarkedOff = 0;
-    size_t prevMarkedSize = 0;
-    TypeInfo* prevTip = nullptr;
-    uintptr_t prevTo = 0;
-
-    while (cursor < regionEnd && guard < kMaxWalk) {
-        ++guard;
-        BaseObject* cand = reinterpret_cast<BaseObject*>(cursor);
-        size_t candOff = static_cast<size_t>(cursor - regionStart);
-        if (candOff > targetOffset && prevMarked != nullptr) {
-            // Past target without containing it in prevMarked → no cover.
-            break;
-        }
-        if (!Heap::IsHeapAddress(cursor) || !cand->IsValidObject()) {
-            break;
-        }
-        TypeInfo* ti = cand->GetTypeInfo();
-        if (ti == nullptr || !ti->IsVaildType()) {
-            break;
-        }
-        size_t candSize = RegionSpace::GetAllocSize(*cand);
-        if (candSize == 0) {
-            break;
-        }
-        bool marked = region->IsMarkedObject(cand);
-        // Also accept ghost-survived at object start (resurrect path).
+    size_t maxBack = ghostSz > 0 ? ghostSz : static_cast<size_t>(region->GetRegionEnd() - regionStart);
+    if (maxBack > targetOffset) {
+        maxBack = targetOffset;
+    }
+    // Cap steps so a single probe stays cheap (4096 * 8 = 32KB).
+    size_t steps = 0;
+    constexpr size_t kMaxSteps = 4096;
+    for (size_t back = 0; back <= maxBack && steps < kMaxSteps; back += 8, ++steps) {
+        size_t candOff = targetOffset - back;
+        BaseObject* cand = reinterpret_cast<BaseObject*>(regionStart + candOff);
+        // Prefer mark bit at candidate start; also accept ghost survived.
+        bool marked = region->IsMarkedObject(candOff);
         if (!marked) {
             LiveInfo* g = region->GetLiveInfo0ForProbe();
             if (g != nullptr && g->IsSurvivedObject(candOff)) {
                 marked = true;
             }
         }
-        if (marked) {
-            uint64_t pre = region->GetPreLiveBytesInGhostRegion(cursor);
-            uintptr_t to = static_cast<uintptr_t>(region->GetRoutePlanAddr(pre));
-            if (candOff == targetOffset) {
-                c.found = true;
-                c.isStart = true;
-                c.host = cand;
-                c.hostOffset = candOff;
-                c.hostSize = candSize;
-                c.delta = 0;
-                c.hostTip = ti;
-                c.hostToAddr = to;
-                return c;
-            }
-            if (candOff < targetOffset && targetOffset < candOff + candSize) {
-                c.found = true;
-                c.isStart = false;
-                c.host = cand;
-                c.hostOffset = candOff;
-                c.hostSize = candSize;
-                c.delta = targetOffset - candOff;
-                c.hostTip = ti;
-                c.hostToAddr = to;
-                return c;
-            }
-            // Track for nextMarkedTo when target itself is a start we already returned.
-            if (candOff > targetOffset && prevMarked != nullptr) {
-                c.nextMarkedTo = to;
-            }
-            prevMarked = cand;
-            prevMarkedOff = candOff;
-            prevMarkedSize = candSize;
-            prevTip = ti;
-            prevTo = to;
-            (void)prevMarkedOff;
-            (void)prevMarkedSize;
-            (void)prevTip;
-            (void)prevTo;
+        if (!marked) {
+            continue;
         }
-        cursor += candSize;
+        TypeInfo* tip = nullptr;
+        size_t sz = 0;
+        if (!PlausibleStart(cand, tip, sz)) {
+            continue;
+        }
+        if (candOff + sz <= targetOffset) {
+            // Candidate ends at/before target — cannot cover.
+            continue;
+        }
+        // candOff <= targetOffset < candOff+sz
+        c.found = true;
+        c.isStart = (candOff == targetOffset);
+        c.host = cand;
+        c.hostOffset = candOff;
+        c.hostSize = sz;
+        c.delta = targetOffset - candOff;
+        c.hostTip = tip;
+        uint64_t pre = region->GetPreLiveBytesInGhostRegion(regionStart + candOff);
+        c.hostToAddr = static_cast<uintptr_t>(region->GetRoutePlanAddr(pre));
+        return c;
     }
     return c;
 }
 
-// Next marked object after fromOffset (for alias criterion on unmarked path).
 uintptr_t NextMarkedToAddr(RegionInfo* region, size_t fromOffset, size_t fromSize)
 {
     if (region == nullptr) {
@@ -191,20 +178,18 @@ uintptr_t NextMarkedToAddr(RegionInfo* region, size_t fromOffset, size_t fromSiz
     MAddress regionEnd = ghostSz > 0 ? regionStart + ghostSz : region->GetRegionEnd();
     MAddress cursor = regionStart + fromOffset + (fromSize > 0 ? fromSize : 8);
     size_t guard = 0;
-    constexpr size_t kMaxWalk = 4096;
+    constexpr size_t kMaxWalk = 512;
     while (cursor < regionEnd && guard < kMaxWalk) {
         ++guard;
         BaseObject* cand = reinterpret_cast<BaseObject*>(cursor);
-        if (!Heap::IsHeapAddress(cursor) || !cand->IsValidObject()) {
+        if (!Heap::IsHeapAddress(cursor)) {
             return 0;
         }
-        TypeInfo* ti = cand->GetTypeInfo();
-        if (ti == nullptr || !ti->IsVaildType()) {
-            return 0;
-        }
-        size_t candSize = RegionSpace::GetAllocSize(*cand);
-        if (candSize == 0) {
-            return 0;
+        TypeInfo* tip = nullptr;
+        size_t candSize = 0;
+        if (!PlausibleStart(cand, tip, candSize)) {
+            cursor += 8;
+            continue;
         }
         if (region->IsMarkedObject(cand)) {
             uint64_t pre = region->GetPreLiveBytesInGhostRegion(cursor);
@@ -235,41 +220,65 @@ void NoteRoute(RegionInfo* region, BaseObject* fromObj, uint64_t preLiveBytes, u
         offset = region->GetAddressOffset(reinterpret_cast<MAddress>(fromObj));
     }
 
-    Covering cov = FindCovering(region, offset);
-    bool isStart = cov.found && cov.isStart;
-    bool isInterior = cov.found && !cov.isStart;
-    if (isStart) {
-        g_start.fetch_add(1, std::memory_order_relaxed);
-    } else if (isInterior) {
-        g_interior.fetch_add(1, std::memory_order_relaxed);
-    } else {
-        // No covering marked object found — count as unmarked domain leak (legacy).
-        g_unmarked.fetch_add(1, std::memory_order_relaxed);
-    }
-
-    // Alias: toAddr equals next marked object's to (legacy unmarked path).
-    size_t objSize = 0;
-    TypeInfo* ti = nullptr;
-    if (fromObj != nullptr && fromObj->IsValidObject()) {
-        ti = fromObj->GetTypeInfo();
-        if (ti != nullptr && ti->IsVaildType()) {
-            objSize = RegionSpace::GetAllocSize(*fromObj);
+    // MarkBits paints whole object range; IsMarkedObject(interior) can be true.
+    // START ⇔ mark/survive at offset AND plausible object header at offset.
+    // INTERIOR ⇔ covering marked host exists with hostStart < offset < hostStart+size.
+    TypeInfo* selfTip = nullptr;
+    size_t selfSize = 0;
+    bool plausibleSelf = PlausibleStart(fromObj, selfTip, selfSize);
+    bool markedBit = (region != nullptr && fromObj != nullptr) ? region->IsMarkedObject(fromObj) : false;
+    if (!markedBit && region != nullptr) {
+        LiveInfo* g = region->GetLiveInfo0ForProbe();
+        if (g != nullptr && g->IsSurvivedObject(offset)) {
+            markedBit = true; // survived via resurrect or ghost face
         }
     }
-    uintptr_t nextTo = NextMarkedToAddr(region, offset, objSize);
-    bool isAlias = (nextTo != 0 && nextTo == toAddr);
-    if (isAlias) {
-        g_alias.fetch_add(1, std::memory_order_relaxed);
+
+    Covering cov;
+    bool isStart = false;
+    bool isInterior = false;
+    if (markedBit && plausibleSelf) {
+        // Object-start in domain (common path — no walk).
+        isStart = true;
+        cov.found = true;
+        cov.isStart = true;
+        cov.host = fromObj;
+        cov.hostOffset = offset;
+        cov.hostSize = selfSize;
+        cov.delta = 0;
+        cov.hostTip = selfTip;
+        cov.hostToAddr = toAddr;
+        g_start.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        // Candidate INTERIOR / UNCOVERED: backward host search (cheap; host usually nearby).
+        cov = FindCoveringBackward(region, offset);
+        isStart = cov.found && cov.isStart;
+        isInterior = cov.found && !cov.isStart;
+        if (isStart) {
+            g_start.fetch_add(1, std::memory_order_relaxed);
+        } else if (isInterior) {
+            g_interior.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_unmarked.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    uintptr_t nextTo = 0;
+    bool isAlias = false;
+    if (isInterior || !cov.found) {
+        nextTo = NextMarkedToAddr(region, offset, selfSize > 0 ? selfSize : (cov.hostSize > 0 ? cov.hostSize : 8));
+        isAlias = (nextTo != 0 && nextTo == toAddr);
+        if (isAlias) {
+            g_alias.fetch_add(1, std::memory_order_relaxed);
+        }
     }
 
     bool invert = InvertOn();
-    bool markedBit = (region != nullptr && fromObj != nullptr) ? region->IsMarkedObject(fromObj) : false;
-    // Detail log: always log INTERIOR (capped); START only under invert or as sparse samples.
     bool wantLog = false;
     if (isInterior) {
         size_t nI = g_loggedInterior.fetch_add(1, std::memory_order_relaxed) + 1;
         wantLog = (nI <= MaxSamples());
-    } else if (invert) {
+    } else if (invert && isStart) {
         size_t n = g_logged.fetch_add(1, std::memory_order_relaxed) + 1;
         wantLog = (n <= MaxSamples());
     } else if (!cov.found) {
@@ -293,6 +302,8 @@ void NoteRoute(RegionInfo* region, BaseObject* fromObj, uint64_t preLiveBytes, u
     }
 
     const char* kind = isInterior ? "INTERIOR" : (isStart ? "START" : "UNCOVERED");
+    size_t objSize = selfSize > 0 ? selfSize : cov.hostSize;
+    TypeInfo* ti = selfTip != nullptr ? selfTip : cov.hostTip;
     LOG(RTLOG_ERROR,
         "[GCV2][routedom] n=%zu kind=%s obj=%p region=%p offset=%zu size=%zu tip=%p "
         "preLiveBytes=%llu toAddr=%#zx nextMarkedTo=%#zx alias=%u markedBit=%u invert=%u "
