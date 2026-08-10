@@ -505,11 +505,14 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return region->IsYoungRegion() ? kGenYoung : kGenOld;
     };
-    // idlewrite: also stamp object-header gen so field-addr vs obj mismatch is visible.
-    const uint8_t holderObjGen =
-        (obj != nullptr && Heap::IsHeapAddress(obj)) ? genOfAddr(reinterpret_cast<MAddress>(obj)) : kGenUnknown;
     const bool probeOn = Enabled();
     const bool idleEdgeOn = IdleEdgeDiag::Enabled();
+    // idlewrite: also stamp object-header gen so field-addr vs obj mismatch is visible.
+    // Computed behind the gate: genOfAddr does an IsHeapAddress plus a region lookup, and this
+    // is the write barrier's hot path -- diagnostics must cost nothing when they are off.
+    const uint8_t holderObjGen = (idleEdgeOn && obj != nullptr && Heap::IsHeapAddress(obj))
+        ? genOfAddr(reinterpret_cast<MAddress>(obj))
+        : kGenUnknown;
     const bool forceRecord = ForceRecordEnabled();
     GCPhase phase = GCPhase::GC_PHASE_UNDEF;
     if (probeOn || idleEdgeOn) {
