@@ -31,7 +31,6 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
-#include "Heap/Collector/Collector.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -997,35 +996,6 @@ public:
                 }
             }
             return OptionalRouteTicket();
-        }
-        // tipnull v5: multi-bit MarkBits admits interiors. Only size-walk starts are
-        // Copy targets / have tips after densify+receipt. Confirm offset is a walk start.
-        {
-            uintptr_t walk = GetRegionStart();
-            uintptr_t alloc = GetRegionAllocPtr();
-            bool isStart = false;
-            while (walk < alloc) {
-                size_t off = static_cast<size_t>(walk - GetRegionStart());
-                if (off == offset) {
-                    isStart = true;
-                    break;
-                }
-                if (off > offset) {
-                    break;
-                }
-                BaseObject* o = from_region_addr(walk);
-                if (!Collector::PlausibleManagedObjectGate("AdmitForRoute-walk", o)) {
-                    break;
-                }
-                size_t sz = o->GetSize();
-                if (sz == 0) {
-                    break;
-                }
-                walk += sz;
-            }
-            if (!isStart) {
-                return OptionalRouteTicket();
-            }
         }
         return OptionalRouteTicket(fromObj);
     }

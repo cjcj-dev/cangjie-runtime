@@ -506,15 +506,31 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         uintptr_t position = GetRegionStart();
         size_t offset = 0;
         uintptr_t allocPtr = GetRegionAllocPtr();
+        size_t regionBytes = allocPtr > GetRegionStart() ? (allocPtr - GetRegionStart()) : 0;
+
+        // tipwho: walkBreak mid-region (e.g. +6424) while orphan live bit remains (+19400).
+        // Gate fail / size=0 must NOT return true (success) — that skips remaining survivors
+        // so softN=0 and FORWARDED publishes without ever Copy'ing them.
+        auto remainingSurvivor = [&](size_t fromOff) -> bool {
+            for (size_t rest = fromOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
+                if (survivedAt(rest)) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
-            // tipnull: fail only if this size-walk offset is a survivor start.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                return !survivedAt(offset);
+                // Incomplete if any liveInfo0 bit remains at/after this offset (orphan past break).
+                return !remainingSurvivor(offset);
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                return !remainingSurvivor(offset);
+            }
             position += allocSize;
             if (survivedAt(offset) && !func(obj)) { return false; }
             offset += allocSize;
@@ -2180,6 +2196,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
+        // Drop geometric plan before clearing ghost so mutators cannot GetRoute a
+        // null-tip to during abandon (WaitRoutedTipReady permanent-hole / soft-null SEGV).
+        region->SetRouteInfo(0);
         region->DispelGhostFromRegion();
         ExemptFromRegion(region);
         return;
