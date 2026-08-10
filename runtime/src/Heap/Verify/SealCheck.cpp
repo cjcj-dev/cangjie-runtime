@@ -94,8 +94,12 @@ void NoteSeal(RegionInfo* region)
     EnsureAtexit();
     if (!region->IsMarkFaceSealed()) {
         region->SetMarkFaceSealed(true);
-        g_sealedRegions.fetch_add(1, std::memory_order_relaxed);
+        size_t n = g_sealedRegions.fetch_add(1, std::memory_order_relaxed) + 1;
         MaybeInjectLatePaint(region);
+        // Periodic summary so timeout-killed ALOT runs still emit SEALCHECK line.
+        if (n == 1 || (n % 256) == 0) {
+            DumpSummary();
+        }
     }
 }
 
