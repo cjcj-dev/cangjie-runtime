@@ -155,7 +155,10 @@ public:
     }
 
     // make_load_good: 带色槽 → 可解引用对象。内部仍返 BaseObject* 以兼容现有调用面；
-    // 新代码应经 to_object(zaddress) 出口。语义未改（任务边界）。
+    // 新代码应经 to_object(zaddress) 出口。
+    // tipnull barriernull: live non-null ref must never become nullptr for mutator
+    // (cjpm+0x31061a test [rax+0xc] after CJ_MCC_ReadRefField with rax=0). If remap
+    // cannot produce a to (abandon DispelGhost / Route miss), keep from.
     BaseObject* make_load_good(RefField<>& ref) const
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
@@ -163,7 +166,11 @@ public:
         if (target == nullptr || is_load_good(ref)) {
             return target;
         }
-        return relocate_or_remap_object(target, remap_generation(ref));
+        BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
+        if (remapped == nullptr) {
+            return target;
+        }
+        return remapped;
     }
 
     // OpenJDK ZPointer::is_mark_good (zAddress.inline.hpp:658-664): mark-good includes load-good,

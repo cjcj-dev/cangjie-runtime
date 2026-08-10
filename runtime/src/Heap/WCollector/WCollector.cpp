@@ -1152,7 +1152,10 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
-        CHECK(toVersion != nullptr);
+        if (toVersion == nullptr) {
+            HealRoot(root, from_object(oldObj));
+            return oldObj;
+        }
         HealRoot(root, from_object(toVersion));
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
@@ -5976,6 +5979,10 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        // tipnull: uncopied movable ghost is not VisitLive success.
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            return nullptr;
+        }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
@@ -6060,7 +6067,10 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    CHECK_DETAIL(toObj != nullptr, "invalid object route");
+    if (toObj == nullptr) {
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
