@@ -1351,10 +1351,75 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         }
         size_t whyN = g_nullslotF3.load(std::memory_order_relaxed);
         if (NullslotProbeEnabled() && whyN < 64) {
+            // whygarbage: holder/target mark + region shape at F3 soft-null.
+            // Safe on free/garbage only via mark-bitmap path (no header load for target).
+            int holderValid = -1;
+            int holderMarked = -1;
+            unsigned holderRtype = 0xffu;
+            unsigned holderRoute = 0xffu;
+            unsigned holderYoung = 0xffu;
+            unsigned holderHasBm = 0xffu;
+            int fromMarked = -1;
+            unsigned fromRoute = 0xffu;
+            unsigned fromYoung = 0xffu;
+            unsigned fromGhost = 0xffu;
+            unsigned fromHasBm = 0xffu;
+            unsigned fromLiveBytes = 0xffffffffu;
+            int latestMarked = -1;
+            unsigned latestRoute = 0xffu;
+            unsigned latestYoung = 0xffu;
+            unsigned latestGhost = 0xffu;
+            unsigned findToHit = 0; // 1 if FindToVersion returned a different addr
+            if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+                RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                if (hr != nullptr) {
+                    holderRtype = static_cast<unsigned>(hr->GetRegionType());
+                    holderRoute = static_cast<unsigned>(hr->GetRouteState());
+                    holderYoung = static_cast<unsigned>(hr->IsYoungRegion());
+                    holderHasBm = hr->GetMarkBitmap() != nullptr ? 1u : 0u;
+                    if (!hr->IsFreeRegion()) {
+                        holderValid = holder->IsValidObject() ? 1 : 0;
+                        // Mark bit is metadata; readable even when region is GARBAGE
+                        // until UnbindPreviousLiveInfo (after postflip F3).
+                        holderMarked = hr->IsMarkedObject(holder) ? 1 : 0;
+                    }
+                }
+            }
+            if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+                RegionInfo* fr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
+                if (fr != nullptr) {
+                    fromRoute = static_cast<unsigned>(fr->GetRouteState());
+                    fromYoung = static_cast<unsigned>(fr->IsYoungRegion());
+                    fromGhost = static_cast<unsigned>(fr->IsGhostFromRegion());
+                    fromHasBm = fr->GetMarkBitmap() != nullptr ? 1u : 0u;
+                    fromLiveBytes = static_cast<unsigned>(fr->GetLiveByteCount());
+                    if (!fr->IsFreeRegion()) {
+                        fromMarked = fr->IsMarkedObject(fromObj) ? 1 : 0;
+                    }
+                }
+            }
+            if (latest != nullptr && latest != fromObj && Heap::IsHeapAddress(latest)) {
+                findToHit = 1;
+                RegionInfo* lr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(latest));
+                if (lr != nullptr) {
+                    latestRoute = static_cast<unsigned>(lr->GetRouteState());
+                    latestYoung = static_cast<unsigned>(lr->IsYoungRegion());
+                    latestGhost = static_cast<unsigned>(lr->IsGhostFromRegion());
+                    if (!lr->IsFreeRegion() && !lr->IsGarbageRegion()) {
+                        latestMarked = lr->IsMarkedObject(latest) ? 1 : 0;
+                    }
+                }
+            }
             LOG(RTLOG_ERROR,
                 "[GCV2][nullslot][f3why] n=%zu reason=%s rtype=%u latestValid=%d "
-                "holder=%p field=%p from=%p latest=%p",
-                whyN, reason, rtype, latestValid, holder, &field, fromObj, latest);
+                "holder=%p field=%p from=%p latest=%p "
+                "hV=%d hM=%d hRtype=%u hRoute=%u hYoung=%u hBm=%u "
+                "fM=%d fRoute=%u fYoung=%u fGhost=%u fBm=%u fLive=%u "
+                "findTo=%u lM=%d lRoute=%u lYoung=%u lGhost=%u",
+                whyN, reason, rtype, latestValid, holder, &field, fromObj, latest,
+                holderValid, holderMarked, holderRtype, holderRoute, holderYoung, holderHasBm,
+                fromMarked, fromRoute, fromYoung, fromGhost, fromHasBm, fromLiveBytes,
+                findToHit, latestMarked, latestRoute, latestYoung, latestGhost);
         }
 
         // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
