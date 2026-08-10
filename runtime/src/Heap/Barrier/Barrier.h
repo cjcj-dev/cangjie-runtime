@@ -120,6 +120,10 @@ protected:
     void FixupNonHeapStructRefs(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const;
     void FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
 
+    // Shared post-copy fixup for every WriteStaticStruct phase override: resolve forwarding,
+    // store plain. Typed on RootSlot so a coloured write cannot be spelled (see Barrier.cpp).
+    void ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const;
+
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;
     void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const;

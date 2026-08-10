@@ -188,15 +188,7 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
 
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
-        RefField<> oldField(refField);
-        RefField<> toBeUpdated(oldField);
-        BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
-        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
-        }
-    });
+    ResolveStaticStructRoots(dst, gctib);
     RecordStaticCrossGenEdges(dst, gctib);
 
 #if defined(CANGJIE_TSAN_SUPPORT)

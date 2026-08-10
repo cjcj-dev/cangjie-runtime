@@ -380,6 +380,22 @@ union GCTib {
         }
     }
 
+    // STACK_ROOTS_STAY_PLAIN: a non-heap destination (static/global storage) is a *root*,
+    // not a heap field. StaticRootTable registers those words as RootSlot and
+    // WCollector::EnumAndTagRawRoot heals them with StorePlain, so a coloured write there is
+    // both pointless (the next root enumeration overwrites it plain) and hazardous (relroroot:
+    // static slots can sit on RELRO read-only pages where lock cmpxchg faults).
+    // Yielding RootSlot makes the coloured spelling not compile: RootSlot has no
+    // CompareExchange / StoreColoured / GetFieldValue, and StorePlain only accepts zaddress.
+    // The bitmap walk itself is unchanged -- this only re-types what it hands out.
+    template<typename Visitor>
+    void ForEachRootSlot(MAddress contentAddr, const Visitor& visitor) const
+    {
+        ForEachBitmapWord(contentAddr, [&visitor](HeapSlot<>& word) {
+            visitor(RootSlotAt(reinterpret_cast<void*>(&word)));
+        });
+    }
+
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
                                   MAddress rangeEnd) const
     {
