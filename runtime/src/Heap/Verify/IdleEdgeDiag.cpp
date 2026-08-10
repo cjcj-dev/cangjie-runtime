@@ -92,12 +92,24 @@ constexpr uint8_t kGenYoung = 1;
 constexpr uint8_t kGenOld = 2;
 constexpr uint8_t kGenNonHeap = 3;
 
+// idlewrite skip-arm codes (mirror RemsetPhaseProbe::SkipReason).
+constexpr uint8_t kReasonRecorded = 0;
+constexpr uint8_t kReasonNoYoung = 1;
+constexpr uint8_t kReasonRefNullOrNonheap = 2;
+constexpr uint8_t kReasonRefNotYoung = 3;
+constexpr uint8_t kReasonHolderNullOrNonheap = 4;
+constexpr uint8_t kReasonHolderYoung = 5;
+constexpr uint8_t kReasonUnknown = 6;
+constexpr uint8_t kReasonNoStamp = 7;
+constexpr size_t kReasonBuckets = 8;
+
 struct StampSlot {
     std::atomic<uintptr_t> field{ 0 };
     std::atomic<uint8_t> phase{ 0 };
     std::atomic<uint8_t> recorded{ 0 };
     std::atomic<uint8_t> holderGen{ 0 };
     std::atomic<uint8_t> targetGen{ 0 };
+    std::atomic<uint8_t> skipReason{ 0 };
 };
 
 StampSlot* g_stamps = nullptr;
@@ -160,6 +172,19 @@ std::atomic<uint64_t> g_decTargetOld{ 0 };
 std::atomic<uint64_t> g_decTargetOther{ 0 };
 std::atomic<uint64_t> g_decRecorded{ 0 };
 std::atomic<uint64_t> g_decSkippedHolderYoung{ 0 };
+// idlewrite: decision-time skip-arm totals + field-vs-obj gen mismatch.
+std::array<std::atomic<uint64_t>, kReasonBuckets> g_decByReason{};
+std::atomic<uint64_t> g_decGenMismatch{ 0 }; // fieldGen != objGen (both known)
+std::atomic<uint64_t> g_decGenMismatchHolderYoung{ 0 }; // field young, obj old (or vice versa)
+// miss-side skip-arm attribution (stamped misses; bare → reason no_stamp)
+std::array<std::atomic<uint64_t>, kReasonBuckets> g_missByReason{};
+std::array<std::atomic<uint64_t>, kReasonBuckets> g_bareByReason{}; // bare always no_stamp, kept for shape
+// stamped miss where write-time holderGen was young (hypothesis: barrier saw young)
+std::atomic<uint64_t> g_missReasonHolderYoung{ 0 };
+std::atomic<uint64_t> g_missReasonNoYoung{ 0 };
+std::atomic<uint64_t> g_missReasonOther{ 0 };
+// gen mismatch observed on stamped miss
+std::atomic<uint64_t> g_missGenMismatch{ 0 };
 
 // fullclear: promote-time target gen stamp vs census-time target gen on miss.
 // Gate MRT_GCV2_FULLCLEAR_PROBE=1. Stamp lives across full clear (like write stamp).
@@ -427,40 +452,37 @@ size_t HashField(MAddress field)
     return static_cast<size_t>(x) & g_stampMask;
 }
 
-void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t holderGen, uint8_t targetGen)
+void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t holderGen, uint8_t targetGen,
+                uint8_t skipReason = 0)
 {
     EnsureStampTable();
     const uintptr_t key = static_cast<uintptr_t>(fieldAddress);
     size_t idx0 = HashField(fieldAddress);
+    auto writeFields = [&](StampSlot& slot) {
+        slot.phase.store(phase, std::memory_order_relaxed);
+        slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
+        slot.holderGen.store(holderGen, std::memory_order_relaxed);
+        slot.targetGen.store(targetGen, std::memory_order_relaxed);
+        slot.skipReason.store(skipReason, std::memory_order_relaxed);
+        g_stampNotes.fetch_add(1, std::memory_order_relaxed);
+    };
     for (size_t p = 0; p < kProbeMax; ++p) {
         size_t idx = (idx0 + p) & g_stampMask;
         StampSlot& slot = g_stamps[idx];
         uintptr_t prev = slot.field.load(std::memory_order_relaxed);
         if (prev == key) {
-            slot.phase.store(phase, std::memory_order_relaxed);
-            slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
-            slot.holderGen.store(holderGen, std::memory_order_relaxed);
-            slot.targetGen.store(targetGen, std::memory_order_relaxed);
-            g_stampNotes.fetch_add(1, std::memory_order_relaxed);
+            writeFields(slot);
             return;
         }
         if (prev == 0) {
             uintptr_t expected = 0;
             if (slot.field.compare_exchange_strong(expected, key, std::memory_order_acq_rel,
                                                    std::memory_order_relaxed)) {
-                slot.phase.store(phase, std::memory_order_relaxed);
-                slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
-                slot.holderGen.store(holderGen, std::memory_order_relaxed);
-                slot.targetGen.store(targetGen, std::memory_order_relaxed);
-                g_stampNotes.fetch_add(1, std::memory_order_relaxed);
+                writeFields(slot);
                 return;
             }
             if (expected == key) {
-                slot.phase.store(phase, std::memory_order_relaxed);
-                slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
-                slot.holderGen.store(holderGen, std::memory_order_relaxed);
-                slot.targetGen.store(targetGen, std::memory_order_relaxed);
-                g_stampNotes.fetch_add(1, std::memory_order_relaxed);
+                writeFields(slot);
                 return;
             }
             g_stampWraps.fetch_add(1, std::memory_order_relaxed);
@@ -471,12 +493,8 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t hol
     StampSlot& slot = g_stamps[idx0];
     g_stampProbeFail.fetch_add(1, std::memory_order_relaxed);
     g_stampWraps.fetch_add(1, std::memory_order_relaxed);
-    slot.phase.store(phase, std::memory_order_relaxed);
-    slot.recorded.store(recorded ? 1 : 0, std::memory_order_relaxed);
-    slot.holderGen.store(holderGen, std::memory_order_relaxed);
-    slot.targetGen.store(targetGen, std::memory_order_relaxed);
+    writeFields(slot);
     slot.field.store(key, std::memory_order_release);
-    g_stampNotes.fetch_add(1, std::memory_order_relaxed);
 }
 
 struct StampLookup {
@@ -485,6 +503,7 @@ struct StampLookup {
     bool recorded = false;
     uint8_t holderGen = 0;
     uint8_t targetGen = 0;
+    uint8_t skipReason = 0;
 };
 
 StampLookup LoadStamp(MAddress fieldAddress)
@@ -507,6 +526,7 @@ StampLookup LoadStamp(MAddress fieldAddress)
             r.recorded = slot.recorded.load(std::memory_order_relaxed) != 0;
             r.holderGen = slot.holderGen.load(std::memory_order_relaxed);
             r.targetGen = slot.targetGen.load(std::memory_order_relaxed);
+            r.skipReason = slot.skipReason.load(std::memory_order_relaxed);
             return r;
         }
     }
@@ -675,6 +695,30 @@ void NoteGenOnMiss(const StampLookup& st, bool bare)
     }
 }
 
+void NoteReasonOnMiss(const StampLookup& st, bool bare)
+{
+    uint8_t reason = bare ? kReasonNoStamp : (st.found ? st.skipReason : kReasonNoStamp);
+    if (reason >= kReasonBuckets) {
+        reason = kReasonUnknown;
+    }
+    g_missByReason[reason].fetch_add(1, std::memory_order_relaxed);
+    if (bare) {
+        g_bareByReason[kReasonNoStamp].fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (reason == kReasonHolderYoung) {
+        g_missReasonHolderYoung.fetch_add(1, std::memory_order_relaxed);
+    } else if (reason == kReasonNoYoung) {
+        g_missReasonNoYoung.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_missReasonOther.fetch_add(1, std::memory_order_relaxed);
+    }
+    // census-time holder is always non-young here; if write-time stamp said young ⇒ mismatch class
+    if (st.found && st.holderGen == kGenYoung) {
+        g_missGenMismatch.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder, BaseObject* target)
 {
     ++stats.remsetMiss;
@@ -685,11 +729,13 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
         NoteBareHolder(holder);
         NoteBareOffset(holder, fieldAddress);
         NoteGenOnMiss(st, true);
+        NoteReasonOnMiss(st, true);
         NoteFullClearMiss(fieldAddress, target, true);
         PushSample(stats, fieldAddress);
         return;
     }
     NoteGenOnMiss(st, false);
+    NoteReasonOnMiss(st, false);
     NoteFullClearMiss(fieldAddress, target, false);
     if (st.phase < kPhaseBuckets) {
         ++stats.missByPhase[st.phase];
@@ -737,7 +783,7 @@ void NotePromoteTimeTarget(MAddress fieldAddress, uint8_t targetGen, bool record
 }
 
 void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, uint8_t holderGen,
-                         uint8_t targetGen)
+                         uint8_t targetGen, uint8_t skipReason, uint8_t holderObjGen)
 {
     if (!Enabled() || fieldAddress == 0) {
         return;
@@ -761,8 +807,21 @@ void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, ui
     }
     if (recorded) {
         g_decRecorded.fetch_add(1, std::memory_order_relaxed);
+        skipReason = kReasonRecorded;
     }
-    StoreStamp(fieldAddress, static_cast<uint8_t>(phase), recorded, holderGen, targetGen);
+    if (skipReason >= kReasonBuckets) {
+        skipReason = kReasonUnknown;
+    }
+    g_decByReason[skipReason].fetch_add(1, std::memory_order_relaxed);
+    // field-addr gen vs object-header gen (both known and differ)
+    if (holderObjGen != 0 && holderGen != 0 && holderObjGen != holderGen) {
+        g_decGenMismatch.fetch_add(1, std::memory_order_relaxed);
+        if ((holderGen == kGenYoung && holderObjGen == kGenOld) ||
+            (holderGen == kGenOld && holderObjGen == kGenYoung)) {
+            g_decGenMismatchHolderYoung.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    StoreStamp(fieldAddress, static_cast<uint8_t>(phase), recorded, holderGen, targetGen, skipReason);
     NoteRa(__builtin_return_address(1));
 }
 
@@ -1093,6 +1152,66 @@ void DumpProcessTotals(const char* tag)
          static_cast<unsigned long long>(decTo), static_cast<unsigned long long>(decTx),
          static_cast<unsigned long long>(decRec), static_cast<unsigned long long>(decSkipY),
          static_cast<unsigned long long>(decHsum));
+
+    // idlewrite: skip-arm attribution (decision totals + miss-side)
+    auto reasonName = [](size_t r) -> const char* {
+        switch (r) {
+            case kReasonRecorded:
+                return "recorded";
+            case kReasonNoYoung:
+                return "no_young";
+            case kReasonRefNullOrNonheap:
+                return "ref_null_or_nonheap";
+            case kReasonRefNotYoung:
+                return "ref_not_young";
+            case kReasonHolderNullOrNonheap:
+                return "holder_null_or_nonheap";
+            case kReasonHolderYoung:
+                return "holder_young";
+            case kReasonNoStamp:
+                return "no_stamp";
+            default:
+                return "unknown";
+        }
+    };
+    uint64_t decReasonSum = 0;
+    uint64_t missReasonSum = 0;
+    uint64_t decReasons[kReasonBuckets];
+    uint64_t missReasons[kReasonBuckets];
+    for (size_t r = 0; r < kReasonBuckets; ++r) {
+        decReasons[r] = g_decByReason[r].load(std::memory_order_relaxed);
+        missReasons[r] = g_missByReason[r].load(std::memory_order_relaxed);
+        decReasonSum += decReasons[r];
+        missReasonSum += missReasons[r];
+    }
+    uint64_t genMismatch = g_decGenMismatch.load(std::memory_order_relaxed);
+    uint64_t genMismatchHY = g_decGenMismatchHolderYoung.load(std::memory_order_relaxed);
+    uint64_t missHY = g_missReasonHolderYoung.load(std::memory_order_relaxed);
+    uint64_t missNY = g_missReasonNoYoung.load(std::memory_order_relaxed);
+    uint64_t missOth = g_missReasonOther.load(std::memory_order_relaxed);
+    uint64_t missGenMM = g_missGenMismatch.load(std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][idleedge][SKIP_ARM] tag=%s decTotal=%llu missTotal=%llu "
+         "missHolderYoung=%llu missNoYoung=%llu missOther=%llu missGenMismatch=%llu "
+         "decGenMismatch=%llu decGenMismatchFieldVsObj=%llu",
+         tag == nullptr ? "?" : tag, static_cast<unsigned long long>(decReasonSum),
+         static_cast<unsigned long long>(missReasonSum), static_cast<unsigned long long>(missHY),
+         static_cast<unsigned long long>(missNY), static_cast<unsigned long long>(missOth),
+         static_cast<unsigned long long>(missGenMM), static_cast<unsigned long long>(genMismatch),
+         static_cast<unsigned long long>(genMismatchHY));
+    for (size_t r = 0; r < kReasonBuckets; ++r) {
+        if (decReasons[r] == 0 && missReasons[r] == 0) {
+            continue;
+        }
+        double dPct =
+            decReasonSum == 0 ? 0.0 : 100.0 * static_cast<double>(decReasons[r]) / static_cast<double>(decReasonSum);
+        double mPct =
+            missReasonSum == 0 ? 0.0 : 100.0 * static_cast<double>(missReasons[r]) / static_cast<double>(missReasonSum);
+        VLOG(REPORT,
+             "[GCV2][idleedge][SKIP_ARM_DETAIL] tag=%s reason=%s(%zu) dec=%llu(%.1f%%) miss=%llu(%.1f%%)",
+             tag == nullptr ? "?" : tag, reasonName(r), r, static_cast<unsigned long long>(decReasons[r]), dPct,
+             static_cast<unsigned long long>(missReasons[r]), mPct);
+    }
 
     if (FullClearProbeOn()) {
         uint64_t pSeen = g_fcPromoteSeen.load(std::memory_order_relaxed);
