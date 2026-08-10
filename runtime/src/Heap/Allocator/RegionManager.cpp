@@ -487,11 +487,22 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
     if (IsKnownEmpty()) {
         return true;
     }
+    // tipnull: after PrepareForwardableRegion, AdmitForRoute / GetRoute use liveInfo0.
+    // Evacuation walk must use the same face; current liveInfo can diverge (cleared /
+    // rebound) and skip survivors that RouteObject still admits → FORWARDED + null tip.
+    LiveInfo* ghostFace = metadata.liveInfo0;
+    auto survivedAt = [this, ghostFace](size_t offset) -> bool {
+        if (ghostFace != nullptr) {
+            return ghostFace->IsSurvivedObject(offset);
+        }
+        return IsSurvivedObject(offset);
+    };
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-            // Stop without calling func: same as "no more live objects we can name".
-            return true;
+            // tipnull: gate reject is not "no more live objects". Incomplete walk must
+            // surface as false so ForwardRegion withholds FORWARDED (see :2016).
+            return !survivedAt(0);
         }
         return func(obj);
     }
@@ -503,14 +514,18 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
-            // On reject: stop walk (return true = "until false" not triggered by visitor).
-            // Do not invent allocSize; a wrong step would desync offset vs mark bitmap.
+            // tipnull: do not invent allocSize; do not pretend success when ghost survivors remain.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+                for (size_t rest = offset; rest < (allocPtr - GetRegionStart()); rest += kMarkedBytesPerBit) {
+                    if (survivedAt(rest)) {
+                        return false;
+                    }
+                }
                 return true;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             position += allocSize;
-            if (IsSurvivedObject(offset) && !func(obj)) { return false; }
+            if (survivedAt(offset) && !func(obj)) { return false; }
             offset += allocSize;
         }
     }
@@ -1971,10 +1986,80 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     }
                 });
             }
-            return toObj != nullptr;
+            // tipnull: object-level FORWARDED is the copy receipt. A non-null toObj that is
+            // still `from` (soft keep) without Unlock FORWARDED is not a receipt.
+            return toObj != nullptr && (obj->IsForwarded() || toObj != obj);
         });
 
-    CHECK(forwarded);
+    // tipnull: FORWARDED must mean every liveInfo0 survivor has an object-level copy receipt.
+    // Prior bug: VisitLive early-true / soft-return still SetRouteState(FORWARDED)+CollectRegion
+    // while GetRoute still admitted uncopied from → WaitRoutedTipReady region_FORWARDED_tip_null.
+    auto allGhostSurvivorsForwarded = [region]() -> bool {
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        if (ghost == nullptr) {
+            return true;
+        }
+        if (region->IsLargeRegion()) {
+            BaseObject* obj = from_region_addr(region->GetRegionStart());
+            if (!ghost->IsSurvivedObject(0)) {
+                return true;
+            }
+            return obj->IsForwarded();
+        }
+        if (!region->IsSmallRegion()) {
+            return true;
+        }
+        uintptr_t position = region->GetRegionStart();
+        size_t offset = 0;
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-receipt", obj)) {
+                for (size_t rest = offset; rest < (allocPtr - region->GetRegionStart());
+                     rest += kMarkedBytesPerBit) {
+                    if (ghost->IsSurvivedObject(rest)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (ghost->IsSurvivedObject(offset) && !obj->IsForwarded()) {
+                return false;
+            }
+            position += allocSize;
+            offset += allocSize;
+        }
+        return true;
+    };
+
+    if (!forwarded || !allGhostSurvivorsForwarded()) {
+        // Second chance: re-walk and force ForwardObject on any ghost survivor still uncopied.
+        (void)region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+            if (obj->IsForwarded()) {
+                return true;
+            }
+            BaseObject* toObj = collector.ForwardObject(obj);
+            return toObj != nullptr && (obj->IsForwarded() || toObj != obj);
+        });
+    }
+
+    if (!forwarded || !allGhostSurvivorsForwarded()) {
+        // Withhold FORWARDED + CollectRegion. Region stays ROUTED: WaitRoutedTipReady treats
+        // that as mid-route and returns from (never geometric null-tip / permanent hole).
+        static std::atomic<size_t> withholdN{ 0 };
+        size_t n = withholdN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            VLOG(REPORT,
+                 "[GCV2][tipnull] withhold FORWARDED region=%p start=%#zx live=%zu young=%u "
+                 "routeState=%u visitOk=%u n=%zu — uncopied ghost survivor(s)",
+                 region, region->GetRegionStart(), region->GetLiveByteCount(),
+                 static_cast<unsigned>(youngRegion), static_cast<unsigned>(region->GetRouteState()),
+                 static_cast<unsigned>(forwarded), n);
+        }
+        return;
+    }
+
     {
         static const bool probe = []() {
             const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
