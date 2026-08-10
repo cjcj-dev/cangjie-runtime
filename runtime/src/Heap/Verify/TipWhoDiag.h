@@ -13,6 +13,7 @@
 namespace MapleRuntime {
 class BaseObject;
 class RegionInfo;
+class TypeInfo;
 
 // tipwho: classify survivors that reach region FORWARDED without a tip receipt.
 //
