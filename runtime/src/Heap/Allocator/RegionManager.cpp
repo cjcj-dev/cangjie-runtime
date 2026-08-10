@@ -1732,11 +1732,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             }
             position += allocSize;
         }
-        // Never clear when full walk found zero starts but old face had live bytes:
-        // that would wipe interior-only marks then FORWARDED/Collect while mutators
-        // still hold from → ReadRefField(null) SEGV si_addr=0x8.
-        uint64_t oldLive = region->GetLiveByteCount();
-        if (fullWalk && position == allocPtr && (nStarts > 0 || oldLive == 0)) {
+        // tipwho walkBreak: partial walk still densifies walked starts so orphans past
+        // walkBreak lose their liveInfo0 bits (Admit miss → keep from). Never densify
+        // when nStarts==0 (would wipe entire face → SEGV si_addr=0x8).
+        if (nStarts > 0) {
             auto clearAll = [](RegionBitmap* bm) {
                 if (bm == nullptr) {
                     return;
@@ -1769,8 +1768,9 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
             if (dn <= 32) {
                 LOG(RTLOG_ERROR,
-                    "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu n=%zu",
-                    region, nStarts, liveBytes, dn);
+                    "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu walkEnd=%#zx alloc=%#zx n=%zu",
+                    region, nStarts, liveBytes, static_cast<size_t>(position),
+                    static_cast<size_t>(allocPtr), dn);
             }
         }
     }
