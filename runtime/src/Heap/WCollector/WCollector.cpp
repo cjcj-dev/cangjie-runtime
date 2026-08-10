@@ -2023,26 +2023,6 @@ namespace {
 std::atomic<size_t> g_minorRefCasFail{ 0 };
 std::atomic<size_t> g_minorRefCasOk{ 0 };
 
-// Install resolved target into field. expected = observed stale/old value.
-// On CAS fail: accept (peer already updated — major TryUpdateRefFieldImpl style).
-// hangfloor: desired must already be RootSlotWriteback / null — heap slots stay coloured
-// (Phase C); only non-heap root slots may be plain. Writing plain into a heap field
-// installs the trust state is_load_good rejects, and every subsequent barrier self-heal
-// turns young GC into thrash (arm A' 10/10 HANG under MRT_GCV2_PLAIN_ROOTS=1).
-bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, RefField<> desired)
-{
-    MAddress desiredVal = raw(desired.GetFieldValue());
-    if (expected == desiredVal) {
-        return true;
-    }
-    if (field.CompareExchange(to_zpointer(expected), to_zpointer(desiredVal))) {
-        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
-        return true;
-    }
-    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
-    return true;
-}
-
 // installdomain (ZGC mark_and_remember shape, GC-thread side): before installing a
 // from/ghost-from address into a heap slot (or forwarding it), ensure the survivor
 // bit that GetRoute will read is set.
@@ -2135,6 +2115,23 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
 }
 } // namespace
 
+// Install a logical resolved target into a heap field. Callers cannot supply a
+// pre-encoded RefField: this controlled entry applies the current heap colour here.
+// On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
+bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target) const
+{
+    zpointer desired = RootSlotWriteback(target, field).GetFieldValue();
+    if (expected == raw(desired)) {
+        return true;
+    }
+    if (field.CompareExchange(to_zpointer(expected), desired)) {
+        g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
+    g_minorRefCasFail.fetch_add(1, std::memory_order_relaxed);
+    return true;
+}
+
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
 {
     RefField<> value(field);
@@ -2151,7 +2148,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             BaseObject* to = FindToVersion(object);
             if (to != nullptr && Heap::IsHeapAddress(to)) {
                 MAddress expected = raw(value.GetFieldValue());
-                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
+                (void)CasInstallResolvedTarget(field, expected, to);
                 return to;
             }
         }
@@ -2171,7 +2168,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
+            (void)CasInstallResolvedTarget(field, expected, to);
             return to;
         }
     }
@@ -2181,7 +2178,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             object->IsValidObject()) {
             // installdomain: identity arm is the A-only fork (IsValidObject without liveInfo0).
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(object, field));
+            (void)CasInstallResolvedTarget(field, expected, object);
             return object;
         }
     }
@@ -2200,7 +2197,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
     NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
-    (void)CasInstallResolvedTarget(field, expected, RefField<>(nullptr));
+    (void)CasInstallResolvedTarget(field, expected, nullptr);
     return nullptr;
 }
 
@@ -3358,7 +3355,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
-                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), RefField<>(nullptr));
+                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), nullptr);
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,

@@ -51,7 +51,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     }
 }
 
-BaseObject* IdleBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
+BaseObject* IdleBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* IdleBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {

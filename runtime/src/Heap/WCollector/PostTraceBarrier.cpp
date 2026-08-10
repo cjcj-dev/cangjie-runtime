@@ -23,7 +23,7 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
     return to_object(tmpField.GetTargetObject());
 }
 
-BaseObject* PostTraceBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
+BaseObject* PostTraceBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {

@@ -45,7 +45,7 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     }
 }
 
-BaseObject* EnumBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
+BaseObject* EnumBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* EnumBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {

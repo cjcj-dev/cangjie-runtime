@@ -57,7 +57,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
     }
 }
 
-BaseObject* TraceBarrier::ReadStaticRef(RootSlot& field) const { return Barrier::ReadStaticRef(field); }
+BaseObject* TraceBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* TraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {

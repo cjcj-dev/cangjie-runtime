@@ -167,7 +167,7 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
     }
 }
 
-BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
+BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 {
     zaddress_unsafe observed = field.LoadPlain();
     if (is_null(observed)) {
@@ -179,7 +179,6 @@ BaseObject* Barrier::ReadStaticRef(RootSlot& field) const
     BaseObject* target = to_object(observedBits.GetTargetObject());
     if (target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target)) {
         target = theCollector.FindLatestVersion(target);
-        HealRoot(field, from_object(target));
     }
     return target;
 }
