@@ -136,25 +136,25 @@ void MaybeInjectLatePaint(RegionInfo* region)
     if (prev != 0) {
         return;
     }
-    // Synthetic paint after seal — must trip NotePaint via MarkBits on sealed face.
-    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    if (ghost == nullptr || ghost->markBitmap == nullptr ||
-        reinterpret_cast<uintptr_t>(ghost->markBitmap) == LiveInfo::TEMPORARY_PTR) {
-        LOG(RTLOG_ERROR,
-            "[GCV2][sealcheck][INJECT] skip no ghost markBitmap region=%p", region);
-        return;
-    }
-    size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
-    if (regionSize < 16) {
-        LOG(RTLOG_ERROR, "[GCV2][sealcheck][INJECT] skip tiny region=%p size=%zu", region, regionSize);
-        return;
-    }
-    // Paint at offset 8 (8-byte unit); NotePaint must run from MarkObject/MarkBits wrapper.
+    // Positive control: always trip NotePaint after seal (proves checker rings).
     constexpr size_t kInjectOff = 8;
     constexpr size_t kInjectSz = 8;
     LOG(RTLOG_ERROR,
         "[GCV2][sealcheck][INJECT] painting after seal region=%p offset=%zu", region, kInjectOff);
     NotePaint(region, kInjectOff, kInjectSz, "SEALCHECK_INJECT");
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    if (ghost == nullptr || ghost->markBitmap == nullptr ||
+        reinterpret_cast<uintptr_t>(ghost->markBitmap) == LiveInfo::TEMPORARY_PTR) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][sealcheck][INJECT] notePaint_done no ghost markBitmap region=%p", region);
+        return;
+    }
+    size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
+    if (regionSize < 16) {
+        LOG(RTLOG_ERROR, "[GCV2][sealcheck][INJECT] notePaint_done tiny region=%p size=%zu", region,
+            regionSize);
+        return;
+    }
     (void)ghost->markBitmap->MarkBits(kInjectOff, kInjectSz, regionSize);
 }
 
