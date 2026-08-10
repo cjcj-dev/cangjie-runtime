@@ -24,6 +24,7 @@
 #include <sys/mman.h>
 #endif
 #include "Base/Globals.h"
+#include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
@@ -1052,9 +1053,12 @@ public:
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
         metadata._generation_id = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
-        if (GetLiveByteCount() > 0) {
-            SetInGhostRegion(1);
-        }
+        // fysfixb / a2e7ee37: always install ghost, including liveBytes==0.
+        // ForwardRegion only early-exits IsKnownEmpty (LIVE_AUTHORITY|0). Regions with
+        // liveBytes==0 but no mark authority (neverExamined) still call RouteRegion;
+        // without ghost that hits CHECK(IsGhostFromRegion). Ghost retention also
+        // holds dead-from until PrepareFromRegionList dispel (plainedge).
+        SetInGhostRegion(1);
 
         metadata.nextRegionIdx0 = metadata.nextRegionIdx;
 
@@ -1070,9 +1074,7 @@ public:
 
             array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
             mdata.ownerRegion0 = this;
-            if (GetLiveByteCount() > 0) {
-                array[i].SetInGhostRegion(1);
-            }
+            array[i].SetInGhostRegion(1);
         }
     }
 
@@ -1117,6 +1119,12 @@ public:
                                     static_cast<unsigned int>(IsGhostFromRegion()),
                                     static_cast<unsigned int>(GetRegionType()),
                                     static_cast<unsigned int>(GetRouteState()));
+        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
+        VLOG(REPORT,
+             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
+             this, GetRegionStart(), nUnit, GetLiveByteCount(),
+             static_cast<unsigned int>(GetRouteState()),
+             static_cast<unsigned>(IsYoungRegion()));
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
