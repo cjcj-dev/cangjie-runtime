@@ -25,6 +25,7 @@ set(SRC_LIST
     "EatArmDiag.cpp"
     "FysDesignDiag.cpp"
     "DiagGate.cpp"
+    "RouteDom.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

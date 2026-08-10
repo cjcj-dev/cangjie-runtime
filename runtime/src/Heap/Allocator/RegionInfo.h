@@ -36,6 +36,7 @@
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/RouteDom.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -982,7 +983,17 @@ public:
         }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
+        // routedom: observe mark-domain at geometric GetRoute call site (default off).
+        if (RouteDom::Enabled()) {
+            RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
+        }
         return from_region_addr(toAddr);
+    }
+
+    // Probe-only: pure RouteInfo geometry for a preLiveBytes rank (no survivor gate).
+    MAddress GetRoutePlanAddr(uint64_t preLiveBytes)
+    {
+        return metadata.routeInfo.GetRoute(preLiveBytes);
     }
 
     ZGenerationId generation_id() const { return metadata._generation_id; }
