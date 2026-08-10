@@ -2082,10 +2082,16 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             // installdomain: admit into route domain before any install/forward consumes it.
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
+            // satbfix: only install a to that is a live object tip; a RECENT_FULL hole
+            // address must not be written into the slot (same invalid_object family).
             if (to != nullptr && Heap::IsHeapAddress(to)) {
-                MAddress expected = raw(value.GetFieldValue());
-                (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
-                return to;
+                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+                if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+                    to->IsValidObject()) {
+                    MAddress expected = raw(value.GetFieldValue());
+                    (void)CasInstallResolvedTarget(field, expected, RootSlotWriteback(to, field));
+                    return to;
+                }
             }
         }
         return object;
