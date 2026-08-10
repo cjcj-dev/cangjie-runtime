@@ -1959,9 +1959,16 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t promotedRecords = 0;
     // tipnull / ZGC parity: no third arm "published complete without receipts".
-    // FORWARDED is only set after every liveInfo0 survivor has object-level FORWARDED
-    // (CopyObject wrote tip). VisitLive true alone is not completion — soft-return of
-    // uncopied from used to make CHECK(forwarded) pass with geometric null-tip holes.
+    // WHY_FORWARDED (source): prior code did CHECK(forwarded) then unconditional
+    // SetRouteState(FORWARDED). VisitLive's true meant visitor never returned false —
+    // visitor `return toObj != nullptr` treated soft-return of uncopied from as success
+    // (ForwardObject gate → return obj). So FORWARDED meant "walk finished", not "every
+    // survivor has CopyObject tip". ZGC: to-addr from copy; find null waits is_done then
+    // assert non-null (zRelocate.cpp:354-410, 134-152) — no published-empty arm.
+    //
+    // Protocol: FORWARDED only if every liveInfo0 size-walk survivor is object-FORWARDED.
+    // Incomplete after re-walk is CHECK (fail closed), not ROUTED park (TIMEOUT) or
+    // FORWARDED hole (permhole).
     auto allSurvivorsForwarded = [region]() -> bool {
         LiveInfo* ghost = region->GetLiveInfo0ForProbe();
         auto survivedAt = [region, ghost](size_t offset) -> bool {
@@ -1974,7 +1981,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             if (!survivedAt(0)) {
                 return true;
             }
-            return from_region_addr(region->GetRegionStart())->IsForwarded();
+            BaseObject* obj = from_region_addr(region->GetRegionStart());
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", obj)) {
+                return false;
+            }
+            return obj->IsForwarded();
         }
         if (!region->IsSmallRegion()) {
             return true;
@@ -1985,13 +1996,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", obj)) {
-                for (size_t rest = offset; rest < (allocPtr - region->GetRegionStart());
-                     rest += kMarkedBytesPerBit) {
-                    if (survivedAt(rest)) {
-                        return false;
-                    }
-                }
-                return true;
+                // Unwalkable: only fail if this offset is a survivor start (must be copyable).
+                // Do not scan rest with 8-byte steps (orphan multi-bit marks → false incomplete).
+                return !survivedAt(offset);
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (survivedAt(offset) && !obj->IsForwarded()) {
@@ -2033,9 +2040,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             return obj->IsForwarded();
         });
 
-    // Second pass: force remaining survivors (concurrent race / first soft miss).
+    // Re-walk once for races / first soft miss.
     if (!forwarded || !allSurvivorsForwarded()) {
-        (void)region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+        forwarded = region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
             if (obj->IsForwarded()) {
                 return true;
             }
@@ -2044,33 +2051,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         });
     }
 
-    // tipnull / ZGC: eliminate intermediate "published without receipts".
-    // If survivors still lack object-FORWARDED after re-walk, abandon the geometric plan:
-    // DispelGhost → NORMAL + no ghost so GetRoute/Admit soft-miss and mutators keep from
-    // (valid objects). Never FORWARDED/COMPACTED with null tip; never park forever on ROUTED.
-    if (!allSurvivorsForwarded()) {
-        static std::atomic<size_t> abandonN{ 0 };
-        size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 16) {
-            LOG(RTLOG_ERROR,
-                "[GCV2][tipnull] ForwardRegion abandon-route region=%p start=%#zx live=%zu "
-                "route=%u n=%zu — DispelGhost; keep from",
-                region, region->GetRegionStart(), region->GetLiveByteCount(),
-                static_cast<unsigned>(region->GetRouteState()), n);
-        }
-        if (youngRegion) {
-            region->PreserveRetainedLiveInfo();
-            (void)RecordPromotedCrossGenEdges(region);
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
-        }
-        region->DispelGhostFromRegion();
-        ExemptFromRegion(region);
-        return;
-    }
-
-    CHECK(forwarded);
-    CHECK(allSurvivorsForwarded());
+    CHECK_DETAIL(forwarded && allSurvivorsForwarded(),
+                 "[GCV2][tipnull] ForwardRegion incomplete region=%p start=%#zx live=%zu "
+                 "route=%u — refuse FORWARDED without receipts",
+                 region, region->GetRegionStart(), region->GetLiveByteCount(),
+                 static_cast<unsigned>(region->GetRouteState()));
     {
         static const bool probe = []() {
             const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
