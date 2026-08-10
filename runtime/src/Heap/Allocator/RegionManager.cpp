@@ -2045,8 +2045,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }
 
     if (!forwarded || !allGhostSurvivorsForwarded()) {
-        // Withhold FORWARDED + CollectRegion. Region stays ROUTED: WaitRoutedTipReady treats
-        // that as mid-route and returns from (never geometric null-tip / permanent hole).
+        // Withhold FORWARDED + CollectRegion. Keep ROUTED geometry so already-copied
+        // objects still FindToVersion; park on unmovable so the carrier is not lost
+        // (ForwardTask already took it off fromRegionList as LONE_FROM).
+        // WaitRoutedTipReady: mid-route → return from (never permanent-hole CHECK).
         static std::atomic<size_t> withholdN{ 0 };
         size_t n = withholdN.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 32) {
@@ -2057,6 +2059,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                  static_cast<unsigned>(youngRegion), static_cast<unsigned>(region->GetRouteState()),
                  static_cast<unsigned>(forwarded), n);
         }
+        if (youngRegion) {
+            region->PreserveRetainedLiveInfo();
+            (void)RecordPromotedCrossGenEdges(region);
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+        ExemptFromRegion(region);
         return;
     }
 

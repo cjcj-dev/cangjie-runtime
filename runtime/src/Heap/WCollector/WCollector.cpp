@@ -5991,16 +5991,30 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     }
 
     if (fwdTable.RouteRegion(region)) {
+        // tipnull: Copy is legal only in PREFORWARD/FORWARD. A withheld-FORWARDED region
+        // may still be ROUTED after GC returns to idle; starting ForwardObjectImpl there
+        // aborts on the phase CHECK and is never a receipt path.
+        GCPhase phase = GetGCPhase();
+        const bool canCopy =
+            phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD;
         // secondclass ①: GetRoute is geometric plan; wait FORWARDED or read-lock
         // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
         for (;;) {
+            if (obj->IsForwarded()) {
+                return FindToVersion(obj);
+            }
+            if (!canCopy) {
+                BaseObject* to = FindToVersion(obj);
+                if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
+                    return to;
+                }
+                // Mid-route / permanent hole without copy rights: no to-version.
+                return nullptr;
+            }
             if (region->TryLockReadFromRegion()) {
                 BaseObject* toVersion = ForwardObjectImpl(obj, region);
                 region->UnlockReadFromRegion();
                 return toVersion;
-            }
-            if (obj->IsForwarded()) {
-                return FindToVersion(obj);
             }
             sched_yield();
         }
