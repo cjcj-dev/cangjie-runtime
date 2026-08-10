@@ -508,12 +508,16 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
         uintptr_t allocPtr = GetRegionAllocPtr();
         size_t regionBytes = allocPtr > GetRegionStart() ? (allocPtr - GetRegionStart()) : 0;
 
-        // tipwho: walkBreak mid-region (e.g. +6424) while orphan live bit remains (+19400).
-        // Gate fail / size=0 must NOT return true (success) — that skips remaining survivors
-        // so softN=0 and FORWARDED publishes without ever Copy'ing them.
-        auto remainingSurvivor = [&](size_t fromOff) -> bool {
-            for (size_t rest = fromOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
+        // tipalign / tipwho: PlausibleManagedObjectGate tip-misaligned reject must NOT end walk
+        // (old: return true / remainingSurvivor false → walkBreak@6424, orphan@19400 never Copy).
+        // 丙: skip rejected slot without GetAllocSize (gate blocked size); step to next
+        // liveInfo0 survivor start. Gate itself unchanged (still blocks GetSize on bad tip).
+        auto stepToNextSurvivorStart = [&](size_t fromOff) -> bool {
+            for (size_t rest = fromOff + kMarkedBytesPerBit; rest < regionBytes;
+                 rest += kMarkedBytesPerBit) {
                 if (survivedAt(rest)) {
+                    offset = rest;
+                    position = GetRegionStart() + rest;
                     return true;
                 }
             }
@@ -524,12 +528,18 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
             BaseObject* obj = from_region_addr(position);
             // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
             if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
-                // Incomplete if any liveInfo0 bit remains at/after this offset (orphan past break).
-                return !remainingSurvivor(offset);
+                // Skip this object for forward; continue walk at next survivor start.
+                if (!stepToNextSurvivorStart(offset)) {
+                    return true; // no more survivors after reject
+                }
+                continue;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (allocSize == 0) {
-                return !remainingSurvivor(offset);
+                if (!stepToNextSurvivorStart(offset)) {
+                    return true;
+                }
+                continue;
             }
             position += allocSize;
             if (survivedAt(offset) && !func(obj)) { return false; }
@@ -1708,18 +1718,34 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         uintptr_t position = region->GetRegionStart();
         uintptr_t allocPtr = region->GetRegionAllocPtr();
         bool fullWalk = true;
+        // tipalign: gate tip-misaligned must not end densify walk (same as VisitLive 丙).
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
+            size_t offset = position - region->GetRegionStart();
             if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
-                fullWalk = false;
-                break;
+                // Skip to next survivor start without GetAllocSize.
+                size_t rest = offset + kMarkedBytesPerBit;
+                size_t regionBytes = allocPtr > region->GetRegionStart()
+                    ? (allocPtr - region->GetRegionStart()) : 0;
+                bool found = false;
+                while (rest < regionBytes) {
+                    if (ghost->IsSurvivedObject(rest)) {
+                        position = region->GetRegionStart() + rest;
+                        found = true;
+                        break;
+                    }
+                    rest += kMarkedBytesPerBit;
+                }
+                if (!found) {
+                    break;
+                }
+                continue;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (allocSize == 0) {
                 fullWalk = false;
                 break;
             }
-            size_t offset = position - region->GetRegionStart();
             if (ghost->IsSurvivedObject(offset)) {
                 if (nStarts >= kMaxStarts) {
                     fullWalk = false;

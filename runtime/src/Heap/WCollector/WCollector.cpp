@@ -1152,12 +1152,7 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
-        // tipnull v5: Admit start-only may soft-null mid-route; keep from (DispelGhost
-        // on incomplete keeps from live; never soft-null after FORWARDED+Collect).
-        if (toVersion == nullptr) {
-            HealRoot(root, from_object(oldObj));
-            return oldObj;
-        }
+        CHECK(toVersion != nullptr);
         HealRoot(root, from_object(toVersion));
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
@@ -6069,13 +6064,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
     BaseObject* toObj = fwdTable.RouteObject(obj);
-    // tipnull walkbreak: after partial densify, concurrent Admit may miss; soft-null.
-    // Safe iff we never FORWARDED+Collect without receipt (allLiveBitsHaveReceipt /
-    // remainingSurvivor → abandon DispelGhost keeps from live).
-    if (toObj == nullptr) {
-        obj->UnlockObject(ObjectState::NORMAL);
-        return nullptr;
-    }
+    CHECK_DETAIL(toObj != nullptr, "invalid object route");
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
     toObj->SetStateCode(ObjectState::NORMAL);
