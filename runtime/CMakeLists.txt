@@ -875,6 +875,18 @@ if (EXISTS ${TESTS_MANIFEST})
          ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cpp
          ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.cj
          ${CMAKE_CURRENT_SOURCE_DIR}/tests/*.sh)
+    # Directories too. The first version globbed only *.cpp/*.cj/*.sh, so tests/gc_unit
+    # -- a whole test suite behind a default-OFF option -- was invisible to the very
+    # check meant to account for this directory, and any future tests/<subdir>/ would
+    # have been just as invisible. A blind spot in the accounting is the thing the
+    # accounting exists to prevent.
+    file(GLOB TESTS_ENTRIES RELATIVE ${CMAKE_CURRENT_SOURCE_DIR}/tests
+         LIST_DIRECTORIES true ${CMAKE_CURRENT_SOURCE_DIR}/tests/*)
+    foreach(e IN LISTS TESTS_ENTRIES)
+        if (IS_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/tests/${e})
+            list(APPEND TESTS_PRESENT "${e}")
+        endif()
+    endforeach()
     foreach(f IN LISTS TESTS_PRESENT)
         list(FIND MANIFEST_FILES "${f}" idx)
         if (idx EQUAL -1)
