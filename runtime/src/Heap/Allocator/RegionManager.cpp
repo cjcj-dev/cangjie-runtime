@@ -2084,8 +2084,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
-        // Drop route plan so WaitRoutedTipReady cannot see FORWARDED+null-tip.
-        region->SetRouteState(RegionInfo::RouteState::COMPACTED);
+        // Leave ROUTED (not FORWARDED/COMPACTED): WaitRoutedTipReady treats mid-route as
+        // return-from after bound spins, never permanent-hole CHECK. Exempt so carrier kept.
         ExemptFromRegion(region);
         return;
     }
