@@ -120,12 +120,32 @@ std::atomic<uint32_t> g_stampInited{ 0 };
 std::atomic<uint64_t> g_stampNotes{ 0 };
 std::atomic<uint64_t> g_stampWraps{ 0 };
 std::atomic<uint64_t> g_stampProbeFail{ 0 };
+// stampfix: process totals for eviction / clear; epoch-local for HEALTH.
+std::atomic<uint64_t> g_stampEvicted{ 0 };
+std::atomic<uint64_t> g_stampClears{ 0 };
+std::atomic<uint64_t> g_stampEpochNotes{ 0 };
+std::atomic<uint64_t> g_stampEpochWraps{ 0 };
+std::atomic<uint64_t> g_stampEpochProbeFail{ 0 };
+std::atomic<uint64_t> g_stampEpochEvicted{ 0 };
+std::atomic<uint32_t> g_stampEpoch{ 0 };
+
+// Open-address set of field keys that lost their stamp to force-overwrite this epoch.
+// Used to split bare no_stamp into never_seen vs displaced (idlewrite deliverable).
+constexpr size_t kEvictCap = 1u << 16;
+constexpr size_t kEvictMask = kEvictCap - 1;
+constexpr size_t kEvictProbe = 16;
+std::atomic<uintptr_t> g_evictKeys[kEvictCap] = {};
+std::atomic<uint64_t> g_evictNotes{ 0 };
+std::atomic<uint64_t> g_evictOverflow{ 0 };
 
 std::atomic<uint64_t> g_minorsCensused{ 0 };
 std::atomic<uint64_t> g_edgesTotal{ 0 };
 std::atomic<uint64_t> g_remsetHit{ 0 };
 std::atomic<uint64_t> g_remsetMiss{ 0 };
 std::atomic<uint64_t> g_missBare{ 0 };
+// stampfix split of missBare / no_stamp (sum == missBare).
+std::atomic<uint64_t> g_missBareNeverSeen{ 0 };
+std::atomic<uint64_t> g_missBareDisplaced{ 0 };
 std::atomic<uint64_t> g_missPhaseLe8{ 0 };
 std::atomic<uint64_t> g_missPhaseGt8{ 0 };
 std::atomic<uint64_t> g_missRecordedLost{ 0 };
@@ -251,6 +271,88 @@ void EnsureStampTable()
     g_stampInited.store(1, std::memory_order_release);
 }
 
+void ClearEvictSet()
+{
+    for (size_t i = 0; i < kEvictCap; ++i) {
+        g_evictKeys[i].store(0, std::memory_order_relaxed);
+    }
+}
+
+void NoteEvictedKey(uintptr_t key)
+{
+    if (key == 0) {
+        return;
+    }
+    g_stampEvicted.fetch_add(1, std::memory_order_relaxed);
+    g_stampEpochEvicted.fetch_add(1, std::memory_order_relaxed);
+    size_t idx0 = (static_cast<size_t>(key >> 3) * 0x9e3779b97f4a7c15ull) & kEvictMask;
+    for (size_t p = 0; p < kEvictProbe; ++p) {
+        size_t idx = (idx0 + p) & kEvictMask;
+        uintptr_t cur = g_evictKeys[idx].load(std::memory_order_relaxed);
+        if (cur == key) {
+            return;
+        }
+        if (cur == 0) {
+            uintptr_t expected = 0;
+            if (g_evictKeys[idx].compare_exchange_strong(expected, key, std::memory_order_relaxed,
+                                                         std::memory_order_relaxed)) {
+                g_evictNotes.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            if (expected == key) {
+                return;
+            }
+            continue;
+        }
+    }
+    g_evictOverflow.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool WasEvicted(uintptr_t key)
+{
+    if (key == 0) {
+        return false;
+    }
+    size_t idx0 = (static_cast<size_t>(key >> 3) * 0x9e3779b97f4a7c15ull) & kEvictMask;
+    for (size_t p = 0; p < kEvictProbe; ++p) {
+        size_t idx = (idx0 + p) & kEvictMask;
+        uintptr_t cur = g_evictKeys[idx].load(std::memory_order_relaxed);
+        if (cur == 0) {
+            return false;
+        }
+        if (cur == key) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// stampfix path 甲: drop write stamps after each census so the table only
+// holds one minor of barrier decisions. Process totals (g_stampNotes etc.) stay.
+// Called only from CensusPrePinnedStamp after ClassifyMiss (STW).
+void ClearWriteStampsAfterCensus()
+{
+    if (g_stamps == nullptr || g_stampCap == 0) {
+        return;
+    }
+    for (size_t i = 0; i < g_stampCap; ++i) {
+        StampSlot& slot = g_stamps[i];
+        slot.field.store(0, std::memory_order_relaxed);
+        slot.phase.store(0, std::memory_order_relaxed);
+        slot.recorded.store(0, std::memory_order_relaxed);
+        slot.holderGen.store(0, std::memory_order_relaxed);
+        slot.targetGen.store(0, std::memory_order_relaxed);
+        slot.skipReason.store(0, std::memory_order_relaxed);
+    }
+    ClearEvictSet();
+    g_stampEpochNotes.store(0, std::memory_order_relaxed);
+    g_stampEpochWraps.store(0, std::memory_order_relaxed);
+    g_stampEpochProbeFail.store(0, std::memory_order_relaxed);
+    g_stampEpochEvicted.store(0, std::memory_order_relaxed);
+    g_stampClears.fetch_add(1, std::memory_order_relaxed);
+    g_stampEpoch.fetch_add(1, std::memory_order_relaxed);
+}
+
 bool FullClearProbeOn()
 {
     static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_FULLCLEAR_PROBE", "fullclear");
@@ -276,27 +378,44 @@ void EmitInstrumentHealth(const char* where, size_t remsetSize, size_t oldToYoun
 {
     size_t occ = CountStampOccupied();
     double occPct = g_stampCap == 0 ? 0.0 : 100.0 * static_cast<double>(occ) / static_cast<double>(g_stampCap);
+    // Prefer epoch (since last clear) for saturation; fall back to process totals if epoch empty.
+    uint64_t epochFail = g_stampEpochProbeFail.load(std::memory_order_relaxed);
+    uint64_t epochWraps = g_stampEpochWraps.load(std::memory_order_relaxed);
+    uint64_t epochNotes = g_stampEpochNotes.load(std::memory_order_relaxed);
+    uint64_t epochEvict = g_stampEpochEvicted.load(std::memory_order_relaxed);
     uint64_t probeFail = g_stampProbeFail.load(std::memory_order_relaxed);
     uint64_t wraps = g_stampWraps.load(std::memory_order_relaxed);
     uint64_t notes = g_stampNotes.load(std::memory_order_relaxed);
-    bool saturated = (occPct > 50.0) || (probeFail > 0 && notes > 0 && probeFail * 100 > notes);
+    uint64_t failForSat = epochNotes > 0 ? epochFail : probeFail;
+    uint64_t notesForSat = epochNotes > 0 ? epochNotes : notes;
+    bool saturated = (occPct > 50.0) || (failForSat > 0 && notesForSat > 0 && failForSat * 100 > notesForSat);
     // HEALTH is RTLOG_ERROR so it matches progress volume (VLOG(REPORT) is file-gated
     // and silent under DEFAULT_MRT_REPORT=0 — that hid table saturation for a whole night).
     LOG(RTLOG_ERROR,
         "[GCV2][diag][HEALTH] where=%s stampCap=%zu stampOcc=%zu stampOccPct=%.1f "
-        "stampNotes=%llu stampWraps=%llu stampProbeFail=%llu remsetSize=%zu "
-        "oldToYoungEdges=%zu trustworthy=%s",
+        "stampNotes=%llu stampWraps=%llu stampProbeFail=%llu stampEpochNotes=%llu "
+        "stampEpochProbeFail=%llu stampEpochEvicted=%llu stampClears=%llu stampEpoch=%u "
+        "remsetSize=%zu oldToYoungEdges=%zu trustworthy=%s",
         where == nullptr ? "?" : where, g_stampCap, occ, occPct,
         static_cast<unsigned long long>(notes), static_cast<unsigned long long>(wraps),
-        static_cast<unsigned long long>(probeFail), remsetSize, oldToYoungEdges,
+        static_cast<unsigned long long>(probeFail), static_cast<unsigned long long>(epochNotes),
+        static_cast<unsigned long long>(epochFail), static_cast<unsigned long long>(epochEvict),
+        static_cast<unsigned long long>(g_stampClears.load(std::memory_order_relaxed)),
+        g_stampEpoch.load(std::memory_order_relaxed), remsetSize, oldToYoungEdges,
         saturated ? "NO" : "YES");
     if (saturated) {
         LOG(RTLOG_ERROR,
             "[GCV2][diag][INSTRUMENT_SATURATED] where=%s stampOccPct=%.1f (threshold 50) "
-            "stampProbeFail=%llu stampWraps=%llu stampCap=%zu "
-            "ACTION=raise MRT_GCV2_IDLEEDGE_STAMP_BITS (max 22) or distrust missBare reclass",
+            "stampProbeFail=%llu stampWraps=%llu stampCap=%zu stampEpochEvicted=%llu "
+            "ACTION=raise MRT_GCV2_IDLEEDGE_STAMP_BITS (max 22) or distrust missBare reclass "
+            "(per-minor clear is on; if still saturated within one minor, table too small)",
             where == nullptr ? "?" : where, occPct, static_cast<unsigned long long>(probeFail),
-            static_cast<unsigned long long>(wraps), g_stampCap);
+            static_cast<unsigned long long>(wraps), g_stampCap,
+            static_cast<unsigned long long>(epochEvict));
+        LOG(RTLOG_ERROR,
+            "[GCV2][diag][REFUSE_NUMBERS] where=%s reason=stamp_saturated "
+            "missBare_reclass_untrustworthy=1 bareNeverSeen_vs_displaced_partial",
+            where == nullptr ? "?" : where);
     }
 }
 
@@ -465,6 +584,7 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t hol
         slot.targetGen.store(targetGen, std::memory_order_relaxed);
         slot.skipReason.store(skipReason, std::memory_order_relaxed);
         g_stampNotes.fetch_add(1, std::memory_order_relaxed);
+        g_stampEpochNotes.fetch_add(1, std::memory_order_relaxed);
     };
     for (size_t p = 0; p < kProbeMax; ++p) {
         size_t idx = (idx0 + p) & g_stampMask;
@@ -486,13 +606,22 @@ void StoreStamp(MAddress fieldAddress, uint8_t phase, bool recorded, uint8_t hol
                 return;
             }
             g_stampWraps.fetch_add(1, std::memory_order_relaxed);
+            g_stampEpochWraps.fetch_add(1, std::memory_order_relaxed);
             continue;
         }
         g_stampWraps.fetch_add(1, std::memory_order_relaxed);
+        g_stampEpochWraps.fetch_add(1, std::memory_order_relaxed);
     }
+    // Force-overwrite home slot: previous key is displaced (no longer findable).
     StampSlot& slot = g_stamps[idx0];
+    uintptr_t displaced = slot.field.load(std::memory_order_relaxed);
+    if (displaced != 0 && displaced != key) {
+        NoteEvictedKey(displaced);
+    }
     g_stampProbeFail.fetch_add(1, std::memory_order_relaxed);
+    g_stampEpochProbeFail.fetch_add(1, std::memory_order_relaxed);
     g_stampWraps.fetch_add(1, std::memory_order_relaxed);
+    g_stampEpochWraps.fetch_add(1, std::memory_order_relaxed);
     writeFields(slot);
     slot.field.store(key, std::memory_order_release);
 }
@@ -659,6 +788,8 @@ struct CensusStats {
     size_t remsetHit = 0;
     size_t remsetMiss = 0;
     size_t missBare = 0;
+    size_t missBareNeverSeen = 0;
+    size_t missBareDisplaced = 0;
     size_t missPhaseLe8 = 0;
     size_t missPhaseGt8 = 0;
     size_t missRecordedLost = 0;
@@ -725,6 +856,12 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
     StampLookup st = LoadStamp(fieldAddress);
     if (!st.found) {
         ++stats.missBare;
+        // stampfix: split no_stamp into never entered vs squeezed out by table.
+        if (WasEvicted(static_cast<uintptr_t>(fieldAddress))) {
+            ++stats.missBareDisplaced;
+        } else {
+            ++stats.missBareNeverSeen;
+        }
         ++stats.missByPhase[0];
         NoteBareHolder(holder);
         NoteBareOffset(holder, fieldAddress);
@@ -889,6 +1026,8 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
     g_remsetHit.fetch_add(stats.remsetHit, std::memory_order_relaxed);
     g_remsetMiss.fetch_add(stats.remsetMiss, std::memory_order_relaxed);
     g_missBare.fetch_add(stats.missBare, std::memory_order_relaxed);
+    g_missBareNeverSeen.fetch_add(stats.missBareNeverSeen, std::memory_order_relaxed);
+    g_missBareDisplaced.fetch_add(stats.missBareDisplaced, std::memory_order_relaxed);
     g_missPhaseLe8.fetch_add(stats.missPhaseLe8, std::memory_order_relaxed);
     g_missPhaseGt8.fetch_add(stats.missPhaseGt8, std::memory_order_relaxed);
     g_missRecordedLost.fetch_add(stats.missRecordedLost, std::memory_order_relaxed);
@@ -912,16 +1051,19 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
     VLOG(REPORT,
          "[GCV2][idleedge] point=pre-pinned-stamp invoke=%zu minorRun=%zu env=MRT_GCV2_IDLEEDGE=1 "
          "remsetSize=%zu holdersScanned=%zu oldToYoungEdges=%zu remsetHit=%zu remsetMiss=%zu "
-         "missPct=%.2f missBare=%zu missPhaseLe8=%zu missPhaseGt8=%zu missRecordedLost=%zu missEarly=%zu "
+         "missPct=%.2f missBare=%zu missBareNeverSeen=%zu missBareDisplaced=%zu "
+         "missPhaseLe8=%zu missPhaseGt8=%zu missRecordedLost=%zu missEarly=%zu "
          "idleClassOfMiss=%zu (%.1f%%) gt8OfMiss=%zu (%.1f%%) costNs=%llu stampNotes=%llu stampWraps=%llu "
-         "stampCap=%zu stampProbeFail=%llu attrRaw=%llu attrOther=%llu "
+         "stampCap=%zu stampProbeFail=%llu stampEpochEvicted=%llu attrRaw=%llu attrOther=%llu "
          "missSamples=[%p,%p,%p,%p]",
          invoke, minorRunIndex, stats.remsetSize, stats.holdersScanned, stats.edgesTotal, stats.remsetHit,
-         stats.remsetMiss, missPct, stats.missBare, stats.missPhaseLe8, stats.missPhaseGt8, stats.missRecordedLost,
-         stats.missEarly, idleClass, idlePctOfMiss, stats.missPhaseGt8, gt8PctOfMiss,
-         static_cast<unsigned long long>(stats.costNs), static_cast<unsigned long long>(g_stampNotes.load()),
+         stats.remsetMiss, missPct, stats.missBare, stats.missBareNeverSeen, stats.missBareDisplaced,
+         stats.missPhaseLe8, stats.missPhaseGt8, stats.missRecordedLost, stats.missEarly, idleClass,
+         idlePctOfMiss, stats.missPhaseGt8, gt8PctOfMiss, static_cast<unsigned long long>(stats.costNs),
+         static_cast<unsigned long long>(g_stampNotes.load()),
          static_cast<unsigned long long>(g_stampWraps.load()), g_stampCap,
          static_cast<unsigned long long>(g_stampProbeFail.load()),
+         static_cast<unsigned long long>(g_stampEpochEvicted.load()),
          static_cast<unsigned long long>(g_attrRawArray.load()),
          static_cast<unsigned long long>(g_attrOther.load()),
          reinterpret_cast<void*>(stats.missSamples[0]),
@@ -940,6 +1082,10 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
         VLOG(REPORT, "[GCV2][idleedge][MISS_BY_PHASE] invoke=%zu phase=%s(%zu) miss=%zu (%.1f%%)", invoke,
              PhaseName(static_cast<uint8_t>(i)), i, stats.missByPhase[i], pct);
     }
+
+    // stampfix path 甲: clear write stamps after census so next minor starts empty.
+    // Promote stamps (fullclear) are intentionally NOT cleared — they span full GC.
+    ClearWriteStampsAfterCensus();
 }
 
 void DumpProcessTotals(const char* tag)
@@ -952,6 +1098,8 @@ void DumpProcessTotals(const char* tag)
     uint64_t hit = g_remsetHit.load(std::memory_order_relaxed);
     uint64_t miss = g_remsetMiss.load(std::memory_order_relaxed);
     uint64_t bare = g_missBare.load(std::memory_order_relaxed);
+    uint64_t bareNever = g_missBareNeverSeen.load(std::memory_order_relaxed);
+    uint64_t bareDisp = g_missBareDisplaced.load(std::memory_order_relaxed);
     uint64_t le8 = g_missPhaseLe8.load(std::memory_order_relaxed);
     uint64_t gt8 = g_missPhaseGt8.load(std::memory_order_relaxed);
     uint64_t lost = g_missRecordedLost.load(std::memory_order_relaxed);
@@ -966,21 +1114,39 @@ void DumpProcessTotals(const char* tag)
 
     VLOG(REPORT,
          "[GCV2][idleedge][TOTAL] tag=%s minors=%llu edges=%llu hit=%llu miss=%llu missPct=%.2f "
-         "perMinorEdges=%.1f perMinorMiss=%.1f missBare=%llu missPhaseLe8=%llu missPhaseGt8=%llu "
-         "missRecordedLost=%llu missEarly=%llu idleClassOfMiss=%llu (%.1f%%) gt8OfMiss=%llu (%.1f%%) "
-         "costNsTotal=%llu stampNotes=%llu stampWraps=%llu stampCap=%zu stampProbeFail=%llu "
-         "attrRawArray=%llu attrOther=%llu attrUnknown=%llu env=MRT_GCV2_IDLEEDGE=1",
+         "perMinorEdges=%.1f perMinorMiss=%.1f missBare=%llu missBareNeverSeen=%llu missBareDisplaced=%llu "
+         "missPhaseLe8=%llu missPhaseGt8=%llu missRecordedLost=%llu missEarly=%llu "
+         "idleClassOfMiss=%llu (%.1f%%) gt8OfMiss=%llu (%.1f%%) costNsTotal=%llu "
+         "stampNotes=%llu stampWraps=%llu stampCap=%zu stampProbeFail=%llu stampEvicted=%llu "
+         "stampClears=%llu stampEpoch=%u attrRawArray=%llu attrOther=%llu attrUnknown=%llu "
+         "env=MRT_GCV2_IDLEEDGE=1",
          tag == nullptr ? "?" : tag, static_cast<unsigned long long>(minors), static_cast<unsigned long long>(edges),
          static_cast<unsigned long long>(hit), static_cast<unsigned long long>(miss), missPct, perMinorEdges,
-         perMinorMiss, static_cast<unsigned long long>(bare), static_cast<unsigned long long>(le8),
+         perMinorMiss, static_cast<unsigned long long>(bare), static_cast<unsigned long long>(bareNever),
+         static_cast<unsigned long long>(bareDisp), static_cast<unsigned long long>(le8),
          static_cast<unsigned long long>(gt8), static_cast<unsigned long long>(lost),
          static_cast<unsigned long long>(early), static_cast<unsigned long long>(idleClass), idlePct,
          static_cast<unsigned long long>(gt8), gt8Pct, static_cast<unsigned long long>(cost),
          static_cast<unsigned long long>(g_stampNotes.load()), static_cast<unsigned long long>(g_stampWraps.load()),
          g_stampCap, static_cast<unsigned long long>(g_stampProbeFail.load()),
+         static_cast<unsigned long long>(g_stampEvicted.load()),
+         static_cast<unsigned long long>(g_stampClears.load()),
+         g_stampEpoch.load(std::memory_order_relaxed),
          static_cast<unsigned long long>(g_attrRawArray.load()),
          static_cast<unsigned long long>(g_attrOther.load()),
          static_cast<unsigned long long>(g_attrUnknown.load()));
+
+    VLOG(REPORT,
+         "[GCV2][idleedge][NO_STAMP_SPLIT] tag=%s missBare=%llu neverSeen=%llu(%.1f%%) "
+         "displaced=%llu(%.1f%%) stampEvicted=%llu evictOverflow=%llu "
+         "compat=missBare_equals_neverSeen_plus_displaced",
+         tag == nullptr ? "?" : tag, static_cast<unsigned long long>(bare),
+         static_cast<unsigned long long>(bareNever),
+         bare == 0 ? 0.0 : 100.0 * static_cast<double>(bareNever) / static_cast<double>(bare),
+         static_cast<unsigned long long>(bareDisp),
+         bare == 0 ? 0.0 : 100.0 * static_cast<double>(bareDisp) / static_cast<double>(bare),
+         static_cast<unsigned long long>(g_stampEvicted.load()),
+         static_cast<unsigned long long>(g_evictOverflow.load()));
 
     for (size_t i = 0; i < kPhaseBuckets; ++i) {
         uint64_t m = g_missByPhase[i].load(std::memory_order_relaxed);
@@ -1212,6 +1378,17 @@ void DumpProcessTotals(const char* tag)
              tag == nullptr ? "?" : tag, reasonName(r), r, static_cast<unsigned long long>(decReasons[r]), dPct,
              static_cast<unsigned long long>(missReasons[r]), mPct);
     }
+    // stampfix: no_stamp split (legacy no_stamp miss count = neverSeen + displaced)
+    VLOG(REPORT,
+         "[GCV2][idleedge][SKIP_ARM_DETAIL] tag=%s reason=no_stamp_never_seen dec=0 miss=%llu "
+         "of_no_stamp=%.1f%% positive=ClassifyMiss without prior StoreStamp",
+         tag == nullptr ? "?" : tag, static_cast<unsigned long long>(bareNever),
+         bare == 0 ? 0.0 : 100.0 * static_cast<double>(bareNever) / static_cast<double>(bare));
+    VLOG(REPORT,
+         "[GCV2][idleedge][SKIP_ARM_DETAIL] tag=%s reason=no_stamp_displaced dec=0 miss=%llu "
+         "of_no_stamp=%.1f%% positive=force-overwrite StoreStamp then ClassifyMiss same key",
+         tag == nullptr ? "?" : tag, static_cast<unsigned long long>(bareDisp),
+         bare == 0 ? 0.0 : 100.0 * static_cast<double>(bareDisp) / static_cast<double>(bare));
 
     if (FullClearProbeOn()) {
         uint64_t pSeen = g_fcPromoteSeen.load(std::memory_order_relaxed);
@@ -1369,12 +1546,66 @@ void RunSelfTest()
     // Ensure bareSlot has no stamp (use address outside flood if possible).
     ClassifyMiss(local, bareSlot, nullptr, nullptr);
     bool okBare = local.missBare > 0;
+    bool okNever = local.missBareNeverSeen > 0 && local.missBareDisplaced == 0;
     LOG(RTLOG_ERROR,
         "[GCV2][diag][SELFTEST] counter=missBare forced=%zu ok=%d "
         "healthyExpect=>0 when heap edge lacks stamp",
         local.missBare, okBare ? 1 : 0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missBareNeverSeen forced=%zu ok=%d "
+        "healthyExpect=>0 when edge never StoreStamp'd this epoch",
+        local.missBareNeverSeen, okNever ? 1 : 0);
 
-    MAddress lostSlot = static_cast<MAddress>(0x1000ull); // first flood key, recorded=false — re-stamp recorded
+    // 2b) missBareDisplaced: force-overwrite a known key then classify as bare.
+    MAddress victim = static_cast<MAddress>(0x1000ull);
+    StoreStamp(victim, static_cast<uint8_t>(GC_PHASE_IDLE), /*recorded=*/false, kGenOld, kGenYoung);
+    // Fill home probe chain with distinct keys that hash near victim so StoreStamp force-evicts.
+    // StoreStamp force-overwrites home slot when probe fails; NoteEvictedKey records prior key.
+    uint64_t ev0 = g_stampEvicted.load(std::memory_order_relaxed);
+    for (size_t i = 0; i < kProbeMax + 8; ++i) {
+        // Distinct keys that share victim's hash home after wrap — flood already filled table;
+        // another store that collides will displace.
+        MAddress coll = static_cast<MAddress>(0x2000ull + i * 0x18ull);
+        StoreStamp(coll, static_cast<uint8_t>(GC_PHASE_IDLE), /*recorded=*/false, kGenOld, kGenYoung);
+    }
+    // Directly mark victim as evicted if flood didn't (table may have re-homed it).
+    if (!WasEvicted(static_cast<uintptr_t>(victim))) {
+        NoteEvictedKey(static_cast<uintptr_t>(victim));
+        // Wipe stamp so ClassifyMiss sees bare.
+        if (g_stamps != nullptr) {
+            size_t idx0 = HashField(victim);
+            for (size_t p = 0; p < kProbeMax; ++p) {
+                size_t idx = (idx0 + p) & g_stampMask;
+                if (g_stamps[idx].field.load(std::memory_order_relaxed) == static_cast<uintptr_t>(victim)) {
+                    g_stamps[idx].field.store(0, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+    } else {
+        // Ensure not found as stamp even if still present under different path.
+        if (g_stamps != nullptr) {
+            size_t idx0 = HashField(victim);
+            for (size_t p = 0; p < kProbeMax; ++p) {
+                size_t idx = (idx0 + p) & g_stampMask;
+                if (g_stamps[idx].field.load(std::memory_order_relaxed) == static_cast<uintptr_t>(victim)) {
+                    g_stamps[idx].field.store(0, std::memory_order_relaxed);
+                    break;
+                }
+            }
+        }
+    }
+    CensusStats localDisp;
+    ClassifyMiss(localDisp, victim, nullptr, nullptr);
+    bool okDisp = localDisp.missBareDisplaced > 0;
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] counter=missBareDisplaced forced=%zu stampEvictedDelta=%llu ok=%d "
+        "healthyExpect=>0 when key was force-overwritten then bare at census",
+        localDisp.missBareDisplaced,
+        static_cast<unsigned long long>(g_stampEvicted.load(std::memory_order_relaxed) - ev0),
+        okDisp ? 1 : 0);
+
+    MAddress lostSlot = static_cast<MAddress>(0x1000ull + 0x30ull);
     StoreStamp(lostSlot, static_cast<uint8_t>(GC_PHASE_FORWARD), /*recorded=*/true, kGenOld, kGenYoung);
     CensusStats local2;
     ClassifyMiss(local2, lostSlot, nullptr, nullptr);
@@ -1389,7 +1620,7 @@ void RunSelfTest()
         "healthyExpect=>0 when write phase=FORWARD",
         local2.missPhaseGt8, okGt8 ? 1 : 0);
 
-    MAddress le8Slot = static_cast<MAddress>(0x1000ull + 0x18ull);
+    MAddress le8Slot = static_cast<MAddress>(0x1000ull + 0x48ull);
     StoreStamp(le8Slot, static_cast<uint8_t>(GC_PHASE_IDLE), /*recorded=*/true, kGenOld, kGenYoung);
     CensusStats local3;
     ClassifyMiss(local3, le8Slot, nullptr, nullptr);
@@ -1439,10 +1670,20 @@ void RunSelfTest()
 
     EmitInstrumentHealth("selftest", /*remsetSize=*/0, /*oldToYoungEdges=*/0);
 
-    int pass = (okNotes ? 1 : 0) + (okWrapOrFail ? 1 : 0) + (okBare ? 1 : 0) + (okLost ? 1 : 0) +
-        (okGt8 ? 1 : 0) + (okLe8 ? 1 : 0);
+    // Leave a clean epoch for the real census that follows (selftest runs inside first census).
+    uint64_t clears0 = g_stampClears.load(std::memory_order_relaxed);
+    ClearWriteStampsAfterCensus();
+    bool okClear = g_stampClears.load(std::memory_order_relaxed) > clears0 && CountStampOccupied() == 0;
     LOG(RTLOG_ERROR,
-        "[GCV2][diag][SELFTEST] summary forcedPass=%d/6 "
+        "[GCV2][diag][SELFTEST] counter=stampClears forcedDelta=%llu occAfter=%zu ok=%d "
+        "healthyExpect=clear zeros table; one clear per census",
+        static_cast<unsigned long long>(g_stampClears.load(std::memory_order_relaxed) - clears0),
+        CountStampOccupied(), okClear ? 1 : 0);
+
+    int pass = (okNotes ? 1 : 0) + (okWrapOrFail ? 1 : 0) + (okBare ? 1 : 0) + (okLost ? 1 : 0) +
+        (okGt8 ? 1 : 0) + (okLe8 ? 1 : 0) + (okNever ? 1 : 0) + (okDisp ? 1 : 0) + (okClear ? 1 : 0);
+    LOG(RTLOG_ERROR,
+        "[GCV2][diag][SELFTEST] summary forcedPass=%d/9 "
         "noForce=remsetSize,oldToYoungEdges,grant,promotegap "
         "rule=do_not_conclude_from_counter_without_positive_arm",
         pass);

@@ -26,8 +26,20 @@ class BaseObject;
 // Self-test:    MRT_GCV2_IDLEEDGE_SELFTEST=1 / MRT_GCV2_DIAG_SELFTEST=1 / DIAG+=selftest
 // No TLS.
 //
+// stampfix: write-stamp table is cleared after each census (per-minor generation).
+// Cross-minor stamp retention was the root of missRecordedLost false positives
+// (fwdlost) and end-of-run 100% saturation (idlewrite). Table only needs one
+// minor window of barrier decisions (~oldToYoungEdges scale under load).
+//
+// bare / no_stamp is split:
+//   missBareNeverSeen  — census edge with no stamp and key not a store-eviction victim
+//   missBareDisplaced  — census edge with no stamp but key was evicted by open-address
+//                        force-overwrite (probe fail). Process totals keep missBare =
+//                        neverSeen + displaced for allocblack compatibility.
+//
 // Counter health expectations are emitted once as [GCV2][diag][LEGEND] and each
 // census as [GCV2][diag][HEALTH]; stamp occupancy >50% shouts INSTRUMENT_SATURATED.
+// When saturated, missBare reclass is untrustworthy (refuse as numbers, not silent).
 //
 // When gated off every entry is a no-op (gates-off equivalence).
 
