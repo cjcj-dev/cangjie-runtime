@@ -31,7 +31,6 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
-#include "Heap/Collector/Collector.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -842,8 +841,6 @@ public:
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
         LiveInfo* ghostLiveInfo = metadata.liveInfo0;
-        // tipnull: multi-bit MarkBits → interiors pass IsSurvivedObject. Only size-walk
-        // starts are Copy targets. Reject offset covered by previous start's size.
         if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
             // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
             // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
@@ -999,35 +996,6 @@ public:
                 }
             }
             return OptionalRouteTicket();
-        }
-        // tipnull: multi-bit MarkBits admits interiors. Confirm offset is a size-walk start
-        // under the ghost face (same walk VisitLive uses). No GetSize on unvalidated prev.
-        {
-            uintptr_t walk = GetRegionStart();
-            uintptr_t alloc = GetRegionAllocPtr();
-            bool isStart = false;
-            while (walk < alloc) {
-                size_t off = walk - GetRegionStart();
-                if (off == offset) {
-                    isStart = true;
-                    break;
-                }
-                if (off > offset) {
-                    break;
-                }
-                BaseObject* o = from_region_addr(walk);
-                if (!Collector::PlausibleManagedObjectGate("AdmitForRoute-walk", o)) {
-                    break;
-                }
-                size_t sz = o->GetSize();
-                if (sz == 0) {
-                    break;
-                }
-                walk += sz;
-            }
-            if (!isStart) {
-                return OptionalRouteTicket();
-            }
         }
         return OptionalRouteTicket(fromObj);
     }
