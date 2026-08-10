@@ -16,6 +16,10 @@
 #              the build. MUST name what it needs.
 #   orphan     no runner at all. Debt: either give it one or delete it.
 #
+# Directories count too: tests/gc_unit is a whole suite behind a default-OFF option,
+# and the first version of this check globbed only *.cpp/*.cj/*.sh, so it was invisible
+# to the accounting that exists to make exactly that visible.
+#
 # <file>                                  <status>   <what it needs / why it is here>
 
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
@@ -41,3 +45,5 @@ epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C chur
 epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress
 remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::EraseRange
 varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefField false-negative unit
+
+gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
