@@ -591,10 +591,21 @@ private:
 };
 
 // Class is a generalization of type information
+//
+// The alignment here is not cosmetic: the collector treats a tip whose low three
+// bits are set as not-a-TypeInfo (StateWord::ADDRESS_ALIGN_MASK), softly at
+// Collector.cpp:104 and :304 and fatally at Mutator.cpp:597 and :754. Declaring
+// 4 while requiring 8 is what let TypeInfoManager's arena hand out addresses the
+// collector then rejected. Raising 4 -> 8 costs nothing in layout: sizeof stays
+// 96 (already a multiple of 8) and every field offset is unchanged, because
+// offsets come from __packed__ and not from __aligned__.
+//
+// This must stay in step with TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h;
+// MClass.cpp's TypeInfoLayoutCheck now asserts that, which it previously did not.
 #ifdef __arm__
 class TypeInfo {
 #else
-class ATTR_PACKED(4) TypeInfo {
+class ATTR_PACKED(8) TypeInfo {
 #endif
     friend class TypeInfoManager;
 #ifdef INTERPRETER_ENABLED
