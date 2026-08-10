@@ -5976,6 +5976,10 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
+        // tipnull: soft-return of uncopied ghost made VisitLive look complete.
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            return nullptr;
+        }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
