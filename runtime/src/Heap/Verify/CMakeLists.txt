@@ -23,6 +23,7 @@ set(SRC_LIST
     "PlainCensus.cpp"
     "IdleEdgeDiag.cpp"
     "EatArmDiag.cpp"
+    "FysDesignDiag.cpp"
     "DiagGate.cpp"
 )
 
