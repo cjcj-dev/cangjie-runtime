@@ -178,6 +178,17 @@ L_copy_end:
     callq   *%r12
 L_unwindPCForN2CStub:
 
+    // See x86_64_linux/N2CStub.S: null EH landing-pad PC in rax before save.
+    leaq    _CJ_MCC_N2CStub(%rip), %r11
+    cmpq    %r11, %rax
+    jb      L_ret_ok
+    leaq    _ExecuteCangjieStub(%rip), %r11
+    cmpq    %r11, %rax
+    jae     L_ret_ok
+    xorq    %rax, %rax
+    xorq    %rdx, %rdx
+L_ret_ok:
+
     // keep potential return value
     // rax is 1st return register, rdx is 2nd return register
     // xmm0-xmm1 are used to return floating point arguments
