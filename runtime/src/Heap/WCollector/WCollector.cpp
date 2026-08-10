@@ -5723,7 +5723,24 @@ void WCollector::DoYoungGarbageCollection()
     size_t allocatedBefore = space.AllocatedBytes();
     // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
     // Pass STW so MRT_GCV2_MINOR_CONC_REF_FIX can release after root fix (P2).
-    EvacuateYoungRegions(reachableVec, liveRememberedSlots, &stw);
+    //
+    // fysfixa / fysaudit D4: slot authority for remset fix = Rescan-admitted
+    // consumedSlots, not the pre-rescan liveRememberedSlots ledger.
+    // liveRememberedSlots under FYS=0 = all non-weak recorded (WCollector.cpp
+    // live-build above); Rescan may drop retained-dead / free-holder / bad_target
+    // without consuming, yet old Evacuate still Fixed those slots → from-object
+    // not in liveInfo0 → AdmitForRoute miss → ForwardObjectExclusive
+    // "invalid object route" (fysfloor B10). FYS=1 masked via reachableSlots
+    // filtering both live-build and Rescan. Unifying on consumed restores
+    // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
+    if (remsetStats.live != consumedSlots.size()) {
+        VLOG(REPORT,
+             "[GCV2][fysfixa] remset_slot_authority live=%zu consumed=%zu gap=%zu "
+             "(evac uses consumed)",
+             remsetStats.live, consumedSlots.size(),
+             remsetStats.live > consumedSlots.size() ? remsetStats.live - consumedSlots.size() : 0);
+    }
+    EvacuateYoungRegions(reachableVec, consumedSlots, &stw);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;
