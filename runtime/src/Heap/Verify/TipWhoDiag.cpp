@@ -20,6 +20,7 @@
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
+#include "ObjectModel/MClass.inline.h"
 
 namespace MapleRuntime {
 namespace TipWhoDiag {
@@ -349,10 +350,26 @@ void NoteBirth(BaseObject* obj, TypeInfo* tip, size_t size, const char* site)
     g_birthN.fetch_add(1, std::memory_order_relaxed);
     if (rec.tipAlignOk == 0) {
         size_t n = g_birthBadN.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 32) {
+        if (n <= 64) {
+            // TypeInfo is ATTR_PACKED(4) (MClass.h:597) — 4-align may be legal; 8-align is gate's bar.
+            unsigned align4ok = (tipAddr != 0 && (tipAddr & 0x3U) == 0) ? 1U : 0U;
+            const char* tname = "?";
+            unsigned valid = 0;
+            // Only call TypeInfo methods if 4-aligned (layout access); still may fault if not a TI.
+            if (align4ok && tip != nullptr) {
+                // IsVaildType is cheap flag check; GetName needs readable name ptr.
+                if (tip->IsVaildType()) {
+                    valid = 1;
+                    const char* nm = tip->GetName();
+                    if (nm != nullptr) {
+                        tname = nm;
+                    }
+                }
+            }
             LOG(RTLOG_ERROR,
-                "[GCV2][tipwho] birth_bad n=%zu obj=%p tip=%#zx size=%zu phase=%u(%s) gc=%zu site=%s",
-                n, obj, tipAddr, size, rec.phase,
+                "[GCV2][tipwho] birth_bad n=%zu obj=%p tip=%#zx low3=%u align4ok=%u valid=%u "
+                "name=%s size=%zu phase=%u(%s) gc=%zu site=%s",
+                n, obj, tipAddr, static_cast<unsigned>(tipAddr & 7U), align4ok, valid, tname, size, rec.phase,
                 Collector::GetGCPhaseName(static_cast<GCPhase>(rec.phase)), rec.gcCount, rec.site);
         }
     }
