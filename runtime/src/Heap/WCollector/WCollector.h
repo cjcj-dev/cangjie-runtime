@@ -214,6 +214,11 @@ public:
     // outside the selected generation's forwarding table is already safe; a matching entry routes
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
+    //
+    // satbfix: RouteObject can return a to-address in an active region whose TypeInfo tip is
+    // null (RECENT_FULL hole). Handing that to make_load_good / IdleBarrier makes the mutator
+    // chase a dead tip forever (THIRD_mutator_same_fn hang) even when F3 no longer CAS-nulls.
+    // Reject invalid to tips; keep from when it is still a plausible object (ghosts until Unbind).
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
         if (!Heap::IsHeapAddress(obj)) {
@@ -225,7 +230,17 @@ public:
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
-        return to == nullptr ? obj : to;
+        if (to == nullptr) {
+            return obj;
+        }
+        if (Heap::IsHeapAddress(to)) {
+            RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+            if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+                !to->IsValidObject()) {
+                return obj;
+            }
+        }
+        return to;
     }
 
     void AddRawPointerObject(BaseObject* obj) override
