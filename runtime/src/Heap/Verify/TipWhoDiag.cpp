@@ -12,12 +12,12 @@
 #include <cstring>
 
 #include "Base/Log.h"
+#include "Common/BaseObject.h"
 #include "Common/ColourTypes.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
-#include "ObjectModel/BaseObject.h"
 
 namespace MapleRuntime {
 namespace TipWhoDiag {
