@@ -1243,15 +1243,19 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         size_t youngRegionTriggerBytes = 32 * MB;
         // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
         // barriers/remset still run. Unset must match product path bit-for-bit.
-        const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
-        const bool disableMinor =
-            disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
+        // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
+        static const bool disableMinor = []() {
+            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
+            return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
+        }();
         if (disableMinor) {
             youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
         }
-        const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
-        const bool useJvmYoungTrigger =
-            !disableMinor && jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
+        static const bool jvmYoungTriggerOn = []() {
+            const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
+            return jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
+        }();
+        const bool useJvmYoungTrigger = !disableMinor && jvmYoungTriggerOn;
         size_t youngTriggerFloor = 0;
         size_t youngTriggerTarget = 0;
         size_t youngTriggerCeiling = 0;
