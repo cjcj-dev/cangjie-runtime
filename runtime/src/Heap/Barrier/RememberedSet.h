@@ -90,6 +90,11 @@ private:
     // those in the sticky bitmap would answer a different question than "did the producer record it".
     void Record(MAddress fieldAddress, bool fromMutatorBarrier = false);
     void RecordExternal(MAddress fieldAddress);
+    // ZGC update_remset_old_to_old (zRelocate.cpp:652-731): move remset bits covering
+    // [fromBase, fromBase+size) to the same field offsets under toBase. Does not clear
+    // the from range — CollectRegion → ClearRegion scrubs the whole from region.
+    // Returns the number of bits recorded at to-addresses (0 if fromBase==toBase).
+    size_t TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
     size_t FinishFullClear(uint8_t scanBuffer);

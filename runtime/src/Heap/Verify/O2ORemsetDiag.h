@@ -36,10 +36,14 @@ void NoteOldObjectForward(BaseObject* fromObj, BaseObject* toObj, size_t size);
 // Positive control: young from-region object copy (same VisitLiveObjects arm, young path).
 void NoteYoungObjectForward();
 
+// Bits recorded at to-addresses by TransferObjectSlots (ZGC old→old move).
+void NoteRecordedOnTo(size_t n);
+
 // Called once at end of ForwardRegion success path for a non-young region, before CollectRegion.
 // remsetInFrom: count of remset slots whose addresses fall in [regionStart, regionEnd).
+// recordedOnTo: bits re-recorded at to-addresses for objects in this region.
 void NoteOldRegionForwarded(RegionInfo* region, size_t remsetInFrom, size_t liveObjectsForwarded,
-                            size_t o2yEdgesOnToObj);
+                            size_t o2yEdgesOnToObj, size_t recordedOnTo);
 
 // Called from ScrubRememberedSetForRegion when probe on and region is non-young.
 void NoteScrubNonYoung(RegionInfo* region, size_t scrubbed);
