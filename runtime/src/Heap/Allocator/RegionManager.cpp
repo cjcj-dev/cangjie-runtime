@@ -1774,6 +1774,16 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     }
                     position += allocSize;
                 }
+                // permwho: split the two ways the second walk can fail its completeness test.
+                // The loop above stops at `filled < nStarts`, so once every survived start has
+                // been collected it exits with position still short of allocPtr whenever the
+                // last object in the region is not itself a survivor. That is arm 6, and it is
+                // not the same failure as the walk breaking on the gate (arm 5).
+                if (!fullWalk) {
+                    densifyOutcome = 5;
+                } else if (filled == nStarts && filled > 0 && position != allocPtr) {
+                    densifyOutcome = 6;
+                }
                 // Second walk must also reach allocPtr with full start set before clearAll.
                 if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
                     densifyOutcome = 0;

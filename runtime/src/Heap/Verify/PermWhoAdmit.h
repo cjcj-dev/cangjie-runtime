@@ -57,7 +57,8 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to);
 // construction — it rebuilds both faces from one size-walk — but only when the walk
 // completes. densifyOutcome records whether it ran and, if not, why not.
 //   0 = densified   1 = gate (not small / no ghost / knownEmpty)   2 = first walk incomplete
-//   3 = nStarts==0  4 = malloc failed                              5 = second walk incomplete
+//   3 = nStarts==0  4 = malloc failed        5 = second walk broke on the gate
+//   6 = second walk collected every start but stopped short of allocPtr (its own loop bound)
 void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome);
 
 // Called on the abandon arm (RegionManager.cpp:2238), where a region that failed the receipt

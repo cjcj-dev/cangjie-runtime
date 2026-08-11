@@ -251,11 +251,12 @@ void DumpSummary()
                  g_abandonForwarded.load(std::memory_order_relaxed));
     std::fprintf(stderr,
                  "[GCV2][permwho-plan] atexit plans=%zu densified=%zu gate=%zu walk1=%zu nstarts0=%zu "
-                 "malloc=%zu walk2=%zu mismatch=%zu mismatchNotDensified=%zu counterGT=%zu bitmapGT=%zu\n",
+                 "malloc=%zu walk2broke=%zu walk2short=%zu mismatch=%zu mismatchNotDensified=%zu counterGT=%zu bitmapGT=%zu\n",
                  g_planTotal.load(std::memory_order_relaxed), g_planByOutcome[0].load(std::memory_order_relaxed),
                  g_planByOutcome[1].load(std::memory_order_relaxed), g_planByOutcome[2].load(std::memory_order_relaxed),
                  g_planByOutcome[3].load(std::memory_order_relaxed), g_planByOutcome[4].load(std::memory_order_relaxed),
-                 g_planByOutcome[5].load(std::memory_order_relaxed), g_planMismatch.load(std::memory_order_relaxed),
+                 g_planByOutcome[5].load(std::memory_order_relaxed), g_planByOutcome[6].load(std::memory_order_relaxed),
+                 g_planMismatch.load(std::memory_order_relaxed),
                  g_planMismatchNotDensified.load(std::memory_order_relaxed),
                  g_planCounterGreater.load(std::memory_order_relaxed),
                  g_planBitmapGreater.load(std::memory_order_relaxed));
