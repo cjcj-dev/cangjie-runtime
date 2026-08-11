@@ -133,6 +133,9 @@ std::atomic<size_t> g_f3DeadarmLatestNotHeap{ 0 };
 std::atomic<size_t> g_f3DeadarmValidButNotLive{ 0 };
 std::atomic<size_t> g_f3DeadarmInvalidObject{ 0 }; // active-region bad-tip early-return arm
 std::atomic<size_t> g_f3DeadarmUnknown{ 0 };
+// Orthogonal overlay (f3weak): dead-arm hits whose holder is IsWeakRef — not a
+// partition class. Reason classes still sum to total; weak_holder ⊆ total.
+std::atomic<size_t> g_f3DeadarmWeakHolder{ 0 };
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
 bool F3DeadarmAssertEnabled()
@@ -155,7 +158,9 @@ void ReportF3DeadarmCounts(const char* point)
     const size_t validButNotLive = g_f3DeadarmValidButNotLive.load(std::memory_order_relaxed);
     const size_t invalidObject = g_f3DeadarmInvalidObject.load(std::memory_order_relaxed);
     const size_t unknown = g_f3DeadarmUnknown.load(std::memory_order_relaxed);
+    const size_t weakHolder = g_f3DeadarmWeakHolder.load(std::memory_order_relaxed);
     // soft-null classes + invalid_object_active_region (bad-tip early-return) partition total.
+    // weak_holder is orthogonal (holder type overlay), not part of classSum.
     const size_t softNullParts =
         latestNull + regionGarbage + regionNull + regionFree + latestNotHeap + validButNotLive + unknown;
     const size_t classSum = softNullParts + invalidObject;
@@ -164,18 +169,20 @@ void ReportF3DeadarmCounts(const char* point)
                  "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
                  "latest_null=%zu region_garbage=%zu region_null=%zu region_free=%zu "
                  "region_null_or_free=%zu latest_not_heap=%zu valid_but_not_live=%zu "
-                 "invalid_object_active_region=%zu unknown=%zu class_sum_ok=%d env_assert=%d\n",
+                 "invalid_object_active_region=%zu unknown=%zu weak_holder=%zu "
+                 "class_sum_ok=%d env_assert=%d\n",
                  point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull,
                  regionFree, regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
-                 classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
+                 weakHolder, classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
     std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
          "latest_null=%zu region_garbage=%zu region_null=%zu region_free=%zu "
          "region_null_or_free=%zu latest_not_heap=%zu valid_but_not_live=%zu "
-         "invalid_object_active_region=%zu unknown=%zu class_sum_ok=%d env_assert=%d",
+         "invalid_object_active_region=%zu unknown=%zu weak_holder=%zu "
+         "class_sum_ok=%d env_assert=%d",
          point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull, regionFree,
-         regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
+         regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown, weakHolder,
          classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
 }
 
@@ -189,10 +196,14 @@ void EnsureF3DeadarmAtexit()
 
 // Classify + count one hit on the !latestLive residue path. Returns reason for assert/log.
 // invalid_object_active_region is counted on the bad-tip arm (no soft-null).
-const char* NoteF3DeadarmHit(const char* reason)
+// holder: optional; when IsWeakRef, increments weak_holder overlay (f3weak).
+const char* NoteF3DeadarmHit(const char* reason, BaseObject* holder)
 {
     EnsureF3DeadarmAtexit();
     g_f3DeadarmTotal.fetch_add(1, std::memory_order_relaxed);
+    if (holder != nullptr && holder->IsWeakRef()) {
+        g_f3DeadarmWeakHolder.fetch_add(1, std::memory_order_relaxed);
+    }
     if (reason == nullptr) {
         g_f3DeadarmUnknown.fetch_add(1, std::memory_order_relaxed);
         return "unknown";
@@ -1453,7 +1464,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 
         // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
         if (latestInActiveRegion && !latestValidObj) {
-            (void)NoteF3DeadarmHit("invalid_object");
+            (void)NoteF3DeadarmHit("invalid_object", holder);
             bool fromLive = false;
             if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj != latest) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
@@ -1484,7 +1495,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
             // True dead residue: soft-null by default (e8e092f6).
             // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
             // (no CAS null). Default path byte-identical soft-null when env unset.
-            const char* deadReason = NoteF3DeadarmHit(reason);
+            // f3weak: holder passed so weak_holder overlay can count IsWeakRef holders.
+            const char* deadReason = NoteF3DeadarmHit(reason, holder);
             static std::atomic<size_t> g_f3DeadLogged{ 0 };
             size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
             if (n < 16) {
