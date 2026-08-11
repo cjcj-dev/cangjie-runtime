@@ -176,6 +176,44 @@ public:
         __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
     }
 
+    // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
+    void BumpSnapshotEpochFromClearLiveInfo()
+    {
+        size_t n;
+        if (IsYoungRegion()) {
+            n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else {
+            n = oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        // Milestone dump so timeout-killed ALOT runs still leave a line (atexit may not run).
+        if (n == 1 || n == 8 || n == 64 || n == 256 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts(IsYoungRegion() ? "clear_young_milestone" : "clear_old_milestone");
+        }
+    }
+    void BumpSnapshotEpochFromInitRegion()
+    {
+        size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("init_milestone");
+        }
+    }
+    void BumpSnapshotEpochFromResetAfterForward()
+    {
+        size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("reset_fwd_milestone");
+        }
+    }
+
+    static void EnsureOneseqAtexit();
+    static void ReportOneseqCounts(const char* point);
+
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
@@ -750,6 +788,18 @@ public:
     // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
     static std::atomic<size_t> markEpochStaleReadCount;
     static std::atomic<bool> markEpochAtexitInstalled;
+
+    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-on counters, atexit dump).
+    static std::atomic<size_t> oneseqBumpClearYoung;
+    static std::atomic<size_t> oneseqBumpClearOld;
+    static std::atomic<size_t> oneseqBumpInitRegion;
+    static std::atomic<size_t> oneseqBumpResetAfterForward;
+    static std::atomic<size_t> oneseqIsKnownEmptyCalls;
+    static std::atomic<size_t> oneseqAuthBlocksReclaim;   // !auth && emptyByEpoch
+    static std::atomic<size_t> oneseqAuthAndEmpty;        // auth && emptyByEpoch (= IsKnownEmpty true)
+    static std::atomic<size_t> oneseqAuthNotEmpty;        // auth && !emptyByEpoch
+    static std::atomic<size_t> oneseqNoAuthNotEmpty;      // !auth && !emptyByEpoch
+    static std::atomic<bool> oneseqAtexitInstalled;
 
     static bool MarkEpochAssertEnabled()
     {
@@ -1446,7 +1496,7 @@ public:
         }
         CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
                      "ClearLiveInfo must be called on a region head");
-        BumpSnapshotEpoch();
+        BumpSnapshotEpochFromClearLiveInfo();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
@@ -1793,22 +1843,37 @@ public:
     bool IsKnownEmpty() const
     {
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        if ((raw & LIVE_AUTHORITY_BIT) == 0) {
+        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        bool emptyByEpoch = false;
+        if (IsLargeRegion()) {
+            emptyByEpoch = (metadata.isMarked == 0);
+        } else {
+            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+                emptyByEpoch = true;
+            } else if (liveInfo->markEpoch != GetSnapshotEpoch()) {
+                // markepoch: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+                emptyByEpoch = true;
+            } else {
+                // Current-cycle mark face present ⇒ ZGC is_marked true ⇒ not empty for reclaim.
+                emptyByEpoch = false;
+            }
+        }
+        // oneseq: authority vs epoch-empty divergence (const path uses relaxed atomics only).
+        oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
+        if (!auth && emptyByEpoch) {
+            oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
+        } else if (auth && emptyByEpoch) {
+            oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
+        } else if (auth && !emptyByEpoch) {
+            oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!auth) {
             return false;
         }
-        if (IsLargeRegion()) {
-            return metadata.isMarked == 0;
-        }
-        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
-        if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
-            return true;
-        }
-        // markepoch: stale face ⇒ unmarked (ZGC is_marked false before bit test).
-        if (liveInfo->markEpoch != GetSnapshotEpoch()) {
-            return true;
-        }
-        // Current-cycle mark face present ⇒ ZGC is_marked true ⇒ not empty for reclaim.
-        return false;
+        return emptyByEpoch;
     }
 
     bool IsSafeKnownEmpty()
@@ -1840,7 +1905,7 @@ public:
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
-        BumpSnapshotEpoch();
+        BumpSnapshotEpochFromResetAfterForward();
     }
 
     void AddLiveByteCount(uint64_t count)
@@ -2263,7 +2328,7 @@ private:
         metadata.retainedPreserveCnt = 0;
         metadata.retainedClearCnt = 0;
         metadata.retainedLastOp = RETAINED_OP_NONE;
-        BumpSnapshotEpoch();
+        BumpSnapshotEpochFromInitRegion();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetNotRelocatableThisCycle(0);
