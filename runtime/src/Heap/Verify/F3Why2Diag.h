@@ -19,6 +19,9 @@ class BaseObject;
 
 namespace F3Why2Diag {
 
+// Gate: MRT_GCV2_F3WHY2=1 or MRT_GCV2_DIAG token f3why2. Default off.
+bool Enabled();
+
 void NoteCollectEnter(RegionInfo* region);
 
 void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest);

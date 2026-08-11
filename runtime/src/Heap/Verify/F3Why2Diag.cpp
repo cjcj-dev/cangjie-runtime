@@ -17,10 +17,30 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {
 namespace F3Why2Diag {
 namespace {
+
+// FysAuditDiag.cpp:29 / :52-56 shape — default off; MRT_GCV2_F3WHY2=1 or token f3why2.
+bool EnvIsOne(const char* name)
+{
+    const char* v = std::getenv(name);
+    return v != nullptr && std::strcmp(v, "1") == 0;
+}
+
+bool GateOn()
+{
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        if (EnvIsOne("MRT_GCV2_F3WHY2")) {
+            return true;
+        }
+        return DiagGate::TokenOn("f3why2");
+    }();
+    return on;
+}
 
 constexpr size_t kRegionSetCap = 1u << 20;
 constexpr size_t kSampleCap = 64;
@@ -129,10 +149,18 @@ bool ContainsRegion(RegionInfo* region)
 
 } // namespace
 
+bool Enabled()
+{
+    return GateOn();
+}
+
 void CountMarks(RegionInfo* region, size_t& validOut, size_t& markedOut)
 {
     validOut = 0;
     markedOut = 0;
+    if (!GateOn()) {
+        return;
+    }
     if (region == nullptr || region->IsLargeRegion()) {
         if (region != nullptr && region->IsLargeRegion() && region->IsMarkedObject(static_cast<size_t>(0))) {
             markedOut = 1;
@@ -168,6 +196,9 @@ void CountMarks(RegionInfo* region, size_t& validOut, size_t& markedOut)
 
 void NoteCollectEnter(RegionInfo* region)
 {
+    if (!GateOn()) {
+        return;
+    }
     EnsureAtexit();
     size_t n = g_enter.fetch_add(1, std::memory_order_relaxed) + 1;
     if (region == nullptr) {
@@ -244,6 +275,9 @@ void NoteCollectEnter(RegionInfo* region)
 
 void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
 {
+    if (!GateOn()) {
+        return;
+    }
     EnsureAtexit();
     size_t n = g_f3RgHits.fetch_add(1, std::memory_order_relaxed) + 1;
     if (latestRegion == nullptr) {
@@ -304,6 +338,9 @@ void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
 void NoteForwardOrder(RegionInfo* region, uint64_t liveBefore, size_t markedBefore, uint64_t liveAfterReset,
                       size_t markedAfterReset, size_t markedAfterInvalidate)
 {
+    if (!GateOn()) {
+        return;
+    }
     EnsureAtexit();
     size_t n = g_orderSamples.fetch_add(1, std::memory_order_relaxed) + 1;
     if (liveBefore > 0) {
@@ -344,6 +381,9 @@ void NoteForwardOrder(RegionInfo* region, uint64_t liveBefore, size_t markedBefo
 
 void Report(const char* point)
 {
+    if (!GateOn()) {
+        return;
+    }
     const size_t enter = g_enter.load(std::memory_order_relaxed);
     const size_t knownEmpty = g_clsKnownEmpty.load(std::memory_order_relaxed);
     const size_t knownEmptyMarked = g_clsKnownEmptyMarked.load(std::memory_order_relaxed);
