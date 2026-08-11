@@ -275,6 +275,20 @@ void CensusPrePinned(size_t minorRunIndex)
     g_c.minorRun = minorRunIndex;
     uint64_t t0 = TimeUtil::NanoSeconds();
     std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
+    // d1producer positive control for the sticky bitmap: slots that ARE in the remset right now.
+    // If the ever bit never gets set, "D1 is 100% neverRecorded" would be an artefact of a dead
+    // instrument rather than a finding, so count how many live remset slots carry the bit.
+    size_t snapEver = 0;
+    if (Heap::GetHeap().GetRememberedSet().EverRecordedEnabled()) {
+        for (MAddress slot : remsetSnap) {
+            if (Heap::GetHeap().GetRememberedSet().WasEverRecorded(slot)) {
+                ++snapEver;
+            }
+        }
+        VLOG(REPORT, "[GCV2][fysaudit][EVER_CTRL] minor=%zu remsetNow=%zu everSet=%zu (positive control: "
+                     "expect >0 whenever the write barrier recorded anything)",
+             minorRunIndex, remsetSnap.size(), snapEver);
+    }
 
     Heap::GetHeap().ForEachObj(
         [&remsetSnap](BaseObject* holder) {
