@@ -12,6 +12,7 @@
 #include <cstring>
 
 #include "Base/Log.h"
+#include "Base/LogFile.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Barrier/RememberedSet.h"
@@ -60,13 +61,14 @@ void MaybeSample(const char* tag, RegionInfo* region, size_t a, size_t b, size_t
     if (!g_sampleLeft.compare_exchange_strong(left, left - 1, std::memory_order_relaxed)) {
         return;
     }
-    VLOG(REPORT,
-         "[GCV2][o2oremset][sample] tag=%s region=%p start=%#zx end=%#zx type=%u young=%u "
-         "a=%zu b=%zu c=%zu env=MRT_GCV2_O2OREMSET=1",
-         tag, region, region != nullptr ? region->GetRegionStart() : 0,
-         region != nullptr ? region->GetRegionEnd() : 0,
-         region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0u,
-         region != nullptr ? static_cast<unsigned>(region->IsYoungRegion()) : 0u, a, b, c);
+    // RTLOG_ERROR: always visible (VLOG(REPORT) is file-gated; same shape as f3why2 health).
+    LOG(RTLOG_ERROR,
+        "[GCV2][o2oremset][sample] tag=%s region=%p start=%#zx end=%#zx type=%u young=%u "
+        "a=%zu b=%zu c=%zu env=MRT_GCV2_O2OREMSET=1",
+        tag, region, region != nullptr ? region->GetRegionStart() : 0,
+        region != nullptr ? region->GetRegionEnd() : 0,
+        region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0u,
+        region != nullptr ? static_cast<unsigned>(region->IsYoungRegion()) : 0u, a, b, c);
 }
 
 } // namespace
@@ -138,17 +140,17 @@ void DumpAndMaybeReset(const char* point, bool reset)
     uint64_t scrubCalls = g_scrubNonYoungCalls.load(std::memory_order_relaxed);
     uint64_t scrubErased = g_scrubNonYoungErased.load(std::memory_order_relaxed);
     uint64_t scrubNz = g_scrubNonYoungNz.load(std::memory_order_relaxed);
-    VLOG(REPORT,
-         "[GCV2][o2oremset] point=%s oldObjFwd=%llu oldObjFwdBytes=%llu youngObjFwd=%llu "
-         "oldRegionFwd=%llu remsetInFromSum=%llu remsetInFromNzRegions=%llu "
-         "o2yEdgesOnToObjSum=%llu scrubNonYoungCalls=%llu scrubNonYoungErased=%llu "
-         "scrubNonYoungNz=%llu env=MRT_GCV2_O2OREMSET=1",
-         point == nullptr ? "?" : point, static_cast<unsigned long long>(obj),
-         static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(young),
-         static_cast<unsigned long long>(reg), static_cast<unsigned long long>(remSum),
-         static_cast<unsigned long long>(remNz), static_cast<unsigned long long>(o2y),
-         static_cast<unsigned long long>(scrubCalls), static_cast<unsigned long long>(scrubErased),
-         static_cast<unsigned long long>(scrubNz));
+    LOG(RTLOG_ERROR,
+        "[GCV2][o2oremset] point=%s oldObjFwd=%llu oldObjFwdBytes=%llu youngObjFwd=%llu "
+        "oldRegionFwd=%llu remsetInFromSum=%llu remsetInFromNzRegions=%llu "
+        "o2yEdgesOnToObjSum=%llu scrubNonYoungCalls=%llu scrubNonYoungErased=%llu "
+        "scrubNonYoungNz=%llu env=MRT_GCV2_O2OREMSET=1",
+        point == nullptr ? "?" : point, static_cast<unsigned long long>(obj),
+        static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(young),
+        static_cast<unsigned long long>(reg), static_cast<unsigned long long>(remSum),
+        static_cast<unsigned long long>(remNz), static_cast<unsigned long long>(o2y),
+        static_cast<unsigned long long>(scrubCalls), static_cast<unsigned long long>(scrubErased),
+        static_cast<unsigned long long>(scrubNz));
     // Positive control: youngObjFwd must be non-zero when minor evacuates; proves probe armed.
     if (reset) {
         g_oldObjFwd.store(0, std::memory_order_relaxed);
