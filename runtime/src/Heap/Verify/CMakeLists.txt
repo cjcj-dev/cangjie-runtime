@@ -22,6 +22,7 @@ set(SRC_LIST
     "StackExposureOracle.cpp"
     "PlainCensus.cpp"
     "IdleEdgeDiag.cpp"
+    "PromoteFillDiag.cpp"
     "EatArmDiag.cpp"
     "FysDesignDiag.cpp"
     "DiagGate.cpp"

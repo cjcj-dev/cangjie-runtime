@@ -25,6 +25,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/PromoteFillDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -198,6 +199,24 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     if (region->IsSafeKnownEmpty()) {
+        if (PromoteFillDiag::Enabled()) {
+            LiveInfo* li = region->GetLiveInfo();
+            LiveInfo* li0 = region->GetLiveInfo0ForProbe();
+            size_t regionBytes = 0;
+            if (region->GetRegionAllocPtr() > region->GetRegionStart()) {
+                regionBytes = region->GetRegionAllocPtr() - region->GetRegionStart();
+            }
+            // Reconstruct LIVE_AUTHORITY|bytes from public accessors (liveByteCount is private).
+            uint64_t liveByteRaw = region->GetLiveByteCount();
+            if (region->IsLiveCountAuthoritative()) {
+                liveByteRaw |= (1ull << 63);
+            }
+            PromoteFillDiag::NoteSafeKnownEmpty(
+                region, li, li0, liveByteRaw,
+                static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                                      region->GetResurrectBitmap() != nullptr),
+                static_cast<unsigned>(region->IsLargeRegion()), regionBytes);
+        }
         if (fysGapProbe) {
             VLOG(REPORT,
                  "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
@@ -216,14 +235,23 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
         region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
+    LiveInfo* promoteLiveInfo = region->GetLiveInfo();
+    LiveInfo* promoteLiveInfo0 = region->GetLiveInfo0ForProbe();
     auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
-                             &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
+                             &unknownEdges, hasObjectLiveness, useLiveOnly, promoteLiveInfo,
+                             promoteLiveInfo0](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
-        bool survived = hasObjectLiveness &&
-            region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        size_t objOff = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
+        bool survived = hasObjectLiveness && region->IsSurvivedObject(objOff);
         if (useLiveOnly && !survived) {
+            if (PromoteFillDiag::Enabled()) {
+                PromoteFillDiag::NoteSkipDeadObject(
+                    region, object, promoteLiveInfo, promoteLiveInfo0, objOff,
+                    static_cast<unsigned>(survived), static_cast<unsigned>(useLiveOnly),
+                    static_cast<unsigned>(hasObjectLiveness));
+            }
             if (fysGapProbe) {
                 object->ForEachRefField([&deadEdges](RefField<>& field) {
                     BaseObject* target = to_object(field.GetTargetObject());

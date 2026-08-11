@@ -21,6 +21,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/PromoteFillDiag.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 
@@ -862,6 +863,8 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
             ++stats.missBareDisplaced;
         } else {
             ++stats.missBareNeverSeen;
+            // promotefill causal join: was this slot refused at promote-fill dead skip?
+            (void)PromoteFillDiag::NoteCensusNeverSeen(fieldAddress);
         }
         ++stats.missByPhase[0];
         NoteBareHolder(holder);

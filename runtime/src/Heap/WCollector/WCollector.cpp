@@ -44,6 +44,7 @@
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/PromoteFillDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -770,6 +771,10 @@ bool WCollector::MarkObject(BaseObject* obj) const
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
         region->AddLiveByteCount(objectSize);
+        // promotefill: capture mark-period liveInfo pointer identity for later promote-time compare.
+        if (PromoteFillDiag::Enabled()) {
+            PromoteFillDiag::NoteMarkLiveInfo(region, region->GetLiveInfo());
+        }
         (void)region;
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
@@ -5917,6 +5922,7 @@ void WCollector::DoYoungGarbageCollection()
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
+    PromoteFillDiag::DumpProcessTotals("post-minor");
 }
 
 void WCollector::DoGarbageCollection()
