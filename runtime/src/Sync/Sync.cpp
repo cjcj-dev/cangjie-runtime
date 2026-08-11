@@ -560,7 +560,10 @@ bool MonitorWait(CJMutex* mutex, void* wq, int64_t timeout)
 bool MCC_MonitorWait(const void* ptr, int64_t timeout)
 {
     CJMonitor* monitor = CastToT<CJMonitor*>(ptr);
-    CJMutex* mutex = monitor->mutexPtr;
+    // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
+    BaseObject* mutexObj =
+        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+    CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(monitor));
     bool ret = MonitorWait(mutex, &monitor->wq, timeout);
@@ -592,7 +595,10 @@ void MCC_MonitorNotifyAll(const void* ptr)
 bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t timeout)
 {
     CJMultiConditionMonitor* monitor = CastToT<CJMultiConditionMonitor*>(ptr);
-    CJMutex* mutex = monitor->mutexPtr;
+    // Same as MCC_MonitorWait: HeapSlot load must go through the real barrier.
+    BaseObject* mutexObj =
+        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+    CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(waitQueuePtr));
     bool ret = MonitorWait(mutex, &CastToT<CJWaitQueue*>(waitQueuePtr)->wq, timeout);

@@ -108,8 +108,15 @@ inline BaseObject* from_alloc_addr(Uptr addr)
 // ⚠ Bits are NOT run through a read barrier here — caller must not pass
 // a raw field load. Stack-map base pointers (BasePtrType = Uptr) use the
 // Uptr overload.
+// High 16 bits must be clear (plain address). Coloured bits here mean a
+// missing barrier at the call site (traceuncolour: mutexPtr bare load).
 inline BaseObject* from_native_ref(Uptr p)
 {
+    // Address occupies bits 0..47; colour/tag live in 48..63 (RefField.h).
+    if (p != 0 && (p >> 48) != 0) {
+        // Keep CHECK out of this header (no Log.h); hard fail matches prior OOB.
+        __builtin_trap();
+    }
     return to_object(to_zaddress(p));
 }
 inline BaseObject* from_native_ref(const void* p)
