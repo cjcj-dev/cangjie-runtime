@@ -176,28 +176,39 @@ public:
         __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
     }
 
-    // oneseq: tagged bumps so atexit can show whether epoch advances per-list / per-region.
+    // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
     void BumpSnapshotEpochFromClearLiveInfo()
     {
+        size_t n;
         if (IsYoungRegion()) {
-            oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed);
+            n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
         } else {
-            oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed);
+            n = oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed) + 1;
         }
         BumpSnapshotEpoch();
         EnsureOneseqAtexit();
+        // Milestone dump so timeout-killed ALOT runs still leave a line (atexit may not run).
+        if (n == 1 || n == 8 || n == 64 || n == 256 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts(IsYoungRegion() ? "clear_young_milestone" : "clear_old_milestone");
+        }
     }
     void BumpSnapshotEpochFromInitRegion()
     {
-        oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed);
+        size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
         BumpSnapshotEpoch();
         EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("init_milestone");
+        }
     }
     void BumpSnapshotEpochFromResetAfterForward()
     {
-        oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed);
+        size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
         BumpSnapshotEpoch();
         EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("reset_fwd_milestone");
+        }
     }
 
     static void EnsureOneseqAtexit();
