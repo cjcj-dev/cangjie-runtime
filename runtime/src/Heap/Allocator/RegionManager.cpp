@@ -1753,9 +1753,23 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             densifyOutcome = 4;
             if (startOff != nullptr && startSz != nullptr) {
                 densifyOutcome = 5;
+                // permwho: this loop stops at `filled < nStarts` — "I have everything I need" —
+                // while the completeness test below demands `position == allocPtr` — "I walked
+                // everything there is". Both hold only when the last object in the region is
+                // itself a survivor; otherwise densify is skipped and liveInfo0 keeps the
+                // multi-bit ranges this block exists to remove. Measured on
+                // natural_wave_notime.O0: 11,028 of 16,080 route plans (68.6%) skip for exactly
+                // this reason, and no other skip reason occurs at all.
+                // MRT_GCV2_DENSIFY_FULLWALK=1 walks to allocPtr so the test can pass. Default
+                // off: it triples how many regions get densified, which is a change on the
+                // forward path and wants its own measurement before it becomes the default.
+                static const bool densifyFullWalk = []() {
+                    const char* v = std::getenv("MRT_GCV2_DENSIFY_FULLWALK");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
                 size_t filled = 0;
                 position = regionStart;
-                while (position < allocPtr && filled < nStarts) {
+                while (position < allocPtr && (densifyFullWalk || filled < nStarts)) {
                     BaseObject* obj = from_region_addr(position);
                     if (!Collector::PlausibleManagedObjectGate("tipnull-densify-fill", obj)) {
                         fullWalk = false;
@@ -1767,7 +1781,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                         break;
                     }
                     size_t offset = position - regionStart;
-                    if (ghost->IsSurvivedObject(offset)) {
+                    if (ghost->IsSurvivedObject(offset) && filled < nStarts) {
                         startOff[filled] = offset;
                         startSz[filled] = allocSize;
                         ++filled;
