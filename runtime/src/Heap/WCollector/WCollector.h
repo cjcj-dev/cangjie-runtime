@@ -8,6 +8,8 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include "Common/ColourMask.h"
+#include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <memory>
@@ -220,22 +222,77 @@ public:
     // permhole receiptization: RouteObject is geometric (ROUTED before Copy fills tip).
     // Only a tip-valid to is a receipt; null-tip geometric to must not reach self-heal.
     // WaitRoutedTipReady returns receipt, or from while mid-route, or CHECKs permanent hole.
+    // permhit: WaitRoutedTipReady is reachable from here and nowhere else (Collector.h:169
+    // make_load_good is its only caller), so "enter=0" alone cannot say whether the wait was
+    // never needed or whether the read barrier never reached this funnel at all. Count each
+    // arm under the same MRT_GCV2_WAITFWD gate; every counter is behind the gate, so the
+    // product path is unchanged when it is off.
+    static bool RemapFunnelOn()
+    {
+        static const int on = []() {
+            const char* v = std::getenv("MRT_GCV2_WAITFWD");
+            return (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
+        }();
+        return on != 0;
+    }
+
     BaseObject* relocate_or_remap_object(BaseObject* obj, ZGenerationId generation) const override
     {
+        static std::atomic<uint64_t> callCount{ 0 };
+        static std::atomic<uint64_t> nonHeapCount{ 0 };
+        static std::atomic<uint64_t> noGhostCount{ 0 };
+        static std::atomic<uint64_t> routeNullCount{ 0 };
+        static std::atomic<uint64_t> receiptCount{ 0 };
+        static std::atomic<uint64_t> waitCount{ 0 };
+        const bool funnel = RemapFunnelOn();
+        if (funnel) {
+            static std::atomic<bool> installed{ false };
+            bool expected = false;
+            if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+                std::atexit([]() {
+                    std::fprintf(stderr,
+                                 "[GCV2][remapfunnel] atexit call=%llu nonHeap=%llu noGhost=%llu "
+                                 "routeNull=%llu receipt=%llu wait=%llu\n",
+                                 static_cast<unsigned long long>(callCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(nonHeapCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(noGhostCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(routeNullCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(receiptCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(waitCount.load(std::memory_order_relaxed)));
+                    std::fflush(stderr);
+                });
+            }
+            callCount.fetch_add(1, std::memory_order_relaxed);
+        }
         if (!Heap::IsHeapAddress(obj)) {
+            if (funnel) {
+                nonHeapCount.fetch_add(1, std::memory_order_relaxed);
+            }
             return obj;
         }
         RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
+            if (funnel) {
+                noGhostCount.fetch_add(1, std::memory_order_relaxed);
+            }
             return obj;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
         if (to == nullptr) {
+            if (funnel) {
+                routeNullCount.fetch_add(1, std::memory_order_relaxed);
+            }
             return obj;
         }
         if (LIKELY(!Heap::IsHeapAddress(to) || to->IsValidObject())) {
+            if (funnel) {
+                receiptCount.fetch_add(1, std::memory_order_relaxed);
+            }
             return to; // receipt (or non-heap)
+        }
+        if (funnel) {
+            waitCount.fetch_add(1, std::memory_order_relaxed);
         }
         return WaitRoutedTipReady(obj, to, forwarding);
     }

@@ -6329,6 +6329,19 @@ struct PermHoleFacts {
     unsigned toYoung = 0;
     uintptr_t toRegStart = 0;
     uintptr_t toRegAllocPtr = 0;
+    // permhit: the recorded plan itself, and the first words of the memory it points at.
+    // RouteInfo (LiveInfo.h:244-260) has no epoch, so plan and reality can only be told
+    // apart by comparing them; ClearUnits (RegionInfo.h:842-851) zeroes reused memory, so
+    // toWord0==0 with the address inside a live alloc prefix is the reuse signature
+    // remsetlife measured on the remset face.
+    uintptr_t planTo1 = 0;
+    unsigned planTo1Used = 0;
+    unsigned planTo2Idx = 0;
+    unsigned toInAllocPrefix = 0;
+    unsigned toWordsRead = 0;
+    unsigned long long toWord0 = 0;
+    unsigned long long toWord1 = 0;
+    size_t toOffInReg = 0;
 };
 
 // Metadata only — safe even after CollectRegion turned the payload into free memory.
@@ -6389,6 +6402,29 @@ void CollectPermHoleToRegion(BaseObject* geometricTo, PermHoleFacts& f)
     f.toYoung = static_cast<unsigned>(tr->IsYoungRegion());
     f.toRegStart = static_cast<uintptr_t>(tr->GetRegionStart());
     f.toRegAllocPtr = static_cast<uintptr_t>(tr->GetRegionAllocPtr());
+    uintptr_t toAddr = reinterpret_cast<uintptr_t>(geometricTo);
+    f.toOffInReg = toAddr >= f.toRegStart ? static_cast<size_t>(toAddr - f.toRegStart) : 0;
+    f.toInAllocPrefix = static_cast<unsigned>(toAddr >= f.toRegStart && toAddr < f.toRegAllocPtr);
+    // Mapped heap memory: readable whatever its contents. A zero first word is the state
+    // ClearUnits leaves behind, and is also what an unwritten tip looks like.
+    if (f.toInAllocPrefix != 0 && toAddr + 2 * sizeof(uint64_t) <= f.toRegAllocPtr) {
+        const uint64_t* w = reinterpret_cast<const uint64_t*>(toAddr);
+        f.toWord0 = static_cast<unsigned long long>(w[0]);
+        f.toWord1 = static_cast<unsigned long long>(w[1]);
+        f.toWordsRead = 1;
+    }
+}
+
+// The plan the from-region is still serving, read straight out of its RouteInfo.
+void CollectPermHolePlan(RegionInfo* r, PermHoleFacts& f)
+{
+    if (r == nullptr) {
+        return;
+    }
+    RouteInfo plan = r->GetRouteInfoForProbe();
+    f.planTo1 = plan.toRegion1StartAddress;
+    f.planTo1Used = static_cast<unsigned>(plan.GetToRegion1UsedBytes());
+    f.planTo2Idx = static_cast<unsigned>(plan.GetToRegion2Idx());
 }
 
 // Payload walk — reads from-region memory, which CollectRegion may already have released.
@@ -6497,6 +6533,14 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         PermHoleFacts f;
         CollectPermHoleMeta(forwarding, from, f);
         CollectPermHoleToRegion(geometricTo, f);
+        CollectPermHolePlan(forwarding, f);
+        LOG(RTLOG_ERROR,
+            "[GCV2][permhit] plan region=%p planTo1=%#zx planTo1Used=%u planTo2Idx=%u "
+            "to=%p toOffInReg=%zu toInAllocPrefix=%u toWordsRead=%u toWord0=%#llx toWord1=%#llx "
+            "preLiveFrom=%llu fromOff=%zu",
+            forwarding, static_cast<size_t>(f.planTo1), f.planTo1Used, f.planTo2Idx, geometricTo,
+            f.toOffInReg, f.toInAllocPrefix, f.toWordsRead, f.toWord0, f.toWord1, f.preLiveFrom,
+            f.fromOffset);
         LOG(RTLOG_ERROR,
             "[GCV2][permwho] toregion to=%p toFound=%u toRtype=%u toRoute=%u toFree=%u toGarbage=%u "
             "toGhost=%u toYoung=%u toRegStart=%#zx toRegAlloc=%#zx fromGhost=%u fromFree=%u "
