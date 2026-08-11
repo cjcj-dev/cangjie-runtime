@@ -6,6 +6,7 @@
 
 
 #include "Barrier.inline.h"
+#include "Base/Macros.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
@@ -17,6 +18,7 @@
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
+#include <atomic>
 
 namespace MapleRuntime {
 namespace {
@@ -24,6 +26,20 @@ namespace {
 std::atomic<uint64_t> generationalBarrierFastPathHits { 0 };
 std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
 #endif
+
+// storegood: is_store_good fast/slow path enter counts (always on, cheap atomics).
+std::atomic<uint64_t> g_storeBarrierFastPath { 0 };
+std::atomic<uint64_t> g_storeBarrierSlowPath { 0 };
+
+inline void NoteStoreFastPath()
+{
+    g_storeBarrierFastPath.fetch_add(1, std::memory_order_relaxed);
+}
+
+inline void NoteStoreSlowPath()
+{
+    g_storeBarrierSlowPath.fetch_add(1, std::memory_order_relaxed);
+}
 
 inline bool HasYoungRegionsForRecording()
 {
@@ -38,6 +54,22 @@ inline bool HasYoungRegionsForRecording()
     return hasYoungRegions;
 }
 } // namespace
+
+extern "C" MRT_EXPORT uint64_t MRT_StoreBarrierFastPathCount()
+{
+    return g_storeBarrierFastPath.load(std::memory_order_relaxed);
+}
+
+extern "C" MRT_EXPORT uint64_t MRT_StoreBarrierSlowPathCount()
+{
+    return g_storeBarrierSlowPath.load(std::memory_order_relaxed);
+}
+
+extern "C" MRT_EXPORT void MRT_ResetStoreBarrierPathCounts()
+{
+    g_storeBarrierFastPath.store(0, std::memory_order_relaxed);
+    g_storeBarrierSlowPath.store(0, std::memory_order_relaxed);
+}
 
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
 void Barrier::ResetGenerationalBarrierProbe()
@@ -71,8 +103,21 @@ void Barrier::WriteF64(BaseObject* obj, Field<double>& field, double val) const 
 
 void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    // OpenJDK zBarrier.inline.hpp:695-706 store_barrier_on_heap_oop_field:
+    // fast path = is_store_good(prev); slow path = remset/SATB work then color_store_good.
+    // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
+    // If the pre-store slot is already store-good for the same target, skip remset work
+    // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    RefField<> prev(field.GetFieldValue());
+    const bool prevStoreGood = theCollector.is_store_good(prev) &&
+        to_object(prev.GetTargetObject()) == ref;
     WriteReferenceImpl(obj, field, ref);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    if (!prevStoreGood) {
+        NoteStoreSlowPath();
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    } else {
+        NoteStoreFastPath();
+    }
 }
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
@@ -178,8 +223,16 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    RefField<> prev(field.GetFieldValue(order));
+    const bool prevStoreGood = theCollector.is_store_good(prev) &&
+        to_object(prev.GetTargetObject()) == ref;
     AtomicWriteReferenceImpl(obj, field, ref, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    if (!prevStoreGood) {
+        NoteStoreSlowPath();
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    } else {
+        NoteStoreFastPath();
+    }
 }
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
