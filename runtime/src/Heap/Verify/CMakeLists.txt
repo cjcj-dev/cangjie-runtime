@@ -29,6 +29,7 @@ set(SRC_LIST
     "RouteDom.cpp"
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
+    "PermWhoAdmit.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

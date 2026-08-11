@@ -26,6 +26,7 @@
 #include "RegionList.h"
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/PermWhoAdmit.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -592,7 +593,10 @@ public:
             if (!ticket) {
                 return nullptr;
             }
-            return fromRegionInfo->GetRoute(ticket.value());
+            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
+            // permwho: classify the answer (default off, early return inside).
+            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
+            return to;
         }
         return nullptr;
     }
@@ -610,7 +614,9 @@ public:
             if (!ticket) {
                 return nullptr;
             }
-            return fromRegionInfo->GetRoute(ticket.value());
+            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
+            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
+            return to;
         }
         return nullptr;
     }
