@@ -126,8 +126,13 @@ protected:
 
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;
-    void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const;
-    void RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size) const;
+    // storecov: optional pre-store snapshot of store-good (addr,target) pairs; nullptr = always Record
+    // (ReadGeneric / legacy callers). Defined in Barrier.cpp.
+    struct StoreGoodPrevSnapshot;
+    void RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
+                                     const StoreGoodPrevSnapshot* prevSnap = nullptr) const;
+    void RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
+                                       const StoreGoodPrevSnapshot* prevSnap = nullptr) const;
     void RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const;
 
 private:

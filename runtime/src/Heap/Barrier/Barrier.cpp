@@ -19,6 +19,8 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include <atomic>
+#include <utility>
+#include <vector>
 
 namespace MapleRuntime {
 namespace {
@@ -39,6 +41,13 @@ inline void NoteStoreFastPath()
 inline void NoteStoreSlowPath()
 {
     g_storeBarrierSlowPath.fetch_add(1, std::memory_order_relaxed);
+}
+
+// storecov: prev is store-good for the same decoded target we are about to store
+// (OpenJDK zBarrier.inline.hpp:381,703 — second write of a registered edge skips remset).
+inline bool PrevIsStoreGoodForTarget(Collector& collector, RefField<> prev, BaseObject* newRef)
+{
+    return collector.is_store_good(prev) && to_object(prev.GetTargetObject()) == newRef;
 }
 
 inline bool HasYoungRegionsForRecording()
@@ -70,6 +79,48 @@ extern "C" MRT_EXPORT void MRT_ResetStoreBarrierPathCounts()
     g_storeBarrierFastPath.store(0, std::memory_order_relaxed);
     g_storeBarrierSlowPath.store(0, std::memory_order_relaxed);
 }
+
+// Pre-write snapshot of (field address → decoded target) for slots that are already
+// store-good. Bulk paths (WriteStruct / Copy*) destroy prev bits via memcpy/memmove,
+// so the gate must sample before the store (single-field paths read prev inline).
+// Nested type declared in Barrier.h; definition lives here next to the bulk gates.
+struct Barrier::StoreGoodPrevSnapshot {
+    void Push(MAddress addr, BaseObject* target)
+    {
+        if (size_ < CACHE_CAPACITY) {
+            cacheAddr_[size_] = addr;
+            cacheTarget_[size_] = target;
+        } else {
+            excessive_.emplace_back(addr, target);
+        }
+        ++size_;
+    }
+
+    bool Matches(MAddress addr, BaseObject* target) const
+    {
+        const size_t n = size_ < CACHE_CAPACITY ? size_ : CACHE_CAPACITY;
+        for (size_t i = 0; i < n; ++i) {
+            if (cacheAddr_[i] == addr && cacheTarget_[i] == target) {
+                return true;
+            }
+        }
+        for (const auto& e : excessive_) {
+            if (e.first == addr && e.second == target) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool Empty() const { return size_ == 0; }
+
+private:
+    static constexpr size_t CACHE_CAPACITY = 16;
+    MAddress cacheAddr_[CACHE_CAPACITY] {};
+    BaseObject* cacheTarget_[CACHE_CAPACITY] {};
+    size_t size_ { 0 };
+    std::vector<std::pair<MAddress, BaseObject*>> excessive_;
+};
 
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
 void Barrier::ResetGenerationalBarrierProbe()
@@ -109,8 +160,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // If the pre-store slot is already store-good for the same target, skip remset work
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
     RefField<> prev(field.GetFieldValue());
-    const bool prevStoreGood = theCollector.is_store_good(prev) &&
-        to_object(prev.GetTargetObject()) == ref;
+    const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
@@ -130,8 +180,23 @@ void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseOb
 
 void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    // storecov: bulk path has no single "prev". Snapshot store-good (addr,target) pairs
+    // before memcpy/recolour destroys the pre-store bits; RecordCrossGenEdgesInStruct
+    // then skips slots whose post-write target still matches a pre-store store-good edge
+    // (second bulk write of the same old→young edges must not re-enter Record).
+    StoreGoodPrevSnapshot snap;
+    if (obj != nullptr && Heap::IsHeapAddress(obj) && HasYoungRegionsForRecording()) {
+        obj->ForEachRefInStruct(
+            [this, &snap](RefField<>& field) {
+                RefField<> prev(field.GetFieldValue());
+                if (theCollector.is_store_good(prev)) {
+                    snap.Push(reinterpret_cast<MAddress>(&field), to_object(prev.GetTargetObject()));
+                }
+            },
+            dst, dst + dstLen);
+    }
     WriteStructImpl(obj, dst, dstLen, src, srcLen);
-    RecordCrossGenEdgesInStruct(obj, dst, dstLen);
+    RecordCrossGenEdgesInStruct(obj, dst, dstLen, &snap);
 }
 
 void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -224,8 +289,7 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     RefField<> prev(field.GetFieldValue(order));
-    const bool prevStoreGood = theCollector.is_store_good(prev) &&
-        to_object(prev.GetTargetObject()) == ref;
+    const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
@@ -251,8 +315,18 @@ void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, B
 BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                          MemoryOrder order) const
 {
+    // storecov: gate on the actual pre-swap slot bits (not an "expected" value — swap has
+    // none). Same shape as WriteReference / AtomicWriteReference: prev store-good for newRef
+    // ⇒ edge already registered when the slot first became store-good.
+    RefField<> prev(field.GetFieldValue(order));
+    const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
-    RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    if (!prevStoreGood) {
+        NoteStoreSlowPath();
+        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    } else {
+        NoteStoreFastPath();
+    }
     return oldRef;
 }
 
@@ -288,9 +362,21 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
 bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
                                       MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    // storecov: CAS has an expected (oldRef) and a stored (newRef). The store-good gate
+    // uses the actual pre-CAS slot bits (same as WriteReference prev), compared to newRef
+    // — not to oldRef. On success with prev already store-good for newRef, the write is a
+    // same-target refresh (typically oldRef==newRef) and remset work is redundant.
+    // Failed CAS stores nothing ⇒ no Record (unchanged).
+    RefField<> prev(field.GetFieldValue(std::memory_order_relaxed));
+    const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
-        RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+        if (!prevStoreGood) {
+            NoteStoreSlowPath();
+            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+        } else {
+            NoteStoreFastPath();
+        }
     }
     return success;
 }
@@ -332,8 +418,20 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
 void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj, MAddress srcField,
                            MIndex srcSize) const
 {
+    // storecov: bulk ref-array — snapshot store-good slots before memmove/recolour.
+    StoreGoodPrevSnapshot snap;
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && HasYoungRegionsForRecording()) {
+        MAddress end = dstField + dstSize;
+        for (MAddress current = dstField; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
+            HeapSlot<>& slot = HeapSlotAt<>(current);
+            RefField<> prev(slot.GetFieldValue());
+            if (theCollector.is_store_good(prev)) {
+                snap.Push(current, to_object(prev.GetTargetObject()));
+            }
+        }
+    }
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
-    RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize);
+    RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize, &snap);
 }
 
 void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
@@ -368,8 +466,20 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
 void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                               MAddress srcField, MIndex srcSize) const
 {
+    // storecov: bulk struct-array — same pre-store snapshot gate as WriteStruct.
+    StoreGoodPrevSnapshot snap;
+    if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && HasYoungRegionsForRecording()) {
+        dstObj->ForEachRefInStruct(
+            [this, &snap](RefField<>& field) {
+                RefField<> prev(field.GetFieldValue());
+                if (theCollector.is_store_good(prev)) {
+                    snap.Push(reinterpret_cast<MAddress>(&field), to_object(prev.GetTargetObject()));
+                }
+            },
+            dstField, dstField + dstSize);
+    }
     CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
-    RecordCrossGenEdgesInStruct(dstObj, dstField, dstSize);
+    RecordCrossGenEdgesInStruct(dstObj, dstField, dstSize, &snap);
 }
 
 void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
@@ -503,6 +613,9 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
 
 void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
+    // storecov: not one of the six gate sites. Heap-dst branch delegates to WriteStruct
+    // (already gated). Outer Record stays unconditional (nullptr snap) for coverage;
+    // remset Record is idempotent, counters stay owned by WriteStruct / single-field paths.
     WriteGenericImpl(obj, fieldPtr, src, size);
     RecordCrossGenEdgesInStruct(obj, reinterpret_cast<MAddress>(fieldPtr), size);
 }
@@ -675,7 +788,8 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
     }
 }
 
-void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size) const
+void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_t size,
+                                          const StoreGoodPrevSnapshot* prevSnap) const
 {
     if (!HasYoungRegionsForRecording()) {
         return;
@@ -684,13 +798,26 @@ void Barrier::RecordCrossGenEdgesInStruct(BaseObject* obj, MAddress start, size_
         return;
     }
     obj->ForEachRefInStruct(
-        [this, obj](RefField<>& field) {
-            RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+        [this, obj, prevSnap](RefField<>& field) {
+            const MAddress addr = reinterpret_cast<MAddress>(&field);
+            BaseObject* ref = to_object(field.GetTargetObject());
+            // storecov: when a pre-store snapshot is supplied, skip remset for slots that
+            // were already store-good for this target; count fast/slow only on gated calls
+            // (nullptr snap = legacy always-Record, no counter noise for ReadGeneric).
+            if (prevSnap != nullptr) {
+                if (prevSnap->Matches(addr, ref)) {
+                    NoteStoreFastPath();
+                    return;
+                }
+                NoteStoreSlowPath();
+            }
+            RecordCrossGenEdge(obj, addr, ref);
         },
         start, start + size);
 }
 
-void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size) const
+void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
+                                            const StoreGoodPrevSnapshot* prevSnap) const
 {
     if (!HasYoungRegionsForRecording()) {
         return;
@@ -701,7 +828,15 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
     MAddress end = start + size;
     for (MAddress current = start; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
         HeapSlot<>& field = HeapSlotAt<>(current);
-        RecordCrossGenEdge(obj, current, to_object(field.GetTargetObject()));
+        BaseObject* ref = to_object(field.GetTargetObject());
+        if (prevSnap != nullptr) {
+            if (prevSnap->Matches(current, ref)) {
+                NoteStoreFastPath();
+                continue;
+            }
+            NoteStoreSlowPath();
+        }
+        RecordCrossGenEdge(obj, current, ref);
     }
 }
 
