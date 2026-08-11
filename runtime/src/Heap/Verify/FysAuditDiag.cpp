@@ -343,6 +343,11 @@ void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
         if (weakSlots.count(slot) != 0) {
             continue;
         }
+        // External/static remset slots are live-not-consumed by design (Rescan skippedNotHeap).
+        // Never call TryGetRegionInfoAt on non-heap — GetUnitIdxAt OOB aborts.
+        if (!Heap::IsHeapAddress(slot)) {
+            continue;
+        }
         // live-but-not-consumed under FYS0 product path → D4 ledger split.
         ++d4Local;
         ++g_c.d4;
