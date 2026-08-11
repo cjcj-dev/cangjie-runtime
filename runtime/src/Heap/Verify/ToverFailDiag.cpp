@@ -218,7 +218,7 @@ void NoteMlgEnter()
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
+    InstallOnce();
     g_mlgEnter.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -243,7 +243,7 @@ void NoteRemapCall()
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
+    InstallOnce();
     g_remapCall.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -308,7 +308,7 @@ void NoteFwdEnter()
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
+    InstallOnce();
     g_fwdEnter.fetch_add(1, std::memory_order_relaxed);
 }
 
