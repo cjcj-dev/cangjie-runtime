@@ -24,6 +24,7 @@ set(SRC_LIST
     "IdleEdgeDiag.cpp"
     "EatArmDiag.cpp"
     "FysDesignDiag.cpp"
+    "FysAuditDiag.cpp"
     "DiagGate.cpp"
     "RouteDom.cpp"
     "SealCheck.cpp"

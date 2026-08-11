@@ -46,6 +46,7 @@
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
+#include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
@@ -5196,6 +5197,9 @@ void WCollector::DoYoungGarbageCollection()
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
     IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
+    // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
+    FysAuditDiag::OnMinorBegin(minorTotalRuns + 1);
+    FysAuditDiag::CensusPrePinned(minorTotalRuns + 1);
     EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
     FysDesignDiag::OnMinorBegin(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
@@ -5245,6 +5249,10 @@ void WCollector::DoYoungGarbageCollection()
 
     const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
     bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
+    // fysaudit: product path forced FYS=0 (audit walk is separate; never admits missing edges).
+    if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
+        fullYoungScan = false;
+    }
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
     static const bool useBitmapLedger = []() {
         const char* v = std::getenv("MRT_GCV2_SETBITMAP");
@@ -5348,6 +5356,10 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
                             &remsetStats);
+    }
+    // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
+    if (FysAuditDiag::Enabled()) {
+        FysAuditDiag::PostRescan(rememberedSlots, liveRememberedSlots, consumedSlots, weakSlots);
     }
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
@@ -5917,6 +5929,7 @@ void WCollector::DoYoungGarbageCollection()
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
+    FysAuditDiag::DumpProcessTotals("post-minor");
 }
 
 void WCollector::DoGarbageCollection()
