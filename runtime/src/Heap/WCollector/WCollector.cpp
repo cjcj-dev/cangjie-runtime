@@ -6065,6 +6065,23 @@ struct PermHoleFacts {
     uintptr_t containerToGuess = 0;
     unsigned containerToValid = 0;
     size_t walkSteps = 0;
+    // from-region carrier state
+    unsigned fromGhost = 0;
+    unsigned fromFree = 0;
+    unsigned fromGarbage = 0;
+    unsigned liveInfoSame = 0;
+    // to-region state: separates "no path ever wrote this tip" from "a tip was written and
+    // the to-region has since been reclaimed/reused" — the CHECK message cannot tell them
+    // apart, and they have opposite fixes.
+    unsigned toFound = 0;
+    unsigned toRtype = 0;
+    unsigned toRoute = 0;
+    unsigned toFree = 0;
+    unsigned toGarbage = 0;
+    unsigned toGhost = 0;
+    unsigned toYoung = 0;
+    uintptr_t toRegStart = 0;
+    uintptr_t toRegAllocPtr = 0;
 };
 
 // Metadata only — safe even after CollectRegion turned the payload into free memory.
@@ -6099,6 +6116,32 @@ void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
         }
     }
     f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(f.fromOffset));
+    f.fromGhost = static_cast<unsigned>(r->IsGhostFromRegion());
+    f.fromFree = static_cast<unsigned>(r->IsFreeRegion());
+    f.fromGarbage = static_cast<unsigned>(r->IsGarbageRegion());
+    f.liveInfoSame = static_cast<unsigned>(r->GetLiveInfo() == ghost);
+}
+
+// The geometric to lands in some region; its carrier state says whether a tip could still
+// be there at all.
+void CollectPermHoleToRegion(BaseObject* geometricTo, PermHoleFacts& f)
+{
+    if (geometricTo == nullptr || !Heap::IsHeapAddress(geometricTo)) {
+        return;
+    }
+    RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(geometricTo));
+    if (tr == nullptr) {
+        return;
+    }
+    f.toFound = 1;
+    f.toRtype = static_cast<unsigned>(tr->GetRegionType());
+    f.toRoute = static_cast<unsigned>(tr->GetRouteState());
+    f.toFree = static_cast<unsigned>(tr->IsFreeRegion());
+    f.toGarbage = static_cast<unsigned>(tr->IsGarbageRegion());
+    f.toGhost = static_cast<unsigned>(tr->IsGhostFromRegion());
+    f.toYoung = static_cast<unsigned>(tr->IsYoungRegion());
+    f.toRegStart = static_cast<uintptr_t>(tr->GetRegionStart());
+    f.toRegAllocPtr = static_cast<uintptr_t>(tr->GetRegionAllocPtr());
 }
 
 // Payload walk — reads from-region memory, which CollectRegion may already have released.
@@ -6206,6 +6249,14 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // already have released, so the cheap facts must be on the record before it runs.
         PermHoleFacts f;
         CollectPermHoleMeta(forwarding, from, f);
+        CollectPermHoleToRegion(geometricTo, f);
+        LOG(RTLOG_ERROR,
+            "[GCV2][permwho] toregion to=%p toFound=%u toRtype=%u toRoute=%u toFree=%u toGarbage=%u "
+            "toGhost=%u toYoung=%u toRegStart=%#zx toRegAlloc=%#zx fromGhost=%u fromFree=%u "
+            "fromGarbage=%u liveInfoSame=%u",
+            geometricTo, f.toFound, f.toRtype, f.toRoute, f.toFree, f.toGarbage, f.toGhost, f.toYoung,
+            static_cast<size_t>(f.toRegStart), static_cast<size_t>(f.toRegAllocPtr), f.fromGhost,
+            f.fromFree, f.fromGarbage, f.liveInfoSame);
         LOG(RTLOG_ERROR,
             "[GCV2][permwho] books region=%p live=%zu liveAuth=%u knownEmpty=%u faceEpoch=%llu "
             "regionEpoch=%llu ghost0Null=%u markBmNull=%u resBmNull=%u ghostSurv=%u curSurv=%u "
@@ -6228,10 +6279,12 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                      "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
                      "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu knownEmpty=%u "
                      "ghostSurv=%u isObjStart=%u containerFwd=%u delta=%zu containerToValid=%u "
+                     "toRtype=%u toFree=%u toGarbage=%u "
                      "from=%p fromFwd=%u to=%p tipValid=0 — publish without receipt",
                      reason, spins, static_cast<int>(phase), static_cast<unsigned>(rs), forwarding,
                      static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live,
                      f.knownEmpty, f.ghostSurv, f.isObjStart, f.containerFwd, f.delta, f.containerToValid,
+                     f.toRtype, f.toFree, f.toGarbage,
                      from, static_cast<unsigned>(fromFwd), geometricTo);
         // Unreachable after FATAL; keep from (never geometric null-tip) if CHECK is non-abort builds.
         return from;
