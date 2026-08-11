@@ -66,7 +66,15 @@ std::atomic<uint64_t> g_skipSlotNotes{ 0 };
 std::atomic<uint64_t> g_skipSlotCollisions{ 0 };
 
 // Counters
-std::atomic<uint64_t> g_calls{ 0 };
+std::atomic<uint64_t> g_enter{ 0 };
+std::atomic<uint64_t> g_enterYoung{ 0 };
+std::atomic<uint64_t> g_enterAuth{ 0 };
+std::atomic<uint64_t> g_enterHasBm{ 0 };
+std::atomic<uint64_t> g_enterLiveNull{ 0 };
+std::atomic<uint64_t> g_enterLiveNonNull{ 0 };
+std::atomic<uint64_t> g_modeLiveOnly{ 0 };
+std::atomic<uint64_t> g_modeScanAll{ 0 };
+std::atomic<uint64_t> g_recordedSum{ 0 };
 std::atomic<uint64_t> g_safeEmptyHits{ 0 };
 std::atomic<uint64_t> g_safeEmptyWithAlloc{ 0 };
 std::atomic<uint64_t> g_safeEmptyLiveNull{ 0 };
@@ -303,6 +311,43 @@ void NoteMarkLiveInfo(RegionInfo* region, void* liveInfoPtr)
     StoreMarkLive(region, liveInfoPtr);
 }
 
+void NotePromoteFillEnter(RegionInfo* region, void* liveInfoAtPromote, void* /*liveInfo0AtPromote*/,
+                          unsigned isYoung, unsigned auth, unsigned hasBitmap)
+{
+    if (!Enabled()) {
+        return;
+    }
+    g_enter.fetch_add(1, std::memory_order_relaxed);
+    if (isYoung) {
+        g_enterYoung.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (auth) {
+        g_enterAuth.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (hasBitmap) {
+        g_enterHasBm.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (liveInfoAtPromote == nullptr) {
+        g_enterLiveNull.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_enterLiveNonNull.fetch_add(1, std::memory_order_relaxed);
+    }
+    (void)region;
+}
+
+void NotePromoteFillMode(unsigned useLiveOnly, size_t recorded)
+{
+    if (!Enabled()) {
+        return;
+    }
+    if (useLiveOnly) {
+        g_modeLiveOnly.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_modeScanAll.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_recordedSum.fetch_add(recorded, std::memory_order_relaxed);
+}
+
 void NoteSafeKnownEmpty(RegionInfo* region, void* liveInfoAtPromote, void* liveInfo0AtPromote,
                         uint64_t liveByteRaw, unsigned hasBitmap, unsigned isLarge, size_t regionBytes)
 {
@@ -426,12 +471,23 @@ void DumpProcessTotals(const char* tag)
         return;
     }
     VLOG(REPORT,
-         "[PROMOTEFILL][TOTAL] tag=%s safeEmpty=%llu (withAlloc=%llu liveNull=%llu liveNonNull=%llu) "
+         "[PROMOTEFILL][TOTAL] tag=%s enter=%llu young=%llu auth=%llu hasBm=%llu liveNull=%llu "
+         "liveNonNull=%llu modeLiveOnly=%llu modeScanAll=%llu recordedSum=%llu | "
+         "safeEmpty=%llu (withAlloc=%llu liveNull=%llu liveNonNull=%llu) "
          "ledgerSafe same=%llu diff=%llu noMark=%llu | skipDeadObjs=%llu youngEdges=%llu "
          "survivedFalse=%llu liveNull=%llu ledgerSkip same=%llu diff=%llu noMark=%llu | "
          "censusNeverSeen=%llu joinSkip=%llu joinNoSkip=%llu | markNotes=%llu skipSlotNotes=%llu "
          "markColl=%llu skipColl=%llu",
          tag == nullptr ? "-" : tag,
+         static_cast<unsigned long long>(g_enter.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_enterYoung.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_enterAuth.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_enterHasBm.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_enterLiveNull.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_enterLiveNonNull.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_modeLiveOnly.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_modeScanAll.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_recordedSum.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_safeEmptyHits.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_safeEmptyWithAlloc.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_safeEmptyLiveNull.load(std::memory_order_relaxed)),

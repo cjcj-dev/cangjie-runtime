@@ -198,6 +198,14 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    if (PromoteFillDiag::Enabled()) {
+        PromoteFillDiag::NotePromoteFillEnter(
+            region, region->GetLiveInfo(), region->GetLiveInfo0ForProbe(),
+            /*isYoung*/ 1,
+            static_cast<unsigned>(region->IsLiveCountAuthoritative()),
+            static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                                  region->GetResurrectBitmap() != nullptr));
+    }
     if (region->IsSafeKnownEmpty()) {
         if (PromoteFillDiag::Enabled()) {
             LiveInfo* li = region->GetLiveInfo();
@@ -299,6 +307,9 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
+    }
+    if (PromoteFillDiag::Enabled()) {
+        PromoteFillDiag::NotePromoteFillMode(static_cast<unsigned>(useLiveOnly), recorded);
     }
     if (fysGapProbe) {
         VLOG(REPORT,

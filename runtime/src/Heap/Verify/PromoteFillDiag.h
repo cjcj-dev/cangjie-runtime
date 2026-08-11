@@ -35,6 +35,12 @@ bool Enabled();
 // Call from WCollector::MarkObject after region mark succeeds (was unmarked).
 void NoteMarkLiveInfo(RegionInfo* region, void* liveInfoPtr);
 
+// Entry of RecordPromotedCrossGenEdges (before early-returns).
+// mode: 0=entered, then after empty check: 1=scan-all, 2=live-only.
+void NotePromoteFillEnter(RegionInfo* region, void* liveInfoAtPromote, void* liveInfo0AtPromote,
+                          unsigned isYoung, unsigned auth, unsigned hasBitmap);
+void NotePromoteFillMode(unsigned useLiveOnly, size_t recorded);
+
 // Early-return 1: whole region skipped by IsSafeKnownEmpty.
 // liveInfoAtPromote / liveInfo0AtPromote: raw pointers at the early-return site.
 void NoteSafeKnownEmpty(RegionInfo* region, void* liveInfoAtPromote, void* liveInfo0AtPromote,
