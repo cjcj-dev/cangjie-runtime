@@ -6022,6 +6022,140 @@ void WCollector::ProcessFinalizers()
 // missing tip = permanent hole = invariant violation → CHECK (not hang, not geometric to).
 //
 // Diag: MRT_GCV2_WAITFWD=1 counts enter / tip-ready / give-up (gate before counter work).
+namespace {
+// permwho: what the permhole CHECK could not say.
+//
+// ① Two ledgers. The report printed live= from GetLiveByteCount(), but livesame moved the
+//    reclaim predicate onto the mark face: IsKnownEmpty() (RegionInfo.h:1620) reads
+//    liveInfo->markEpoch vs snapshotEpoch, and GetLiveByteCount() now only feeds densify
+//    (RegionInfo.h:1593-1595). A break reported from one ledger cannot say whether the two
+//    agree at that instant, so record both faces.
+// ② Which invariant. AdmitForRoute (RegionInfo.h:940-945) admits any 8-byte offset whose bit
+//    is set in liveInfo0; MarkBits paints one bit per 8 bytes across the whole object
+//    (RegionInfo.h:478 → LiveInfo.h:123), so every interior word of a marked object is
+//    admissible. CopyObject writes a tip only at an object *start* (WCollector.cpp:6215).
+//    A size-walk of the from-region separates the two candidate breaks:
+//      isObjStart=1 containerFwd=0 ⇒ a survivor *start* reached FORWARDED without a Copy
+//                                    (receipt-gate / ordering break)
+//      isObjStart=0 containerFwd=1 ⇒ interior admission: no path ever fills that tip, and
+//                                    to == containerTo + delta proves the plan is geometric
+struct PermHoleFacts {
+    unsigned knownEmpty = 0;
+    unsigned liveAuth = 0;
+    unsigned long long faceEpoch = 0;
+    unsigned long long regionEpoch = 0;
+    unsigned markBmNull = 1;
+    unsigned resBmNull = 1;
+    unsigned ghost0Null = 1;
+    unsigned ghostSurv = 0;
+    unsigned curSurv = 0;
+    size_t fromOffset = 0;
+    size_t allocOff = 0;
+    size_t ghostSize = 0;
+    unsigned long long preLiveFrom = 0;
+    // walk results
+    unsigned walkDone = 0;
+    unsigned isObjStart = 0;
+    unsigned containerFound = 0;
+    unsigned containerFwd = 0;
+    uintptr_t containerAddr = 0;
+    size_t containerSize = 0;
+    size_t delta = 0;
+    unsigned long long preLiveContainer = 0;
+    uintptr_t containerToGuess = 0;
+    unsigned containerToValid = 0;
+    size_t walkSteps = 0;
+};
+
+// Metadata only — safe even after CollectRegion turned the payload into free memory.
+void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
+{
+    if (r == nullptr) {
+        return;
+    }
+    f.knownEmpty = static_cast<unsigned>(r->IsKnownEmpty());
+    f.liveAuth = static_cast<unsigned>(r->IsLiveCountAuthoritative());
+    f.regionEpoch = static_cast<unsigned long long>(r->GetSnapshotEpoch());
+    f.ghostSize = r->GetGhostRegionSize();
+    MAddress start = r->GetRegionStart();
+    MAddress allocPtr = r->GetRegionAllocPtr();
+    f.allocOff = allocPtr > start ? static_cast<size_t>(allocPtr - start) : 0;
+    MAddress fromAddr = reinterpret_cast<MAddress>(from);
+    if (from != nullptr && fromAddr >= start) {
+        f.fromOffset = static_cast<size_t>(fromAddr - start);
+    }
+    LiveInfo* ghost = r->GetLiveInfo0ForProbe();
+    f.ghost0Null = static_cast<unsigned>(ghost == nullptr);
+    if (ghost != nullptr) {
+        f.faceEpoch = static_cast<unsigned long long>(ghost->markEpoch);
+        f.markBmNull = static_cast<unsigned>(ghost->markBitmap == nullptr);
+        f.resBmNull = static_cast<unsigned>(ghost->resurrectBitmap == nullptr);
+        f.ghostSurv = static_cast<unsigned>(ghost->IsSurvivedObject(f.fromOffset));
+        // GetPreMaskInfo divides by the ghost region size; a zero size would fault inside
+        // the diagnostic rather than reporting anything.
+        if (f.ghostSize > 0) {
+            f.preLiveFrom =
+                static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(fromAddr));
+        }
+    }
+    f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(f.fromOffset));
+}
+
+// Payload walk — reads from-region memory, which CollectRegion may already have released.
+// Called only after the metadata line is already on the record.
+void CollectPermHoleWalk(RegionInfo* r, BaseObject* from, BaseObject* geometricTo, PermHoleFacts& f)
+{
+    if (r == nullptr || from == nullptr || !r->IsSmallRegion()) {
+        return;
+    }
+    MAddress start = r->GetRegionStart();
+    MAddress allocPtr = r->GetRegionAllocPtr();
+    MAddress fromAddr = reinterpret_cast<MAddress>(from);
+    if (fromAddr < start || allocPtr <= start) {
+        return;
+    }
+    constexpr size_t kMaxWalkSteps = 1u << 20;
+    MAddress position = start;
+    while (position < allocPtr && f.walkSteps < kMaxWalkSteps) {
+        BaseObject* o = from_region_addr(position);
+        if (!Collector::PlausibleManagedObjectGate("permwho-walk", o)) {
+            break;
+        }
+        size_t allocSize = RegionSpace::GetAllocSize(*o);
+        if (allocSize == 0) {
+            break;
+        }
+        ++f.walkSteps;
+        if (position == fromAddr) {
+            f.isObjStart = 1;
+        }
+        if (fromAddr >= position && fromAddr < position + allocSize) {
+            f.containerFound = 1;
+            f.containerAddr = static_cast<uintptr_t>(position);
+            f.containerSize = allocSize;
+            f.delta = static_cast<size_t>(fromAddr - position);
+            f.containerFwd = static_cast<unsigned>(o->IsForwarded());
+            LiveInfo* ghost = r->GetLiveInfo0ForProbe();
+            if (ghost != nullptr && r->GetGhostRegionSize() > 0) {
+                f.preLiveContainer =
+                    static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(position));
+            }
+            if (geometricTo != nullptr && reinterpret_cast<uintptr_t>(geometricTo) > f.delta) {
+                uintptr_t guess = reinterpret_cast<uintptr_t>(geometricTo) - f.delta;
+                f.containerToGuess = guess;
+                BaseObject* cto = from_region_addr(guess);
+                if (Heap::IsHeapAddress(cto)) {
+                    f.containerToValid = static_cast<unsigned>(cto->IsValidObject());
+                }
+            }
+            break;
+        }
+        position += allocSize;
+    }
+    f.walkDone = 1;
+}
+} // namespace
+
 BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const
 {
     static std::atomic<uint64_t> enterCount{0};
@@ -6033,6 +6167,20 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         diagOn = (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
     }
     if (diagOn) {
+        // permwho: the three counters were incremented but never read anywhere, so
+        // MRT_GCV2_WAITFWD=1 produced no output at all and "enter != 0" was unanswerable.
+        // Capture-less lambda may odr-use these function-local statics without capturing.
+        static std::atomic<bool> waitfwdAtexitInstalled{ false };
+        bool expected = false;
+        if (waitfwdAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr, "[GCV2][waitfwd] atexit enter=%llu tipReady=%llu giveUp=%llu\n",
+                             static_cast<unsigned long long>(enterCount.load(std::memory_order_relaxed)),
+                             static_cast<unsigned long long>(tipReadyCount.load(std::memory_order_relaxed)),
+                             static_cast<unsigned long long>(giveUpCount.load(std::memory_order_relaxed)));
+                std::fflush(stderr);
+            });
+        }
         enterCount.fetch_add(1, std::memory_order_relaxed);
     }
 
@@ -6053,13 +6201,38 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         unsigned young = forwarding != nullptr ? static_cast<unsigned>(forwarding->IsYoungRegion()) : 0;
         size_t live = forwarding != nullptr ? forwarding->GetLiveByteCount() : 0;
         bool fromFwd = from != nullptr && from->IsForwarded();
+        // permwho: both ledgers, then the size-walk that names which invariant broke.
+        // Metadata line first: the walk touches from-region payload that CollectRegion may
+        // already have released, so the cheap facts must be on the record before it runs.
+        PermHoleFacts f;
+        CollectPermHoleMeta(forwarding, from, f);
+        LOG(RTLOG_ERROR,
+            "[GCV2][permwho] books region=%p live=%zu liveAuth=%u knownEmpty=%u faceEpoch=%llu "
+            "regionEpoch=%llu ghost0Null=%u markBmNull=%u resBmNull=%u ghostSurv=%u curSurv=%u "
+            "fromOff=%zu allocOff=%zu ghostSize=%zu preLiveFrom=%llu "
+            "enter=%llu tipReady=%llu giveUp=%llu",
+            forwarding, live, f.liveAuth, f.knownEmpty, f.faceEpoch, f.regionEpoch, f.ghost0Null,
+            f.markBmNull, f.resBmNull, f.ghostSurv, f.curSurv, f.fromOffset, f.allocOff, f.ghostSize,
+            f.preLiveFrom, static_cast<unsigned long long>(enterCount.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(tipReadyCount.load(std::memory_order_relaxed)),
+            static_cast<unsigned long long>(giveUpCount.load(std::memory_order_relaxed)));
+        CollectPermHoleWalk(forwarding, from, geometricTo, f);
+        LOG(RTLOG_ERROR,
+            "[GCV2][permwho] walk region=%p walkDone=%u steps=%zu isObjStart=%u containerFound=%u "
+            "container=%#zx containerSize=%zu containerFwd=%u delta=%zu preLiveContainer=%llu "
+            "containerToGuess=%#zx containerToValid=%u",
+            forwarding, f.walkDone, f.walkSteps, f.isObjStart, f.containerFound,
+            static_cast<size_t>(f.containerAddr), f.containerSize, f.containerFwd, f.delta,
+            f.preLiveContainer, static_cast<size_t>(f.containerToGuess), f.containerToValid);
         CHECK_DETAIL(false,
                      "[GCV2][permhole] WaitRoutedTipReady %s spins=%d phase=%d routeState=%u "
-                     "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu "
+                     "region=%p range=[%#zx,%#zx) rtype=%u young=%u live=%zu knownEmpty=%u "
+                     "ghostSurv=%u isObjStart=%u containerFwd=%u delta=%zu containerToValid=%u "
                      "from=%p fromFwd=%u to=%p tipValid=0 — publish without receipt",
                      reason, spins, static_cast<int>(phase), static_cast<unsigned>(rs), forwarding,
-                     static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live, from,
-                     static_cast<unsigned>(fromFwd), geometricTo);
+                     static_cast<size_t>(regStart), static_cast<size_t>(regEnd), rtype, young, live,
+                     f.knownEmpty, f.ghostSurv, f.isObjStart, f.containerFwd, f.delta, f.containerToValid,
+                     from, static_cast<unsigned>(fromFwd), geometricTo);
         // Unreachable after FATAL; keep from (never geometric null-tip) if CHECK is non-abort builds.
         return from;
     };
