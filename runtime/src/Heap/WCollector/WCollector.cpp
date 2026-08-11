@@ -48,6 +48,7 @@
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/FysAuditDiag.h"
+#include "Heap/Verify/FlipPromoDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
@@ -4876,6 +4877,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu "
              "youngRegionCount=%zu",
              rebuiltRecords, promotedPathRecords, residualPromoteRecords, liveYoungRegions);
+        FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
+        FlipPromoDiag::DumpProcessTotals("post-promote");
 
         fwdTable.PrepareForwardTable();
         ValidateMinorReferences("after-dispel", nullptr);
@@ -5447,6 +5450,8 @@ void WCollector::DoYoungGarbageCollection()
     FysAuditDiag::CensusPrePinned(minorTotalRuns + 1);
     EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
     FysDesignDiag::OnMinorBegin(minorTotalRuns + 1);
+    // flippromo: open broad-vs-product window for regions demoted last minor.
+    FlipPromoDiag::OnBroadScanBegin(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)

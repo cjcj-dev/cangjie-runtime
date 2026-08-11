@@ -26,6 +26,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/FlipPromoDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
@@ -299,6 +300,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(slot);
                 ++recorded;
+                FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
                 NotePromoteGapField(object, field, true, false);
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
                 if (fysGapProbe) {
@@ -320,6 +322,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (recorded != 0) {
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
     }
+    FlipPromoDiag::NotePromotedRegion(region, /*path*/ 0, recorded);
     if (fysGapProbe) {
         VLOG(REPORT,
              "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
@@ -356,19 +359,21 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
             return;
         }
-        region->VisitAllObjects([&rememberedSet, &recorded](BaseObject* object) {
+        region->VisitAllObjects([&rememberedSet, &recorded, region](BaseObject* object) {
             if (object == nullptr || !object->HasRefField()) {
                 return;
             }
-            object->ForEachRefField([&rememberedSet, &recorded, object](RefField<>& field) {
+            object->ForEachRefField([&rememberedSet, &recorded, region](RefField<>& field) {
                 BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
                 }
                 RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                 if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                    rememberedSet.Record(reinterpret_cast<MAddress>(&field));
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    rememberedSet.Record(slot);
                     ++recorded;
+                    FlipPromoDiag::NoteBroadRecord(region, slot);
                 }
             });
         });
@@ -2294,6 +2299,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                         rememberedSet.Record(slot);
                         ++promotedRecords;
+                        FlipPromoDiag::NoteProductRecord(slot, /*path*/ 1);
                         NotePromoteGapField(toObj, field, true, true);
                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
                     } else {
