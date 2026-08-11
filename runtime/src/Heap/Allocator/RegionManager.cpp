@@ -1692,18 +1692,19 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
     // tipnull densify (FULL size-walk only): MarkBits multi-bit ranges let interiors pass
     // Admit while VisitLive only copies starts → FORWARDED + null tip. Rebuild liveInfo0
-    // to size-walk ∩ prior-survived starts so Admit domain ⊆ Copy domain.
+    // to size-walk ∩ prior-survived starts so Admit domain ⊆ Copy domain (H1a).
     //
-    // SEGV fix (si_addr=0x8 MAPERR in CJ_MCC_ReadRefField, rdi=0 rbx=0x8): earlier densify
-    // cleared bitmaps on *partial* walk (gate break mid-region), zeroing liveByteCount and
-    // wiping unwalked survivors → ROUTED/FORWARDED/Collect with mutator still holding from
-    // → ReadRefField(null,+8). Only densify when walk reaches allocPtr.
+    // densifyseal: PrepareForwardable shares liveInfo→liveInfo0; clearAll on that face
+    // wipes MarkObject bits. Partial walk (gate break) then only re-MarkBits walked
+    // starts → unwalked sealed start bits stay 0 → F3 IsMarkedObject=0 / soft-null
+    // (marksurvive sameWord1∧mBit1∧f3Bit0). Only densify when walk reaches allocPtr so
+    // every size-walk start is in the re-paint set. nStarts==0: never clear (empty wipe
+    // → SEGV si_addr=0x8). Anchor: e32383c9; fe96aab8 partial densify is the wipe root.
     if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
         !region->IsKnownEmpty()) {
         // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
         // DEFAULT_STACK_SIZE 512KiB guard MAPERR (si_addr=rbp-0x20058). Heap via malloc
-        // (not managed heap — no GC re-entry). 8192 == default 64KB region / ALLOC_ALIGN=8
-        // max starts; larger regionSize can exceed it — exact nStarts, no silent truncate.
+        // (not managed heap — no GC re-entry). Exact nStarts, no silent truncate.
         LiveInfo* ghost = region->GetLiveInfo0ForProbe();
         RegionBitmap* mb = ghost->markBitmap;
         RegionBitmap* rb = ghost->resurrectBitmap;
@@ -1712,13 +1713,16 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         size_t nStarts = 0;
         size_t liveBytes = 0;
         uintptr_t position = regionStart;
+        bool fullWalk = true;
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
+                fullWalk = false;
                 break;
             }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
             if (allocSize == 0) {
+                fullWalk = false;
                 break;
             }
             size_t offset = position - regionStart;
@@ -1728,9 +1732,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             }
             position += allocSize;
         }
-        // Partial walk still densifies walked starts (orphans past break lose bits).
-        // nStarts==0: never clear (would wipe face → SEGV si_addr=0x8).
-        if (nStarts > 0) {
+        if (fullWalk && position == allocPtr && nStarts > 0) {
             size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
             size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
             if (startOff != nullptr && startSz != nullptr) {
@@ -1739,10 +1741,12 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                 while (position < allocPtr && filled < nStarts) {
                     BaseObject* obj = from_region_addr(position);
                     if (!Collector::PlausibleManagedObjectGate("tipnull-densify-fill", obj)) {
+                        fullWalk = false;
                         break;
                     }
                     size_t allocSize = RegionSpace::GetAllocSize(*obj);
                     if (allocSize == 0) {
+                        fullWalk = false;
                         break;
                     }
                     size_t offset = position - regionStart;
@@ -1753,7 +1757,8 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     }
                     position += allocSize;
                 }
-                if (filled > 0) {
+                // Second walk must also reach allocPtr with full start set before clearAll.
+                if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
                     auto clearAll = [](RegionBitmap* bm) {
                         if (bm == nullptr) {
                             return;
@@ -1789,7 +1794,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     if (dn <= 32) {
                         LOG(RTLOG_ERROR,
                             "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu "
-                            "walkEnd=%#zx alloc=%#zx n=%zu (heap)",
+                            "walkEnd=%#zx alloc=%#zx n=%zu (full)",
                             region, filled, liveBytesFilled, static_cast<size_t>(position),
                             static_cast<size_t>(allocPtr), dn);
                     }
