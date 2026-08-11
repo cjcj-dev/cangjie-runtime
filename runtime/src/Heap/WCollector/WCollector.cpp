@@ -120,6 +120,104 @@ std::atomic<size_t> g_resolveRootOld{ 0 };
 std::atomic<size_t> g_resolveRootHealNull{ 0 };
 std::atomic<size_t> g_fixMinorRootSlotsCalls{ 0 };
 
+// F3 true-dead arm (FixOldTaggedRefField soft-null). Always-on classified counters
+// (f3arm / F3_KEEP_NO_NULL_DEAD_ARM §6 BEFORE_A). Default product still CAS-null;
+// MRT_GCV2_F3_DEADARM_ASSERT=1 fail-closes instead. Categories partition the
+// soft-null write — sum == total (assert path counts then aborts).
+std::atomic<size_t> g_f3DeadarmTotal{ 0 };
+std::atomic<size_t> g_f3DeadarmLatestNull{ 0 };
+std::atomic<size_t> g_f3DeadarmRegionGarbage{ 0 };
+std::atomic<size_t> g_f3DeadarmRegionNull{ 0 };
+std::atomic<size_t> g_f3DeadarmRegionFree{ 0 };
+std::atomic<size_t> g_f3DeadarmLatestNotHeap{ 0 };
+std::atomic<size_t> g_f3DeadarmValidButNotLive{ 0 };
+std::atomic<size_t> g_f3DeadarmInvalidObject{ 0 }; // active-region bad-tip early-return arm
+std::atomic<size_t> g_f3DeadarmUnknown{ 0 };
+std::atomic<bool> g_f3DeadarmAtexit{ false };
+
+bool F3DeadarmAssertEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_F3_DEADARM_ASSERT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+void ReportF3DeadarmCounts(const char* point)
+{
+    const size_t total = g_f3DeadarmTotal.load(std::memory_order_relaxed);
+    const size_t latestNull = g_f3DeadarmLatestNull.load(std::memory_order_relaxed);
+    const size_t regionGarbage = g_f3DeadarmRegionGarbage.load(std::memory_order_relaxed);
+    const size_t regionNull = g_f3DeadarmRegionNull.load(std::memory_order_relaxed);
+    const size_t regionFree = g_f3DeadarmRegionFree.load(std::memory_order_relaxed);
+    const size_t latestNotHeap = g_f3DeadarmLatestNotHeap.load(std::memory_order_relaxed);
+    const size_t validButNotLive = g_f3DeadarmValidButNotLive.load(std::memory_order_relaxed);
+    const size_t invalidObject = g_f3DeadarmInvalidObject.load(std::memory_order_relaxed);
+    const size_t unknown = g_f3DeadarmUnknown.load(std::memory_order_relaxed);
+    // soft-null classes + invalid_object_active_region (bad-tip early-return) partition total.
+    const size_t softNullParts =
+        latestNull + regionGarbage + regionNull + regionFree + latestNotHeap + validButNotLive + unknown;
+    const size_t classSum = softNullParts + invalidObject;
+    // fprintf+fflush: crash/assert paths must leave a greppable line even if VLOG is late.
+    std::fprintf(stderr,
+                 "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
+                 "latest_null=%zu region_garbage=%zu region_null=%zu region_free=%zu "
+                 "region_null_or_free=%zu latest_not_heap=%zu valid_but_not_live=%zu "
+                 "invalid_object_active_region=%zu unknown=%zu class_sum_ok=%d env_assert=%d\n",
+                 point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull,
+                 regionFree, regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
+                 classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
+    std::fflush(stderr);
+    VLOG(REPORT,
+         "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
+         "latest_null=%zu region_garbage=%zu region_null=%zu region_free=%zu "
+         "region_null_or_free=%zu latest_not_heap=%zu valid_but_not_live=%zu "
+         "invalid_object_active_region=%zu unknown=%zu class_sum_ok=%d env_assert=%d",
+         point != nullptr ? point : "?", total, softNullParts, latestNull, regionGarbage, regionNull, regionFree,
+         regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
+         classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
+}
+
+void EnsureF3DeadarmAtexit()
+{
+    bool expected = false;
+    if (g_f3DeadarmAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() { ReportF3DeadarmCounts("atexit"); });
+    }
+}
+
+// Classify + count one hit on the !latestLive residue path. Returns reason for assert/log.
+// invalid_object_active_region is counted on the bad-tip arm (no soft-null).
+const char* NoteF3DeadarmHit(const char* reason)
+{
+    EnsureF3DeadarmAtexit();
+    g_f3DeadarmTotal.fetch_add(1, std::memory_order_relaxed);
+    if (reason == nullptr) {
+        g_f3DeadarmUnknown.fetch_add(1, std::memory_order_relaxed);
+        return "unknown";
+    }
+    if (std::strcmp(reason, "latest_null") == 0) {
+        g_f3DeadarmLatestNull.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "region_garbage") == 0) {
+        g_f3DeadarmRegionGarbage.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "region_null") == 0) {
+        g_f3DeadarmRegionNull.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "region_free") == 0) {
+        g_f3DeadarmRegionFree.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "latest_not_heap") == 0) {
+        g_f3DeadarmLatestNotHeap.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "valid_but_not_live") == 0) {
+        g_f3DeadarmValidButNotLive.fetch_add(1, std::memory_order_relaxed);
+    } else if (std::strcmp(reason, "invalid_object") == 0) {
+        // Active-region bad tip: counted under invalid_object_active_region; not soft-null.
+        g_f3DeadarmInvalidObject.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_f3DeadarmUnknown.fetch_add(1, std::memory_order_relaxed);
+    }
+    return reason;
+}
+
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
                        std::atomic<size_t>* pathCount)
 {
@@ -1355,6 +1453,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
 
         // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
         if (latestInActiveRegion && !latestValidObj) {
+            (void)NoteF3DeadarmHit("invalid_object");
             bool fromLive = false;
             if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj != latest) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
@@ -1382,13 +1481,24 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
                 return;
             }
         } else {
-            // True dead residue: soft-null (e8e092f6).
+            // True dead residue: soft-null by default (e8e092f6).
+            // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
+            // (no CAS null). Default path byte-identical soft-null when env unset.
+            const char* deadReason = NoteF3DeadarmHit(reason);
             static std::atomic<size_t> g_f3DeadLogged{ 0 };
             size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
             if (n < 16) {
                 VLOG(REPORT,
-                     "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p — null slot",
-                     holder, &field, fromObj, latest);
+                     "[GCV2][F3-dead] holder=%p field=%p from=%p latest=%p reason=%s — null slot",
+                     holder, &field, fromObj, latest, deadReason);
+            }
+            if (F3DeadarmAssertEnabled()) {
+                ReportF3DeadarmCounts("assert");
+                CHECK_DETAIL(false,
+                             "[GCV2][f3-deadarm] ASSERT reason=%s rtype=%u latestValid=%d "
+                             "holder=%p field=%p from=%p latest=%p env=MRT_GCV2_F3_DEADARM_ASSERT=1",
+                             deadReason, rtype, latestValid, holder, &field, fromObj, latest);
+                return;
             }
             NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
             RefField<> nullField(nullptr);
@@ -1866,6 +1976,8 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     if (heapTotals.rebuilt != 0) {
         VLOG(REPORT, "[GCV2][remset] rebuilt after full GC recorded=%zu", heapTotals.rebuilt);
     }
+    // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
+    ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     if (account) {
         VLOG(REPORT,
              "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
