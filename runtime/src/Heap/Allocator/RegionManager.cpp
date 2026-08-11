@@ -2241,6 +2241,32 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 region, region->GetRegionStart(), region->GetLiveByteCount(),
                 static_cast<unsigned>(region->GetRouteState()), n);
         }
+        // permwho: this arm's assumption ("RouteObject miss ⇒ mutator keeps from") only holds
+        // for objects this pass did not copy. Objects it did copy already carry
+        // ObjectState::FORWARDED in their own header, and nothing clears that. Count them
+        // before the region is exempted and can be routed again under a fresh RouteInfo.
+        if (PermWhoAdmit::Enabled() && region->IsSmallRegion()) {
+            size_t walked = 0;
+            size_t forwarded = 0;
+            uintptr_t pos = region->GetRegionStart();
+            uintptr_t end = region->GetRegionAllocPtr();
+            while (pos < end) {
+                BaseObject* o = from_region_addr(pos);
+                if (!Collector::PlausibleManagedObjectGate("permwho-abandon", o)) {
+                    break;
+                }
+                size_t sz = RegionSpace::GetAllocSize(*o);
+                if (sz == 0) {
+                    break;
+                }
+                ++walked;
+                if (o->IsForwarded()) {
+                    ++forwarded;
+                }
+                pos += sz;
+            }
+            PermWhoAdmit::NoteAbandon(region, walked, forwarded);
+        }
         if (youngRegion) {
             region->PreserveRetainedLiveInfo();
             (void)RecordPromotedCrossGenEdges(region);

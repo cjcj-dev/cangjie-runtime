@@ -66,6 +66,12 @@ std::atomic<size_t> g_planMismatchNotDensified{ 0 };
 std::atomic<size_t> g_planCounterGreater{ 0 };
 std::atomic<size_t> g_planBitmapGreater{ 0 };
 std::atomic<size_t> g_planLogged{ 0 };
+// Abandon arm: stale per-object receipts left in an exempted region.
+std::atomic<size_t> g_abandonTotal{ 0 };
+std::atomic<size_t> g_abandonWithStaleReceipt{ 0 };
+std::atomic<size_t> g_abandonWalked{ 0 };
+std::atomic<size_t> g_abandonForwarded{ 0 };
+std::atomic<size_t> g_abandonLogged{ 0 };
 
 void EnsureAtexit()
 {
@@ -207,11 +213,42 @@ void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome
         static_cast<unsigned>(region->IsKnownEmpty()));
 }
 
+void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjects)
+{
+    if (!Enabled() || region == nullptr) {
+        return;
+    }
+    EnsureAtexit();
+    g_abandonTotal.fetch_add(1, std::memory_order_relaxed);
+    g_abandonWalked.fetch_add(walkedObjects, std::memory_order_relaxed);
+    g_abandonForwarded.fetch_add(forwardedObjects, std::memory_order_relaxed);
+    if (forwardedObjects > 0) {
+        g_abandonWithStaleReceipt.fetch_add(1, std::memory_order_relaxed);
+        size_t n = g_abandonLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= MaxSamples()) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][permwho-abandon] n=%zu region=%p start=%#zx walked=%zu forwarded=%zu "
+                "live=%zu route=%u rtype=%u young=%u — Exempt keeps %zu stale receipts",
+                n, region, region->GetRegionStart(), walkedObjects, forwardedObjects,
+                region->GetLiveByteCount(), static_cast<unsigned>(region->GetRouteState()),
+                static_cast<unsigned>(region->GetRegionType()),
+                static_cast<unsigned>(region->IsYoungRegion()), forwardedObjects);
+        }
+    }
+}
+
 void DumpSummary()
 {
     if (!Enabled()) {
         return;
     }
+    std::fprintf(stderr,
+                 "[GCV2][permwho-abandon] atexit abandons=%zu withStaleReceipt=%zu walkedObjects=%zu "
+                 "forwardedObjects=%zu\n",
+                 g_abandonTotal.load(std::memory_order_relaxed),
+                 g_abandonWithStaleReceipt.load(std::memory_order_relaxed),
+                 g_abandonWalked.load(std::memory_order_relaxed),
+                 g_abandonForwarded.load(std::memory_order_relaxed));
     std::fprintf(stderr,
                  "[GCV2][permwho-plan] atexit plans=%zu densified=%zu gate=%zu walk1=%zu nstarts0=%zu "
                  "malloc=%zu walk2=%zu mismatch=%zu mismatchNotDensified=%zu counterGT=%zu bitmapGT=%zu\n",

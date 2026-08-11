@@ -60,6 +60,21 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to);
 //   3 = nStarts==0  4 = malloc failed                              5 = second walk incomplete
 void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome);
 
+// Called on the abandon arm (RegionManager.cpp:2238), where a region that failed the receipt
+// gate is dispelled and exempted instead of published.
+//
+// The arm's stated assumption is "GetGhostFromRegionAt null ⇒ RouteObject miss ⇒ mutator
+// keeps from". That holds only for objects that were never copied. Objects the same pass
+// already copied carry ObjectState::FORWARDED in their own header (set at
+// WCollector.cpp:6218), and nothing ever clears it — every SetStateCode(NORMAL) in the tree
+// is applied to the to-copy, never to a from object. The region survives (Exempt), so next
+// cycle PrepareForwardableRegion can route it again, and RegionInfo.h:1155 wipes the
+// RouteInfo those headers were receipts for. A consumer that then reaches such an object
+// takes the from->IsForwarded() branch and asks for a to under the *new* plan.
+//
+// forwardedObjects is how many stale receipts this abandoned region leaves behind.
+void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjects);
+
 void DumpSummary();
 
 } // namespace PermWhoAdmit
