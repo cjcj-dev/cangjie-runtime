@@ -196,6 +196,10 @@ struct RegionBitmap {
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
+    // markepoch: ZGC ZLiveMap::_seqnum counterpart on this face.
+    // Stamped to RegionInfo::snapshotEpoch at bind; reader treats mismatch as unmarked.
+    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §4.1 (zLiveMap.inline.hpp:41-43,93-98).
+    uint64_t markEpoch = 0;
     RegionBitmap* markBitmap = nullptr;
     RegionBitmap* resurrectBitmap = nullptr;
     RegionBitmap* enqueueBitmap = nullptr;

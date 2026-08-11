@@ -9,6 +9,9 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <list>
 #include <map>
@@ -313,6 +316,11 @@ public:
                                             std::memory_order_relaxed)) {
                 LiveInfo* allocatedLiveInfo = ForwardDataManager::GetForwardDataManager().AllocateLiveInfo();
                 allocatedLiveInfo->bindedRegion = this;
+                // markepoch: stamp face to current region snapshot (ZGC reset→release_store seqnum).
+                allocatedLiveInfo->markEpoch = GetSnapshotEpoch();
+                allocatedLiveInfo->markBitmap = nullptr;
+                allocatedLiveInfo->resurrectBitmap = nullptr;
+                allocatedLiveInfo->enqueueBitmap = nullptr;
                 __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
                 return allocatedLiveInfo;
@@ -566,13 +574,80 @@ public:
         return resurrectBitmap->IsMarked(offset);
     }
 
+    // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
+    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
+    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
+    // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
+    static std::atomic<size_t> markEpochStaleReadCount;
+    static std::atomic<bool> markEpochAtexitInstalled;
+
+    static bool MarkEpochAssertEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_MARK_EPOCH_ASSERT");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        return on;
+    }
+
+    static void ReportMarkEpochCounts(const char* point)
+    {
+        const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
+        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu env_assert=%d\n",
+                     point != nullptr ? point : "?", stale, MarkEpochAssertEnabled() ? 1 : 0);
+        std::fflush(stderr);
+    }
+
+    static void EnsureMarkEpochAtexit()
+    {
+        bool expected = false;
+        if (markEpochAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() { ReportMarkEpochCounts("atexit"); });
+        }
+    }
+
+    // Returns false if face is stale (counts as unmarked). true ⇒ epoch matches; caller checks bits.
+    bool NoteMarkEpochOnRead(LiveInfo* liveInfo)
+    {
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        const uint64_t face = liveInfo->markEpoch;
+        const uint64_t now = GetSnapshotEpoch();
+        if (face == now) {
+            return true;
+        }
+        EnsureMarkEpochAtexit();
+        size_t n = markEpochStaleReadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (MarkEpochAssertEnabled()) {
+            LOG(RTLOG_FATAL,
+                "[GCV2][mark-epoch] stale LiveInfo read region=%p faceEpoch=%llu regionEpoch=%llu n=%zu "
+                "env=MRT_GCV2_MARK_EPOCH_ASSERT=1",
+                this, static_cast<unsigned long long>(face), static_cast<unsigned long long>(now), n);
+        }
+        if (n <= 8) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][mark-epoch] stale_read region=%p faceEpoch=%llu regionEpoch=%llu n=%zu",
+                this, static_cast<unsigned long long>(face), static_cast<unsigned long long>(now), n);
+        }
+        return false;
+    }
+
     bool IsMarkedObject(const BaseObject* obj)
     {
         if (IsLargeRegion()) {
             return (metadata.isMarked == 1);
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        // markepoch §5: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+        if (!NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
@@ -584,8 +659,15 @@ public:
         if (IsLargeRegion()) {
             return (metadata.isMarked == 1);
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        if (!NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
         return markBitmap->IsMarked(offset);
@@ -597,13 +679,18 @@ public:
             return metadata.isMarked == 1 || metadata.isResurrected == 1;
         }
 
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap && markBitmap->IsMarked(offset)) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr || !NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap != nullptr && reinterpret_cast<MAddress>(markBitmap) != LiveInfo::TEMPORARY_PTR &&
+            markBitmap->IsMarked(offset)) {
             return true;
         }
-
-        RegionBitmap* resurrectBitmap = GetResurrectBitmap();
-        if (resurrectBitmap && resurrectBitmap->IsMarked(offset)) {
+        RegionBitmap* resurrectBitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+        if (resurrectBitmap != nullptr && reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
+            resurrectBitmap->IsMarked(offset)) {
             return true;
         }
         return false;
