@@ -31,6 +31,7 @@ set(SRC_LIST
     "F3Why2Diag.cpp"
     "PermWhoAdmit.cpp"
     "FlipPromoDiag.cpp"
+    "O2ORemsetDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
