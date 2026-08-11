@@ -23,6 +23,8 @@
 #include "Utils/Demangler.h"
 #include "Flags.h"
 
+#include <type_traits>
+
 #ifdef INTERPRETER_ENABLED
 #include "Interpreter/RuntimeTypes.h"
 #endif
@@ -1249,6 +1251,49 @@ void EnumCtorInfo::SetName(const char* pName)
 }
 
 #ifdef INTERPRETER_ENABLED
+struct ExtensionDataLayoutCheck {
+    // ExtensionData and DYN_ExtensionData are binary mirrors. Keep both
+    // standard-layout so every named field below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<ExtensionData>::value,
+            "ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_ExtensionData>::value,
+            "DYN_ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_ExtensionData) == sizeof(ExtensionData),
+            "DYN_ExtensionData size must match ExtensionData");
+        static_assert(alignof(DYN_ExtensionData) == alignof(ExtensionData),
+            "DYN_ExtensionData alignment must match ExtensionData");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, argNum) ==
+                __builtin_offsetof(ExtensionData, argNum),
+            "argNum offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, isInterfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, isInterfaceTypeInfo),
+            "isInterfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, flag) == __builtin_offsetof(ExtensionData, flag),
+            "flag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTableSize) ==
+                __builtin_offsetof(ExtensionData, funcTableSize),
+            "funcTableSize offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, tt) == __builtin_offsetof(ExtensionData, tt),
+            "tt offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, ti) == __builtin_offsetof(ExtensionData, ti),
+            "ti offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceFn) ==
+                __builtin_offsetof(ExtensionData, interfaceFn),
+            "interfaceFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, interfaceTypeInfo),
+            "interfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, whereCondFn) ==
+                __builtin_offsetof(ExtensionData, whereCondFn),
+            "whereCondFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTable) ==
+                __builtin_offsetof(ExtensionData, funcTable),
+            "funcTable offset mismatch");
+    }
+};
+
 struct TypeInfoLayoutCheck {
     // Static layout checks: DYN_TypeInfo is a binary mirror of TypeInfo.
     static void CheckInterpreterMirror()
