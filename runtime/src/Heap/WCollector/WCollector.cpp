@@ -3446,6 +3446,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     //   4) post-resolve null / bad_target drops
     // Does not relax IsValidObject / FindLatestVersion CHECK_DETAIL.
     static std::atomic<size_t> g_remsetScrubLogged{ 0 };
+    static std::atomic<size_t> g_remsetLifeClearLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
     size_t scrubbedBadTarget = 0;
@@ -3454,6 +3455,28 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         const char* value = std::getenv("MRT_GCV2_RETLIVE_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    // remsetlife: uncapped classification of the bad_target arm. The existing sample log
+    // caps at 16 per process, so the 386-edge population was only ever seen through 84
+    // samples. Counters answer "where does the target sit" for every dropped edge.
+    // Default off; observation only, no control-flow change.
+    static const bool remsetLifeProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSETLIFE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    size_t btNoRegion = 0;
+    size_t btBeyondAlloc = 0;
+    size_t btInAlloc = 0;
+    size_t btWord0Zero = 0;
+    size_t btNeverExamined = 0;
+    size_t btOriginFound = 0;
+    size_t btHolderInvalid = 0;
+    size_t btTargetYoung = 0;
+    size_t btRawTagged = 0;
+    size_t btLoadBad = 0;
+    size_t btOldPtr = 0;
+    size_t btCurrentPtr = 0;
+    size_t btClearHit = 0;
+    size_t btRegionType[16] = { 0 };
     size_t originFound = 0;
     size_t originBoundsValid = 0;
     size_t retainedNever = 0;
@@ -3668,6 +3691,68 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         if (!target->IsValidObject()) {
             ++scrubbedBadTarget;
+            if (remsetLifeProbe) {
+                MAddress tAddr = reinterpret_cast<MAddress>(target);
+                RegionInfo* tRegion = RegionInfo::TryGetRegionInfoAt(tAddr);
+                if (tRegion == nullptr) {
+                    ++btNoRegion;
+                } else {
+                    btRegionType[static_cast<unsigned>(tRegion->GetRegionType()) & 0xFU]++;
+                    if (tRegion->IsYoungRegion()) {
+                        ++btTargetYoung;
+                    }
+                    if (tRegion->GetMarkBitmap() == nullptr &&
+                        tRegion->GetRegionAllocPtr() > tRegion->GetRegionStart()) {
+                        ++btNeverExamined;
+                    }
+                    // Is the address inside the region's allocated prefix at all? A target at or
+                    // past allocPtr was never handed out by this region's current life.
+                    if (tAddr >= tRegion->GetRegionAllocPtr()) {
+                        ++btBeyondAlloc;
+                    } else {
+                        ++btInAlloc;
+                    }
+                }
+                uint64_t word0 = 0;
+                std::memcpy(&word0, target, sizeof(word0));
+                if (word0 == 0) {
+                    ++btWord0Zero;
+                }
+                if ((rawSlot & TAGGED_BITS_MASK) != 0) {
+                    ++btRawTagged;
+                }
+                // Which read-path predicate saw this value? peek is the pre-resolve snapshot.
+                if (IsLoadBad(peek)) {
+                    ++btLoadBad;
+                }
+                if (IsOldPointer(peek)) {
+                    ++btOldPtr;
+                }
+                if (IsCurrentPointer(peek)) {
+                    ++btCurrentPtr;
+                }
+                auto btOrigin = rememberedOrigins.find(slot);
+                if (btOrigin != rememberedOrigins.end() && btOrigin->second != nullptr) {
+                    ++btOriginFound;
+                    if (!btOrigin->second->IsValidObject()) {
+                        ++btHolderInvalid;
+                    }
+                }
+                // Was the target's memory zeroed under us by a region recycle
+                // (TakeRegion → ClearUnits, RegionManager.cpp:1262) or a compact tail?
+                // Reuses the existing gcfwdfix ring; needs MRT_GCV2_TRACE_CLEAR=1.
+                if (TraceClear::Enabled()) {
+                    char clearDetail[256];
+                    if (TraceClear::Lookup(tAddr, clearDetail, sizeof(clearDetail))) {
+                        ++btClearHit;
+                        size_t c = g_remsetLifeClearLogged.fetch_add(1, std::memory_order_relaxed);
+                        if (c < 8) {
+                            VLOG(REPORT, "[GCV2][remsetlife][cleared] slot=%#zx target=%p detail=%s",
+                                 static_cast<size_t>(slot), target, clearDetail);
+                        }
+                    }
+                }
+            }
             size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
             if (n < 16) {
                 RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
@@ -3703,6 +3788,20 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              "staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
              scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+    }
+    if (remsetLifeProbe && scrubbedBadTarget != 0) {
+        VLOG(REPORT,
+             "[GCV2][remsetlife] badTarget=%zu noRegion=%zu beyondAlloc=%zu inAlloc=%zu word0Zero=%zu "
+             "neverExamined=%zu targetYoung=%zu rawTagged=%zu loadBad=%zu oldPtr=%zu currentPtr=%zu "
+             "originFound=%zu holderInvalid=%zu clearHit=%zu "
+             "rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu] "
+             "originsBuilt=%zu remembered=%zu env=MRT_GCV2_REMSETLIFE=1",
+             scrubbedBadTarget, btNoRegion, btBeyondAlloc, btInAlloc, btWord0Zero, btNeverExamined, btTargetYoung,
+             btRawTagged, btLoadBad, btOldPtr, btCurrentPtr, btOriginFound, btHolderInvalid, btClearHit,
+             btRegionType[0], btRegionType[1], btRegionType[2],
+             btRegionType[3], btRegionType[4], btRegionType[5], btRegionType[6], btRegionType[7], btRegionType[8],
+             btRegionType[9], btRegionType[10], btRegionType[11], btRegionType[12], btRegionType[13],
+             btRegionType[14], btRegionType[15], rememberedOrigins.size(), rememberedSlots.size());
     }
     if (retainedProbe) {
         VLOG(REPORT,
