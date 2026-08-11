@@ -411,7 +411,11 @@ public:
 
     void AddRawPointerObject(BaseObject* obj)
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        // Pin needs a plain load-good address. High colour bits ⇒ missing barrier
+        // at the call site (would OOB in GetUnitIdxAt; fail closed here).
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->IncRawPointerObjectCount();
         if (region->IsFromRegion() && fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                            RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
@@ -428,7 +432,9 @@ public:
 
     void RemoveRawPointerObject(BaseObject* obj)
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->DecRawPointerObjectCount();
     }
 
