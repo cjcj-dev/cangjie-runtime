@@ -258,16 +258,22 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
     if (obj == nullptr) {
         return false;
     }
+    // gchot: SiteBucket is strstr over 13 tags — only needed for bysite accounting.
+    // Product path (MARKFLOOR_OBJ_GATE unset) must not pay strstr on every reject.
+    // Reject/admit predicate below is unchanged; GATEEQUIV = identical reject set.
+    const bool account = PlausibleObjGateAccountOn();
     if (!Heap::IsHeapAddress(obj)) {
         size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
-        g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
-        if (PlausibleObjGateAccountOn() && PlausibleObjGateSampleAllowed(32)) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            LOG(RTLOG_ERROR,
-                "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=non-heap n=%zu phase=%s(%u) "
-                "ra0=%p ra1=%p ra2=%p",
-                g_gcCount, site, obj, n, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-                __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+        if (account) {
+            g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+            if (PlausibleObjGateSampleAllowed(32)) {
+                GCPhase phase = Heap::GetHeap().GetGCPhase();
+                LOG(RTLOG_ERROR,
+                    "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=non-heap n=%zu phase=%s(%u) "
+                    "ra0=%p ra1=%p ra2=%p",
+                    g_gcCount, site, obj, n, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+                    __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+            }
         }
         return false;
     }
@@ -279,17 +285,19 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
     if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
         region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
         size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
-        g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
-        if (PlausibleObjGateAccountOn() && PlausibleObjGateSampleAllowed(48)) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            unsigned rtype = region == nullptr ? 255U : static_cast<unsigned>(region->GetRegionType());
-            uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
-            LOG(RTLOG_ERROR,
-                "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=dead-region n=%zu "
-                "region=%p start=%#zx regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-                g_gcCount, site, obj, n, region, rstart, rtype, Collector::GetGCPhaseName(phase),
-                static_cast<unsigned>(phase), __builtin_return_address(0),
-                __builtin_return_address(1), __builtin_return_address(2));
+        if (account) {
+            g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+            if (PlausibleObjGateSampleAllowed(48)) {
+                GCPhase phase = Heap::GetHeap().GetGCPhase();
+                unsigned rtype = region == nullptr ? 255U : static_cast<unsigned>(region->GetRegionType());
+                uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
+                LOG(RTLOG_ERROR,
+                    "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=dead-region n=%zu "
+                    "region=%p start=%#zx regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
+                    g_gcCount, site, obj, n, region, rstart, rtype, Collector::GetGCPhaseName(phase),
+                    static_cast<unsigned>(phase), __builtin_return_address(0),
+                    __builtin_return_address(1), __builtin_return_address(2));
+            }
         }
         return false;
     }
@@ -312,27 +320,26 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
         return true;
     }
     size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
-    g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
-    // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
-    unsigned off = 0;
-    if (PlausibleObjGateAccountOn()) {
-        off = ClassifyInteriorOffset(obj);
+    if (account) {
+        g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+        // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
+        unsigned off = ClassifyInteriorOffset(obj);
         g_plausibleObjGateByIntOff[off / 8u < 5u ? off / 8u : 0u].fetch_add(1, std::memory_order_relaxed);
-    }
-    if (PlausibleObjGateAccountOn() && PlausibleObjGateSampleAllowed(48)) {
-        GCPhase phase = Heap::GetHeap().GetGCPhase();
-        // The region this obj sits in is the join key against [GCRECLAIM][fwd-empty-collect]:
-        // if the dropped root's region is the one CollectRegion later frees, the "live array
-        // reclaimed as empty" chain is reconciled rather than inferred. Only the dead-region
-        // branch above used to print it, and this branch is the one RawArray+8 takes.
-        uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
-        // tip-small-int + off=8 ⇒ classic RawArray+8 / &MArray::length.
-        LOG(RTLOG_ERROR,
-            "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p tip=%p reason=%s n=%zu "
-            "int_off=%u region=%p start=%#zx phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-            g_gcCount, site, obj, tip, reason, n, off, region, rstart,
-            Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-            __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+        if (PlausibleObjGateSampleAllowed(48)) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            // The region this obj sits in is the join key against [GCRECLAIM][fwd-empty-collect]:
+            // if the dropped root's region is the one CollectRegion later frees, the "live array
+            // reclaimed as empty" chain is reconciled rather than inferred. Only the dead-region
+            // branch above used to print it, and this branch is the one RawArray+8 takes.
+            uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
+            // tip-small-int + off=8 ⇒ classic RawArray+8 / &MArray::length.
+            LOG(RTLOG_ERROR,
+                "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p tip=%p reason=%s n=%zu "
+                "int_off=%u region=%p start=%#zx phase=%s(%u) ra0=%p ra1=%p ra2=%p",
+                g_gcCount, site, obj, tip, reason, n, off, region, rstart,
+                Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+                __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+        }
     }
     return false;
 }

@@ -5501,8 +5501,12 @@ void WCollector::DoYoungGarbageCollection()
         });
     }
 
-    const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
-    bool fullYoungScan = fallback == nullptr || std::strcmp(fallback, "0") != 0;
+    // gchot: once-per-process (campaigns set FYS at process start, never mid-run setenv).
+    static const bool fullYoungScanEnv = []() {
+        const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
+        return fallback == nullptr || std::strcmp(fallback, "0") != 0;
+    }();
+    bool fullYoungScan = fullYoungScanEnv;
     // fysaudit: product path forced FYS=0 (audit walk is separate; never admits missing edges).
     if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
         fullYoungScan = false;
