@@ -3477,6 +3477,16 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t btCurrentPtr = 0;
     size_t btClearHit = 0;
     size_t btRegionType[16] = { 0 };
+    // S1 A/B gate. Default OFF: the acceptance criterion fysminor proposed
+    // ("remembered= collapses across minors under FYS=0 + SKIP_PINNED_SCAN=1")
+    // does not reproduce on natural_wave_notime.O0 @256MB (5 runs x ~9 minors,
+    // floor stayed 2115). Ship the mechanism behind a switch and let the D1
+    // delta decide, rather than defaulting on against an unreproduced premise.
+    static const bool remsetReRemember = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_REREMEMBER");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    size_t reRemembered = 0;
     size_t originFound = 0;
     size_t originBoundsValid = 0;
     size_t retainedNever = 0;
@@ -3781,6 +3791,22 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         if (statsOut != nullptr) {
             ++statsOut->consumed;
         }
+        // S1 (fysminor): re-remember on consumption, like ZGC zRemembered.cpp:578-588
+        // (scan_field re-arms the entry via remember(p) whenever the healed value is
+        // still young). DrainForMinor emptied the scan buffer, and the three rebuild
+        // sites only cover *promoted* holders (RegionManager.cpp:258 / :328 and
+        // WCollector.cpp:4688 walk reachableVec's to-versions), so a long-lived old
+        // holder whose field is written once and never again loses its record after
+        // one minor. Record() targets the active (next-cycle) buffer and is idempotent.
+        // If the target is promoted out of young by this collection, the next Rescan
+        // simply will not re-arm it, so the entry self-drains.
+        if (remsetReRemember) {
+            RegionInfo* keepRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (keepRegion != nullptr && keepRegion->IsYoungRegion()) {
+                Heap::GetHeap().GetRememberedSet().Record(slot);
+                ++reRemembered;
+            }
+        }
     }
     if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0 || scrubbedStaleOldTag != 0) {
         VLOG(REPORT,
@@ -3788,6 +3814,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              "staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
              scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+    }
+    if (remsetReRemember) {
+        VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu remembered=%zu env=MRT_GCV2_REMSET_REREMEMBER=1",
+             reRemembered, rememberedSlots.size());
     }
     if (remsetLifeProbe && scrubbedBadTarget != 0) {
         VLOG(REPORT,
