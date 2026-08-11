@@ -48,6 +48,7 @@
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
+#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -1449,6 +1450,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         } else if (latestRegion->IsGarbageRegion()) {
             reason = "region_garbage";
             rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+            // f3why2: join CollectRegion region-set ∩ F3 region_garbage targets.
+            F3Why2Diag::NoteF3RegionGarbage(latestRegion, latest);
         } else {
             latestValid = latestValidObj ? 1 : 0;
             reason = latestValid ? "valid_but_not_live" : "invalid_object";
@@ -1990,6 +1993,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     }
     // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
+    F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     if (account) {
         VLOG(REPORT,
              "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "

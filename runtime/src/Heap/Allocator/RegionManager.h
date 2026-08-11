@@ -24,6 +24,7 @@
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
+#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "securec.h"
 #include "SlotList.h"
@@ -338,6 +339,11 @@ public:
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        // f3why2: always-on enter + class of why this region becomes GARBAGE.
+        // Positive control: enter must be non-zero whenever F3 region_garbage fires
+        // (those regions were typed GARBAGE by CollectRegion before postflip F3).
+        F3Why2Diag::NoteCollectEnter(region);
+
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
