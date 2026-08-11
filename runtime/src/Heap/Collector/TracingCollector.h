@@ -275,11 +275,10 @@ public:
             return true;
         }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        
+        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
         bool marked = regionInfo->MarkObject(obj);
         if (!marked) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -304,10 +303,10 @@ public:
         if (!Collector::PlausibleManagedObjectGate("TracingCollector::ResurrectObject", obj)) {
             return true;
         }
+        // livesame: ResurrectObject counts on 0→1 inside.
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }

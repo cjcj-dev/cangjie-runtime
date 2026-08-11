@@ -454,11 +454,14 @@ public:
         SetResurrectedRegionFlag(0);
     }
 
+    // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
+    // MarkBits returns true if already marked; false on first paint. AddLive only then.
     bool MarkObject(const BaseObject* obj)
     {
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);
+                AddLiveByteCount(obj->GetSize());
                 return false;
             }
             return true;
@@ -472,12 +475,15 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap();
         SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject");
-        bool marked = writeBm->MarkBits(offset, objSize, regionSize);
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
-        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
                                               "MarkObject_sized0");
         CHECK(IsMarkedObject(offset));
-        return marked;
+        return already;
     }
 
     bool MarkObject(const BaseObject* obj, size_t objSize)
@@ -485,6 +491,7 @@ public:
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);
+                AddLiveByteCount(objSize);
                 return false;
             }
             return true;
@@ -497,12 +504,15 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* writeBm = GetOrAllocMarkBitmap();
         SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
-        bool marked = writeBm->MarkBits(offset, objSize, regionSize);
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
         (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
-        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, marked,
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
                                               "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
-        return marked;
+        return already;
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
@@ -510,6 +520,7 @@ public:
         if (IsLargeRegion()) {
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
+                AddLiveByteCount(obj->GetSize());
                 return false;
             }
             return true;
@@ -521,9 +532,12 @@ public:
         size_t regionSize = regionEnd - regionStart;
         RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
         SealCheck::NotePaint(this, offset, objSize, "RegionInfo::ResurrectObject");
-        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
+        bool already = bitmap->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
         CHECK(bitmap->IsMarked(offset));
-        return marked;
+        return already;
     }
 
     bool EnqueueObject(const BaseObject* obj, size_t offset)
@@ -1577,10 +1591,15 @@ public:
     }
 
     // liveByteCount: bit63 = LIVE_AUTHORITY (mark-period established), bits0-62 = live bytes.
-    // InitRegionInfo zeros without authority; minor never marks non-young, so bare live==0 there is not
-    // a reclaim predicate. Readers that decide "empty ⇒ reclaim/skip" must use IsKnownEmpty().
+    // densify / fragmentation still use the byte count; reclaim-empty uses IsKnownEmpty()
+    // which mirrors ZGC page->is_marked() (mark face epoch), not the byte counter alone.
     static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
     static constexpr uint64_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1ull;
+
+    // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
+    static std::atomic<size_t> liveCrossMismatchCount;
+    static std::atomic<size_t> liveCrossCheckCount;
+    static std::atomic<bool> liveCrossAtexitInstalled;
 
     uint64_t GetLiveByteCount() const
     {
@@ -1592,10 +1611,31 @@ public:
         return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
     }
 
+    // ZGC zGeneration.cpp:205-225 / zPage.inline.hpp:223-225:
+    //   free iff !page->is_marked() where is_marked = livemap.seqnum == generation.seqnum.
+    // Ours: mark-period authority required (minor must not reclaim non-young on bare zero),
+    // then empty iff this region has no *current-cycle* mark face
+    // (liveInfo null/TEMPORARY, or LiveInfo.markEpoch != snapshotEpoch, or large isMarked==0).
+    // liveByteCount alone is NOT the reclaim predicate (ZGC live_bytes is relocation only).
     bool IsKnownEmpty() const
     {
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
-        return (raw & LIVE_AUTHORITY_BIT) != 0 && (raw & LIVE_BYTES_MASK) == 0;
+        if ((raw & LIVE_AUTHORITY_BIT) == 0) {
+            return false;
+        }
+        if (IsLargeRegion()) {
+            return metadata.isMarked == 0;
+        }
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+            return true;
+        }
+        // markepoch: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+        if (liveInfo->markEpoch != GetSnapshotEpoch()) {
+            return true;
+        }
+        // Current-cycle mark face present ⇒ ZGC is_marked true ⇒ not empty for reclaim.
+        return false;
     }
 
     bool IsSafeKnownEmpty()
@@ -1606,13 +1646,28 @@ public:
         if (GetRegionAllocPtr() <= GetRegionStart()) {
             return true;
         }
-        return GetMarkBitmap() != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion();
+        // Examined: either large, or we had a mark face this cycle that is now stale/null
+        // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
+        return GetMarkBitmap() != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
+            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
     }
 
     void ResetLiveByteCount()
     {
-        // Young region fully forwarded: known empty.
+        // densify rebuild: clear byte counter only (mark face rewritten in place next).
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+    }
+
+    // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
+    // empty live bytes + invalidate mark face (bump snapshotEpoch; large clears isMarked).
+    // MARK_EPOCH_DISCIPLINE §4.2: no memset of shared markWords.
+    void ResetLiveMapAfterForward()
+    {
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(0);
+        }
+        BumpSnapshotEpoch();
     }
 
     void AddLiveByteCount(uint64_t count)
@@ -1620,6 +1675,43 @@ public:
         uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
         if ((prev & LIVE_AUTHORITY_BIT) == 0) {
             (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
+        }
+    }
+
+    // ZGC ZPage::verify_live — live_objects/bytes must match livemap. Always-on counter;
+    // MRT_GCV2_LIVE_CROSSCHECK=1 aborts on mismatch.
+    void VerifyLiveBooks(const char* where)
+    {
+        liveCrossCheckCount.fetch_add(1, std::memory_order_relaxed);
+        if (!IsLiveCountAuthoritative()) {
+            return;
+        }
+        const uint64_t liveBytes = GetLiveByteCount();
+        const bool emptyByMark = IsKnownEmpty();
+        // Homology: liveBytes==0 ⇔ empty-by-mark (and vice versa) under authority.
+        const bool emptyByLive = (liveBytes == 0);
+        if (emptyByMark == emptyByLive) {
+            return;
+        }
+        size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        static const bool abortOn = []() {
+            const char* v = std::getenv("MRT_GCV2_LIVE_CROSSCHECK");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr, "[GCV2][livesame][crosscheck] atexit checks=%zu mismatch=%zu\n",
+                             liveCrossCheckCount.load(std::memory_order_relaxed),
+                             liveCrossMismatchCount.load(std::memory_order_relaxed));
+                std::fflush(stderr);
+            });
+        }
+        if (n <= 32 || abortOn) {
+            LOG(abortOn ? RTLOG_FATAL : RTLOG_ERROR,
+                "[GCV2][livesame][crosscheck] where=%s region=%p liveBytes=%llu emptyByMark=%u "
+                "emptyByLive=%u n=%zu",
+                where != nullptr ? where : "?", this, static_cast<unsigned long long>(liveBytes),
+                static_cast<unsigned>(emptyByMark), static_cast<unsigned>(emptyByLive), n);
         }
     }
 

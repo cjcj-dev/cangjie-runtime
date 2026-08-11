@@ -24,6 +24,7 @@
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
@@ -42,6 +43,9 @@ std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
 std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
+std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
+std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
@@ -2274,13 +2278,39 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             }
         }
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
-        if (youngRegion) {
-            if (promotedRecords != 0) {
-                g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
-            }
+        // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
+        // live bytes + mark face (ResetLiveMapAfterForward).
+        {
+            const uint64_t liveBefore = region->GetLiveByteCount();
+            size_t validBefore = 0;
+            size_t markedBefore = 0;
+            F3Why2Diag::CountMarks(region, validBefore, markedBefore);
+            region->VerifyLiveBooks("pre-ResetLiveMapAfterForward");
+            // Simulated split for ORDER: live-only then mark-only was the old bug;
+            // measure residual marks after live-zero before joint reset.
             region->ResetLiveByteCount();
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            const uint64_t liveAfterReset = region->GetLiveByteCount();
+            size_t validAfterReset = 0;
+            size_t markedAfterReset = 0;
+            F3Why2Diag::CountMarks(region, validAfterReset, markedAfterReset);
+            // Joint publish (restores live empty + epoch bump in one API).
+            region->ResetLiveMapAfterForward();
+            size_t validAfterInv = 0;
+            size_t markedAfterInv = 0;
+            F3Why2Diag::CountMarks(region, validAfterInv, markedAfterInv);
+            F3Why2Diag::NoteForwardOrder(region, liveBefore, markedBefore, liveAfterReset, markedAfterReset,
+                                         markedAfterInv);
+            region->VerifyLiveBooks("post-ResetLiveMapAfterForward");
+            if (youngRegion) {
+                if (promotedRecords != 0) {
+                    g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
+                }
+                region->SetYoungRegionFlag(0);
+                region->SetYoungAge(0);
+            }
+            (void)validBefore;
+            (void)validAfterReset;
+            (void)validAfterInv;
         }
         CollectRegion(region);
     }

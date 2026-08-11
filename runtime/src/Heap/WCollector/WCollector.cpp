@@ -46,6 +46,7 @@
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
+#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
@@ -768,10 +769,9 @@ bool WCollector::MarkObject(BaseObject* obj) const
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
+    // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
-        region->AddLiveByteCount(objectSize);
-        (void)region;
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
@@ -784,13 +784,13 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     if (!Collector::PlausibleManagedObjectGate("WCollector::ResurrectObject", obj)) {
         return true;
     }
+    // livesame: ResurrectObject counts on 0→1 inside.
     bool resurrected = region->ResurrectObject(obj, offset);
-        if (!resurrected) {
-            region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
-        }
-        return resurrected;
+    if (!resurrected) {
+        DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
+             obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+    }
+    return resurrected;
 }
 
 // this api updates current pointer as well as old pointer, caller should take care of this.
@@ -1450,6 +1450,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         } else if (latestRegion->IsGarbageRegion()) {
             reason = "region_garbage";
             rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+            F3Why2Diag::NoteF3RegionGarbage(latestRegion, latest);
         } else {
             latestValid = latestValidObj ? 1 : 0;
             reason = latestValid ? "valid_but_not_live" : "invalid_object";
@@ -1991,6 +1992,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     }
     // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
+    F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     if (account) {
         VLOG(REPORT,
              "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
