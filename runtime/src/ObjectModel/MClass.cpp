@@ -1251,6 +1251,26 @@ void EnumCtorInfo::SetName(const char* pName)
 }
 
 #ifdef INTERPRETER_ENABLED
+struct GCTibLayoutCheck {
+    // GCTib and DYN_GCTib are binary mirrors. Keep both standard-layout so
+    // every named union member below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<GCTib>::value,
+            "GCTib must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_GCTib>::value,
+            "DYN_GCTib must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_GCTib) == sizeof(GCTib), "DYN_GCTib size must match GCTib");
+        static_assert(alignof(DYN_GCTib) == alignof(GCTib), "DYN_GCTib alignment must match GCTib");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, tag),
+            "raw/tag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, bitmap),
+            "raw/bitmap offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, ptr) == __builtin_offsetof(GCTib, gctib),
+            "ptr/gctib offset mismatch");
+    }
+};
+
 struct ExtensionDataLayoutCheck {
     // ExtensionData and DYN_ExtensionData are binary mirrors. Keep both
     // standard-layout so every named field below can be checked with offsetof.
