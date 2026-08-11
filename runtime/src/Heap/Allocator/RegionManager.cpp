@@ -44,10 +44,51 @@ std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
 std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::oneseqBumpClearYoung { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpClearOld { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpInitRegion { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpResetAfterForward { 0 };
+std::atomic<size_t> RegionInfo::oneseqIsKnownEmptyCalls { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthBlocksReclaim { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthAndEmpty { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthNotEmpty { 0 };
+std::atomic<size_t> RegionInfo::oneseqNoAuthNotEmpty { 0 };
+std::atomic<bool> RegionInfo::oneseqAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
 std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
 std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
+
+void RegionInfo::ReportOneseqCounts(const char* point)
+{
+    std::fprintf(stderr,
+                 "[GCV2][oneseq] point=%s bump_clear_young=%zu bump_clear_old=%zu "
+                 "bump_init=%zu bump_reset_fwd=%zu "
+                 "ike_calls=%zu auth_blocks=%zu auth_empty=%zu auth_not_empty=%zu noauth_not_empty=%zu "
+                 "stale_read=%zu live_cross_check=%zu live_cross_mismatch=%zu\n",
+                 point != nullptr ? point : "?",
+                 oneseqBumpClearYoung.load(std::memory_order_relaxed),
+                 oneseqBumpClearOld.load(std::memory_order_relaxed),
+                 oneseqBumpInitRegion.load(std::memory_order_relaxed),
+                 oneseqBumpResetAfterForward.load(std::memory_order_relaxed),
+                 oneseqIsKnownEmptyCalls.load(std::memory_order_relaxed),
+                 oneseqAuthBlocksReclaim.load(std::memory_order_relaxed),
+                 oneseqAuthAndEmpty.load(std::memory_order_relaxed),
+                 oneseqAuthNotEmpty.load(std::memory_order_relaxed),
+                 oneseqNoAuthNotEmpty.load(std::memory_order_relaxed),
+                 markEpochStaleReadCount.load(std::memory_order_relaxed),
+                 liveCrossCheckCount.load(std::memory_order_relaxed),
+                 liveCrossMismatchCount.load(std::memory_order_relaxed));
+    std::fflush(stderr);
+}
+
+void RegionInfo::EnsureOneseqAtexit()
+{
+    bool expected = false;
+    if (oneseqAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() { ReportOneseqCounts("atexit"); });
+    }
+}
 std::mutex RegionInfo::youngRegionFlagMutex;
 std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
 
