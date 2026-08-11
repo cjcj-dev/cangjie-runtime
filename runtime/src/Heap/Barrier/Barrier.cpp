@@ -594,7 +594,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             }
             return;
         }
-        theRememberedSet.Record(fieldAddress);
+        theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
         }

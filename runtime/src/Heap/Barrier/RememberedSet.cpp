@@ -47,7 +47,31 @@ void RememberedSet::Initialize(MAddress start, size_t size)
             dirtyMaps[buffer][word].store(0, std::memory_order_relaxed);
         }
     }
+    // d1producer: sticky ever-recorded backing, gated off by default (see RememberedSet.h).
+    const char* everEnv = std::getenv("MRT_GCV2_REMSET_EVER");
+    if (everEnv != nullptr && std::strcmp(everEnv, "1") == 0) {
+        everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
+        CHECK_DETAIL(everRecorded != nullptr, "failed to allocate remembered-set ever bitmap");
+        for (size_t word = 0; word < wordCount; ++word) {
+            everRecorded[word].store(0, std::memory_order_relaxed);
+        }
+    }
     initialized = true;
+}
+
+bool RememberedSet::WasEverRecorded(MAddress fieldAddress) const
+{
+    if (everRecorded == nullptr) {
+        return false;
+    }
+    if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize ||
+        fieldAddress % kFieldBytes != 0) {
+        return false;
+    }
+    size_t bit = (fieldAddress - heapStart) / kFieldBytes;
+    size_t word = bit / kBitsPerWord;
+    uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+    return (everRecorded[word].load(std::memory_order_relaxed) & mask) != 0;
 }
 
 void RememberedSet::CheckInitialized() const
@@ -79,7 +103,7 @@ void RememberedSet::ClearWordDirty(size_t buffer, size_t word)
     dirtyMaps[buffer][dirtyWord].fetch_and(~mask, std::memory_order_relaxed);
 }
 
-void RememberedSet::Record(MAddress fieldAddress)
+void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
 {
     CheckInitialized();
     size_t bit = AddressToBit(fieldAddress);
@@ -87,6 +111,9 @@ void RememberedSet::Record(MAddress fieldAddress)
     uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
     uint64_t old = bitmaps[buffer][word].fetch_or(mask, std::memory_order_relaxed);
+    if (fromMutatorBarrier && everRecorded != nullptr) {
+        everRecorded[word].fetch_or(mask, std::memory_order_relaxed);
+    }
     MarkWordDirty(buffer, word);
     if ((old & mask) == 0) {
         recordCounts[buffer].fetch_add(1, std::memory_order_relaxed);
