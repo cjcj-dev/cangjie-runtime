@@ -760,9 +760,7 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             }
             return;
         }
-        // fromMutatorBarrier=true when the 2-arg overload exists (d1producer); single-arg
-        // trees (storegood build base) still accept this as Record(fieldAddress) only.
-        theRememberedSet.Record(fieldAddress);
+        theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
         }
