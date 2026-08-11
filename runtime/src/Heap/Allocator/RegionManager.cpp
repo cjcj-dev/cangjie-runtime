@@ -24,6 +24,7 @@
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
@@ -2274,13 +2275,37 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             }
         }
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
-        if (youngRegion) {
-            if (promotedRecords != 0) {
-                g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
+        // livesame ORDER sample + same-book invalidate (ZGC reset_livemap after from iter).
+        {
+            const uint64_t liveBefore = region->GetLiveByteCount();
+            size_t validBefore = 0;
+            size_t markedBefore = 0;
+            F3Why2Diag::CountMarks(region, validBefore, markedBefore);
+            if (youngRegion) {
+                if (promotedRecords != 0) {
+                    g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
+                }
+                // ResetLiveByteCount empties live first; residual mark bits stay until
+                // InvalidateMarkFaceAfterForward bumps epoch (REPORT-f3why2 knownEmpty_marked).
+                region->ResetLiveByteCount();
             }
-            region->ResetLiveByteCount();
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            const uint64_t liveAfterReset = region->GetLiveByteCount();
+            size_t validAfterReset = 0;
+            size_t markedAfterReset = 0;
+            F3Why2Diag::CountMarks(region, validAfterReset, markedAfterReset);
+            region->InvalidateMarkFaceAfterForward();
+            size_t validAfterInv = 0;
+            size_t markedAfterInv = 0;
+            F3Why2Diag::CountMarks(region, validAfterInv, markedAfterInv);
+            F3Why2Diag::NoteForwardOrder(region, liveBefore, markedBefore, liveAfterReset, markedAfterReset,
+                                         markedAfterInv);
+            if (youngRegion) {
+                region->SetYoungRegionFlag(0);
+                region->SetYoungAge(0);
+            }
+            (void)validBefore;
+            (void)validAfterReset;
+            (void)validAfterInv;
         }
         CollectRegion(region);
     }

@@ -1615,6 +1615,16 @@ public:
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
     }
 
+    // livesame / ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration:
+    // liveByteCount was emptied (ResetLiveByteCount) but mark bits on the from face may
+    // still read 1. Bump snapshotEpoch so IsMarkedObject's markepoch gate treats residual
+    // bits as stale — same book as live (no memset of shared markWords;
+    // MARK_EPOCH_DISCIPLINE §4.2 B/C). Call only after survivors are fully forwarded.
+    void InvalidateMarkFaceAfterForward()
+    {
+        BumpSnapshotEpoch();
+    }
+
     void AddLiveByteCount(uint64_t count)
     {
         uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
