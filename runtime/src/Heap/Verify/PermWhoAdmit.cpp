@@ -47,6 +47,12 @@ std::atomic<size_t> g_fwdToNull{ 0 };
 std::atomic<size_t> g_fwdToNotHeap{ 0 };
 std::atomic<size_t> g_fwdToInvalid{ 0 };
 std::atomic<size_t> g_fwdToValid{ 0 };
+// Two ledgers at answer time. The permhole report prints live= from GetLiveByteCount()
+// (the densify counter), while the reclaim decision reads the mark face via IsKnownEmpty().
+// Counting both on the same answer says whether they agree.
+std::atomic<size_t> g_fwdLiveZero{ 0 };
+std::atomic<size_t> g_fwdKnownEmpty{ 0 };
+std::atomic<size_t> g_fwdBooksSplit{ 0 };
 // ROUTED (copy still in flight) answers, same three columns
 std::atomic<size_t> g_rtdTotal{ 0 };
 std::atomic<size_t> g_rtdToInvalid{ 0 };
@@ -103,6 +109,17 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to)
     if (region->IsGarbageRegion()) {
         g_fwdGarbage.fetch_add(1, std::memory_order_relaxed);
     }
+    const bool liveZero = (region->GetLiveByteCount() == 0);
+    const bool knownEmpty = region->IsKnownEmpty();
+    if (liveZero) {
+        g_fwdLiveZero.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (knownEmpty) {
+        g_fwdKnownEmpty.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (liveZero != knownEmpty) {
+        g_fwdBooksSplit.fetch_add(1, std::memory_order_relaxed);
+    }
     const bool fromFwd = from->IsForwarded();
     if (!fromFwd) {
         g_fwdFromNotFwd.fetch_add(1, std::memory_order_relaxed);
@@ -154,7 +171,7 @@ void DumpSummary()
                  "routed=%zu compacted=%zu forwarded=%zu other=%zu] "
                  "ROUTED{total=%zu toInvalid=%zu} "
                  "FORWARDED{total=%zu garbageRegion=%zu fromNotFwd=%zu toNull=%zu toNotHeap=%zu "
-                 "toInvalid=%zu toValid=%zu}\n",
+                 "toInvalid=%zu toValid=%zu liveZero=%zu knownEmpty=%zu booksSplit=%zu}\n",
                  g_total.load(std::memory_order_relaxed), g_byState[0].load(std::memory_order_relaxed),
                  g_byState[1].load(std::memory_order_relaxed), g_byState[2].load(std::memory_order_relaxed),
                  g_byState[3].load(std::memory_order_relaxed), g_byState[4].load(std::memory_order_relaxed),
@@ -163,7 +180,9 @@ void DumpSummary()
                  g_fwdTotal.load(std::memory_order_relaxed), g_fwdGarbage.load(std::memory_order_relaxed),
                  g_fwdFromNotFwd.load(std::memory_order_relaxed), g_fwdToNull.load(std::memory_order_relaxed),
                  g_fwdToNotHeap.load(std::memory_order_relaxed), g_fwdToInvalid.load(std::memory_order_relaxed),
-                 g_fwdToValid.load(std::memory_order_relaxed));
+                 g_fwdToValid.load(std::memory_order_relaxed), g_fwdLiveZero.load(std::memory_order_relaxed),
+                 g_fwdKnownEmpty.load(std::memory_order_relaxed),
+                 g_fwdBooksSplit.load(std::memory_order_relaxed));
     std::fflush(stderr);
 }
 
