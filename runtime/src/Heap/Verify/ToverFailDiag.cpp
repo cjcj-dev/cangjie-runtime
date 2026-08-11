@@ -10,6 +10,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <csignal>
 
 #include "Common/BaseObject.h"
 #include "Heap/Verify/DiagGate.h"
@@ -49,37 +50,20 @@ std::atomic<uint64_t> g_fwdSame{ 0 };
 std::atomic<uint64_t> g_sampleLogged{ 0 };
 std::atomic<uint64_t> g_heartbeatN{ 0 };
 
+// Sample lines for unmovable; census dumps survive SIGSEGV via signal path.
 constexpr uint64_t kLogCap = 4096;
-constexpr uint64_t kHeartbeat = 1ull << 20;
+// Fast-path heartbeat: every 64K load-good (short runs crash before 1M).
+constexpr uint64_t kHeartbeatFast = 1ull << 16;
+// Slow-path heartbeat: every 256 slow enters (fromver window ~1-4s).
+constexpr uint64_t kHeartbeatSlow = 256;
+constexpr uint64_t kHeartbeatResolve = 256;
+constexpr uint64_t kHeartbeatUnmov = 64;
 
 #define TV_LD(c) static_cast<unsigned long long>((c).load(std::memory_order_relaxed))
 
-void InstallAtexitOnce()
+void DumpCensusRaw(const char* why)
 {
-    static std::atomic<bool> installed{ false };
-    bool expected = false;
-    if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() { Report("atexit"); });
-    }
-}
-
-} // namespace
-
-bool Enabled()
-{
-    static const bool on = []() {
-        return DiagGate::LegacyOrToken("MRT_GCV2_TOVERFAIL", "toverfail");
-    }();
-    return on;
-}
-
-void Report(const char* why)
-{
-    if (!Enabled()) {
-        return;
-    }
-    // RATE numerator = resolve_keep_from (parse tried, still handed from).
-    // RATE denominator = resolve_enter. unmovable_skip is NOT in either.
+    // Async-signal-safe-ish: single fprintf + fflush; no heap, no locks.
     std::fprintf(stderr,
                  "[GCV2][toverfail][census] why=%s "
                  "loadgood_fast=%llu slow_enter=%llu "
@@ -102,19 +86,68 @@ void Report(const char* why)
     std::fflush(stderr);
 }
 
+void CrashCensusHandler(int sig)
+{
+    const char* tag = "signal";
+    if (sig == SIGSEGV) {
+        tag = "sigsegv";
+    } else if (sig == SIGABRT) {
+        tag = "sigabrt";
+    } else if (sig == SIGBUS) {
+        tag = "sigbus";
+    }
+    DumpCensusRaw(tag);
+    // Restore default and re-raise so runtime crash reporter still runs.
+    std::signal(sig, SIG_DFL);
+    std::raise(sig);
+}
+
+void InstallOnce()
+{
+    static std::atomic<bool> installed{ false };
+    bool expected = false;
+    if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() { Report("atexit"); });
+        // Crash dumps: atexit never runs on SIGSEGV; fromver short runs need this.
+        std::signal(SIGSEGV, CrashCensusHandler);
+        std::signal(SIGABRT, CrashCensusHandler);
+        std::signal(SIGBUS, CrashCensusHandler);
+    }
+}
+
+} // namespace
+
+bool Enabled()
+{
+    static const bool on = []() {
+        return DiagGate::LegacyOrToken("MRT_GCV2_TOVERFAIL", "toverfail");
+    }();
+    return on;
+}
+
+void Report(const char* why)
+{
+    if (!Enabled()) {
+        return;
+    }
+    // RATE numerator = resolve_keep_from (parse tried, still handed from).
+    // RATE denominator = resolve_enter. unmovable_skip is NOT in either.
+    DumpCensusRaw(why);
+}
+
 void NoteLoadGoodFast()
 {
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
+    InstallOnce();
     uint64_t n = g_loadGoodFast.fetch_add(1, std::memory_order_relaxed);
     if (n == 0) {
         std::fprintf(stderr, "[GCV2][toverfail] armed\n");
         std::fflush(stderr);
-    } else if ((n & (kHeartbeat - 1)) == 0) {
+    } else if ((n & (kHeartbeatFast - 1)) == 0) {
         g_heartbeatN.fetch_add(1, std::memory_order_relaxed);
-        Report("heartbeat");
+        Report("heartbeat_fast");
     }
 }
 
@@ -123,8 +156,11 @@ void NoteSlowEnter()
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
-    g_slowEnter.fetch_add(1, std::memory_order_relaxed);
+    InstallOnce();
+    uint64_t n = g_slowEnter.fetch_add(1, std::memory_order_relaxed);
+    if ((n & (kHeartbeatSlow - 1)) == 0) {
+        Report("heartbeat_slow");
+    }
 }
 
 void NoteUnmovableSkip(BaseObject* oldTarget, unsigned stateCode, unsigned isForwarded)
@@ -132,8 +168,8 @@ void NoteUnmovableSkip(BaseObject* oldTarget, unsigned stateCode, unsigned isFor
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
-    g_unmovableSkip.fetch_add(1, std::memory_order_relaxed);
+    InstallOnce();
+    uint64_t n = g_unmovableSkip.fetch_add(1, std::memory_order_relaxed);
     if (isForwarded != 0u) {
         g_unmovableSkipFwd.fetch_add(1, std::memory_order_relaxed);
     }
@@ -144,6 +180,9 @@ void NoteUnmovableSkip(BaseObject* oldTarget, unsigned stateCode, unsigned isFor
                      static_cast<void*>(oldTarget), stateCode, isForwarded);
         std::fflush(stderr);
     }
+    if ((n & (kHeartbeatUnmov - 1)) == 0) {
+        Report("heartbeat_unmov");
+    }
 }
 
 void NoteResolveEnter()
@@ -151,8 +190,11 @@ void NoteResolveEnter()
     if (!Enabled()) {
         return;
     }
-    InstallAtexitOnce();
-    g_resolveEnter.fetch_add(1, std::memory_order_relaxed);
+    InstallOnce();
+    uint64_t n = g_resolveEnter.fetch_add(1, std::memory_order_relaxed);
+    if ((n & (kHeartbeatResolve - 1)) == 0) {
+        Report("heartbeat_resolve");
+    }
 }
 
 void NoteResolveOutcome(BaseObject* oldTarget, BaseObject* loadGood, unsigned moved)
