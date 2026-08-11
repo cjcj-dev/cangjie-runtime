@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <limits>
@@ -2011,6 +2012,111 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
 }
 
+namespace {
+// permhit: the receipt gate below (allLiveBitsHaveReceipt) accepts o->IsForwarded() as proof
+// that this cycle copied o. That state code carries no target and no cycle stamp — it is set
+// by UnlockObject(FORWARDED) (WCollector.cpp:6617) and only cleared when the memory is reused
+// (ClearUnits, RegionInfo.h:850-860). A route that is abandoned after copying part of the
+// region (:2346-2347) leaves those objects FORWARDED inside a region that survives on
+// unmovableFromRegionList (:1338-1341), so the next route reads a stale bit as a receipt.
+//
+// Consequence if it happens: the copy pass skips the object (:2317-2318, :2226 receipt), the gate
+// passes, the region publishes FORWARDED, and no path ever fills that object's tip — which is
+// what the read barrier reports as permhole. Audit it at the producer, where the answer is a
+// population per run instead of one rare abort.
+//
+// Gate: MRT_GCV2_PERMHIT_RECEIPT=1 (default off; the walk is the same shape the gate already
+// does twice, and it runs only for regions that are about to be published).
+bool PermhitReceiptOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_PERMHIT_RECEIPT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+std::atomic<size_t> g_phRegions{ 0 };
+std::atomic<size_t> g_phStarts{ 0 };
+std::atomic<size_t> g_phFwdStarts{ 0 };
+std::atomic<size_t> g_phNoTip{ 0 };
+std::atomic<size_t> g_phNoTipAbandon{ 0 };
+std::atomic<size_t> g_phRouteNull{ 0 };
+std::atomic<size_t> g_phLogged{ 0 };
+std::atomic<bool> g_phAtexit{ false };
+
+// point = "publish" (gate passed, about to SetRouteState(FORWARDED)) or "abandon" (gate
+// refused). Both are after the synchronous copy pass, so at either point a start that reads
+// FORWARDED must already have a tip-valid route unless its bit is stale.
+void PermhitReceiptAudit(RegionInfo* region, const char* point)
+{
+    if (!PermhitReceiptOn() || region == nullptr || !region->IsSmallRegion()) {
+        return;
+    }
+    const bool abandon = point != nullptr && point[0] == 'a';
+    bool expected = false;
+    if (g_phAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr,
+                         "[GCV2][permhit-receipt] atexit regions=%zu starts=%zu fwdStarts=%zu "
+                         "routeNull=%zu noTipPublish=%zu noTipAbandon=%zu\n",
+                         g_phRegions.load(std::memory_order_relaxed), g_phStarts.load(std::memory_order_relaxed),
+                         g_phFwdStarts.load(std::memory_order_relaxed),
+                         g_phRouteNull.load(std::memory_order_relaxed), g_phNoTip.load(std::memory_order_relaxed),
+                         g_phNoTipAbandon.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+    g_phRegions.fetch_add(1, std::memory_order_relaxed);
+    uintptr_t start = region->GetRegionStart();
+    uintptr_t allocPtr = region->GetRegionAllocPtr();
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    uintptr_t position = start;
+    while (position < allocPtr) {
+        BaseObject* o = from_region_addr(position);
+        if (!Collector::PlausibleManagedObjectGate("permhit-receipt", o)) {
+            break;
+        }
+        size_t allocSize = RegionSpace::GetAllocSize(*o);
+        if (allocSize == 0) {
+            break;
+        }
+        size_t offset = position - start;
+        bool survived = ghost != nullptr ? ghost->IsSurvivedObject(offset) : region->IsSurvivedObject(offset);
+        if (survived) {
+            g_phStarts.fetch_add(1, std::memory_order_relaxed);
+            if (o->IsForwarded()) {
+                g_phFwdStarts.fetch_add(1, std::memory_order_relaxed);
+                BaseObject* to = region->GetRouteForProbe(o);
+                bool tipValid = to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject();
+                if (to == nullptr) {
+                    g_phRouteNull.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!tipValid) {
+                    if (abandon) {
+                        g_phNoTipAbandon.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        g_phNoTip.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    size_t n = g_phLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (n <= 32) {
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][permhit-receipt] n=%zu point=%s region=%p start=%#zx off=%zu size=%zu "
+                            "from=%p to=%p route=%u rtype=%u young=%u live=%zu "
+                            "— FORWARDED start whose route has no tip",
+                            n, point, region, start, offset, allocSize, o, to,
+                            static_cast<unsigned>(region->GetRouteState()),
+                            static_cast<unsigned>(region->GetRegionType()),
+                            static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount());
+                    }
+                }
+            }
+        }
+        position += allocSize;
+    }
+}
+} // namespace
+
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
@@ -2217,6 +2323,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }
 
     if (!forwarded || !allLiveBitsHaveReceipt()) {
+        // permhit: same audit on the refusing arm — the copy pass is already done here too.
+        PermhitReceiptAudit(region, "abandon");
         static std::atomic<size_t> abandonN{ 0 };
         size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 32) {
@@ -2277,6 +2385,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                      static_cast<unsigned>(youngRegion));
             }
         }
+        // permhit: last point at which a real receipt must already be tip-valid.
+        PermhitReceiptAudit(region, "publish");
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
