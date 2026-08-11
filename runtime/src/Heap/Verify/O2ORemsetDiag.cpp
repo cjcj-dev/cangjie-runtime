@@ -47,6 +47,7 @@ std::atomic<uint64_t> g_oldRegionFwd{ 0 };
 std::atomic<uint64_t> g_remsetInFromSum{ 0 };
 std::atomic<uint64_t> g_remsetInFromNzRegions{ 0 };
 std::atomic<uint64_t> g_o2yOnToSum{ 0 };
+std::atomic<uint64_t> g_recordedOnToSum{ 0 };
 std::atomic<uint64_t> g_scrubNonYoungCalls{ 0 };
 std::atomic<uint64_t> g_scrubNonYoungErased{ 0 };
 std::atomic<uint64_t> g_scrubNonYoungNz{ 0 };
@@ -97,8 +98,16 @@ void NoteYoungObjectForward()
     g_youngObjFwd.fetch_add(1, std::memory_order_relaxed);
 }
 
+void NoteRecordedOnTo(size_t n)
+{
+    if (!GateOn() || n == 0) {
+        return;
+    }
+    g_recordedOnToSum.fetch_add(static_cast<uint64_t>(n), std::memory_order_relaxed);
+}
+
 void NoteOldRegionForwarded(RegionInfo* region, size_t remsetInFrom, size_t liveObjectsForwarded,
-                            size_t o2yEdgesOnToObj)
+                            size_t o2yEdgesOnToObj, size_t recordedOnTo)
 {
     if (!GateOn() || region == nullptr) {
         return;
@@ -109,7 +118,9 @@ void NoteOldRegionForwarded(RegionInfo* region, size_t remsetInFrom, size_t live
         g_remsetInFromNzRegions.fetch_add(1, std::memory_order_relaxed);
     }
     g_o2yOnToSum.fetch_add(static_cast<uint64_t>(o2yEdgesOnToObj), std::memory_order_relaxed);
-    MaybeSample("old-region-fwd", region, remsetInFrom, liveObjectsForwarded, o2yEdgesOnToObj);
+    g_recordedOnToSum.fetch_add(static_cast<uint64_t>(recordedOnTo), std::memory_order_relaxed);
+    MaybeSample("old-region-fwd", region, remsetInFrom, recordedOnTo, o2yEdgesOnToObj);
+    (void)liveObjectsForwarded;
 }
 
 void NoteScrubNonYoung(RegionInfo* region, size_t scrubbed)
@@ -137,20 +148,21 @@ void DumpAndMaybeReset(const char* point, bool reset)
     uint64_t remSum = g_remsetInFromSum.load(std::memory_order_relaxed);
     uint64_t remNz = g_remsetInFromNzRegions.load(std::memory_order_relaxed);
     uint64_t o2y = g_o2yOnToSum.load(std::memory_order_relaxed);
+    uint64_t onTo = g_recordedOnToSum.load(std::memory_order_relaxed);
     uint64_t scrubCalls = g_scrubNonYoungCalls.load(std::memory_order_relaxed);
     uint64_t scrubErased = g_scrubNonYoungErased.load(std::memory_order_relaxed);
     uint64_t scrubNz = g_scrubNonYoungNz.load(std::memory_order_relaxed);
     LOG(RTLOG_ERROR,
         "[GCV2][o2oremset] point=%s oldObjFwd=%llu oldObjFwdBytes=%llu youngObjFwd=%llu "
         "oldRegionFwd=%llu remsetInFromSum=%llu remsetInFromNzRegions=%llu "
-        "o2yEdgesOnToObjSum=%llu scrubNonYoungCalls=%llu scrubNonYoungErased=%llu "
-        "scrubNonYoungNz=%llu env=MRT_GCV2_O2OREMSET=1",
+        "o2yEdgesOnToObjSum=%llu recordedOnToSum=%llu scrubNonYoungCalls=%llu "
+        "scrubNonYoungErased=%llu scrubNonYoungNz=%llu env=MRT_GCV2_O2OREMSET=1",
         point == nullptr ? "?" : point, static_cast<unsigned long long>(obj),
         static_cast<unsigned long long>(bytes), static_cast<unsigned long long>(young),
         static_cast<unsigned long long>(reg), static_cast<unsigned long long>(remSum),
         static_cast<unsigned long long>(remNz), static_cast<unsigned long long>(o2y),
-        static_cast<unsigned long long>(scrubCalls), static_cast<unsigned long long>(scrubErased),
-        static_cast<unsigned long long>(scrubNz));
+        static_cast<unsigned long long>(onTo), static_cast<unsigned long long>(scrubCalls),
+        static_cast<unsigned long long>(scrubErased), static_cast<unsigned long long>(scrubNz));
     // Positive control: youngObjFwd must be non-zero when minor evacuates; proves probe armed.
     if (reset) {
         g_oldObjFwd.store(0, std::memory_order_relaxed);
@@ -160,6 +172,7 @@ void DumpAndMaybeReset(const char* point, bool reset)
         g_remsetInFromSum.store(0, std::memory_order_relaxed);
         g_remsetInFromNzRegions.store(0, std::memory_order_relaxed);
         g_o2yOnToSum.store(0, std::memory_order_relaxed);
+        g_recordedOnToSum.store(0, std::memory_order_relaxed);
         g_scrubNonYoungCalls.store(0, std::memory_order_relaxed);
         g_scrubNonYoungErased.store(0, std::memory_order_relaxed);
         g_scrubNonYoungNz.store(0, std::memory_order_relaxed);

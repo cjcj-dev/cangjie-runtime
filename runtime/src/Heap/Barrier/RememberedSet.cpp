@@ -132,6 +132,49 @@ void RememberedSet::RecordExternal(MAddress fieldAddress)
     externalRecords[buffer].insert(fieldAddress);
 }
 
+size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
+{
+    CheckInitialized();
+    // ForwardRegion old→old never in-places (RouteObject allocates a distinct to-space).
+    // CompactRegion is a separate path and does not call this.
+    if (size < kFieldBytes || fromBase == toBase) {
+        return 0;
+    }
+    MAddress fromEnd = fromBase + size;
+    if (fromBase < heapStart || fromEnd > heapStart + heapSize) {
+        return 0;
+    }
+    MAddress toEnd = toBase + size;
+    if (toBase < heapStart || toEnd > heapStart + heapSize) {
+        return 0;
+    }
+    // Field-aligned addresses in [fromBase, fromEnd).
+    size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
+    size_t endBit = (fromEnd - heapStart) / kFieldBytes;
+    if (firstBit >= endBit || firstBit >= bitCount) {
+        return 0;
+    }
+    if (endBit > bitCount) {
+        endBit = bitCount;
+    }
+    size_t buffer = activeBuffer.load(std::memory_order_acquire);
+    const ptrdiff_t delta = static_cast<ptrdiff_t>(toBase) - static_cast<ptrdiff_t>(fromBase);
+    size_t transferred = 0;
+    for (size_t bit = firstBit; bit < endBit; ++bit) {
+        size_t word = bit / kBitsPerWord;
+        uint64_t mask = static_cast<uint64_t>(1) << (bit % kBitsPerWord);
+        uint64_t w = bitmaps[buffer][word].load(std::memory_order_relaxed);
+        if ((w & mask) == 0) {
+            continue;
+        }
+        MAddress fromSlot = heapStart + bit * kFieldBytes;
+        MAddress toSlot = static_cast<MAddress>(static_cast<ptrdiff_t>(fromSlot) + delta);
+        Record(toSlot, false);
+        ++transferred;
+    }
+    return transferred;
+}
+
 size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 {
     CheckInitialized();

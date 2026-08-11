@@ -2294,17 +2294,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     size_t promotedRecords = 0;
     size_t oldObjForwarded = 0;
     size_t o2yOnToForOld = 0;
+    size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
         [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
-         &o2yOnToForOld](BaseObject* obj) {
+         &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
             BaseObject* toObj = collector.ForwardObject(obj);
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
             //
-            // ★ o2oremset / ZGC C.5: this arm is young-only (promotion). There is no
-            // old→old remset bit move (ZGC update_remset_old_to_old). Old holders that
-            // had O→Y slots recorded at from-addresses lose those bits at CollectRegion
-            // scrub; to-addresses are not re-recorded here.
+            // Young: re-scan to-object and Record O→Y slots (promotion).
+            // Old→old: ZGC update_remset_old_to_old — TransferObjectSlots moves existing
+            // remset bits by field offset (zRelocate.cpp:652-731). From bits are scrubbed
+            // later by CollectRegion → ClearRegion (no in-place overlap on this path:
+            // RouteObject always mints a distinct to address).
             if (youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
                 O2ORemsetDiag::NoteYoungObjectForward();
             }
@@ -2329,24 +2331,28 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
                     }
                 });
-            } else if (!youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
-                // Observe only: count old→old object moves + O→Y edges present on to-object
-                // (would need remset re-record if we had ZGC-style transfer).
+            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
                 size_t sz = RegionSpace::GetAllocSize(*obj);
-                O2ORemsetDiag::NoteOldObjectForward(obj, toObj, sz);
-                ++oldObjForwarded;
-                if (toObj->HasRefField()) {
-                    toObj->ForEachRefField([&o2yOnToForOld](RefField<>& field) {
-                        BaseObject* target = to_object(field.GetTargetObject());
-                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                            return;
-                        }
-                        RegionInfo* targetRegion =
-                            RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                        if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                            ++o2yOnToForOld;
-                        }
-                    });
+                MAddress fromBase = reinterpret_cast<MAddress>(obj);
+                MAddress toBase = reinterpret_cast<MAddress>(toObj);
+                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz);
+                recordedOnToForOld += moved;
+                if (O2ORemsetDiag::Enabled()) {
+                    O2ORemsetDiag::NoteOldObjectForward(obj, toObj, sz);
+                    ++oldObjForwarded;
+                    if (toObj->HasRefField()) {
+                        toObj->ForEachRefField([&o2yOnToForOld](RefField<>& field) {
+                            BaseObject* target = to_object(field.GetTargetObject());
+                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                                return;
+                            }
+                            RegionInfo* targetRegion =
+                                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                                ++o2yOnToForOld;
+                            }
+                        });
+                    }
                 }
             }
             // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
@@ -2571,7 +2577,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
             } else if (O2ORemsetDiag::Enabled()) {
-                // Pre-scrub census: remset bits still at from-addresses (ZGC would move them).
+                // Pre-scrub census: remset bits still at from-addresses (Transfer moved to to).
                 size_t remsetInFrom = 0;
                 MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
                 MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
@@ -2580,7 +2586,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         ++remsetInFrom;
                     }
                 }
-                O2ORemsetDiag::NoteOldRegionForwarded(region, remsetInFrom, oldObjForwarded, o2yOnToForOld);
+                O2ORemsetDiag::NoteOldRegionForwarded(region, remsetInFrom, oldObjForwarded, o2yOnToForOld,
+                                                     recordedOnToForOld);
             }
             (void)validBefore;
             (void)validAfterReset;
