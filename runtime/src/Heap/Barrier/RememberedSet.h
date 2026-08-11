@@ -48,6 +48,17 @@ public:
     bool Contains(MAddress fieldAddress) const;
     size_t Size() const;
 
+    // d1producer: sticky "was this heap field ever handed to Record()" bitmap, never cleared by
+    // DrainForMinor. Snapshot() alone cannot separate "the producer never recorded this slot"
+    // from "the producer recorded it in an earlier cycle and the destructive drain removed it" --
+    // the first is a write-side miss, the second is a retention/consume-side one.
+    // Allocated only when MRT_GCV2_REMSET_EVER=1, so the product pays neither memory nor stores.
+    // Caveat for readers: slot addresses are reused when a region is recycled, so a true bit may
+    // belong to an earlier object at the same address. true is therefore an upper bound on
+    // "recorded before" and false is exact: a false bit proves the slot was never recorded.
+    bool EverRecordedEnabled() const { return everRecorded != nullptr; }
+    bool WasEverRecorded(MAddress fieldAddress) const;
+
     // Bytes reserved by both exact bitmap backings.
     size_t MemoryOverhead() const
     {
@@ -74,7 +85,10 @@ private:
     static constexpr size_t kFieldBytes = sizeof(RefField<>);
     static constexpr size_t kBufferCount = 2;
 
-    void Record(MAddress fieldAddress);
+    // fromMutatorBarrier: true only on the write-barrier path (Barrier::RecordCrossGenEdge).
+    // The conservative pinned/old walk and the promotion replay also call Record(), and counting
+    // those in the sticky bitmap would answer a different question than "did the producer record it".
+    void Record(MAddress fieldAddress, bool fromMutatorBarrier = false);
     void RecordExternal(MAddress fieldAddress);
     size_t ClearRegion(MAddress start, MAddress end, size_t* outWords = nullptr);
     uint8_t BeginFullClear();
@@ -93,6 +107,8 @@ private:
     size_t dirtyWordCount = 0;
     std::unique_ptr<std::atomic<uint64_t>[]> bitmaps[kBufferCount];
     std::unique_ptr<std::atomic<uint64_t>[]> dirtyMaps[kBufferCount];
+    // d1producer: single, never-cleared backing for WasEverRecorded. null unless gated on.
+    std::unique_ptr<std::atomic<uint64_t>[]> everRecorded;
     std::atomic<size_t> recordCounts[kBufferCount];
     std::atomic<uint8_t> activeBuffer{ 0 };
     bool initialized = false;

@@ -152,6 +152,9 @@ struct Counters {
     size_t samplesEmitted = 0;
     size_t dedupHits = 0;
     size_t costNs = 0;
+    // d1producer: split D1 by whether the write barrier ever recorded this slot at all.
+    size_t d1NeverRecorded = 0;   // write-side miss: producer never handed the slot over
+    size_t d1RecordedThenLost = 0; // retention/consume-side: recorded earlier, destructive drain removed it
 };
 
 Counters g_c;
@@ -170,6 +173,8 @@ std::atomic<uint64_t> g_procD1Recovered{ 0 };
 std::atomic<uint64_t> g_procD1Residual{ 0 };
 std::atomic<uint64_t> g_procD1Truncated{ 0 };
 std::atomic<uint64_t> g_procPostPinnedRuns{ 0 };
+std::atomic<uint64_t> g_procD1NeverRecorded{ 0 };
+std::atomic<uint64_t> g_procD1RecordedThenLost{ 0 };
 
 void EmitSample(uint8_t cls, MAddress slot, BaseObject* holder, RegionInfo* holderRegion, BaseObject* target,
                 RegionInfo* targetRegion, bool inRemset, bool holderMarked)
@@ -321,6 +326,16 @@ void CensusPrePinned(size_t minorRunIndex)
                     }
                     CountClass(cls);
                     if (cls == CLS_D1) {
+                        // d1producer: exclude the read/retention side. A slot the mutator barrier
+                        // never recorded is a write-side miss; one it did record and the
+                        // destructive DrainForMinor later dropped belongs to the S1 face.
+                        if (Heap::GetHeap().GetRememberedSet().WasEverRecorded(slot)) {
+                            ++g_c.d1RecordedThenLost;
+                        } else {
+                            ++g_c.d1NeverRecorded;
+                        }
+                    }
+                    if (cls == CLS_D1) {
                         // d1producer: keep the slot so CensusPostPinned can ask whether the
                         // conservative pinned/old walk recovered it before DrainForMinor.
                         const size_t keepCap = EnvSizeT("MRT_GCV2_FYS_AUDIT_D1_KEEP", 1u << 20);
@@ -343,6 +358,12 @@ void CensusPrePinned(size_t minorRunIndex)
     g_procD4.fetch_add(g_c.d4, std::memory_order_relaxed);
     g_procUnc.fetch_add(g_c.unclassified, std::memory_order_relaxed);
     g_procMinors.fetch_add(1, std::memory_order_relaxed);
+    g_procD1NeverRecorded.fetch_add(g_c.d1NeverRecorded, std::memory_order_relaxed);
+    g_procD1RecordedThenLost.fetch_add(g_c.d1RecordedThenLost, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][fysaudit][D1_SIDE] minor=%zu D1=%zu neverRecorded=%zu recordedThenLost=%zu everBitmap=%u",
+         g_c.minorRun, g_c.d1, g_c.d1NeverRecorded, g_c.d1RecordedThenLost,
+         static_cast<unsigned>(Heap::GetHeap().GetRememberedSet().EverRecordedEnabled()));
     Report("pre-pinned");
 }
 
@@ -596,11 +617,14 @@ void DumpProcessTotals(const char* tag)
     // always-on pinned/old walk before DrainForMinor. residual is what FYS=0 actually loses.
     VLOG(REPORT,
          "[GCV2][fysaudit][POSTPIN_TOTAL] tag=%s postPinnedRuns=%llu d1Recovered=%llu d1Residual=%llu "
-         "d1Truncated=%llu",
+         "d1Truncated=%llu d1NeverRecorded=%llu d1RecordedThenLost=%llu everBitmap=%u",
          t, static_cast<unsigned long long>(g_procPostPinnedRuns.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_procD1Recovered.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_procD1Residual.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(g_procD1Truncated.load(std::memory_order_relaxed)));
+         static_cast<unsigned long long>(g_procD1Truncated.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_procD1NeverRecorded.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_procD1RecordedThenLost.load(std::memory_order_relaxed)),
+         static_cast<unsigned>(Heap::GetHeap().GetRememberedSet().EverRecordedEnabled()));
 }
 
 } // namespace FysAuditDiag
