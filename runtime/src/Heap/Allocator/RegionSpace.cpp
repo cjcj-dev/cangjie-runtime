@@ -296,54 +296,33 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             }
             AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
         }
-        // blackmark 甲 / youngconc Ⅱ: allocation-black = truly set mark bits (not only skip
-        // enqueue). Ordinary MOVEABLE alloc never called MarkNewObject; pin reuse did MarkObject.
-        // GetRoute reads ghost liveInfo0 (PrepareForwardable snapshot). Marks written only to
-        // current liveInfo after that snapshot are invisible to GetRoute — also mark ghost
-        // when present. Use max(mutator,heap) phase so lagging mutator still covers.
-        //
-        // MRT_GCV2_ALLOC_BLACK=1: experimental full paint (default OFF; PrepareYoung ClearLiveInfo
-        // can wipe pre-mark paint on the product path — see REPORT-blackmark).
-        //
-        // MRT_GCV2_YOUNG_CONC_MARK=1: ZGC allocate-black for the concurrent young mark window
-        // only — young non-large regions under TRACE/CLEAR after PrepareYoung already ran, so
-        // ClearLiveInfo will not wipe these bits before STW2 evacuate. isTraceRegion alone
-        // makes ShouldEnqueue skip SATB; without paint those objects stay live0Surv=0 at route.
+        // youngconc allocate-black (MRT_GCV2_YOUNG_CONC_MARK=1 only): paint mark bits + grey-list
+        // for TRACE/CLEAR window young allocs. Experimental MRT_GCV2_ALLOC_BLACK full paint removed
+        // (ZGC_CONVERGENCE_RULING §5.2; default-off + author-marked incomplete; product relies on
+        // post-mark fixpoint at WCollector.cpp iorfix/blackmark loop). Ordinary MOVEABLE alloc
+        // never MarkNewObject; pin reuse did MarkObject. GetRoute reads ghost liveInfo0 — also
+        // mark ghost when present. isTraceRegion alone makes ShouldEnqueue skip SATB; without
+        // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
-            static const bool allocBlackOn = []() {
-                const char* v = std::getenv("MRT_GCV2_ALLOC_BLACK");
-                return v != nullptr && v[0] == '1' && v[1] == '\0';
-            }();
             static const bool youngConcMarkOn = []() {
                 const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
-            if ((allocBlackOn || youngConcMarkOn) && reg != nullptr && !reg->IsLargeRegion()) {
+            if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {
                 GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
                 Mutator* m = Mutator::GetMutator();
                 if (m != nullptr) {
                     mutP = m->GetMutatorPhase();
                 }
                 GCPhase heapP = Heap::GetHeap().GetGCPhase();
-                auto phaseNeedsBlack = [](GCPhase p) {
-                    return p == GCPhase::GC_PHASE_ENUM || p == GCPhase::GC_PHASE_TRACE ||
-                        p == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || p == GCPhase::GC_PHASE_POST_TRACE ||
-                        p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD;
-                };
-                bool needBlack = false;
-                if (allocBlackOn) {
-                    // Also: isTraceRegion alone means "implicit black" in ShouldEnqueue — unify.
-                    needBlack = phaseNeedsBlack(mutP) || phaseNeedsBlack(heapP) || reg->IsTraceRegion();
-                } else {
-                    // youngconc only: concurrent mark window (TRACE/CLEAR) + young region.
-                    // Also paint when isTraceRegion (ShouldEnqueue skip) even if mutator phase lags.
-                    // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
-                    const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
-                                             heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-                                             mutP == GCPhase::GC_PHASE_TRACE ||
-                                             mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-                    needBlack = reg->IsYoungRegion() && (inConcMark || reg->IsTraceRegion());
-                }
+                // concurrent mark window (TRACE/CLEAR) + young region.
+                // Also paint when isTraceRegion (ShouldEnqueue skip) even if mutator phase lags.
+                // Do not paint POST_TRACE/FORWARD (evacuate STW; csetalloc owns that surface).
+                const bool inConcMark = (heapP == GCPhase::GC_PHASE_TRACE ||
+                                         heapP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
+                                         mutP == GCPhase::GC_PHASE_TRACE ||
+                                         mutP == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+                const bool needBlack = reg->IsYoungRegion() && (inConcMark || reg->IsTraceRegion());
                 if (needBlack) {
                     MAddress regionStart = reg->GetRegionStart();
                     MAddress regionEnd = reg->GetRegionEnd();
@@ -361,11 +340,9 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                             SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.ghost");
                             (void)ghost->markBitmap->MarkBits(offset, totalSize, regionSize);
                         }
-                        // youngconc: also grey-list so STW2 can force reachableVec + field scan
+                        // grey-list so STW2 can force reachableVec + field scan
                         // (TraceYoungClosure claim-skips already-marked → would miss children).
-                        if (youngConcMarkOn) {
-                            PushYoungAllocBlack(reinterpret_cast<BaseObject*>(addr));
-                        }
+                        PushYoungAllocBlack(reinterpret_cast<BaseObject*>(addr));
                     }
                 }
             }

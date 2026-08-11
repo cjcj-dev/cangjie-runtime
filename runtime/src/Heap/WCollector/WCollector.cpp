@@ -5893,7 +5893,7 @@ void WCollector::DoYoungGarbageCollection()
     // reachableVec can still hold fields to unmarked young (live0Surv=0 at GetRoute).
     // Re-walk holder fields via ResolveMinorReference and re-enter TraceYoungClosure so
     // those targets join the route domain *before* PrepareForwardable freezes liveInfo0.
-    // Formerly gated by MRT_GCV2_ALLOC_BLACK (paint-side switch) — orthogonal to paint;
+    // Orthogonal to allocate-black paint (youngconc-only after §5.2 delete of MRT_GCV2_ALLOC_BLACK);
     // IOR samples are FixMinorEvacuatedSlot×liveobj with ROUTED+surv0 (REPORT-iorsource).
     {
         size_t totalExtra = 0;
