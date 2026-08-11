@@ -17,20 +17,42 @@
 namespace MapleRuntime {
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    // E-class = !IsOldPointer (zcolor9 dual was too strong; see ForwardUpdateRawRef).
-    CHECK(!theCollector.IsOldPointer(tmpField));
-    return to_object(tmpField.GetTargetObject());
+    // Align ordinary Read with Idle/Enum/Trace/Preforward/Forward: colour test + self-heal.
+    // Template: IdleBarrier.cpp:19-51 / TraceBarrier.cpp:31-57; ZGC zBarrier.inline.hpp:294-344.
+    // Replaces E-class CHECK(!IsOldPointer)+direct return (tagdel E08) which trusted plain/stale colour.
+    for (int attempts = 0;;) {
+        RefField<> oldField(field);
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
+        }
+
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
+        // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
+        // the CAS expected value. A concurrent GC update therefore wins rather than being
+        // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
+            return loadGood;
+        }
+    }
 }
 
 BaseObject* PostTraceBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    // E-class = !IsOldPointer (same restoration as ReadReference).
-    CHECK(!theCollector.IsOldPointer(tmpField));
-    BaseObject* referent = to_object(tmpField.GetTargetObject());
+    // tagdel E09: heal colour first (same ordinary Read as peers), then PostTrace weak clear.
+    BaseObject* referent = ReadReference(obj, field);
     if (referent == nullptr) {
         return nullptr;
     }
@@ -42,7 +64,7 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
         *referentAddr = nullptr; // set referent field as null
         return nullptr;
     }
-    return to_object(tmpField.GetTargetObject());
+    return referent;
 }
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
@@ -82,9 +104,9 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
 
 void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    // tagdel E10: drop E-class CHECK(!IsOldPointer) — it was false safety (plain/stale colour
+    // passes). Store path still mints current colour; storecov owns generational write face.
     RefField<> tmpField(field);
-    // E-class = !IsOldPointer (zcolor9 dual was too strong).
-    CHECK(!theCollector.IsOldPointer(tmpField));
     DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     field.StoreColoured(newField.GetFieldValue());
