@@ -326,6 +326,54 @@ void CensusPrePinned(size_t minorRunIndex)
     Report("pre-pinned");
 }
 
+// d4ledger: mirror RescanRememberedSet drop reasons for live\consumed (heap only).
+// Order matches WCollector.cpp Rescan scrub (region-dead → retained → resolve → bad_target).
+// Does not call FindLatestVersion / IsValidObject predicates beyond the same soft checks Rescan uses.
+enum class D4DropReason : uint8_t {
+    FREE_GARBAGE_HOLDER = 0,
+    RETAINED_DEAD = 1,
+    STALE_TARGET = 2, // null / non-heap after soft resolve
+    BAD_TARGET = 3,   // heap addr but !IsValidObject (Rescan :3667)
+    OTHER = 4,        // unexplained — only this means "should have been consumed"
+};
+
+const char* D4DropName(D4DropReason r)
+{
+    switch (r) {
+        case D4DropReason::FREE_GARBAGE_HOLDER:
+            return "free_garbage_holder";
+        case D4DropReason::RETAINED_DEAD:
+            return "retained_dead";
+        case D4DropReason::STALE_TARGET:
+            return "stale_target";
+        case D4DropReason::BAD_TARGET:
+            return "bad_target";
+        default:
+            return "other_should_consume";
+    }
+}
+
+D4DropReason ClassifyLiveNotConsumed(MAddress slot)
+{
+    RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(slot);
+    if (holderRegion == nullptr || holderRegion->IsFreeRegion() || holderRegion->IsGarbageRegion()) {
+        return D4DropReason::FREE_GARBAGE_HOLDER;
+    }
+    // Soft field read (same shape as Rescan pre-resolve peek; no FindLatestVersion).
+    HeapSlot<>* field = &HeapSlotAt<>(slot);
+    RefField<> peek(*field);
+    BaseObject* target = to_object(peek.GetTargetObject());
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return D4DropReason::STALE_TARGET;
+    }
+    if (!target->IsValidObject()) {
+        return D4DropReason::BAD_TARGET;
+    }
+    // Target looks valid at post-rescan time — may have been retained-dropped (needs origin)
+    // or race-resolved after Rescan; residual for should-consume analysis.
+    return D4DropReason::OTHER;
+}
+
 void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
                 const std::unordered_set<MAddress>& liveRememberedSlots,
                 const std::unordered_set<MAddress>& consumedSlots, const std::unordered_set<MAddress>& weakSlots)
@@ -335,6 +383,12 @@ void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
     }
     size_t d4Local = 0;
     size_t d2Local = 0;
+    size_t d4Free = 0;
+    size_t d4Retained = 0;
+    size_t d4Stale = 0;
+    size_t d4Bad = 0;
+    size_t d4Other = 0;
+    size_t d4NonHeap = 0;
     const size_t sampleCap = EnvSizeT("MRT_GCV2_FYS_AUDIT_SAMPLES", 32);
     for (MAddress slot : liveRememberedSlots) {
         if (consumedSlots.count(slot) != 0) {
@@ -346,23 +400,52 @@ void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
         // External/static remset slots are live-not-consumed by design (Rescan skippedNotHeap).
         // Never call TryGetRegionInfoAt on non-heap — GetUnitIdxAt OOB aborts.
         if (!Heap::IsHeapAddress(slot)) {
+            ++d4NonHeap;
             continue;
         }
         // live-but-not-consumed under FYS0 product path → D4 ledger split.
         ++d4Local;
         ++g_c.d4;
         ++g_c.miss;
+        D4DropReason reason = ClassifyLiveNotConsumed(slot);
+        switch (reason) {
+            case D4DropReason::FREE_GARBAGE_HOLDER:
+                ++d4Free;
+                break;
+            case D4DropReason::RETAINED_DEAD:
+                ++d4Retained;
+                break;
+            case D4DropReason::STALE_TARGET:
+                ++d4Stale;
+                break;
+            case D4DropReason::BAD_TARGET:
+                ++d4Bad;
+                break;
+            default:
+                ++d4Other;
+                break;
+        }
         if (g_c.samplesEmitted < sampleCap) {
             RegionInfo* region = RegionInfo::TryGetRegionInfoAt(slot);
             unsigned hType = region == nullptr ? 0u : static_cast<unsigned>(region->GetRegionType());
             uint64_t key = DedupKey(slot, CLS_D4, hType);
             if (g_dedup.insert(key).second) {
                 ++g_c.samplesEmitted;
+                HeapSlot<>* field = &HeapSlotAt<>(slot);
+                RefField<> peek(*field);
+                BaseObject* target = to_object(peek.GetTargetObject());
+                RegionInfo* tRegion =
+                    target != nullptr && Heap::IsHeapAddress(target)
+                        ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target))
+                        : nullptr;
                 VLOG(REPORT,
                      "[GCV2][fysaudit][EDGE] class=D4 slot=%#zx holder=%p hType=%u hYoung=0 hMarked=0 "
-                     "hRegion=%p hName=? target=%p tType=0 tYoung=0 tRegion=%p tName=? inRemset=1 "
-                     "note=live_not_consumed",
-                     static_cast<size_t>(slot), nullptr, hType, region, nullptr, nullptr);
+                     "hRegion=%p hName=? target=%p tType=%u tYoung=%u tRegion=%p tName=? inRemset=1 "
+                     "note=live_not_consumed drop=%s",
+                     static_cast<size_t>(slot), nullptr, hType, region, target,
+                     tRegion == nullptr ? 0u : static_cast<unsigned>(tRegion->GetRegionType()),
+                     tRegion == nullptr ? 0u : static_cast<unsigned>(tRegion->IsYoungRegion()), tRegion,
+                     D4DropName(reason));
             }
         }
     }
@@ -405,8 +488,11 @@ void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
     g_procMiss.fetch_add(d2Local + d4Local, std::memory_order_relaxed);
     VLOG(REPORT,
          "[GCV2][fysaudit][post-rescan] minor=%zu remembered=%zu live=%zu consumed=%zu "
-         "D2_retainedDrop=%zu D4_liveNotConsumed=%zu",
-         g_c.minorRun, rememberedSlots.size(), liveRememberedSlots.size(), consumedSlots.size(), d2Local, d4Local);
+         "D2_retainedDrop=%zu D4_liveNotConsumed=%zu "
+         "D4_freeHolder=%zu D4_retainedDead=%zu D4_staleTarget=%zu D4_badTarget=%zu "
+         "D4_otherShouldConsume=%zu D4_nonHeapSkipped=%zu",
+         g_c.minorRun, rememberedSlots.size(), liveRememberedSlots.size(), consumedSlots.size(), d2Local, d4Local,
+         d4Free, d4Retained, d4Stale, d4Bad, d4Other, d4NonHeap);
     (void)rememberedSlots;
 }
 
