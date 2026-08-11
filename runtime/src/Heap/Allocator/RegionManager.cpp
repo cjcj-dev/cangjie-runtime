@@ -1706,6 +1706,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // (marksurvive sameWord1∧mBit1∧f3Bit0). Only densify when walk reaches allocPtr so
     // every size-walk start is in the re-paint set. nStarts==0: never clear (empty wipe
     // → SEGV si_addr=0x8). Anchor: e32383c9; fe96aab8 partial densify is the wipe root.
+    // permwho: which arm this region took. 0=densified 1=gate 2=walk1 3=nStarts0 4=malloc
+    // 5=walk2. Only arm 0 rebuilds both faces from one walk, i.e. only arm 0 leaves the
+    // reservation (counter) and the placement (bitmap prefix-sum) equal by construction.
+    unsigned densifyOutcome = 1;
     if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
         !region->IsKnownEmpty()) {
         // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
@@ -1738,13 +1742,34 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             }
             position += allocSize;
         }
+        if (!fullWalk || position != allocPtr) {
+            densifyOutcome = 2;
+        } else if (nStarts == 0) {
+            densifyOutcome = 3;
+        }
         if (fullWalk && position == allocPtr && nStarts > 0) {
             size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
             size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            densifyOutcome = 4;
             if (startOff != nullptr && startSz != nullptr) {
+                densifyOutcome = 5;
+                // permwho: this loop stops at `filled < nStarts` — "I have everything I need" —
+                // while the completeness test below demands `position == allocPtr` — "I walked
+                // everything there is". Both hold only when the last object in the region is
+                // itself a survivor; otherwise densify is skipped and liveInfo0 keeps the
+                // multi-bit ranges this block exists to remove. Measured on
+                // natural_wave_notime.O0: 11,028 of 16,080 route plans (68.6%) skip for exactly
+                // this reason, and no other skip reason occurs at all.
+                // MRT_GCV2_DENSIFY_FULLWALK=1 walks to allocPtr so the test can pass. Default
+                // off: it triples how many regions get densified, which is a change on the
+                // forward path and wants its own measurement before it becomes the default.
+                static const bool densifyFullWalk = []() {
+                    const char* v = std::getenv("MRT_GCV2_DENSIFY_FULLWALK");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
                 size_t filled = 0;
                 position = regionStart;
-                while (position < allocPtr && filled < nStarts) {
+                while (position < allocPtr && (densifyFullWalk || filled < nStarts)) {
                     BaseObject* obj = from_region_addr(position);
                     if (!Collector::PlausibleManagedObjectGate("tipnull-densify-fill", obj)) {
                         fullWalk = false;
@@ -1756,15 +1781,26 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                         break;
                     }
                     size_t offset = position - regionStart;
-                    if (ghost->IsSurvivedObject(offset)) {
+                    if (ghost->IsSurvivedObject(offset) && filled < nStarts) {
                         startOff[filled] = offset;
                         startSz[filled] = allocSize;
                         ++filled;
                     }
                     position += allocSize;
                 }
+                // permwho: split the two ways the second walk can fail its completeness test.
+                // The loop above stops at `filled < nStarts`, so once every survived start has
+                // been collected it exits with position still short of allocPtr whenever the
+                // last object in the region is not itself a survivor. That is arm 6, and it is
+                // not the same failure as the walk breaking on the gate (arm 5).
+                if (!fullWalk) {
+                    densifyOutcome = 5;
+                } else if (filled == nStarts && filled > 0 && position != allocPtr) {
+                    densifyOutcome = 6;
+                }
                 // Second walk must also reach allocPtr with full start set before clearAll.
                 if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
+                    densifyOutcome = 0;
                     auto clearAll = [](RegionBitmap* bm) {
                         if (bm == nullptr) {
                             return;
@@ -1811,6 +1847,9 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         }
     }
     size_t fromBytes = region->GetLiveByteCount();
+    // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
+    // by bitmap prefix-sum. Nothing compares the two magnitudes; record them here.
+    PermWhoAdmit::NoteRoutePlan(region, fromBytes, densifyOutcome);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);
@@ -2225,6 +2264,32 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 "— live bit without receipt; DispelGhost (no FORWARDED)",
                 region, region->GetRegionStart(), region->GetLiveByteCount(),
                 static_cast<unsigned>(region->GetRouteState()), n);
+        }
+        // permwho: this arm's assumption ("RouteObject miss ⇒ mutator keeps from") only holds
+        // for objects this pass did not copy. Objects it did copy already carry
+        // ObjectState::FORWARDED in their own header, and nothing clears that. Count them
+        // before the region is exempted and can be routed again under a fresh RouteInfo.
+        if (PermWhoAdmit::Enabled() && region->IsSmallRegion()) {
+            size_t walked = 0;
+            size_t forwarded = 0;
+            uintptr_t pos = region->GetRegionStart();
+            uintptr_t end = region->GetRegionAllocPtr();
+            while (pos < end) {
+                BaseObject* o = from_region_addr(pos);
+                if (!Collector::PlausibleManagedObjectGate("permwho-abandon", o)) {
+                    break;
+                }
+                size_t sz = RegionSpace::GetAllocSize(*o);
+                if (sz == 0) {
+                    break;
+                }
+                ++walked;
+                if (o->IsForwarded()) {
+                    ++forwarded;
+                }
+                pos += sz;
+            }
+            PermWhoAdmit::NoteAbandon(region, walked, forwarded);
         }
         if (youngRegion) {
             region->PreserveRetainedLiveInfo();

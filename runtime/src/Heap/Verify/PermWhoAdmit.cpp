@@ -58,6 +58,20 @@ std::atomic<size_t> g_rtdTotal{ 0 };
 std::atomic<size_t> g_rtdToInvalid{ 0 };
 std::atomic<size_t> g_logged{ 0 };
 std::atomic<bool> g_atexit{ false };
+// Route planning: reservation (counter) vs placement (bitmap).
+std::atomic<size_t> g_planTotal{ 0 };
+std::atomic<size_t> g_planByOutcome[8];
+std::atomic<size_t> g_planMismatch{ 0 };
+std::atomic<size_t> g_planMismatchNotDensified{ 0 };
+std::atomic<size_t> g_planCounterGreater{ 0 };
+std::atomic<size_t> g_planBitmapGreater{ 0 };
+std::atomic<size_t> g_planLogged{ 0 };
+// Abandon arm: stale per-object receipts left in an exempted region.
+std::atomic<size_t> g_abandonTotal{ 0 };
+std::atomic<size_t> g_abandonWithStaleReceipt{ 0 };
+std::atomic<size_t> g_abandonWalked{ 0 };
+std::atomic<size_t> g_abandonForwarded{ 0 };
+std::atomic<size_t> g_abandonLogged{ 0 };
 
 void EnsureAtexit()
 {
@@ -161,11 +175,92 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to)
         toRegion != nullptr ? static_cast<unsigned>(toRegion->IsFreeRegion()) : 0xffu);
 }
 
+void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome)
+{
+    if (!Enabled() || region == nullptr) {
+        return;
+    }
+    EnsureAtexit();
+    g_planTotal.fetch_add(1, std::memory_order_relaxed);
+    g_planByOutcome[densifyOutcome < 8 ? densifyOutcome : 7].fetch_add(1, std::memory_order_relaxed);
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    if (ghost == nullptr) {
+        return;
+    }
+    const size_t bitmapBytes = ghost->RecomputeBitmapLiveBytes();
+    if (bitmapBytes == fromBytes) {
+        return;
+    }
+    g_planMismatch.fetch_add(1, std::memory_order_relaxed);
+    if (densifyOutcome != 0) {
+        g_planMismatchNotDensified.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (fromBytes > bitmapBytes) {
+        g_planCounterGreater.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_planBitmapGreater.fetch_add(1, std::memory_order_relaxed);
+    }
+    size_t n = g_planLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n > MaxSamples()) {
+        return;
+    }
+    LOG(RTLOG_ERROR,
+        "[GCV2][permwho-plan] n=%zu region=%p start=%#zx densify=%u reserveCounter=%zu "
+        "placeBitmap=%zu delta=%zd young=%u small=%u knownEmpty=%u",
+        n, region, region->GetRegionStart(), densifyOutcome, fromBytes, bitmapBytes,
+        static_cast<ssize_t>(fromBytes) - static_cast<ssize_t>(bitmapBytes),
+        static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->IsSmallRegion()),
+        static_cast<unsigned>(region->IsKnownEmpty()));
+}
+
+void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjects)
+{
+    if (!Enabled() || region == nullptr) {
+        return;
+    }
+    EnsureAtexit();
+    g_abandonTotal.fetch_add(1, std::memory_order_relaxed);
+    g_abandonWalked.fetch_add(walkedObjects, std::memory_order_relaxed);
+    g_abandonForwarded.fetch_add(forwardedObjects, std::memory_order_relaxed);
+    if (forwardedObjects > 0) {
+        g_abandonWithStaleReceipt.fetch_add(1, std::memory_order_relaxed);
+        size_t n = g_abandonLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= MaxSamples()) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][permwho-abandon] n=%zu region=%p start=%#zx walked=%zu forwarded=%zu "
+                "live=%zu route=%u rtype=%u young=%u — Exempt keeps %zu stale receipts",
+                n, region, region->GetRegionStart(), walkedObjects, forwardedObjects,
+                region->GetLiveByteCount(), static_cast<unsigned>(region->GetRouteState()),
+                static_cast<unsigned>(region->GetRegionType()),
+                static_cast<unsigned>(region->IsYoungRegion()), forwardedObjects);
+        }
+    }
+}
+
 void DumpSummary()
 {
     if (!Enabled()) {
         return;
     }
+    std::fprintf(stderr,
+                 "[GCV2][permwho-abandon] atexit abandons=%zu withStaleReceipt=%zu walkedObjects=%zu "
+                 "forwardedObjects=%zu\n",
+                 g_abandonTotal.load(std::memory_order_relaxed),
+                 g_abandonWithStaleReceipt.load(std::memory_order_relaxed),
+                 g_abandonWalked.load(std::memory_order_relaxed),
+                 g_abandonForwarded.load(std::memory_order_relaxed));
+    std::fprintf(stderr,
+                 "[GCV2][permwho-plan] atexit plans=%zu densified=%zu gate=%zu walk1=%zu nstarts0=%zu "
+                 "malloc=%zu walk2broke=%zu walk2short=%zu mismatch=%zu mismatchNotDensified=%zu counterGT=%zu bitmapGT=%zu\n",
+                 g_planTotal.load(std::memory_order_relaxed), g_planByOutcome[0].load(std::memory_order_relaxed),
+                 g_planByOutcome[1].load(std::memory_order_relaxed), g_planByOutcome[2].load(std::memory_order_relaxed),
+                 g_planByOutcome[3].load(std::memory_order_relaxed), g_planByOutcome[4].load(std::memory_order_relaxed),
+                 g_planByOutcome[5].load(std::memory_order_relaxed), g_planByOutcome[6].load(std::memory_order_relaxed),
+                 g_planMismatch.load(std::memory_order_relaxed),
+                 g_planMismatchNotDensified.load(std::memory_order_relaxed),
+                 g_planCounterGreater.load(std::memory_order_relaxed),
+                 g_planBitmapGreater.load(std::memory_order_relaxed));
+    std::fflush(stderr);
     std::fprintf(stderr,
                  "[GCV2][permwho-admit] atexit total=%zu byState[normal=%zu forwardable=%zu routing=%zu "
                  "routed=%zu compacted=%zu forwarded=%zu other=%zu] "
