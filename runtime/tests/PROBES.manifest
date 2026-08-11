@@ -40,7 +40,6 @@ generational_barrier_nvi_harness.cpp      manual     harness for run_generationa
 varray_write_barrier_harness.cpp          manual     harness for run_varray_write_barrier_probe.sh
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
 
-c3epoch_state_machine_probe.cpp           orphan     no runner; C3 epoch/store-good state machine (463ac52c)
 epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake
 epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress
 remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::EraseRange
