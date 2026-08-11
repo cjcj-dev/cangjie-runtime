@@ -21,6 +21,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/O0HoleDiag.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 
@@ -862,6 +863,7 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
             ++stats.missBareDisplaced;
         } else {
             ++stats.missBareNeverSeen;
+            (void)O0HoleDiag::NoteCensusNeverSeen(fieldAddress);
         }
         ++stats.missByPhase[0];
         NoteBareHolder(holder);

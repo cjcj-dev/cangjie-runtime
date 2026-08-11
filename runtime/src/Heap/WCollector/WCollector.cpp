@@ -44,6 +44,7 @@
 #include "Heap/Verify/Zap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/O0HoleDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -4547,6 +4548,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
         size_t residualPromoteRecords = 0;
+        size_t residualDemoteN = 0;
+        const size_t youngBeforeResidual = RegionInfo::GetYoungRegionCount();
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
@@ -4567,6 +4570,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
+                ++residualDemoteN;
             }
         }
         if (keepOneYoung && !keptOneYoung) {
@@ -4597,6 +4601,46 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
         size_t rebuiltRecords = 0;
         const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
+        // o0hole 乙: always compute virtual rebuild yield (read-only; does not Record
+        // when gate is closed). virtualWouldRecord = old holders with young targets
+        // under reachableVec; virtualMissRemset = those not already in remset.
+        size_t virtualWouldRecord = 0;
+        size_t virtualWouldMissRemset = 0;
+        if (O0HoleDiag::Enabled()) {
+            std::unordered_set<MAddress> remsetSnap;
+            if (liveYoungRegions == 0) {
+                remsetSnap = rememberedSet.Snapshot();
+            }
+            for (BaseObject* object : reachableVec) {
+                BaseObject* holder = currentObject(object);
+                if (holder == nullptr || !holder->HasRefField()) {
+                    continue;
+                }
+                RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                if (holderRegion == nullptr || holderRegion->IsYoungRegion()) {
+                    continue;
+                }
+                holder->ForEachRefField([this, &virtualWouldRecord, &virtualWouldMissRemset, &remsetSnap,
+                                        liveYoungRegions, &rememberedSet](RefField<>& field) {
+                    BaseObject* target = ResolveMinorReference(field);
+                    if (!Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion == nullptr || !targetRegion->IsYoungRegion()) {
+                        return;
+                    }
+                    ++virtualWouldRecord;
+                    if (liveYoungRegions == 0) {
+                        MAddress slot = reinterpret_cast<MAddress>(&field);
+                        if (remsetSnap.count(slot) == 0) {
+                            ++virtualWouldMissRemset;
+                        }
+                    }
+                    (void)rememberedSet;
+                });
+            }
+        }
         if (liveYoungRegions == 0) {
             VLOG(REPORT,
                  "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
@@ -4625,6 +4669,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                      "youngRegionCount=%zu",
                      liveYoungRegions);
             }
+        }
+        if (O0HoleDiag::Enabled()) {
+            O0HoleDiag::NoteRebuildGate(youngBeforeResidual, liveYoungRegions, residualDemoteN,
+                                        residualPromoteRecords, promotedPathRecords, rebuiltRecords,
+                                        virtualWouldRecord, virtualWouldMissRemset,
+                                        liveYoungRegions == 0);
         }
         VLOG(REPORT,
              "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu "
@@ -5917,6 +5967,7 @@ void WCollector::DoYoungGarbageCollection()
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
+    O0HoleDiag::DumpProcessTotals("post-minor");
 }
 
 void WCollector::DoGarbageCollection()

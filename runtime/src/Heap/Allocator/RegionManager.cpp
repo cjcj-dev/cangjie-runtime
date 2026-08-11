@@ -25,6 +25,7 @@
 #include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/O0HoleDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Mutator/Mutator.inline.h"
@@ -2086,31 +2087,56 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     Collector& collector = Heap::GetHeap().GetCollector();
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t promotedRecords = 0;
+    if (youngRegion && O0HoleDiag::Enabled()) {
+        O0HoleDiag::NoteFwdEnterRegion(region);
+    }
     bool forwarded = region->VisitLiveObjectsUntilFalse(
         [&collector, youngRegion, &rememberedSet, &promotedRecords](BaseObject* obj) {
             BaseObject* toObj = collector.ForwardObject(obj);
             // Remset slots must address the surviving (to-space) holder, not the from copy
             // that CollectRegion is about to reclaim.
-            if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
-                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
-                    BaseObject* target = to_object(field.GetTargetObject());
-                    MAddress slot = reinterpret_cast<MAddress>(&field);
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        NotePromoteGapField(toObj, field, false, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
-                        return;
+            if (youngRegion) {
+                if (toObj == nullptr) {
+                    if (O0HoleDiag::Enabled()) {
+                        O0HoleDiag::NoteFwdField(0, nullptr, nullptr, false, /*no-to*/ 3);
                     }
-                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                        rememberedSet.Record(slot);
-                        ++promotedRecords;
-                        NotePromoteGapField(toObj, field, true, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
-                    } else {
-                        NotePromoteGapField(toObj, field, false, true);
-                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+                } else if (!toObj->HasRefField()) {
+                    if (O0HoleDiag::Enabled()) {
+                        O0HoleDiag::NoteFwdField(0, toObj, nullptr, false, /*no-ref*/ 4);
                     }
-                });
+                } else {
+                    if (O0HoleDiag::Enabled()) {
+                        O0HoleDiag::NoteFwdEnterObj(toObj);
+                    }
+                    toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
+                        BaseObject* target = to_object(field.GetTargetObject());
+                        MAddress slot = reinterpret_cast<MAddress>(&field);
+                        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                            NotePromoteGapField(toObj, field, false, true);
+                            IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
+                            if (O0HoleDiag::Enabled()) {
+                                O0HoleDiag::NoteFwdField(slot, toObj, target, false, /*null*/ 1);
+                            }
+                            return;
+                        }
+                        RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                        if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                            rememberedSet.Record(slot);
+                            ++promotedRecords;
+                            NotePromoteGapField(toObj, field, true, true);
+                            IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
+                            if (O0HoleDiag::Enabled()) {
+                                O0HoleDiag::NoteFwdField(slot, toObj, target, true, /*recorded*/ 0);
+                            }
+                        } else {
+                            NotePromoteGapField(toObj, field, false, true);
+                            IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+                            if (O0HoleDiag::Enabled()) {
+                                O0HoleDiag::NoteFwdField(slot, toObj, target, false, /*old*/ 2);
+                            }
+                        }
+                    });
+                }
             }
             // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
             return obj->IsForwarded();
