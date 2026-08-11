@@ -49,6 +49,7 @@
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/FlipPromoDiag.h"
+#include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
@@ -6189,6 +6190,7 @@ void WCollector::DoYoungGarbageCollection()
     RegionManager::DumpScrubCostAndReset("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
     FysAuditDiag::DumpProcessTotals("post-minor");
+    O2ORemsetDiag::DumpAndMaybeReset("post-minor", /*reset*/ true);
 }
 
 void WCollector::DoGarbageCollection()
@@ -6244,6 +6246,7 @@ void WCollector::DoGarbageCollection()
     // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     Collector::ReportMarkGoodHeapGateCounts();
+    O2ORemsetDiag::DumpAndMaybeReset("post-major", /*reset*/ true);
 }
 
 void WCollector::MarkNewObject(BaseObject* obj)
