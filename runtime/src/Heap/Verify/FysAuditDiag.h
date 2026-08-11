@@ -50,6 +50,16 @@ void OnMinorBegin(size_t minorRunIndex);
 // Classifies D1/D2/D3 (and unclassified). Does not mutate remset or mark state.
 void CensusPrePinned(size_t minorRunIndex);
 
+// d1producer: after RecordPinnedCrossGenEdges and BEFORE DrainForMinor.
+// D1 is measured against the *mutator* remset only, but the product FYS=0 path also
+// runs the always-on conservative pinned/old walk seven lines later, and that walk
+// drains into the same minor. So D1 is an upper bound on what the product loses.
+// Re-checks each D1 slot against the now-current remset:
+//   d1Recovered — the pinned walk put it back; product consumes it this minor
+//   d1Residual  — still absent at drain time; this is the edge FYS=0 really loses
+// Observe only: no walk, no remset mutation, one Snapshot plus a lookup per D1 slot.
+void CensusPostPinned(size_t minorRunIndex, size_t pinnedRecorded);
+
 // After RescanRememberedSet under product FYS=0: D4 ledger gap + retained-drop D2.
 void PostRescan(const std::unordered_set<MAddress>& rememberedSlots,
                 const std::unordered_set<MAddress>& liveRememberedSlots,

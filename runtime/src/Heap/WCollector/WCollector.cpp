@@ -5212,6 +5212,10 @@ void WCollector::DoYoungGarbageCollection()
         if (pinnedRemsetRecords != 0) {
             VLOG(REPORT, "[GCV2Minor] pinnedCrossGenEdges=%zu", pinnedRemsetRecords);
         }
+        // d1producer: D1 counts misses against the *mutator* remset at :5204, but the pinned walk
+        // above drains into this same minor. Ask here, before the drain, how many D1 edges the
+        // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
+        FysAuditDiag::CensusPostPinned(minorTotalRuns + 1, pinnedRemsetRecords);
         Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
     }
 

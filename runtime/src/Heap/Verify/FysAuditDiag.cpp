@@ -11,6 +11,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <unordered_set>
+#include <utility>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Base/TimeUtils.h"
@@ -154,6 +156,9 @@ struct Counters {
 
 Counters g_c;
 std::unordered_set<uint64_t> g_dedup;
+// d1producer: D1 edges of the current minor, replayed against the remset after the
+// conservative pinned/old walk. Bounded so a pathological minor cannot grow it without limit.
+std::vector<std::pair<MAddress, BaseObject*>> g_d1Edges;
 std::atomic<uint64_t> g_procMiss{ 0 };
 std::atomic<uint64_t> g_procD1{ 0 };
 std::atomic<uint64_t> g_procD2{ 0 };
@@ -161,6 +166,10 @@ std::atomic<uint64_t> g_procD3{ 0 };
 std::atomic<uint64_t> g_procD4{ 0 };
 std::atomic<uint64_t> g_procUnc{ 0 };
 std::atomic<uint64_t> g_procMinors{ 0 };
+std::atomic<uint64_t> g_procD1Recovered{ 0 };
+std::atomic<uint64_t> g_procD1Residual{ 0 };
+std::atomic<uint64_t> g_procD1Truncated{ 0 };
+std::atomic<uint64_t> g_procPostPinnedRuns{ 0 };
 
 void EmitSample(uint8_t cls, MAddress slot, BaseObject* holder, RegionInfo* holderRegion, BaseObject* target,
                 RegionInfo* targetRegion, bool inRemset, bool holderMarked)
@@ -250,6 +259,7 @@ void OnMinorBegin(size_t minorRunIndex)
     g_c = Counters{};
     g_c.minorRun = minorRunIndex;
     g_dedup.clear();
+    g_d1Edges.clear();
 }
 
 void CensusPrePinned(size_t minorRunIndex)
@@ -310,6 +320,16 @@ void CensusPrePinned(size_t minorRunIndex)
                         // Leftover interest edges stay unclassified with raw fields.
                     }
                     CountClass(cls);
+                    if (cls == CLS_D1) {
+                        // d1producer: keep the slot so CensusPostPinned can ask whether the
+                        // conservative pinned/old walk recovered it before DrainForMinor.
+                        const size_t keepCap = EnvSizeT("MRT_GCV2_FYS_AUDIT_D1_KEEP", 1u << 20);
+                        if (g_d1Edges.size() < keepCap) {
+                            g_d1Edges.emplace_back(slot, holder);
+                        } else {
+                            g_procD1Truncated.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
                     EmitSample(cls, slot, holder, holderRegion, target, targetRegion, inRemset, holderMarked);
                 });
         },
@@ -324,6 +344,51 @@ void CensusPrePinned(size_t minorRunIndex)
     g_procUnc.fetch_add(g_c.unclassified, std::memory_order_relaxed);
     g_procMinors.fetch_add(1, std::memory_order_relaxed);
     Report("pre-pinned");
+}
+
+void CensusPostPinned(size_t minorRunIndex, size_t pinnedRecorded)
+{
+    if (!GateOn()) {
+        return;
+    }
+    uint64_t t0 = TimeUtil::NanoSeconds();
+    // Same buffer CensusPrePinned snapshotted: RecordPinnedCrossGenEdges records into the
+    // active buffer and DrainForMinor has not run yet, so this is pre-drain ∪ pinned-walk.
+    std::unordered_set<MAddress> snap = Heap::GetHeap().GetRememberedSet().Snapshot();
+    size_t recovered = 0;
+    size_t residual = 0;
+    size_t residualSamples = 0;
+    const size_t sampleCap = EnvSizeT("MRT_GCV2_FYS_AUDIT_SAMPLES", 32);
+    for (const auto& edge : g_d1Edges) {
+        if (snap.count(edge.first) != 0) {
+            ++recovered;
+            continue;
+        }
+        ++residual;
+        if (residualSamples >= sampleCap) {
+            continue;
+        }
+        ++residualSamples;
+        BaseObject* holder = edge.second;
+        RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        TypeInfo* hTi = holder != nullptr && holder->IsValidObject() ? holder->GetTypeInfo() : nullptr;
+        VLOG(REPORT,
+             "[GCV2][fysaudit][EDGE] class=D1R slot=%#zx holder=%p hType=%u hYoung=%u hMarked=%u "
+             "hRegion=%p hName=%s inRemset=0 note=pinned_walk_did_not_recover",
+             static_cast<size_t>(edge.first), holder,
+             holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->GetRegionType()),
+             holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsYoungRegion()),
+             holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsMarkedObject(holder)),
+             holderRegion, hTi == nullptr || hTi->GetName() == nullptr ? "?" : hTi->GetName());
+    }
+    g_procD1Recovered.fetch_add(recovered, std::memory_order_relaxed);
+    g_procD1Residual.fetch_add(residual, std::memory_order_relaxed);
+    g_procPostPinnedRuns.fetch_add(1, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][fysaudit][post-pinned] minor=%zu d1=%zu recovered=%zu residual=%zu "
+         "pinnedRecorded=%zu remsetNow=%zu costNs=%zu",
+         minorRunIndex, g_d1Edges.size(), recovered, residual, pinnedRecorded, snap.size(),
+         static_cast<size_t>(TimeUtil::NanoSeconds() - t0));
 }
 
 // d4ledger: mirror RescanRememberedSet drop reasons for live\consumed (heap only).
@@ -527,6 +592,15 @@ void DumpProcessTotals(const char* tag)
          static_cast<unsigned long long>(g_procD3.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_procD4.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_procUnc.load(std::memory_order_relaxed)));
+    // d1producer: D1 is measured against the mutator remset; the product FYS=0 path also has the
+    // always-on pinned/old walk before DrainForMinor. residual is what FYS=0 actually loses.
+    VLOG(REPORT,
+         "[GCV2][fysaudit][POSTPIN_TOTAL] tag=%s postPinnedRuns=%llu d1Recovered=%llu d1Residual=%llu "
+         "d1Truncated=%llu",
+         t, static_cast<unsigned long long>(g_procPostPinnedRuns.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_procD1Recovered.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_procD1Residual.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_procD1Truncated.load(std::memory_order_relaxed)));
 }
 
 } // namespace FysAuditDiag
