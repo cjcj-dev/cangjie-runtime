@@ -9,6 +9,7 @@
 
 #include "Base/SysCall.h"
 #include "Common/ScopedObjectLock.h"
+#include "Heap/Verify/ToverFailDiag.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
@@ -18,6 +19,18 @@
 #endif
 
 namespace MapleRuntime {
+namespace {
+// toverfail: barrier-moment snapshot of ObjectState bits (not post-return recompute).
+unsigned ToverFailStateCode(BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return 0xffu;
+    }
+    uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(obj), __ATOMIC_RELAXED);
+    return static_cast<unsigned>((hdr >> 48) & 0x3u);
+}
+} // namespace
+
 BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     // Soft-resolve every tagged outcome. A bare `do { ... } while (true)` with no
@@ -28,11 +41,16 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            if (oldTarget != nullptr) {
+                ToverFailDiag::NoteLoadGoodFast();
+            }
             return oldTarget;
         }
 
+        ToverFailDiag::NoteSlowEnter();
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+            ToverFailDiag::NoteResolveEnter();
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
@@ -42,6 +60,13 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                     loadGood = fwd;
                 }
             }
+            ToverFailDiag::NoteResolveOutcome(oldTarget, loadGood,
+                                              loadGood != oldTarget ? 1u : 0u);
+        } else {
+            // 丁: barrier-moment IsUnmovableFromObject short-circuit (fromver §6).
+            unsigned st = ToverFailStateCode(oldTarget);
+            ToverFailDiag::NoteUnmovableSkip(oldTarget, st,
+                                             st == static_cast<unsigned>(ObjectState::FORWARDED) ? 1u : 0u);
         }
         // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
         // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
@@ -102,12 +127,17 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            if (oldTarget != nullptr) {
+                ToverFailDiag::NoteLoadGoodFast();
+            }
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
             return oldTarget;
         }
 
+        ToverFailDiag::NoteSlowEnter();
         BaseObject* loadGood = oldTarget;
         if (!theCollector.IsUnmovableFromObject(oldTarget)) {
+            ToverFailDiag::NoteResolveEnter();
             loadGood = theCollector.make_load_good(oldField);
             if (theCollector.IsGhostFromObject(loadGood)) {
                 BaseObject* fwd = theCollector.ForwardObject(loadGood);
@@ -117,6 +147,12 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
                     loadGood = fwd;
                 }
             }
+            ToverFailDiag::NoteResolveOutcome(oldTarget, loadGood,
+                                              loadGood != oldTarget ? 1u : 0u);
+        } else {
+            unsigned st = ToverFailStateCode(oldTarget);
+            ToverFailDiag::NoteUnmovableSkip(oldTarget, st,
+                                             st == static_cast<unsigned>(ObjectState::FORWARDED) ? 1u : 0u);
         }
         // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {

@@ -19,6 +19,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Collector/CopyCollector.h"
 #include "Heap/Verify/DiffPathExplainer.h"
+#include "Heap/Verify/ToverFailDiag.h"
 namespace MapleRuntime {
 class ScopedStopTheWorld;
 
@@ -255,6 +256,9 @@ public:
         static std::atomic<uint64_t> receiptCount{ 0 };
         static std::atomic<uint64_t> waitCount{ 0 };
         const bool funnel = RemapFunnelOn();
+        // toverfail reuses the same arm split as MRT_GCV2_WAITFWD (e49a5bcc), under its
+        // own gate so product path is unchanged when both are off.
+        const bool tv = ToverFailDiag::Enabled();
         if (funnel) {
             static std::atomic<bool> installed{ false };
             bool expected = false;
@@ -274,9 +278,15 @@ public:
             }
             callCount.fetch_add(1, std::memory_order_relaxed);
         }
+        if (tv) {
+            ToverFailDiag::NoteRemapCall();
+        }
         if (!Heap::IsHeapAddress(obj)) {
             if (funnel) {
                 nonHeapCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapNonHeap();
             }
             return obj;
         }
@@ -284,6 +294,9 @@ public:
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
             if (funnel) {
                 noGhostCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapNoGhost(); // 乙
             }
             return obj;
         }
@@ -293,16 +306,25 @@ public:
             if (funnel) {
                 routeNullCount.fetch_add(1, std::memory_order_relaxed);
             }
+            if (tv) {
+                ToverFailDiag::NoteRemapRouteNull(); // 甲
+            }
             return obj;
         }
         if (LIKELY(!Heap::IsHeapAddress(to) || to->IsValidObject())) {
             if (funnel) {
                 receiptCount.fetch_add(1, std::memory_order_relaxed);
             }
+            if (tv) {
+                ToverFailDiag::NoteRemapReceipt();
+            }
             return to; // receipt (or non-heap)
         }
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (tv) {
+            ToverFailDiag::NoteRemapWait(); // 丙 entry
         }
         return WaitRoutedTipReady(obj, to, forwarding);
     }
