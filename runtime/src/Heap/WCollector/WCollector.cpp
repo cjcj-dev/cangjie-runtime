@@ -768,10 +768,9 @@ bool WCollector::MarkObject(BaseObject* obj) const
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
     size_t objectSize = obj->GetSize();
+    // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked = region->MarkObject(obj, objectSize);
     if (!marked) {
-        region->AddLiveByteCount(objectSize);
-        (void)region;
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
@@ -784,13 +783,13 @@ bool WCollector::ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* reg
     if (!Collector::PlausibleManagedObjectGate("WCollector::ResurrectObject", obj)) {
         return true;
     }
+    // livesame: ResurrectObject counts on 0→1 inside.
     bool resurrected = region->ResurrectObject(obj, offset);
-        if (!resurrected) {
-            region->AddLiveByteCount(obj->GetSize());
-            DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
-                 obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
-        }
-        return resurrected;
+    if (!resurrected) {
+        DLOG(TRACE, "resurrect region %p@%#zx obj %p<%p>(%zu), live bytes %zu", region, region->GetRegionStart(),
+             obj, obj->GetTypeInfo(), obj->GetSize(), region->GetLiveByteCount());
+    }
+    return resurrected;
 }
 
 // this api updates current pointer as well as old pointer, caller should take care of this.
