@@ -5623,7 +5623,8 @@ void WCollector::DoYoungGarbageCollection()
                      kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra, allocBlackN);
             }
         }
-        // Rebuild liveRememberedSlots after concurrent remset merge (evac uses this set).
+        // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
+        // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
         liveRememberedSlots.clear();
         for (MAddress slot : rememberedSlots) {
             if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
