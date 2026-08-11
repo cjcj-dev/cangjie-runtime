@@ -197,6 +197,14 @@ public:
     // Probe-only: raw ghost liveInfo0 (no TEMPORARY filter; ghost never uses TEMPORARY).
     LiveInfo* GetLiveInfo0ForProbe() const { return metadata.liveInfo0; }
 
+    // permhit, probe-only: the route's own to-side plan. RouteInfo records a bare start
+    // address plus a used-bytes split (LiveInfo.h:246-248) and carries no epoch, so a
+    // to-region that was reclaimed and re-taken keeps answering the same geometry. Only
+    // the recorded plan, next to the region that lives at that address now, separates
+    // "no path ever filled this tip" from "a tip was filled and the memory was reused".
+    // Precedent: GetLiveInfo0ForProbe.
+    RouteInfo GetRouteInfoForProbe() const { return metadata.routeInfo; }
+
     // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
     // rejects. After MarkObject created current liveInfo, bind it as ghost while still
     // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
