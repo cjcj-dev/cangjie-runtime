@@ -1706,6 +1706,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // (marksurvive sameWord1∧mBit1∧f3Bit0). Only densify when walk reaches allocPtr so
     // every size-walk start is in the re-paint set. nStarts==0: never clear (empty wipe
     // → SEGV si_addr=0x8). Anchor: e32383c9; fe96aab8 partial densify is the wipe root.
+    // permwho: which arm this region took. 0=densified 1=gate 2=walk1 3=nStarts0 4=malloc
+    // 5=walk2. Only arm 0 rebuilds both faces from one walk, i.e. only arm 0 leaves the
+    // reservation (counter) and the placement (bitmap prefix-sum) equal by construction.
+    unsigned densifyOutcome = 1;
     if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
         !region->IsKnownEmpty()) {
         // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
@@ -1738,10 +1742,17 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             }
             position += allocSize;
         }
+        if (!fullWalk || position != allocPtr) {
+            densifyOutcome = 2;
+        } else if (nStarts == 0) {
+            densifyOutcome = 3;
+        }
         if (fullWalk && position == allocPtr && nStarts > 0) {
             size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
             size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            densifyOutcome = 4;
             if (startOff != nullptr && startSz != nullptr) {
+                densifyOutcome = 5;
                 size_t filled = 0;
                 position = regionStart;
                 while (position < allocPtr && filled < nStarts) {
@@ -1765,6 +1776,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                 }
                 // Second walk must also reach allocPtr with full start set before clearAll.
                 if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
+                    densifyOutcome = 0;
                     auto clearAll = [](RegionBitmap* bm) {
                         if (bm == nullptr) {
                             return;
@@ -1811,6 +1823,9 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         }
     }
     size_t fromBytes = region->GetLiveByteCount();
+    // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
+    // by bitmap prefix-sum. Nothing compares the two magnitudes; record them here.
+    PermWhoAdmit::NoteRoutePlan(region, fromBytes, densifyOutcome);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);

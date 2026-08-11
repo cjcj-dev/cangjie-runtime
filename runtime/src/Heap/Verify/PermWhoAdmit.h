@@ -41,6 +41,25 @@ bool Enabled();
 // Called with the result of RegionManager::RouteObject (to may be null).
 void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to);
 
+// Called at route planning time (RouteOrCompactRegionImpl, right where fromBytes is read).
+//
+// Two things are decided here from two different sources:
+//   - the reservation size comes from the *counter*: fromBytes = GetLiveByteCount()
+//     (RegionManager.cpp:1813), stored as toRegion1UsedBytes by SetRouteInfo
+//   - each object's destination comes from the *bitmap*: GetRoute(preLiveBytes) is a
+//     popcount prefix-sum (LiveInfo.h:229-241 → LiveInfo.cpp:15-24), and it switches to
+//     to-region2 exactly when preLiveBytes >= toRegion1UsedBytes
+// If the two disagree in magnitude, the reservation does not match the placement. Nothing
+// checks that: VerifyLiveBooks (RegionInfo.h:1683) only tests the zero / non-zero homology
+// (liveBytes==0 ⇔ IsKnownEmpty()), never equality of the two magnitudes.
+//
+// The tipnull densify block just above (RegionManager.cpp:1699-1808) makes them agree by
+// construction — it rebuilds both faces from one size-walk — but only when the walk
+// completes. densifyOutcome records whether it ran and, if not, why not.
+//   0 = densified   1 = gate (not small / no ghost / knownEmpty)   2 = first walk incomplete
+//   3 = nStarts==0  4 = malloc failed                              5 = second walk incomplete
+void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome);
+
 void DumpSummary();
 
 } // namespace PermWhoAdmit
