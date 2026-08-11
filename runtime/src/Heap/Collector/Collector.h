@@ -186,6 +186,19 @@ public:
         return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) && is_load_good(ref);
     }
 
+    // OpenJDK ZPointer::is_store_good (zAddress.inline.hpp:679-684): store-good includes
+    // mark-good plus the current Remembered epoch bit. Fast path for write barrier.
+    bool is_store_good(RefField<>& ref) const
+    {
+        zpointer v = ref.GetFieldValue();
+        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) && is_load_good(ref);
+    }
+
+    bool is_store_bad(RefField<>& ref) const
+    {
+        return (raw(ref.GetFieldValue()) & ::g_cjStoreBadMask) != 0;
+    }
+
     // zc7fix: is_mark_good admits plain (uncoloured) non-null; those may be non-heap.
     // Gate before IsValidObject/IsMarkedObject. Count rejects under MRT_GCV2_MARKGOOD_HEAP_GATE=1.
     static bool MarkGoodHeapGate(const char* site, BaseObject* target);

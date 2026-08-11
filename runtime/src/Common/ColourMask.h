@@ -36,6 +36,10 @@ extern "C" const char g_cjRuntimeProvenance[];
 // Mark barriers use the same dynamic-mask ABI as load barriers. The mark mask additionally rejects
 // references carrying the previous young or old mark epoch (OpenJDK zAddress.hpp:209-217).
 extern unsigned long g_cjMarkBadMask;
+
+// Store barriers reject references that are mark-bad or missing the current Remembered epoch bit
+// (OpenJDK zAddress.hpp:216-217, zAddress.cpp:83-87). Load/mark masks do not include Remembered.
+extern unsigned long g_cjStoreBadMask;
 }
 
 namespace MapleRuntime {
@@ -64,7 +68,8 @@ constexpr unsigned REMAP_COLOUR_BITS = 4u;
 // state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
 constexpr unsigned MARKED_YOUNG_BITS = 2u;
 constexpr unsigned MARKED_OLD_BITS = 2u;
-// address:48 + isTagged:1 + tagID:1 + remapColour:4 + markedYoung:2 + markedOld:2 + padding:6 == 64
+// address:48 + isTagged:1 + tagID:1 + remapColour:4 + markedYoung:2 + markedOld:2
+// + remembered:2 + spare padding == 64 (spare = TAG_ID_PADDING_BITS - REMEMBERED_BITS)
 constexpr unsigned TAG_ID_PADDING_BITS =
     15u - TAG_ID_BITS - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
 constexpr unsigned REMAP_COLOUR_SHIFT = 48u + 1u + TAG_ID_BITS;
@@ -82,6 +87,18 @@ constexpr unsigned MARKED_OLD_SHIFT = MARKED_YOUNG_SHIFT + MARKED_YOUNG_BITS;
 constexpr uintptr_t MARKED_OLD_0 = uintptr_t(1) << MARKED_OLD_SHIFT;
 constexpr uintptr_t MARKED_OLD_1 = uintptr_t(1) << (MARKED_OLD_SHIFT + 1u);
 constexpr uintptr_t MARKED_OLD_MASK = MARKED_OLD_0 | MARKED_OLD_1;
+// Remembered[0,1] one-hot epoch (OpenJDK zAddress.hpp:148-154). Lives in former padding at
+// bits 58-59 when TAG_ID_BITS=1 (ops/design/REMEMBERED_BIT_DESIGN.md). Finalizable not introduced.
+constexpr unsigned REMEMBERED_BITS = 2u;
+constexpr unsigned REMEMBERED_SHIFT = MARKED_OLD_SHIFT + MARKED_OLD_BITS;
+constexpr uintptr_t REMEMBERED_0 = uintptr_t(1) << REMEMBERED_SHIFT;
+constexpr uintptr_t REMEMBERED_1 = uintptr_t(1) << (REMEMBERED_SHIFT + 1u);
+constexpr uintptr_t REMEMBERED_MASK = REMEMBERED_0 | REMEMBERED_1;
+static_assert(REMEMBERED_BITS <= TAG_ID_PADDING_BITS,
+              "Remembered family needs free RefField padding bits");
+// Store metadata = remap + MY + MO + Remembered (OpenJDK zAddress.hpp:194; no Finalizable).
+constexpr uintptr_t STORE_METADATA_MASK =
+    REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK | REMEMBERED_MASK;
 // Tagged (mid-evacuation) needs the barrier whichever colour it carries.
 constexpr uintptr_t TAGGED_BITS_MASK = ((uintptr_t(1) << (1u + TAG_ID_BITS)) - 1u) << 48u;
 

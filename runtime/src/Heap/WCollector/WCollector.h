@@ -117,17 +117,25 @@ public:
     Uptr currentRemapColour = ZPointerRemapped00;
     Uptr currentMarkedYoung = MARKED_YOUNG_0;
     Uptr currentMarkedOld = MARKED_OLD_0;
+    // OpenJDK ZPointerRemembered (zAddress.cpp:125); flips with young mark start (:133-134).
+    Uptr currentRemembered = REMEMBERED_0;
     size_t youngMarkFlipCount = 0;
     size_t oldMarkFlipCount = 0;
 
-    // Mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94): mark-good is
-    // load-good plus the current epoch from each independent mark family.
+    // Mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94):
+    //   :81 LoadGood  = remap_bits(Remapped)
+    //   :82 MarkGood  = LoadGood | MarkedYoung | MarkedOld
+    //   :83 StoreGood = MarkGood | Remembered
+    // Bad masks are Good ^ Metadata (+ tagged for our ABI). Finalizable not introduced.
     void set_good_masks()
     {
         currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
         ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ currentRemapColour);
         ::g_cjMarkBadMask = ::g_cjLoadBadMask | (MARKED_YOUNG_MASK & ~currentMarkedYoung) |
             (MARKED_OLD_MASK & ~currentMarkedOld);
+        // StoreBad = MarkBad | (RememberedMask & ~currentRemembered)
+        // equivalent to StoreGood ^ STORE_METADATA_MASK with tagged folded in via MarkBad.
+        ::g_cjStoreBadMask = ::g_cjMarkBadMask | (REMEMBERED_MASK & ~currentRemembered);
     }
 
     // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start
@@ -144,14 +152,16 @@ public:
         set_good_masks();
     }
 
-    // OpenJDK zAddress.cpp:132-146 flips each mark family only at that generation's mark start.
+    // OpenJDK zAddress.cpp:132-136: young mark-start flips MarkedYoung and Remembered together.
     void flip_young_mark_start()
     {
         currentMarkedYoung ^= MARKED_YOUNG_MASK;
+        currentRemembered ^= REMEMBERED_MASK;
         set_good_masks();
         if (++youngMarkFlipCount == 1) {
-            LOG(RTLOG_ERROR, "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx",
-                youngMarkFlipCount, ::g_cjMarkBadMask);
+            LOG(RTLOG_ERROR,
+                "[ZCOLOR2][mark-mask-flip] generation=young count=%zu g_cjMarkBadMask=%#lx g_cjStoreBadMask=%#lx",
+                youngMarkFlipCount, ::g_cjMarkBadMask, ::g_cjStoreBadMask);
         }
     }
 
@@ -390,11 +400,15 @@ protected:
         // neither IsOldPointer nor IsCurrentPointer recognised, so readers dereferenced it without
         // asking anything. Handing out the current colour instead means a later phase flip turns
         // this reference bad on its own, and the reader finds out by testing the value it holds.
+        // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83,
+        // ZAddress::store_good). Written refs must be store-good so a second store of the
+        // same edge takes the is_store_good fast path.
+        const Uptr storeColour =
+            currentRemapColour | currentMarkedYoung | currentMarkedOld | currentRemembered;
         if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID,
-                currentRemapColour | currentMarkedYoung | currentMarkedOld);
+            return RefField<>(target, 1, currentTagID, storeColour);
         }
-        return RefField<>(target, 0, 0, currentRemapColour | currentMarkedYoung | currentMarkedOld);
+        return RefField<>(target, 0, 0, storeColour);
     }
 
     // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back

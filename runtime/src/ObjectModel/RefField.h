@@ -134,7 +134,9 @@ public:
           remapColour((colour >> REMAP_COLOUR_SHIFT) & ((MAddress(1) << REMAP_COLOUR_BITS) - 1)),
           markedYoung((colour >> MARKED_YOUNG_SHIFT) & ((MAddress(1) << MARKED_YOUNG_BITS) - 1)),
           markedOld((colour >> MARKED_OLD_SHIFT) & ((MAddress(1) << MARKED_OLD_BITS) - 1)),
-          padding(0)
+          // Remembered occupies low bits of padding (bits 58-59); spare stays 0.
+          // OpenJDK zAddress.cpp:83 StoreGood = MarkGood | Remembered.
+          padding((colour >> REMEMBERED_SHIFT) & ((MAddress(1) << TAG_ID_PADDING_BITS) - 1))
     {
         CHECK(tagid < TAG_ID_COUNT);
     }

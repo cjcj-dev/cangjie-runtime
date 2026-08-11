@@ -246,3 +246,13 @@ extern "C" unsigned long g_cjLoadBadMask =
 extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = MapleRuntime::TAGGED_BITS_MASK |
     (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
     MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;
+
+// Store-good = mark-good | current Remembered (initial REMEMBERED_0). Store-bad rejects the
+// other rem bit and all mark-bad bits (OpenJDK zAddress.cpp:83-87).
+// storeGood0 = Remapped00 | MY0 | MO0 | REM0
+// storeBad0  = storeGood0 ^ (REMAP|MY|MO|REM) | TAGGED  — match live set_good_masks shape:
+//              markBad | (REM_MASK & ~currentRem)  with tagged already in markBad.
+extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = MapleRuntime::TAGGED_BITS_MASK |
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
+    MapleRuntime::REMEMBERED_1;
