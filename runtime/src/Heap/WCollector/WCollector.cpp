@@ -3499,6 +3499,23 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t directDeadDrop = 0;
     size_t filterCorrect = 0;
     size_t filterIncorrect = 0;
+    size_t filterOverKeep = 0;   // filter kept, closure says dead — floating garbage (safe)
+    size_t filterOverDrop = 0;   // filter dropped, closure reached it — a live edge (unsafe)
+    // holderlive (F2): never=100% has three candidate producers and the state word cannot
+    // tell them apart. RegionInfo keeps a per-region-life history (RegionInfo.h:107-124);
+    // read it here so the answer is a count, not a reading of the code.
+    size_t neverNoPreserve = 0;      // Preserve* never ran on this region in its current life
+    size_t neverPreserveSaidNever = 0; // Preserve* ran, had no live info, wrote NEVER itself
+    size_t neverCleared = 0;         // Preserve* stored a snapshot, a clear path wiped it
+    size_t neverLastOp[RegionInfo::RETAINED_OP_COUNT] = { 0 };
+    size_t neverLiveInfoNow = 0;     // holder region has a live (current-cycle) LiveInfo now
+    size_t neverHolderYoung = 0;
+    size_t neverRegionType[16] = { 0 };
+    // holderlive (F2) ③: bad_target population crossed with holder liveness (FYS oracle).
+    size_t deadHolderTargetOk = 0;
+    size_t deadHolderTargetBad = 0;
+    size_t liveHolderTargetOk = 0;
+    size_t liveHolderTargetBad = 0;
     // The precise bitmap intentionally stores only field-slot identity. Recover an
     // object origin only for regions whose retained snapshot is consumable (or when
     // the default-off probe requests visibility), and keep that adapter local to this
@@ -3579,6 +3596,23 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 if (retainedState == RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED) {
                     if (retainedProbe) {
                         ++retainedNever;
+                        uint32_t preserveCnt = holderRegion->GetRetainedPreserveCount();
+                        uint32_t clearCnt = holderRegion->GetRetainedClearCount();
+                        if (preserveCnt == 0) {
+                            ++neverNoPreserve;
+                        } else if (clearCnt != 0) {
+                            ++neverCleared;
+                        } else {
+                            ++neverPreserveSaidNever;
+                        }
+                        neverLastOp[holderRegion->GetRetainedLastOp() % RegionInfo::RETAINED_OP_COUNT]++;
+                        if (holderRegion->GetLiveInfo() != nullptr) {
+                            ++neverLiveInfoNow;
+                        }
+                        if (holderRegion->IsYoungRegion()) {
+                            ++neverHolderYoung;
+                        }
+                        neverRegionType[static_cast<unsigned>(holderRegion->GetRegionType()) & 0xFU]++;
                     }
                 } else if (!holderRegion->IsRetainedSnapshotValid()) {
                     if (retainedProbe) {
@@ -3613,10 +3647,21 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                 ++directDeadDrop;
                             }
                         } else {
-                            LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
-                            CHECK(retainedLiveInfo != nullptr);
                             size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
-                            keepByRetainedSnapshot = retainedLiveInfo->IsSurvivedObject(holderOffset);
+                            // holderlive (F2): prefer the region's own copy of the mark bits.
+                            // GetRetainedLiveInfo() is a borrowed pointer into the per-tag
+                            // LiveInfo arena and is nulled by UnbindPreviousLiveInfo
+                            // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) at the end of every
+                            // major, which is why this
+                            // arm was unreachable — the state word read NEVER_EXAMINED before
+                            // control ever got here.
+                            if (holderRegion->HasRetainedMarkWords()) {
+                                keepByRetainedSnapshot = holderRegion->RetainedMarkWordsSay(holderOffset);
+                            } else {
+                                LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
+                                CHECK(retainedLiveInfo != nullptr);
+                                keepByRetainedSnapshot = retainedLiveInfo->IsSurvivedObject(holderOffset);
+                            }
                             if (retainedProbe && !keepByRetainedSnapshot) {
                                 ++directDeadDrop;
                             }
@@ -3640,6 +3685,46 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                     ++filterCorrect;
                 } else {
                     ++filterIncorrect;
+                    // holderlive (F2): the two disagreement directions are not equally bad and
+                    // a single "incorrect" count hides that. overKeep = the filter kept a slot
+                    // the closure says is dead: floating garbage, which is what today's
+                    // fail-open already does. overDrop = the filter dropped a slot the closure
+                    // reached: that edge is live and dropping it is a missed mark. overDrop is
+                    // the number this filter has to keep at zero to be allowed to decide.
+                    if (keepByRetainedSnapshot) {
+                        ++filterOverKeep;
+                    } else {
+                        ++filterOverDrop;
+                    }
+                }
+                // holderlive (F2) ③: the bad_target population was never crossed with holder
+                // liveness, so "D4 is benign because those holders are dead" was an assumption.
+                // Under FYS the closure is the liveness oracle, so classify the target of every
+                // slot by whether its holder survived. Read-only: peek + FindToVersion, no
+                // ResolveMinorReference (that one can CAS-install into the slot).
+                HeapSlot<>* peekField = &HeapSlotAt<>(slot);
+                RefField<> tgtPeek(*peekField);
+                BaseObject* tgtRaw = to_object(tgtPeek.GetTargetObject());
+                BaseObject* tgt = tgtRaw;
+                if (tgtRaw != nullptr && Heap::IsHeapAddress(tgtRaw)) {
+                    BaseObject* to = FindToVersion(tgtRaw);
+                    if (to != nullptr) {
+                        tgt = to;
+                    }
+                }
+                bool targetOk = tgt != nullptr && Heap::IsHeapAddress(tgt) && tgt->IsValidObject();
+                if (oracleKeep) {
+                    if (targetOk) {
+                        ++liveHolderTargetOk;
+                    } else {
+                        ++liveHolderTargetBad;
+                    }
+                } else {
+                    if (targetOk) {
+                        ++deadHolderTargetOk;
+                    } else {
+                        ++deadHolderTargetBad;
+                    }
                 }
             }
             if (!oracleKeep) {
@@ -3841,6 +3926,35 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              rememberedSlots.size(), originFound, originBoundsValid, retainedNever, retainedValid, retainedEmpty,
              retainedStale, retainedKeep, retainedDrop, safeEmptyDrop, directDeadDrop, filterCorrect,
              filterIncorrect, static_cast<unsigned>(fullYoungScan));
+        VLOG(REPORT,
+             "[RETLIVE][why-never] never=%zu noPreserve=%zu preserveSaidNever=%zu cleared=%zu "
+             "liveInfoNow=%zu holderYoung=%zu lastOp=[none=%zu,pVALID=%zu,pEMPTY=%zu,pNEVER=%zu,"
+             "clrChecked=%zu,clrAll=%zu,clrRange=%zu]",
+             retainedNever, neverNoPreserve, neverPreserveSaidNever, neverCleared, neverLiveInfoNow,
+             neverHolderYoung, neverLastOp[RegionInfo::RETAINED_OP_NONE],
+             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_VALID],
+             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_EMPTY],
+             neverLastOp[RegionInfo::RETAINED_OP_PRESERVE_NEVER],
+             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_CHECKED],
+             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_ALL],
+             neverLastOp[RegionInfo::RETAINED_OP_CLEAR_RANGE]);
+        VLOG(REPORT,
+             "[RETLIVE][why-never-rtype] originRegions=%zu rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu,"
+             "%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu]",
+             originRegions.size(), neverRegionType[0], neverRegionType[1], neverRegionType[2],
+             neverRegionType[3], neverRegionType[4], neverRegionType[5], neverRegionType[6],
+             neverRegionType[7], neverRegionType[8], neverRegionType[9], neverRegionType[10],
+             neverRegionType[11], neverRegionType[12], neverRegionType[13], neverRegionType[14],
+             neverRegionType[15]);
+        VLOG(REPORT,
+             "[RETLIVE][deadalive] deadHolderTargetOk=%zu deadHolderTargetBad=%zu "
+             "liveHolderTargetOk=%zu liveHolderTargetBad=%zu (FYS oracle; liveHolderTargetBad>0 "
+             "= a live holder whose remset target does not resolve)",
+             deadHolderTargetOk, deadHolderTargetBad, liveHolderTargetOk, liveHolderTargetBad);
+        VLOG(REPORT,
+             "[RETLIVE][verdict] overKeep=%zu overDrop=%zu correct=%zu (overDrop>0 = the filter "
+             "would have dropped an edge the young closure reached)",
+             filterOverKeep, filterOverDrop, filterCorrect);
     }
 }
 

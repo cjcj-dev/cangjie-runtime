@@ -98,6 +98,26 @@ public:
         SNAPSHOT_EMPTY,
     };
 
+    // holderlive (F2): the only object-level holder-liveness filter we have reads
+    // GetRetainedLiveInfoState() at WCollector.cpp:3579 and measured NEVER_EXAMINED for
+    // 100% of holders (never=2787/originFound=2787 per minor). NEVER_EXAMINED has three
+    // distinct producers and the state word cannot tell them apart:
+    //   - nobody ever called Preserve* on this region during its current life,
+    //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
+    //   - Preserve* ran and stored a snapshot, then a clear path wiped it.
+    // These counters name which one happened. Maintained unconditionally (three stores on
+    // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
+    enum RetainedOp : uint8_t {
+        RETAINED_OP_NONE = 0,
+        RETAINED_OP_PRESERVE_VALID = 1,
+        RETAINED_OP_PRESERVE_EMPTY = 2,
+        RETAINED_OP_PRESERVE_NEVER = 3,
+        RETAINED_OP_CLEAR_CHECKED = 4,   // CheckAndClearLiveInfo (RegionInfo.h:1271)
+        RETAINED_OP_CLEAR_ALL = 5,       // ClearLiveInfo (RegionInfo.h:1297)
+        RETAINED_OP_CLEAR_RANGE = 6,     // NullLiveInfoFieldsInRange (RegionInfo.h:1327)
+        RETAINED_OP_COUNT = 7,
+    };
+
     enum RouteState : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
@@ -223,29 +243,123 @@ public:
 
     MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
 
+    // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
+    // mark" during every minor until the next major re-marks the region. It cannot do that as a
+    // borrowed LiveInfo*: LiveInfo lives in a per-tag arena that is recycled one GC cycle later
+    // (ForwardDataManager::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
+    // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) drops every borrowed pointer
+    // into it at the end of each major.
+    // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
+    // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
+    // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
+    // are actually preserved. Default off (MRT_GCV2_RETAINED_OWN_COPY=1).
+    static bool RetainedOwnCopyEnabled()
+    {
+        static const bool enabled = []() {
+            const char* value = std::getenv("MRT_GCV2_RETAINED_OWN_COPY");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        return enabled;
+    }
+
+    // Union of markBitmap and resurrectBitmap — the same two bitmaps LiveInfo::IsSurvivedObject
+    // reads, collapsed into one array so the copy answers exactly the same question.
+    void CaptureRetainedMarkWords(LiveInfo* liveInfo)
+    {
+        FreeRetainedMarkWords();
+        if (liveInfo == nullptr) {
+            return;
+        }
+        RegionBitmap* mark = liveInfo->markBitmap;
+        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
+        size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
+        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
+        size_t wordCnt = std::max(markWords, resurrectWords);
+        if (wordCnt == 0) {
+            return;
+        }
+        uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
+        if (words == nullptr) {
+            // Out of memory for a diagnostic-grade copy: leave the snapshot absent. The
+            // consumer treats "no snapshot" as keep, i.e. this degrades to today's fail-open.
+            return;
+        }
+        for (size_t i = 0; i < wordCnt; ++i) {
+            uint64_t bits = 0;
+            if (i < markWords) {
+                bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < resurrectWords) {
+                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+            }
+            words[i] = bits;
+        }
+        metadata.retainedMarkWords = words;
+        metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
+    }
+
+    bool HasRetainedMarkWords() const { return metadata.retainedMarkWords != nullptr; }
+
+    // Same indexing as RegionBitmap::IsMarked.
+    bool RetainedMarkWordsSay(size_t offset) const
+    {
+        if (metadata.retainedMarkWords == nullptr) {
+            return false;
+        }
+        size_t bitIdx = offset / kMarkedBytesPerBit;
+        size_t wordIdx = bitIdx / kBitsPerWord;
+        if (wordIdx >= metadata.retainedMarkWordCnt) {
+            return false;
+        }
+        return (metadata.retainedMarkWords[wordIdx] &
+                (static_cast<uint64_t>(1) << (bitIdx % kBitsPerWord))) != 0;
+    }
+
+    void FreeRetainedMarkWords()
+    {
+        if (metadata.retainedMarkWords != nullptr) {
+            free(metadata.retainedMarkWords);
+            metadata.retainedMarkWords = nullptr;
+        }
+        metadata.retainedMarkWordCnt = 0;
+    }
+
+    uint32_t GetRetainedPreserveCount() const { return metadata.retainedPreserveCnt; }
+
+    uint32_t GetRetainedClearCount() const { return metadata.retainedClearCnt; }
+
+    uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
+
     void PreserveRetainedLiveInfo()
     {
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
+        if (RetainedOwnCopyEnabled() && !IsLargeRegion()) {
+            CaptureRetainedMarkWords(metadata.retainedLiveInfo);
+        }
         if (IsLargeRegion()) {
             if (GetLiveByteCount() == 0) {
                 metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
                     ? RetainedLiveInfoState::SNAPSHOT_EMPTY
                     : RetainedLiveInfoState::NEVER_EXAMINED;
+                NoteRetainedPreserve();
                 return;
             }
             metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         if (metadata.retainedLiveInfo != nullptr) {
             metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         CHECK(GetLiveByteCount() == 0);
         metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
             ? RetainedLiveInfoState::SNAPSHOT_EMPTY
             : RetainedLiveInfoState::NEVER_EXAMINED;
+        NoteRetainedPreserve();
     }
 
     MAddress GetCensusBoundary() const
@@ -272,11 +386,16 @@ public:
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         metadata.retainedLiveInfoCoveredUpTo = boundary;
+        if (RetainedOwnCopyEnabled()) {
+            CaptureRetainedMarkWords(metadata.retainedLiveInfo);
+        }
         if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
             metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            NoteRetainedPreserve();
             return;
         }
         metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+        NoteRetainedPreserve();
     }
 
     ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
@@ -287,10 +406,39 @@ public:
             metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
             metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
             metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
             return;
         }
         CHECK(coveredUpToOverride == GetRegionAllocPtr());
         PreserveRetainedLiveInfo();
+    }
+
+    // holderlive (F2): record the outcome of a Preserve* call. Called after the state word
+    // is already written, so the op code is derived from it rather than duplicated.
+    ALWAYS_INLINE void NoteRetainedPreserve()
+    {
+        ++metadata.retainedPreserveCnt;
+        switch (metadata.retainedLiveInfoState) {
+            case RetainedLiveInfoState::SNAPSHOT_VALID:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
+                break;
+            case RetainedLiveInfoState::SNAPSHOT_EMPTY:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_EMPTY;
+                break;
+            default:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
+                break;
+        }
+    }
+
+    // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
+    ALWAYS_INLINE void NoteRetainedClear(RetainedOp op)
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return;
+        }
+        ++metadata.retainedClearCnt;
+        metadata.retainedLastOp = static_cast<uint8_t>(op);
     }
 
     bool IsRetainedSnapshotValid() const
@@ -1269,7 +1417,14 @@ public:
             metadata.liveInfo0 = nullptr;
         }
         if (metadata.retainedLiveInfo == liveInfo) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_CHECKED);
             metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): this unbind exists because the borrowed LiveInfo* is about to
+            // dangle — it says nothing about whether the snapshot is still true. When we own
+            // the bits, drop the pointer and keep the verdict.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
             metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
@@ -1294,6 +1449,10 @@ public:
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(0);
         }
+        NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
+        // holderlive (F2): a new mark cycle starts for this region — the old snapshot is about
+        // to be superseded by a better one, so the owned copy goes with it.
+        FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
@@ -1325,7 +1484,13 @@ public:
             metadata.liveInfo0 = nullptr;
         }
         if (inRange(metadata.retainedLiveInfo)) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_RANGE);
             metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): same rule as CheckAndClearLiveInfo — the range is about to be
+            // madvise'd, so the pointer must go; an owned copy is not in that range.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
             metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
             metadata.retainedLiveInfoEpoch = 0;
             metadata.retainedLiveInfoCoveredUpTo = 0;
@@ -1844,6 +2009,16 @@ private:
         RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         uint64_t retainedLiveInfoEpoch = 0;
         MAddress retainedLiveInfoCoveredUpTo = 0;
+        // holderlive (F2): per-region-life history of the three fields above. Reset by
+        // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
+        // "never preserved since boot".
+        uint32_t retainedPreserveCnt = 0;
+        uint32_t retainedClearCnt = 0;
+        uint8_t retainedLastOp = RETAINED_OP_NONE;
+        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
+        // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
+        uint64_t* retainedMarkWords = nullptr;
+        uint32_t retainedMarkWordCnt = 0;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
@@ -2070,10 +2245,16 @@ private:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         metadata.liveInfo0 = nullptr;
+        FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
         metadata.retainedLiveInfoEpoch = 0;
         metadata.retainedLiveInfoCoveredUpTo = 0;
+        // holderlive (F2): new region life — its predecessor's snapshot history does not
+        // describe the objects that are about to be allocated here.
+        metadata.retainedPreserveCnt = 0;
+        metadata.retainedClearCnt = 0;
+        metadata.retainedLastOp = RETAINED_OP_NONE;
         BumpSnapshotEpoch();
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
