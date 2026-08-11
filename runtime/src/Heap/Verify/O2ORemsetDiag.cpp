@@ -65,7 +65,7 @@ void MaybeSample(const char* tag, RegionInfo* region, size_t a, size_t b, size_t
          "a=%zu b=%zu c=%zu env=MRT_GCV2_O2OREMSET=1",
          tag, region, region != nullptr ? region->GetRegionStart() : 0,
          region != nullptr ? region->GetRegionEnd() : 0,
-         region != nullptr ? region->GetRegionType() : 0u,
+         region != nullptr ? static_cast<unsigned>(region->GetRegionType()) : 0u,
          region != nullptr ? static_cast<unsigned>(region->IsYoungRegion()) : 0u, a, b, c);
 }
 
