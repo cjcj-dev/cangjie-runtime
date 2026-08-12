@@ -67,7 +67,10 @@ public:
             return nullptr;
         }
         if (!IsTargetHasSameSourceWith(childTi)) {
-            for (const auto& pair : childTi->GetMTableDesc()->mTable) {
+            MTableDesc* childDesc = childTi->GetMTableDesc();
+            CHECK(childDesc != nullptr);
+            std::lock_guard<std::recursive_mutex> tableLock(childDesc->mTableMutex);
+            for (const auto& pair : childDesc->mTable) {
                 auto superTi = pair.second.GetSuperTi();
                 if (IsTargetHasSameSourceWith(superTi)) {
                     void* fn = reinterpret_cast<void*>(whereCondFn);

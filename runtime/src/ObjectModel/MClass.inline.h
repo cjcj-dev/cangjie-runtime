@@ -273,7 +273,11 @@ inline U32* TypeInfo::GetFieldOffsets() const
     return fieldOffsets;
 }
 
-inline U16 TypeInfo::GetValidInheritNum() const { return validInheritNum & ((1ULL << 15) - 1); }
+inline U16 TypeInfo::GetValidInheritNum() const
+{
+    U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_ACQUIRE);
+    return inherit & ((1ULL << 15) - 1);
+}
 
 inline U32 TypeInfo::GetUUID()
 {

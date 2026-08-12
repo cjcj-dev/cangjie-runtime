@@ -8,6 +8,7 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <atomic>
 #include <cstring>
 #include <functional>
 #include <mutex>
@@ -108,6 +109,9 @@ public:
         : superExtensionData(ed), superTypeInfo(super), cachedTypeInfos(sz) {}
     ExtensionData* GetExtensionData() const { return superExtensionData; }
     TypeInfo* GetSuperTi() const { return superTypeInfo; }
+    // Caller must hold MTableDesc::mTableMutex. The assignment deletes the old
+    // array; Get/SetCachedTypeInfo also take that mutex, so no reader can still
+    // hold the pointer being freed (BUG-19).
     void ResetAtomicInfoArray(size_t size) { cachedTypeInfos = AtomicTypeInfoArray(size); }
     TypeInfo* GetCachedTypeInfo(size_t index) const { return cachedTypeInfos.Get(index); }
     void SetCachedTypeInfo(size_t index, TypeInfo* ti) { cachedTypeInfos.Set(index, ti); }
@@ -217,14 +221,16 @@ struct MTableDesc {
     std::unordered_map<U32, InheritFuncTable> mTable;
     MTableBitmap mTableBitmap;
     std::recursive_mutex mTableMutex;
-    bool pending = false;
-    bool needsResolveInner = true;
-    bool needsResolveOuter = true;
+    std::atomic<bool> pending { false };
+    std::atomic<bool> needsResolveInner { true };
+    std::atomic<bool> needsResolveOuter { true };
     explicit MTableDesc(ArchUInt bitmap_);
     MTableDesc() = delete;
     bool IsFullyHandled() const { return !NeedResolveInner() && !NeedResolveOuter(); };
-    inline bool NeedResolveInner() const { return needsResolveInner; }
-    inline bool NeedResolveOuter() const { return needsResolveOuter; }
+    inline bool NeedResolveInner() const { return needsResolveInner.load(std::memory_order_acquire); }
+    inline bool NeedResolveOuter() const { return needsResolveOuter.load(std::memory_order_acquire); }
+    inline void MarkInnerResolved() { needsResolveInner.store(false, std::memory_order_release); }
+    inline void MarkOuterResolved() { needsResolveOuter.store(false, std::memory_order_release); }
 };
 
 typedef TypeInfo* (*GenericFunc)(TypeInfo**);
@@ -727,14 +733,27 @@ public:
     void SetInstanceSize(U32 size) { this->instanceSize = size; }
     void SetGCTib(GCTib gctib);
     void SetComponentTypeInfo(TypeInfo* ti) { this->componentTypeInfo = ti; }
-    void SetValidInheritNum(U16 num) { this->validInheritNum = num | (1 << 15); }
+    void SetValidInheritNum(U16 num)
+    {
+        U16 tagged = static_cast<U16>(num | (1U << 15));
+        __atomic_store_n(&validInheritNum, tagged, __ATOMIC_RELEASE);
+    }
+    void MarkMTableUninitialized()
+    {
+        U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_RELAXED);
+        inherit = static_cast<U16>(inherit | (1U << 15));
+        __atomic_store_n(&validInheritNum, inherit, __ATOMIC_RELEASE);
+    }
     bool IsSubType(TypeInfo* superTypeInfo);
     void SetFlagHasRefField();
     void SetReflectInfo(ReflectInfo* info) { this->reflectInfo = info; }
     void SetvExtensionDataStart(ExtensionData **ptr) { this->vExtensionDataStart = ptr; }
     void SetEnumInfo(EnumInfo* ei) { this->enumInfo = ei; }
     void SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo);
-    MTableDesc* GetMTableDesc() const { return mTableDesc; }
+    MTableDesc* GetMTableDesc() const
+    {
+        return __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+    }
     void AddMTable(TypeInfo* ti, ExtensionData* extensionData);
     FuncPtr* GetMTable(TypeInfo* itf);
     TypeInfo* GetMethodOuterTI(TypeInfo* itf, U64 index);
@@ -764,18 +783,22 @@ private:
     std::pair<FuncPtr*, bool> FindMTable(U32 itfUUID);
 
     inline bool IsMTableDescUnInitialized() {
-
-        return (mTableDesc == nullptr) || (validInheritNum >> 15 == 1)
+        MTableDesc* desc =
+            __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+        U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_ACQUIRE);
+        return (desc == nullptr) || (inherit >> 15 == 1)
         // mtable bitmap optimization will be enabled for non-ARM architectures.
 #ifndef __arm__
-               || (reinterpret_cast<uintptr_t>(mTableDesc) >> 63 == 1)
+               || (reinterpret_cast<uintptr_t>(desc) >> 63 == 1)
 #endif
             ;
     }
     // This function must be called before mTableDesc is overwritten.
     inline ArchUInt GetResolveBitmapFromMTableDesc()
     {
-        return reinterpret_cast<uintptr_t>(mTableDesc);
+        MTableDesc* desc =
+            __atomic_load_n(reinterpret_cast<MTableDesc* const*>(&mTableDesc), __ATOMIC_ACQUIRE);
+        return reinterpret_cast<uintptr_t>(desc);
     }
 
     const char* typeInfoName;

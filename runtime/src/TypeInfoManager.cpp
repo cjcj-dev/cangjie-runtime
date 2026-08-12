@@ -221,7 +221,7 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
     // and their mTableDesc is also 0.
     if (reinterpret_cast<uintptr_t>(ti->GetMTableDesc()) == 0) {
         // 15: The most significant bit indicates whether the mTable is initialized.
-        ti->validInheritNum |= 1 << 15;
+        ti->MarkMTableUninitialized();
     }
     if (isGeneric) {
         bool hasExisted = false;
