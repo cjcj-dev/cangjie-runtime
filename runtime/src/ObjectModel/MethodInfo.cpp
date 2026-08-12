@@ -200,9 +200,10 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
     if (actualArgCnt != GetNumOfActualParameterInfos()) {
         return false;
     }
-    Uptr base = reinterpret_cast<Uptr>(&(actualArgs->rawPtr->data));
+    ObjRef rawArray = reinterpret_cast<ObjRef>(actualArgs->rawPtr);
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(actualArgs->rawPtr->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
-        ObjRef argObj = *reinterpret_cast<ObjRef*>(base);
+        ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric()) {
@@ -211,7 +212,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         if (argType == nullptr) {
             return false;
         }
-        base += sizeof(ObjRef);
+        refField++;
         if (!argObj->GetTypeInfo()->IsSubType(argType)) {
             return false;
         }
