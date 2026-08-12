@@ -1776,6 +1776,82 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     return region;
 }
 
+void RegionManager::SealRootNamedYoungForRoute()
+{
+    // keepfrom (Q2): one-shot seal of root-named young into survivor face while every
+    // cset region is still FORWARDABLE (before any Route freezes liveBytes). Per-region
+    // root walks at RouteOrCompact hang (full static root set × N regions).
+    // Closes statresid SEALGAP: pregrant missAfter=0 then Fix admit_miss@COMPACTED.
+    size_t painted = 0;
+    size_t already = 0;
+    size_t young = 0;
+    auto remarkOne = [&painted, &already, &young](BaseObject* obj) {
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("keepfrom.prep_seal", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr || host == obj) {
+                return;
+            }
+            obj = host;
+            if (!Collector::PlausibleManagedObjectGate("keepfrom.prep_seal.host", obj)) {
+                return;
+            }
+        }
+        RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (region == nullptr) {
+            region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        }
+        if (region == nullptr || !region->IsYoungRegion() || !region->IsGhostFromRegion()) {
+            return;
+        }
+        if (region->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
+            return;
+        }
+        ++young;
+        size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        LiveInfo* g0 = region->GetLiveInfo0ForProbe();
+        if (g0 != nullptr && g0->IsSurvivedObject(offset)) {
+            ++already;
+            return;
+        }
+        (void)region->MarkObject(obj);
+        region->BindLiveInfo0FromLiveIfNull();
+        LiveInfo* live = region->GetLiveInfo();
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
+            reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+            size_t objSize = 0;
+            if (Collector::PlausibleManagedObjectGate("keepfrom.prep_seal.size", obj)) {
+                objSize = obj->GetSize();
+            }
+            size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
+            if (objSize > 0 && offset + objSize <= regionSize) {
+                SealCheck::NotePaint(region, offset, objSize, "keepfrom.prep_seal.ghost");
+                (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
+            }
+        }
+        ghost = region->GetLiveInfo0ForProbe();
+        if (ghost != nullptr && ghost->IsSurvivedObject(offset)) {
+            ++painted;
+        }
+    };
+    RootVisitor visitRoot = [&remarkOne](ObjectRef& root) {
+        zaddress_unsafe observed = root.LoadPlain();
+        if (is_null(observed)) {
+            return;
+        }
+        HeapSlot<> bits(to_zpointer(raw(observed)));
+        remarkOne(to_object(bits.GetTargetObject()));
+    };
+    Heap::GetHeap().VisitStaticRoots(visitRoot);
+    MutatorManager::Instance().VisitAllMutators(
+        [&visitRoot](Mutator& mutator) { mutator.VisitMutatorRoots(visitRoot); });
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitRoot);
+    LOG(RTLOG_ERROR, "[GCV2][keepfrom] prep_seal young=%zu paint=%zu already=%zu", young, painted, already);
+}
+
 void RegionManager::RequestForRegion(size_t size)
 {
     if (IsGcThread()) {
@@ -1810,88 +1886,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
-    // keepfrom (Q2): freeze of liveBytes/geometry is about to happen. Root-named young
-    // objects must be on the survivor face *before* that freeze — otherwise Admit fails
-    // (live0Surv=0) and FixMinor leave-alone leaves a reclaimable/compacted-away from
-    // (GetSize SEGV si_addr=0xffff… under FYS=1). Pregrant can report missAfter=0 while
-    // a later sibling Route still freezes without these objects (statresid SEALGAP).
-    // Only young ghost cset: this is the FixMinor root surface. Default-on product path.
-    if (region->IsYoungRegion() && region->IsGhostFromRegion()) {
-        static std::atomic<size_t> g_keepfromSealRegions{ 0 };
-        static std::atomic<size_t> g_keepfromSealPaint{ 0 };
-        static std::atomic<size_t> g_keepfromSealAlready{ 0 };
-        size_t painted = 0;
-        size_t already = 0;
-        auto remarkOne = [region, &painted, &already](BaseObject* obj) {
-            if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-                return;
-            }
-            if (!Collector::PlausibleManagedObjectGate("keepfrom.route_seal", obj)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(obj);
-                if (host == nullptr || host == obj) {
-                    return;
-                }
-                obj = host;
-                if (!Collector::PlausibleManagedObjectGate("keepfrom.route_seal.host", obj)) {
-                    return;
-                }
-            }
-            RegionInfo* at = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-            if (at != region) {
-                return;
-            }
-            size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-            LiveInfo* g0 = region->GetLiveInfo0ForProbe();
-            if (g0 != nullptr && g0->IsSurvivedObject(offset)) {
-                ++already;
-                return;
-            }
-            // MarkObject paints current liveInfo and AddLiveByteCount on 0→1 (geometry).
-            // PrepareForwardable shares liveInfo→liveInfo0; if they diverge, also paint ghost.
-            (void)region->MarkObject(obj);
-            region->BindLiveInfo0FromLiveIfNull();
-            LiveInfo* live = region->GetLiveInfo();
-            LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-            if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
-                reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
-                size_t objSize = 0;
-                if (Collector::PlausibleManagedObjectGate("keepfrom.route_seal.size", obj)) {
-                    objSize = obj->GetSize();
-                }
-                size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
-                if (objSize > 0 && offset + objSize <= regionSize) {
-                    SealCheck::NotePaint(region, offset, objSize, "keepfrom.route_seal.ghost");
-                    (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
-                }
-            }
-            ghost = region->GetLiveInfo0ForProbe();
-            if (ghost != nullptr && ghost->IsSurvivedObject(offset)) {
-                ++painted;
-            }
-        };
-        RootVisitor visitRoot = [&remarkOne](ObjectRef& root) {
-            zaddress_unsafe observed = root.LoadPlain();
-            if (is_null(observed)) {
-                return;
-            }
-            HeapSlot<> bits(to_zpointer(raw(observed)));
-            remarkOne(to_object(bits.GetTargetObject()));
-        };
-        Heap::GetHeap().VisitStaticRoots(visitRoot);
-        MutatorManager::Instance().VisitAllMutators(
-            [&visitRoot](Mutator& mutator) { mutator.VisitMutatorRoots(visitRoot); });
-        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitRoot);
-        if (painted > 0 || already > 0) {
-            size_t rn = g_keepfromSealRegions.fetch_add(1, std::memory_order_relaxed) + 1;
-            g_keepfromSealPaint.fetch_add(painted, std::memory_order_relaxed);
-            g_keepfromSealAlready.fetch_add(already, std::memory_order_relaxed);
-            if (rn <= 32) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][keepfrom] route_seal region=%p paint=%zu already=%zu liveBytes=%zu n=%zu",
-                    region, painted, already, region->GetLiveByteCount(), rn);
-            }
-        }
-    }
     // tipnull densify (FULL size-walk only): MarkBits multi-bit ranges let interiors pass
     // Admit while VisitLive only copies starts → FORWARDED + null tip. Rebuild liveInfo0
     // to size-walk ∩ prior-survived starts so Admit domain ⊆ Copy domain (H1a).

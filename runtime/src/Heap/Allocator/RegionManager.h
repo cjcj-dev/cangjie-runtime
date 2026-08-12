@@ -713,7 +713,11 @@ public:
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
+        SealRootNamedYoungForRoute();
     }
+
+    // keepfrom: one-shot seal root-named young into survivor face (FORWARDABLE only).
+    void SealRootNamedYoungForRoute();
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
     // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
