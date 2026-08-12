@@ -531,6 +531,11 @@ int MCC_WaitQueueInit(void* ptr)
 
 bool MonitorWait(CJMutex* mutex, void* wq, int64_t timeout)
 {
+    // WaitqueuePark rejects ns <= 0 before the unlock callback.
+    // Re-locking here would bump ownCount a second time and leak the hold.
+    if (timeout <= 0) {
+        return false;
+    }
     // 1. Keep the #mutex-hold before release the mutex.
     Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     uint64_t ownCount = mutex->ownCount;
@@ -635,6 +640,9 @@ bool MCC_IsThreadObjectInited()
 void* MRT_GetCurrentCJThreadObject()
 {
     void* argStart = CJThreadGetArg();
+    if (argStart == nullptr) {
+        return nullptr;
+    }
     RootSlot& root = RootSlotAt(&reinterpret_cast<LWTData*>(argStart)->threadObject);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
