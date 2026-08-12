@@ -872,13 +872,9 @@ bool TypeTemplate::IsEnumCtor() const
     }
     // The current SDK emits enum constructor with empty enumInfo,
     // so enumInfo == nullptr indicates an enum constructor.
-    // Earlier versions emitted enum constructor with non-empty enumInfo and
-    // MODIFIER_ENUM_CTOR flag set in the modifier; such cases are not handled
-    // here and would be misidentified as the enum itself.
-    if (enumInfo == nullptr) {
-        return true;
-    }
-    return false;
+    // Earlier versions emitted enum constructors with non-empty enumInfo and
+    // MODIFIER_ENUM_CTOR set in the modifier; honor that form for compatibility.
+    return enumInfo == nullptr || static_cast<bool>(enumInfo->GetModifier() & MODIFIER_ENUM_CTOR);
 }
 
 void* ReflectInfo::GetAnnotations(TypeInfo* arrayTi)
@@ -905,13 +901,9 @@ bool TypeInfo::IsEnumCtor() const
     }
     // The current SDK emits enum constructor with empty enumInfo,
     // so enumInfo == nullptr indicates an enum constructor.
-    // Earlier versions emitted enum constructor with non-empty enumInfo and
-    // MODIFIER_ENUM_CTOR flag set in the modifier; such cases are not handled
-    // here and would be misidentified as the enum itself.
-    if (enumInfo == nullptr) {
-        return true;
-    }
-    return false;
+    // Earlier versions emitted enum constructors with non-empty enumInfo and
+    // MODIFIER_ENUM_CTOR set in the modifier; honor that form for compatibility.
+    return enumInfo == nullptr || static_cast<bool>(enumInfo->GetModifier() & MODIFIER_ENUM_CTOR);
 }
 
 bool TypeInfo::IsOptionLikeRefEnum()

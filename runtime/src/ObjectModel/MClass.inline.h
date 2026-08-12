@@ -249,8 +249,8 @@ inline bool TypeInfo::HasRefField() const
 inline bool TypeInfo::HasFinalizer() const { return static_cast<bool>(flag & FLAG_HAS_FINALIZER); }
 inline bool TypeInfo::IsInitialUUID() const { return uuid == 0; }
 inline bool TypeInfo::IsFutureClass() const { return static_cast<bool>(flag & FLAG_FUTURE_CLASS); }
-inline bool TypeInfo::IsMonitorClass() const { return static_cast<bool>(flag & FLAG_MUTEX_CLASS); }
-inline bool TypeInfo::IsMutexClass() const { return static_cast<bool>(flag & FLAG_MONITOR_CLASS); }
+inline bool TypeInfo::IsMonitorClass() const { return static_cast<bool>(flag & FLAG_MONITOR_CLASS); }
+inline bool TypeInfo::IsMutexClass() const { return static_cast<bool>(flag & FLAG_MUTEX_CLASS); }
 inline bool TypeInfo::IsWaitQueueClass() const { return static_cast<bool>(flag & FLAG_WAIT_QUEUE_CLASS); }
 inline bool TypeInfo::HasExtPart() const { return static_cast<bool>(flag & FLAG_HAS_EXT_PART); }
 inline bool TypeInfo::IsBoxClass() const

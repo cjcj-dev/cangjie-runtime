@@ -200,9 +200,10 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
     if (actualArgCnt != GetNumOfActualParameterInfos()) {
         return false;
     }
-    Uptr base = reinterpret_cast<Uptr>(&(actualArgs->rawPtr->data));
+    ObjRef rawArray = reinterpret_cast<ObjRef>(actualArgs->rawPtr);
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(actualArgs->rawPtr->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCnt; ++actualArgIdx) {
-        ObjRef argObj = *reinterpret_cast<ObjRef*>(base);
+        ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
         ParameterInfo* actualParameterInfo = GetActualParameterInfo(actualArgIdx);
         TypeInfo* argType = actualParameterInfo->GetType();
         if (argType->IsGeneric()) {
@@ -211,7 +212,7 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
         if (argType == nullptr) {
             return false;
         }
-        base += sizeof(ObjRef);
+        refField++;
         if (!argObj->GetTypeInfo()->IsSubType(argType)) {
             return false;
         }
@@ -424,7 +425,7 @@ void* MethodInfo::RetValueToAny(Value ret, void* sret, TypeInfo* retType)
         return obj;
     } else if (retType->IsVArray()) {
         // RAW_POINTER_OBJECT may land non-young; ref-bearing VArray uses WriteStruct (G-C3).
-        MSize vArraySize = retType->GetFieldNum() * retType->GetComponentTypeInfo()->GetInstanceSize();
+        MSize vArraySize = retType->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(retType, size, AllocType::RAW_POINTER_OBJECT);
         if (vArraySize == 0) {
@@ -485,7 +486,7 @@ void MethodInfo::PrepareSRet(ArgValue* argValues, void**& sretSlot, TypeInfo* re
 {
     U32 size = 0;
     if (retType->IsVArray()) {
-        size = retType->GetFieldNum() * retType->GetComponentTypeInfo()->GetInstanceSize();
+        size = retType->GetInstanceSize();
     } else {
         size = retType->GetInstanceSize();
     }

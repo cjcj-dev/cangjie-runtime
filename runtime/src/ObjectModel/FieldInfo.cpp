@@ -31,19 +31,19 @@ const char* InstanceFieldInfo::GetName(TypeInfo* declaringTypeInfo) const
 
 inline U32 InstanceFieldInfo::GetOffset(TypeInfo* declaringTypeInfo) const
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldOffset(fieldIdx);
 }
 
 TypeInfo* InstanceFieldInfo::GetFieldType(TypeInfo* declaringTypeInfo)
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldType(fieldIdx);
 }
 
 void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
 {
-    CHECK(!(fieldIdx > declaringTi->GetFieldNum()));
+    CHECK(fieldIdx < declaringTi->GetFieldNum());
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTi);
     TypeInfo* fieldTi = GetFieldType(declaringTi);
     if (fieldTi->IsRef()) {
@@ -74,7 +74,7 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
         return obj;
     } else if (fieldTi->IsVArray()) {
         // VArray may embed managed refs; HasRefField is the authority (G-C3).
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+        MSize vArraySize = fieldTi->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(fieldTi, size);
         if (vArraySize == 0) {
@@ -120,7 +120,7 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
         }
     } else if (fieldTi->IsVArray()) {
         // VArray may embed managed refs; direct memcpy skips remset (G-C2).
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+        MSize vArraySize = fieldTi->GetInstanceSize();
         if (vArraySize == 0) {
             return;
         }
@@ -195,8 +195,8 @@ void* StaticFieldInfo::GetValue()
         return obj;
     } else if (fieldTi->IsVArray()) {
         // VArray may embed managed refs; HasRefField is the authority (G-C3).
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
-        MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + vArraySize, TYPEINFO_PTR_SIZE);
+        MSize vArraySize = fieldTi->GetInstanceSize();
+        MSize size = MRT_ALIGN(TYPEINFO_PTR_SIZE + vArraySize, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(fieldTi, size);
         if (vArraySize == 0) {
             return obj;
@@ -236,7 +236,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
     } else if (fieldTi->IsVArray()) {
         // Static VArray is a root slot (not heap remset holder); still route
         // ref-bearing payload through WriteStruct so colour/heal stays consistent.
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+        MSize vArraySize = fieldTi->GetInstanceSize();
         if (vArraySize == 0) {
             return;
         }
@@ -331,7 +331,7 @@ bool SetStructField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 
 bool SetVArrayField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 {
-    MSize vArraySize = argType->GetFieldNum() * argType->GetComponentTypeInfo()->GetInstanceSize();
+    MSize vArraySize = argType->GetInstanceSize();
     if (vArraySize == 0) {
         return true;
     }
@@ -510,7 +510,7 @@ BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
     // RAW_POINTER_OBJECT is not guaranteed young (RegionSpace raw-pointer path);
     // ref-bearing VArray must go through WriteStruct (G-C3).
-    MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+    MSize vArraySize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
     if (vArraySize == 0) {

@@ -54,12 +54,11 @@ union MTableBitmap {
             U8* bitmaps = largeBitmap->second;
             for (U32 i = 0; i < largeBitmap->first; ++i) {
                 U8 bitInfo = bitmaps[i];
+                ExtensionData** byteStart = vExtensionPtr + i * sizeof(U8) * 8;
                 while (LIKELY(bitInfo != 0)) {
-                    if (bitInfo & 0x1) {
-                        visitor(*vExtensionPtr);
-                    }
-                    bitInfo >>= 1;
-                    ++vExtensionPtr;
+                    U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitInfo)));
+                    visitor(*(byteStart + bitIndex));
+                    bitInfo &= static_cast<U8>(bitInfo - 1);
                 }
             }
         }
@@ -137,6 +136,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             if (cacheSize == 0) {
                 typeInfos = nullptr;
@@ -166,6 +166,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             typeInfos = other.typeInfos;
             other.cacheSize = 0;
