@@ -592,10 +592,34 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
+    // After in-place Compact, packed survivors live in [start, allocPtr). That address
+    // *is* the to-copy. Admit/GetRoute still index liveInfo0 by *from* offset — feeding a
+    // packed to-address reads the wrong bit (offpast same-target: sameObj=0).
+    // Unmarked from-copies sit in the memset tail (>= allocPtr) and still need Admit.
+    static BaseObject* CompactedToIfAlreadyPacked(BaseObject* obj, RegionInfo* region)
+    {
+        if (obj == nullptr || region == nullptr || !region->IsCompacted()) {
+            return nullptr;
+        }
+        MAddress addr = reinterpret_cast<MAddress>(obj);
+        MAddress start = region->GetRegionStart();
+        MAddress alloc = region->GetRegionAllocPtr();
+        if (addr >= start && addr < alloc) {
+            return obj;
+        }
+        return nullptr;
+    }
+
     // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
+        if (BaseObject* packed = CompactedToIfAlreadyPacked(fromObj, fromRegionInfo)) {
+            return packed;
+        }
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
+            if (BaseObject* packed = CompactedToIfAlreadyPacked(fromObj, fromRegionInfo)) {
+                return packed;
+            }
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
                 return nullptr;
@@ -615,8 +639,14 @@ public:
             return nullptr;
         }
 
+        if (BaseObject* packed = CompactedToIfAlreadyPacked(fromObj, fromRegionInfo)) {
+            return packed;
+        }
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
+            if (BaseObject* packed = CompactedToIfAlreadyPacked(fromObj, fromRegionInfo)) {
+                return packed;
+            }
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
                 return nullptr;
