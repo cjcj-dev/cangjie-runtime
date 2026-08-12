@@ -8,6 +8,7 @@
 #include "Collector/Collector.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -103,11 +104,24 @@ std::atomic<size_t> g_gateEquivMismatch{ 0 };
 std::atomic<size_t> g_gateEquivChecked{ 0 };
 std::atomic<size_t> g_gateEquivInjected{ 0 };
 
+void GateEquivAtexitReport()
+{
+    LOG(RTLOG_ERROR,
+        "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
+        g_gateEquivChecked.load(std::memory_order_relaxed),
+        g_gateEquivMismatch.load(std::memory_order_relaxed),
+        g_gateEquivInjected.load(std::memory_order_relaxed));
+}
+
 bool GateEquivOn()
 {
     static const bool on = []() {
         const char* v = std::getenv("MRT_GCV2_GATEEQUIV");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+        bool enabled = v != nullptr && std::strcmp(v, "1") == 0;
+        if (enabled) {
+            std::atexit(GateEquivAtexitReport);
+        }
+        return enabled;
     }();
     return on;
 }
