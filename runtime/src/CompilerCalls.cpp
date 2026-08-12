@@ -69,6 +69,95 @@ static ObjectPtr PlainObjectPtr(ObjectPtr maybeColoured)
     return reinterpret_cast<ObjectPtr>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
 }
 
+// TypeInfo lives in private mmap / static modules (TypeInfoManager), not the GC heap.
+// Compiler may still pass TypeInfo* with GC colour bits set (isTagged/remap); strip before
+// treating as a C++ TypeInfo* (titaint / tistrip; same PlainManagedAddr as acqstrip/mmstrip).
+static TypeInfo* PlainTypeInfoPtr(TypeInfo* maybeColoured)
+{
+    return reinterpret_cast<TypeInfo*>(PlainManagedAddr(reinterpret_cast<MAddress>(maybeColoured)));
+}
+
+// Default-off coverage: MRT_GCV2_TISTRIP_PROBE=1 counts TypeInfo* args with load-bad bits.
+// Positive control: CJ_MCC_IsSubType first arg is known coloured under hostnull colour RT.
+enum class TiStripEntry : int {
+    GetOrCreateTypeInfo = 0,
+    IsSubType = 1,
+    IsTupleTypeOf = 2,
+    AssignGeneric = 3,
+    GetMTable = 4,
+    GetMethodOuterTI = 5,
+    UpdateVMT = 6,
+    IVCallInstrumentation = 7,
+    kCount = 8,
+};
+
+static std::atomic<uint64_t> g_tiStripCalls[static_cast<int>(TiStripEntry::kCount)];
+static std::atomic<uint64_t> g_tiStripColoured[static_cast<int>(TiStripEntry::kCount)];
+static std::atomic<int> g_tiStripProbeInit{0};
+static bool g_tiStripProbeOn = false;
+
+extern "C" void MRT_DumpTiStripProbe(void);
+
+static void TiStripProbeAtexit(void)
+{
+    MRT_DumpTiStripProbe();
+}
+
+static bool TiStripProbeEnabled()
+{
+    int state = g_tiStripProbeInit.load(std::memory_order_acquire);
+    if (state != 0) {
+        return g_tiStripProbeOn;
+    }
+    const char* env = std::getenv("MRT_GCV2_TISTRIP_PROBE");
+    g_tiStripProbeOn = (env != nullptr && env[0] == '1' && env[1] == '\0');
+    if (g_tiStripProbeOn) {
+        std::atexit(TiStripProbeAtexit);
+    }
+    g_tiStripProbeInit.store(1, std::memory_order_release);
+    return g_tiStripProbeOn;
+}
+
+static void NoteTypeInfoArg(TiStripEntry entry, TypeInfo* maybeColoured)
+{
+    if (!TiStripProbeEnabled() || maybeColoured == nullptr) {
+        return;
+    }
+    int idx = static_cast<int>(entry);
+    g_tiStripCalls[idx].fetch_add(1, std::memory_order_relaxed);
+    MAddress raw = reinterpret_cast<MAddress>(maybeColoured);
+    if ((raw & static_cast<MAddress>(::g_cjLoadBadMask)) != 0) {
+        g_tiStripColoured[idx].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+static void NoteTypeInfoArgs(TiStripEntry entry, TypeInfo* const* args, U32 n)
+{
+    if (!TiStripProbeEnabled() || args == nullptr) {
+        return;
+    }
+    for (U32 i = 0; i < n; ++i) {
+        NoteTypeInfoArg(entry, args[i]);
+    }
+}
+
+extern "C" void MRT_DumpTiStripProbe(void)
+{
+    if (!TiStripProbeEnabled()) {
+        return;
+    }
+    static const char* names[] = {
+        "GetOrCreateTypeInfo", "IsSubType", "IsTupleTypeOf", "AssignGeneric",
+        "GetMTable", "GetMethodOuterTI", "UpdateVMT", "IVCallInstrumentation",
+    };
+    for (int i = 0; i < static_cast<int>(TiStripEntry::kCount); ++i) {
+        uint64_t calls = g_tiStripCalls[i].load(std::memory_order_relaxed);
+        uint64_t col = g_tiStripColoured[i].load(std::memory_order_relaxed);
+        fprintf(stderr, "TISTRIP_PROBE entry=%s calls=%llu coloured=%llu\n", names[i],
+                static_cast<unsigned long long>(calls), static_cast<unsigned long long>(col));
+    }
+}
+
 template<bool isAtomic>
 static RefField<isAtomic>* PlainRefFieldPtr(RefField<isAtomic>* maybeColoured)
 {
@@ -1976,11 +2065,39 @@ extern "C" void* MCC_GetTypeInfoAnnotations(TypeInfo* cls, TypeInfo* arrayTi) { 
 // for generic
 extern "C" TypeInfo* CJ_MCC_GetOrCreateTypeInfo(TypeTemplate* typeTemplate, U32 argSize, TypeInfo* typeArgs[])
 {
-    return TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, typeArgs);
+    // tistrip: typeArgs[] elements may carry GC colour bits across the MCC ABI.
+    NoteTypeInfoArgs(TiStripEntry::GetOrCreateTypeInfo, typeArgs, argSize);
+    TypeInfo** plainArgs = typeArgs;
+    TypeInfo* stackPlain[16];
+    TypeInfo** heapPlain = nullptr;
+    if (typeArgs != nullptr && argSize > 0) {
+        if (argSize <= 16) {
+            plainArgs = stackPlain;
+        } else {
+            heapPlain = static_cast<TypeInfo**>(std::malloc(sizeof(TypeInfo*) * argSize));
+            CHECK_DETAIL(heapPlain != nullptr, "CJ_MCC_GetOrCreateTypeInfo plainArgs malloc failed");
+            plainArgs = heapPlain;
+        }
+        for (U32 i = 0; i < argSize; ++i) {
+            plainArgs[i] = PlainTypeInfoPtr(typeArgs[i]);
+        }
+    }
+    TypeInfo* result =
+        TypeInfoManager::GetTypeInfoManager().GetOrCreateTypeInfo(typeTemplate, argSize, plainArgs);
+    if (heapPlain != nullptr) {
+        std::free(heapPlain);
+    }
+    return result;
 }
 
 extern "C" bool CJ_MCC_IsSubType(TypeInfo* typeInfo, TypeInfo* superTypeInfo)
 {
+    // tistrip / titaint: hostnull colour RT SEGV at TypeInfo::IsSubType+0x14 (uuid@+0x18)
+    // when typeInfo carries isTagged; strip at ABI before C++ member access.
+    NoteTypeInfoArg(TiStripEntry::IsSubType, typeInfo);
+    NoteTypeInfoArg(TiStripEntry::IsSubType, superTypeInfo);
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    superTypeInfo = PlainTypeInfoPtr(superTypeInfo);
     FromverMccEntry("IsSubType", typeInfo);
     if (typeInfo == nullptr || superTypeInfo == nullptr) {
         return false;
@@ -2047,6 +2164,11 @@ static bool IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTyp
 
 extern "C" bool CJ_MCC_IsTupleTypeOf(ObjectPtr obj, TypeInfo* typeInfo, TypeInfo* targetTypeInfo)
 {
+    // tistrip: strip TypeInfo* only; ObjectPtr remains managed (do not PlainObjectPtr).
+    NoteTypeInfoArg(TiStripEntry::IsTupleTypeOf, typeInfo);
+    NoteTypeInfoArg(TiStripEntry::IsTupleTypeOf, targetTypeInfo);
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    targetTypeInfo = PlainTypeInfoPtr(targetTypeInfo);
     if (obj == nullptr || targetTypeInfo == nullptr) {
         return false;
     }
@@ -2065,6 +2187,12 @@ extern "C" void CJ_MCC_WriteGeneric(const ObjectPtr obj, void* fieldPtr, const O
 
 extern "C" void CJ_MCC_AssignGeneric(ObjectPtr dst, ObjectPtr src, TypeInfo* typeInfo)
 {
+    // tistrip: strip TypeInfo* only; dst/src stay as managed ObjectPtr.
+    NoteTypeInfoArg(TiStripEntry::AssignGeneric, typeInfo);
+    typeInfo = PlainTypeInfoPtr(typeInfo);
+    if (typeInfo == nullptr) {
+        return;
+    }
     size_t instanceSize = typeInfo->GetInstanceSize();
     if (instanceSize == 0) {
         return;
@@ -2129,18 +2257,30 @@ extern "C" void CJ_MCC_ReadGeneric(const ObjectPtr dstPtr, ObjectPtr obj, void* 
 
 extern "C" FuncPtr* CJ_MCC_GetMTable(TypeInfo* ti, TypeInfo* itf)
 {
+    NoteTypeInfoArg(TiStripEntry::GetMTable, ti);
+    NoteTypeInfoArg(TiStripEntry::GetMTable, itf);
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     FromverMccEntry("GetMTable", ti);
     return ti->GetMTable(itf);
 }
 
 extern "C" TypeInfo* CJ_MCC_GetMethodOuterTI(TypeInfo* ti, TypeInfo* itf, U64 index)
 {
+    NoteTypeInfoArg(TiStripEntry::GetMethodOuterTI, ti);
+    NoteTypeInfoArg(TiStripEntry::GetMethodOuterTI, itf);
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     FromverMccEntry("GetMethodOuterTI", ti);
     return ti->GetMethodOuterTI(itf, index);
 }
 
 extern "C" void CJ_MCC_UpdateVMT(TypeInfo* ti, TypeInfo* itf, ExtensionData* extensionData)
 {
+    NoteTypeInfoArg(TiStripEntry::UpdateVMT, ti);
+    NoteTypeInfoArg(TiStripEntry::UpdateVMT, itf);
+    ti = PlainTypeInfoPtr(ti);
+    itf = PlainTypeInfoPtr(itf);
     if (UNLIKELY(!extensionData->IsFuncTableUpdated())) {
         return ti->TryUpdateExtensionData(itf, extensionData);
     }
@@ -2308,7 +2448,13 @@ extern "C" void CJ_MCC_CopyStructField(BaseObject* dstBase, void* dstField, size
 
 extern "C" int32_t __ccc_personality_v0() { return 0; }
 // @deprecated
-extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey) {}
+extern "C" void CJ_MCC_IVCallInstrumentation(TypeInfo* cls, const char* callBaseKey)
+{
+    // tistrip: empty body, but still strip + probe for coverage completeness.
+    NoteTypeInfoArg(TiStripEntry::IVCallInstrumentation, cls);
+    (void)PlainTypeInfoPtr(cls);
+    (void)callBaseKey;
+}
 
 void CJ_MCC_CrossAccessBarrier(U64 cjExport)
 {
