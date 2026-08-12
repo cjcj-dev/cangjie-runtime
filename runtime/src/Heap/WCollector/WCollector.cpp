@@ -4841,11 +4841,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
         postEvacPoint("pre-fix-forwarded", false);
 
-        // installdomain / iorfix: serial pre-grant on FORWARDABLE ghost face only.
+        // installdomain / iorfix: pre-grant on FORWARDABLE ghost face only.
         // Raw field read (no ResolveMinorReference — Resolve can RouteRegion).
         // Multi-round field walk: grant may paint a young whose fields hold further
         // unmarked from-objects (same shape as FixMinor liveobj IOR edges).
         {
+            MRT_PHASE_TIMER("young.pregrant");
             auto ensureObj = [this](BaseObject* t) {
                 if (t == nullptr || !Heap::IsHeapAddress(t)) {
                     return;
@@ -4863,32 +4864,134 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 RefField<> value(field);
                 ensureObj(to_object(value.GetTargetObject()));
             };
-            for (BaseObject* object : reachableVec) {
-                ensureObj(object);
-            }
-            for (MAddress slot : remsetVec) {
-                if (Heap::IsHeapAddress(slot)) {
-                    ensureField(HeapSlotAt<>(slot));
+            // STW-parallel of the same holder/field grant. MarkBits/AddLive are already
+            // atomic (concurrent-mark path). Default OFF — mutator-visible state is
+            // identical (still STW; only walk order changes). Root families stay serial
+            // (staticref10 face). Env MRT_GCV2_PREGRANT_PARALLEL=1.
+            static const bool pregrantParEnv = []() {
+                const char* v = std::getenv("MRT_GCV2_PREGRANT_PARALLEL");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            GCThreadPool* pregrantPool = pregrantParEnv ? threadPool : nullptr;
+            const size_t nPreObj = reachableVec.size();
+            const size_t nPreSlot = remsetVec.size();
+            if (pregrantPool != nullptr) {
+                int32_t workers = pregrantPool->GetMaxThreadNum() + 1;
+                if (workers < 1) {
+                    workers = 1;
                 }
-            }
-            constexpr size_t kPregrantRounds = 4;
-            for (size_t round = 0; round < kPregrantRounds; ++round) {
-                size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
+                const size_t objChunk = std::max<size_t>(64, (nPreObj + static_cast<size_t>(workers) * 4 - 1) /
+                                                                (static_cast<size_t>(workers) * 4 + 1));
+                const size_t slotChunk = std::max<size_t>(64, (nPreSlot + static_cast<size_t>(workers) * 4 - 1) /
+                                                                 (static_cast<size_t>(workers) * 4 + 1));
+                {
+                    std::atomic<size_t> objCursor{ 0 };
+                    std::atomic<size_t> slotCursor{ 0 };
+                    for (int32_t w = 0; w < workers; ++w) {
+                        pregrantPool->AddWork(new (std::nothrow) LambdaWork(
+                            [ensureObj, ensureField, &reachableVec, &remsetVec, &objCursor, &slotCursor, nPreObj,
+                             nPreSlot, objChunk, slotChunk](size_t) {
+                                for (;;) {
+                                    bool got = false;
+                                    if (objCursor.load(std::memory_order_relaxed) < nPreObj) {
+                                        size_t o0 = objCursor.fetch_add(objChunk, std::memory_order_relaxed);
+                                        if (o0 < nPreObj) {
+                                            size_t o1 = std::min(o0 + objChunk, nPreObj);
+                                            for (size_t i = o0; i < o1; ++i) {
+                                                ensureObj(reachableVec[i]);
+                                            }
+                                            got = true;
+                                        }
+                                    }
+                                    if (slotCursor.load(std::memory_order_relaxed) < nPreSlot) {
+                                        size_t s0 = slotCursor.fetch_add(slotChunk, std::memory_order_relaxed);
+                                        if (s0 < nPreSlot) {
+                                            size_t s1 = std::min(s0 + slotChunk, nPreSlot);
+                                            for (size_t i = s0; i < s1; ++i) {
+                                                MAddress slot = remsetVec[i];
+                                                if (Heap::IsHeapAddress(slot)) {
+                                                    ensureField(HeapSlotAt<>(slot));
+                                                }
+                                            }
+                                            got = true;
+                                        }
+                                    }
+                                    if (!got) {
+                                        break;
+                                    }
+                                }
+                            }));
+                    }
+                    pregrantPool->Start();
+                    pregrantPool->WaitFinish();
+                }
+                constexpr size_t kPregrantRounds = 4;
+                for (size_t round = 0; round < kPregrantRounds; ++round) {
+                    size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
+                    std::atomic<size_t> walkCursor{ 0 };
+                    for (int32_t w = 0; w < workers; ++w) {
+                        pregrantPool->AddWork(new (std::nothrow) LambdaWork(
+                            [ensureField, &reachableVec, &walkCursor, nPreObj, objChunk](size_t) {
+                                for (;;) {
+                                    size_t i0 = walkCursor.fetch_add(objChunk, std::memory_order_relaxed);
+                                    if (i0 >= nPreObj) {
+                                        break;
+                                    }
+                                    size_t i1 = std::min(i0 + objChunk, nPreObj);
+                                    for (size_t i = i0; i < i1; ++i) {
+                                        BaseObject* object = reachableVec[i];
+                                        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                                            continue;
+                                        }
+                                        if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant",
+                                                                                   object)) {
+                                            continue;
+                                        }
+                                        if (!object->IsValidObject() || !object->HasRefField()) {
+                                            continue;
+                                        }
+                                        object->ForEachRefField(ensureField);
+                                    }
+                                }
+                            }));
+                    }
+                    pregrantPool->Start();
+                    pregrantPool->WaitFinish();
+                    size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
+                    if (grantAfter == grantBefore) {
+                        break;
+                    }
+                }
+                VLOG(REPORT, "[GCV2][pregrant] parallel=1 workers=%d nObj=%zu nSlot=%zu grant=%zu", workers, nPreObj,
+                     nPreSlot, g_installDomainGrant.load(std::memory_order_relaxed));
+            } else {
                 for (BaseObject* object : reachableVec) {
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
-                        continue;
-                    }
-                    if (!object->IsValidObject() || !object->HasRefField()) {
-                        continue;
-                    }
-                    object->ForEachRefField(ensureField);
+                    ensureObj(object);
                 }
-                size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
-                if (grantAfter == grantBefore) {
-                    break;
+                for (MAddress slot : remsetVec) {
+                    if (Heap::IsHeapAddress(slot)) {
+                        ensureField(HeapSlotAt<>(slot));
+                    }
+                }
+                constexpr size_t kPregrantRounds = 4;
+                for (size_t round = 0; round < kPregrantRounds; ++round) {
+                    size_t grantBefore = g_installDomainGrant.load(std::memory_order_relaxed);
+                    for (BaseObject* object : reachableVec) {
+                        if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                            continue;
+                        }
+                        if (!Collector::PlausibleManagedObjectGate("installdomain.pregrant", object)) {
+                            continue;
+                        }
+                        if (!object->IsValidObject() || !object->HasRefField()) {
+                            continue;
+                        }
+                        object->ForEachRefField(ensureField);
+                    }
+                    size_t grantAfter = g_installDomainGrant.load(std::memory_order_relaxed);
+                    if (grantAfter == grantBefore) {
+                        break;
+                    }
                 }
             }
             // youngstatic: static roots are FixMinor-critical. ensureObj may skip non-from
