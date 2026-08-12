@@ -53,5 +53,8 @@ objm_nativealloc_zero_unit.cpp            orphan     no runner; BUG-24 NativeAll
 objm_generic_null_ti_unit.cpp             orphan     no runner; BUG-22 constrained generic null TypeInfo unit
 objm_fieldinfo_malloc_unit.cpp            orphan     no runner; BUG-21 FieldInfo malloc-null OOM unit
 objm_same_root_package_unit.cpp           orphan     no runner; SUSPECT-02 IsSameRootPackage NUL walk unit
+rtown_threadcache_tls_unit.cpp            orphan     no runner; BUG-20 ThreadCache TLS leak unit
+rtown_mtable_publish_unit.cpp             orphan     no runner; BUG-18 MTable publish race unit
+rtown_functable_cache_unit.cpp            orphan     no runner; BUG-19 functable cache UAF unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
