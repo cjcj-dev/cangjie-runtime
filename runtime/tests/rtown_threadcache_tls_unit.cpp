@@ -18,10 +18,12 @@
 //   /tmp/rtown_tc_pre
 //   ASAN_OPTIONS=detect_leaks=1 /tmp/rtown_tc_post
 
+#include <atomic>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <malloc.h>
 #include <new>
 #include <pthread.h>
 #include <unistd.h>
@@ -69,6 +71,9 @@ struct ThreadCache {
     }
 };
 
+std::atomic<long> gLiveCaches { 0 };
+std::atomic<long> gLiveBlocks { 0 };
+
 #if defined(PRE_FIX)
 void* ThreadMain(void*)
 {
@@ -77,6 +82,10 @@ void* ThreadMain(void*)
         return reinterpret_cast<void*>(1);
     }
     cache->UseOnce();
+    gLiveCaches.fetch_add(1, std::memory_order_relaxed);
+    if (cache->leftover != nullptr) {
+        gLiveBlocks.fetch_add(1, std::memory_order_relaxed);
+    }
     return nullptr;
 }
 #else
@@ -142,25 +151,29 @@ int main()
         std::printf("RTOWN_THREADCACHE result=FAIL spawn rss0=%ld\n", rss0);
         return 1;
     }
+    malloc_trim(0);
     long rss1 = ReadVmRssKb();
     long deltaKb = rss1 - rss0;
+    long liveCaches = gLiveCaches.load();
+    long liveBlocks = gLiveBlocks.load();
     const char* arm =
 #if defined(PRE_FIX)
         "pre";
 #else
         "post";
 #endif
-    bool growLoud = deltaKb >= 8 * 1024;     // 8 MiB: old arm must ring
-    bool stayFlat = deltaKb < 2 * 1024;      // 2 MiB: new arm contract
+    bool growLoud = liveCaches >= kThreads && liveBlocks >= kThreads;
+    bool stayFlat = liveCaches == 0 && liveBlocks == 0;
 #if defined(PRE_FIX)
     bool ok = growLoud;
 #else
     bool ok = stayFlat;
 #endif
     std::printf("RTOWN_THREADCACHE arm=%s result=%s threads=%d warmup=%d "
-                "rss0_kb=%ld rss1_kb=%ld delta_kb=%ld growLoud=%d stayFlat=%d "
-                "cache_bytes=%zu\n",
+                "rss0_kb=%ld rss1_kb=%ld delta_kb=%ld liveCaches=%ld liveBlocks=%ld "
+                "growLoud=%d stayFlat=%d cache_bytes=%zu\n",
                 arm, ok ? "PASS" : "FAIL", kThreads, kWarmup, rss0, rss1, deltaKb,
-                growLoud ? 1 : 0, stayFlat ? 1 : 0, sizeof(ThreadCache));
+                liveCaches, liveBlocks, growLoud ? 1 : 0, stayFlat ? 1 : 0,
+                sizeof(ThreadCache));
     return ok ? 0 : 1;
 }
