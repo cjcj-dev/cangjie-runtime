@@ -15,6 +15,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {
@@ -234,7 +235,7 @@ void NotePregrantSlot(void* slot, BaseObject* obj, const char* site)
     EnsureAtexit();
     uint8_t young = 0;
     uint8_t ghost = 0;
-    if (obj != nullptr) {
+    if (obj != nullptr && Heap::IsHeapAddress(obj)) {
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         if (region != nullptr) {
             young = region->IsYoungRegion() ? 1 : 0;
@@ -264,9 +265,11 @@ void NotePregrant(BaseObject* obj, const char* site)
     }
     Slot& sl = gSlots[i];
     sl.target = obj;
-    sl.region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (sl.region == nullptr) {
-        sl.region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    if (Heap::IsHeapAddress(obj)) {
+        sl.region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (sl.region == nullptr) {
+            sl.region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        }
     }
     sl.site = (site != nullptr) ? site : "";
     FillSnap(sl.pre, sl.region, obj);
@@ -353,9 +356,12 @@ void NoteFixMiss(BaseObject* obj)
     Slot* sl = Find(obj);
     if (sl == nullptr) {
         size_t unk = gFixUnknown.fetch_add(1, std::memory_order_relaxed) + 1;
-        RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-        if (region == nullptr) {
-            region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        RegionInfo* region = nullptr;
+        if (Heap::IsHeapAddress(obj)) {
+            region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            if (region == nullptr) {
+                region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+            }
         }
         Snap s{};
         FillSnap(s, region, obj);
