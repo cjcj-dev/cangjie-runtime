@@ -13,6 +13,7 @@
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
 #include "Common/TypeDef.h"
+#include "Exception/Exception.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "MangleNameHelper.h"
 #include "StackMap/StackMap.h"
@@ -235,7 +236,22 @@ void StackInfo::GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteF
                                               std::vector<StackTraceElement>& stackTrace)
 {
     constexpr int liteFrameInfoElementSize = 3;
-    for (size_t i = 0; i < liteFrameInfos.size(); i += liteFrameInfoElementSize) {
+    size_t decodeEnd = liteFrameInfos.size();
+    // SOF folding appends one SofStackFlag (CompilerCalls.cpp), making the vector 3n+1.
+    // Consume that schema here so the flag is not decoded as a frame.
+    if (decodeEnd % static_cast<size_t>(liteFrameInfoElementSize) == 1) {
+        uint64_t foldedFlag = liteFrameInfos.back();
+        if (foldedFlag == static_cast<uint64_t>(SofStackFlag::TOP_FOLDED) ||
+            foldedFlag == static_cast<uint64_t>(SofStackFlag::BOTTOM_FOLDED)) {
+            decodeEnd -= 1;
+        } else {
+            LOG(RTLOG_FATAL, "liteFrameInfos has a trailing element that is not a SofStackFlag.");
+        }
+    } else if (decodeEnd % static_cast<size_t>(liteFrameInfoElementSize) == 2) {
+        LOG(RTLOG_FATAL, "liteFrameInfos size %zu is not a multiple of 3 and is not the 3n+1 SOF schema.",
+            decodeEnd);
+    }
+    for (size_t i = 0; i < decodeEnd; i += static_cast<size_t>(liteFrameInfoElementSize)) {
         // Each function stack frame is represented by a triple {ip, startPC, funcDesc}.
         // Do not construct StackMetadataHelper here: INTERPRETED_FRAME_FDESC is 0, and the
         // helper ctor immediately dereferences that as FuncDesc. The native path constructs
