@@ -31,19 +31,19 @@ const char* InstanceFieldInfo::GetName(TypeInfo* declaringTypeInfo) const
 
 inline U32 InstanceFieldInfo::GetOffset(TypeInfo* declaringTypeInfo) const
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldOffset(fieldIdx);
 }
 
 TypeInfo* InstanceFieldInfo::GetFieldType(TypeInfo* declaringTypeInfo)
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldType(fieldIdx);
 }
 
 void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
 {
-    CHECK(!(fieldIdx > declaringTi->GetFieldNum()));
+    CHECK(fieldIdx < declaringTi->GetFieldNum());
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTi);
     TypeInfo* fieldTi = GetFieldType(declaringTi);
     if (fieldTi->IsRef()) {
