@@ -32,6 +32,8 @@ NetpollFd NetpollCreate(void)
     int error = fcntl(metaData->kqfd, F_SETFD, FD_CLOEXEC);
     if (error == -1) {
         LOG_ERROR(errno, "fcntl FD_CLOEXEC failed");
+        close(metaData->kqfd);
+        free(metaData);
         return nullptr;
     }
     return metaData;
@@ -112,6 +114,10 @@ void NetpollExit(NetpollFd npfd)
     NetpollMetaData* metaData = static_cast<NetpollMetaData*>(npfd);
     if (npfd == nullptr) {
         return;
+    }
+    if (metaData->kqfd != -1) {
+        close(metaData->kqfd);
+        metaData->kqfd = -1;
     }
     free(metaData);
 }
