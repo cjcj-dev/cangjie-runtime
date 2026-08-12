@@ -31,6 +31,7 @@
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -301,6 +302,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(slot);
                 ++recorded;
+                // promodomain dual-run: old product edge set for bidirectional reconcile.
+                PromotedRegionDomain::NoteOldProductRecord(slot);
                 FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
                 NotePromoteGapField(object, field, true, false);
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
@@ -1316,6 +1319,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                                         static_cast<unsigned int>(head->IsGhostFromRegion()),
                                         static_cast<unsigned int>(head->GetRegionType()),
                                         static_cast<unsigned int>(head->GetRouteState()));
+            // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
+            PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -2477,7 +2482,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     if (!RouteRegion(region)) {
         if (youngRegion) {
             // In-place promote (compacted / unrouted): scan before clearing young flag.
+            // promodomain §A.3: register durable domain (default off); old scan stays.
             region->PreserveRetainedLiveInfo();
+            PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -2692,7 +2699,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             PermWhoAdmit::NoteAbandon(region, walked, forwarded);
         }
         if (youngRegion) {
+            // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
             region->PreserveRetainedLiveInfo();
+            PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);

@@ -54,6 +54,7 @@
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/ToverFailDiag.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -4812,7 +4813,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
                 // still demote to old; must replay young→young edges that become old→young.
+                // promodomain §A.3 residual arm: register + old sync walk (domain default off).
                 region->PreserveRetainedLiveInfo();
+                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Residual);
                 residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
@@ -4835,6 +4838,23 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
         }
         size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
+
+        // promodomain v1: discharge flip-promoted registry in young.evac_finish (STW).
+        // Dual-run: old RecordPromotedCrossGenEdges already ran; domain visitor reconciles.
+        if (PromotedRegionDomain::Enabled()) {
+            size_t domainEdges = PromotedRegionDomain::DischargeAll(
+                this,
+                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
+                [this](RefField<>& field) -> bool { return is_store_good(field); },
+                [this](RefField<>& field, BaseObject* target) {
+                    RefField<> coloured = GetAndTryTagRefField(target);
+                    field.StoreColoured(coloured.GetFieldValue());
+                });
+            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "evac_finish");
+            PromotedRegionDomain::DumpProcessTotals("evac_finish");
+            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu promoteReplay=%zu residual=%zu",
+                 domainEdges, promotedPathRecords, residualPromoteRecords);
+        }
 
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
         // live young region count is the product-path authority
@@ -5452,6 +5472,9 @@ void WCollector::DoYoungGarbageCollection()
     FysAuditDiag::CensusPrePinned(minorTotalRuns + 1);
     EatArmDiag::OnMinorBegin(minorTotalRuns + 1);
     FysDesignDiag::OnMinorBegin(minorTotalRuns + 1);
+    // promodomain: reset last cycle's flip-promoted table (CHECK registered==discharged).
+    // Corresponds to ZGC reset_relocation_set before the new young collection.
+    PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
     FlipPromoDiag::OnBroadScanBegin(minorTotalRuns + 1);
     MinorSlotSet rememberedSlots;
