@@ -109,6 +109,9 @@ public:
         : superExtensionData(ed), superTypeInfo(super), cachedTypeInfos(sz) {}
     ExtensionData* GetExtensionData() const { return superExtensionData; }
     TypeInfo* GetSuperTi() const { return superTypeInfo; }
+    // Caller must hold MTableDesc::mTableMutex. The assignment deletes the old
+    // array; Get/SetCachedTypeInfo also take that mutex, so no reader can still
+    // hold the pointer being freed (BUG-19).
     void ResetAtomicInfoArray(size_t size) { cachedTypeInfos = AtomicTypeInfoArray(size); }
     TypeInfo* GetCachedTypeInfo(size_t index) const { return cachedTypeInfos.Get(index); }
     void SetCachedTypeInfo(size_t index, TypeInfo* ti) { cachedTypeInfos.Set(index, ti); }
