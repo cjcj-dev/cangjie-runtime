@@ -56,9 +56,10 @@ class HeapImpl : public Heap {
 public:
     HeapImpl()
         : theSpace(Allocator::NewAllocator()), collectorResources(collectorProxy),
-          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy),
-        idleBarrier(collectorProxy), enumBarrier(collectorProxy), traceBarrier(collectorProxy),
-        postTraceBarrier(collectorProxy), preforwardBarrier(collectorProxy), forwardBarrier(collectorProxy)
+          collectorProxy(*theSpace, collectorResources), stwBarrier(collectorProxy, rememberedSet),
+        idleBarrier(collectorProxy, rememberedSet), enumBarrier(collectorProxy, rememberedSet),
+        traceBarrier(collectorProxy, rememberedSet), postTraceBarrier(collectorProxy, rememberedSet),
+        preforwardBarrier(collectorProxy, rememberedSet), forwardBarrier(collectorProxy, rememberedSet)
     {
         currentBarrier = &stwBarrier;
         stwBarrierPtr = &stwBarrier;
@@ -98,10 +99,11 @@ public:
     MAddress GetSpaceEndAddress() const override;
     void RegisterStaticRoots(Uptr addr, U32) override;
     void UnregisterStaticRoots(Uptr addr, U32) override;
-    void VisitStaticRoots(const RefFieldVisitor& visitor) override;
+    void VisitStaticRoots(const RootSlotVisitor& visitor) override;
     bool ForEachObj(const std::function<void(BaseObject*)>&, bool) const override;
     ssize_t GetHeapPhysicalMemorySize() const override;
     void InstallBarrier(const GCPhase phase) override;
+    RememberedSet& GetRememberedSet() override { return rememberedSet; }
     FinalizerProcessor& GetFinalizerProcessor() override;
     CollectorResources& GetCollectorResources() override;
     void RegisterAllocBuffer(AllocBuffer& buffer) override;
@@ -141,6 +143,7 @@ private:
     CollectorProxy collectorProxy;
 
     ExportRootTable exportRootsTable;
+    RememberedSet rememberedSet;
     Barrier stwBarrier;
     IdleBarrier idleBarrier;
     EnumBarrier enumBarrier;
@@ -168,6 +171,7 @@ bool HeapImpl::ForEachObj(const std::function<void(BaseObject*)>& visitor, bool 
 void HeapImpl::Init(const HeapParam& param)
 {
     theSpace->Init(param);
+    rememberedSet.Initialize(theSpace->GetSpaceStartAddress(), theSpace->GetMaxCapacity());
     Heap::GetHeap().EnableGC(InitEnabledGCParam());
     collectorProxy.Init();
     collectorResources.Init();
@@ -233,7 +237,7 @@ void HeapImpl::UnregisterStaticRoots(Uptr addr, U32 size)
     staticRootTable.UnregisterRoots(reinterpret_cast<StaticRootTable::StaticRootArray*>(addr), size);
 }
 
-void HeapImpl::VisitStaticRoots(const RefFieldVisitor& visitor)
+void HeapImpl::VisitStaticRoots(const RootSlotVisitor& visitor)
 {
     staticRootTable.VisitRoots(visitor);
 #ifdef INTERPRETER_ENABLED

@@ -29,6 +29,7 @@ class Heap {
 public:
     static Heap& GetHeap();
     static Barrier& GetBarrier() { return **currentBarrierPtr; }
+    virtual RememberedSet& GetRememberedSet() = 0;
 
     // concurrent gc uses barrier to access heap.
     static bool UseBarrier() { return *currentBarrierPtr != stwBarrierPtr; }
@@ -90,7 +91,7 @@ public:
 
     virtual void UnregisterStaticRoots(Uptr, U32) = 0;
 
-    virtual void VisitStaticRoots(const RefFieldVisitor& visitor) = 0;
+    virtual void VisitStaticRoots(const RootSlotVisitor& visitor) = 0;
 
     virtual U64 RegisterExportRoot(BaseObject*) = 0;
     virtual void VisitAllExportRoots(const RootVisitor& visitor) = 0;
