@@ -14,6 +14,7 @@
 #include <cstring>
 #include <vector>
 
+#include "CangjieRuntime.h"
 #include "Common/StackType.h"
 #include "Exception/Exception.h"
 #include "ObjectModel/MFuncdesc.h"
@@ -50,17 +51,13 @@ void InitEmptyFuncDesc(FakeFuncDescLayout* blob)
     blob->stackMapOff = static_cast<int32_t>(offsetof(FakeFuncDescLayout, stackmap));
 }
 
-struct PlantedStack : CJThreadStackInfo {
-    explicit PlantedStack(const UnwindContext* ctx) : CJThreadStackInfo(ctx, 256) {}
-    void Plant(const FrameInfo& frame) { stack.push_back(frame); }
-};
-
 } // namespace
 
 // BUG 1: 3n+1 SOF flag must not be decoded as a frame (StackInfo.cpp).
 // Pre-fix walked i=3 and read liteFrameInfos[4], [5].
 GC_TEST(UnwindRegress, SofFoldFlagIsNotAFrame)
 {
+    CangjieRuntime::stackGrowConfig = StackGrowConfig::STACK_GROW_OFF;
     FakeFuncDescLayout blob;
     InitEmptyFuncDesc(&blob);
     std::vector<uint64_t> lite;
@@ -99,10 +96,10 @@ GC_TEST(UnwindRegress, SignalFramePrintDoesNotAbort)
 GC_TEST(UnwindRegress, FallbackZeroesPcAndLine)
 {
     UnwindContext ctx;
-    PlantedStack planted(&ctx);
+    CJThreadStackInfo planted(&ctx, 256);
     FrameInfo emptyNative;
     emptyNative.SetFrameType(FrameType::NATIVE);
-    planted.Plant(emptyNative);
+    planted.GetStack().push_back(emptyNative);
 
     uint32_t pcs[TRACE_STACK_MAX_DEPTH];
     uint32_t lines[TRACE_STACK_MAX_DEPTH];
