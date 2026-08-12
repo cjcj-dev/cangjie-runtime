@@ -169,10 +169,13 @@ GenericTypeInfo* MethodInfo::GetGenericParameterInfo(U32 index)
 
 bool MethodInfo::CheckGenericConstraint(GenericTypeInfo* genericTi, TypeInfo* ti, void* genericArgsArray)
 {
+    if (ti == nullptr) {
+        return false;
+    }
     U32 genericConstraintCnt = genericTi->GetGenericConstraintNum();
     for (U32 idx = 0; idx < genericConstraintCnt; ++idx) {
         TypeInfo* genericConstraintTi = genericTi->GetGenericConstraint(idx);
-        if (genericConstraintTi->IsGeneric()) {
+        if (genericConstraintTi != nullptr && genericConstraintTi->IsGeneric()) {
             genericConstraintTi =
                 GetActualTypeFromGenericType(reinterpret_cast<GenericTypeInfo*>(genericConstraintTi), genericArgsArray);
         }
@@ -187,8 +190,20 @@ bool MethodInfo::CheckMethodActualArgs(void* genericArgsArray, void* actualArgsA
 {
     // check Generic Constrains
     U16 genericArgCnt = GetNumOfGenericParameterInfos();
+    if (genericArgCnt > 0) {
+        if (genericArgsArray == nullptr) {
+            return false;
+        }
+        CJArray* genericArgs = static_cast<CJArray*>(genericArgsArray);
+        if (genericArgs->rawPtr == nullptr || genericArgs->rawPtr->len < genericArgCnt) {
+            return false;
+        }
+    }
     for (U16 genericIdx = 0; genericIdx < genericArgCnt; ++genericIdx) {
         GenericTypeInfo* genericTi = GetGenericParameterInfo(genericIdx);
+        if (genericTi == nullptr) {
+            return false;
+        }
         TypeInfo* ti = GetActualTypeFromGenericType(genericTi, genericArgsArray);
         if (genericTi->GetGenericConstraintNum() > 0 && !CheckGenericConstraint(genericTi, ti, genericArgsArray)) {
             return false;
@@ -263,10 +278,17 @@ TypeInfo* MethodInfo::GetReturnType()
 TypeInfo* MethodInfo::GetActualTypeFromGenericType(GenericTypeInfo* genericTi, void* genericArgs)
 {
     if (genericTi->IsGeneric() && genericArgs != nullptr) {
+        CJArray* genericArgsArray = static_cast<CJArray*>(genericArgs);
+        if (genericArgsArray->rawPtr == nullptr) {
+            return nullptr;
+        }
+        U64 available = genericArgsArray->rawPtr->len;
         for (U32 idx = 0; idx < genericParametersCnt; ++idx) {
             GenericTypeInfo* genericParamType = GetGenericParameterInfo(idx);
             if (genericTi == genericParamType) {
-                CJArray* genericArgsArray = static_cast<CJArray*>(genericArgs);
+                if (idx >= available) {
+                    return nullptr;
+                }
                 Uptr base = reinterpret_cast<Uptr>(&(genericArgsArray->rawPtr->data));
                 TypeInfo* ti = *reinterpret_cast<TypeInfo**>(base + idx * TYPEINFO_PTR_SIZE);
                 return ti;
