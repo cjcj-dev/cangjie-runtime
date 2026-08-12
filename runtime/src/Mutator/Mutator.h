@@ -191,8 +191,17 @@ public:
     // Force current mutator leave saferegion, internal use only.
     __attribute__((always_inline)) inline void DoLeaveSaferegion()
     {
-        SetInSaferegion(SAFE_REGION_FALSE);
-        // go slow path if the mutator should suspend
+        for (;;) {
+            MutatorLock();
+            if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
+                MutatorUnlock();
+                (void)sched_yield();
+                continue;
+            }
+            SetInSaferegion(SAFE_REGION_FALSE);
+            MutatorUnlock();
+            break;
+        }
         if (UNLIKELY(HasAnySuspensionRequest())) {
             HandleSuspensionRequest();
         }
@@ -310,8 +319,7 @@ public:
 
     bool CanGcAssistEpochHandshake() const
     {
-        return InSaferegion() ||
-            epochHandshakeLifecycle.load(std::memory_order_acquire) != EPOCH_HANDSHAKE_RUNNING;
+        return InSaferegion();
     }
 
     EpochHandshakeLifecycle GetEpochHandshakeLifecycle() const
@@ -483,18 +491,18 @@ public:
         if (UNLIKELY(tlData->buffer == nullptr)) {
             (void)AllocBuffer::GetOrCreateAllocBuffer();
         }
-        DoLeaveSaferegion();
         SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_RUNNING);
         SetSafepointStatePtr(&tlData->safepointState);
-        SetSafepointActive(false);
+        SetSafepointActive(HasAnySuspensionRequest());
+        DoLeaveSaferegion();
     }
 
     void PreparedToPark(void* pc, void* fa)
     {
         SetSafepointStatePtr(nullptr);
-        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+            SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
             return;
         }
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
@@ -514,6 +522,7 @@ public:
         }
 #endif // platform
         SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
+        SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
     }
 
     // This interface is used for initiating the mutator who is created by foreign thread.
