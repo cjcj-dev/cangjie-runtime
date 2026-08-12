@@ -171,6 +171,16 @@ void Mutator::InitProtectStackAddr()
 
 void Mutator::ResetMutator()
 {
+    for (;;) {
+        MutatorLock();
+        if (epochHandshakeState.load(std::memory_order_acquire) == EPOCH_HANDSHAKE_CLAIMED) {
+            MutatorUnlock();
+            (void)sched_yield();
+            continue;
+        }
+        break;
+    }
+    SetManagedContext(false);
     StorePlain(rawObject, zaddress::null);
     SatbBuffer::Instance().FlushQueue(satbNode);
     if (!localFinalizers.empty()) {
@@ -192,6 +202,7 @@ void Mutator::ResetMutator()
     exceptionWrapper.ClearInfo();
     // stackwm #1 lifecycle: exit/reset closes watermark (must not leave SCANNING dangling).
     stackWatermark.OnExit();
+    MutatorUnlock();
 }
 
 void Mutator::SetManagedContext(bool isManagedContext)
@@ -289,6 +300,11 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         return expected == EPOCH_HANDSHAKE_ACKNOWLEDGED && FinishedEpochHandshake(epoch);
     }
 
+    if (!bySelf && !CanGcAssistEpochHandshake()) {
+        epochHandshakeState.store(EPOCH_HANDSHAKE_REQUESTED, std::memory_order_release);
+        return false;
+    }
+
     if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
         // S1/S3/S5 publication order: the first short STW must publish the ENUM
         // barrier before an ack can snapshot roots. The acquire phase read pairs
@@ -306,8 +322,8 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
-    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
     epochHandshakeCompletion.store(epoch, std::memory_order_release);
+    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
     return true;
 }
 
@@ -802,6 +818,10 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
 {
     scannedFrames = 0;
     MutatorLock();
+    if (owner == StackWatermark::WM_OWNER_GC && !InSaferegion()) {
+        MutatorUnlock();
+        return false;
+    }
     if (!IsManagedContext()) {
         bool began = stackWatermark.TryBegin(epoch, owner, 0);
         if (began) {
@@ -853,10 +873,12 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
 
 bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf, size_t* scannedFrames)
 {
+    MutatorLock();
     auto& localFins = GetLocalFinalizers();
     if (!localFins.empty()) {
         Heap::GetHeap().GetFinalizerProcessor().RegisterFinalizers(localFins);
     }
+    MutatorUnlock();
     std::set<BaseObject*> rootSet;
     std::stack<BaseObject*> rootStack;
     HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this](HeapSlot<>& refFieldAddr) {

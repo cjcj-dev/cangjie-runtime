@@ -39,10 +39,6 @@ CleanThreadLocalData::CleanThreadLocalData()
 {
     // Add a side effect to make sure the constructor wont be optimized out.
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    static volatile bool isInit = false;
-    if (!isInit) {
-        isInit = true;
-    }
 }
 
 CleanThreadLocalData::~CleanThreadLocalData()
