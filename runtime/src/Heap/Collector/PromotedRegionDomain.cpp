@@ -152,6 +152,46 @@ bool FatalOnMismatch()
     return on;
 }
 
+// Dual-run snapshot: capture domain edge set at Register (still young), same moment as
+// RecordPromotedCrossGenEdges. Discharge may run after demote when targets no longer
+// look young — set equivalence must use promote-time slots (ZGC flip-promote remset
+// also sees the page before age flip completes).
+void SnapshotDomainEdgesAtRegister(RegionInfo* region)
+{
+    // Caller holds g_mu when ReconcileEnabled.
+    if (!ReconcileEnabled() || region == nullptr || region->IsSafeKnownEmpty()) {
+        return;
+    }
+    static const bool skipOne = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_SKIP_ONE");
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
+    bool useLiveOnly = UseLiveOnly(region);
+    region->VisitAllObjects([&](BaseObject* object) {
+        if (object == nullptr || !object->HasRefField()) {
+            return;
+        }
+        if (useLiveOnly && !ObjectSurvived(region, object, hasObjectLiveness)) {
+            return;
+        }
+        object->ForEachRefField([&](RefField<>& field) {
+            BaseObject* target = to_object(field.GetTargetObject());
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                return;
+            }
+            RegionInfo* tr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (tr == nullptr || !tr->IsYoungRegion()) {
+                return;
+            }
+            MAddress slot = reinterpret_cast<MAddress>(&field);
+            if (skipOne && g_skipOneFired.load(std::memory_order_relaxed) == 0) {
+                g_skipOneFired.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            g_domainSlots.insert(slot);
+        });
+    });
+}
+
 void Register(RegionInfo* region, RegisterPath path)
 {
     if (!Enabled() || region == nullptr) {
@@ -170,6 +210,8 @@ void Register(RegionInfo* region, RegisterPath path)
     e.discharged = false;
     g_entries.push_back(e);
     g_registered.insert(region);
+    // Promote-time domain edge snapshot for dual-run (before demote clears young).
+    SnapshotDomainEdgesAtRegister(region);
     DLOG(REGION, "[PROMODOMAIN] register region=%p path=%s n=%zu", region, PathName(path), g_entries.size());
 }
 
@@ -230,12 +272,10 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         return 0;
     }
     g_dischargeCalls.fetch_add(1, std::memory_order_relaxed);
-    static const bool skipOne = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_SKIP_ONE");
     static const bool injectUndischarged = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED");
 
     auto t0 = std::chrono::steady_clock::now();
     size_t recorded = 0;
-    bool skippedOnce = false;
 
     std::lock_guard<std::mutex> lg(g_mu);
     for (Entry& e : g_entries) {
@@ -251,6 +291,8 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             region->GetResurrectBitmap() != nullptr;
         bool useLiveOnly = UseLiveOnly(region);
 
+        // Product remset heal (ZGC remap_and_maybe_add_remset). Dual-run edge sets were
+        // snapshotted at Register; here we still walk for Record + store-good colour.
         region->VisitAllObjects([&](BaseObject* object) {
             if (object == nullptr || !object->HasRefField()) {
                 return;
@@ -260,23 +302,8 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             }
             object->ForEachRefField([&](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
-                // ZGC remap_and_maybe_add_remset: store-good ⇒ already covered (O(1)).
                 if (isStoreGood(field)) {
                     g_storeGoodEarly.fetch_add(1, std::memory_order_relaxed);
-                    BaseObject* target = to_object(field.GetTargetObject());
-                    if (target != nullptr && Heap::IsHeapAddress(target)) {
-                        RegionInfo* tr = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                        if (tr != nullptr && tr->IsYoungRegion()) {
-                            if (ReconcileEnabled()) {
-                                if (skipOne && !skippedOnce) {
-                                    skippedOnce = true;
-                                    g_skipOneFired.fetch_add(1, std::memory_order_relaxed);
-                                    return;
-                                }
-                                g_domainSlots.insert(slot);
-                            }
-                        }
-                    }
                     return;
                 }
                 BaseObject* target = resolve(field);
@@ -287,17 +314,9 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                 if (targetRegion == nullptr || !targetRegion->IsYoungRegion()) {
                     return;
                 }
-                if (skipOne && !skippedOnce) {
-                    skippedOnce = true;
-                    g_skipOneFired.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
                 recordSlot(slot);
                 colorStoreGood(field, target);
                 ++recorded;
-                if (ReconcileEnabled()) {
-                    g_domainSlots.insert(slot);
-                }
             });
         });
         if (!(injectUndischarged && e.region == g_entries.front().region)) {
