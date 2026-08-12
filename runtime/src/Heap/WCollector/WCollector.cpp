@@ -2297,6 +2297,8 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
         if (objSize > 0 && offset + objSize <= regionSize) {
             SealCheck::NotePaint(region, offset, objSize, "EnsureRouteDomainMembership.ghost");
+            // MarkObject already maintained liveByteCount on the live face; ghost paint is
+            // domain-visible bits only (do not double-count).
             (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
         }
     }
@@ -2361,14 +2363,10 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
             size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
             if (objSize > 0 && offset + objSize <= regionSize) {
                 SealCheck::NotePaint(region, offset, objSize, "statresid.force_domain.ghost");
-                // uafclose: MarkBits on ghost alone does not touch region liveByteCount.
-                // RouteOrCompact freezes fromBytes=GetLiveByteCount(); a ghost-only paint
-                // without AddLive leaves root-named objects past the reserved prefix
-                // (admit_miss off>=liveBytes → leave-alone → reclaim UAF).
-                bool alreadyGhost = g0->markBitmap->MarkBits(offset, objSize, regionSize);
-                if (!alreadyGhost) {
-                    region->AddLiveByteCount(objSize);
-                }
+                // MarkObject above already counted liveByteCount when first paint on live.
+                // Ghost-only MarkBits must not double-count (FYS0 OverflowException risk).
+                (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+            }
             }
         }
     }
