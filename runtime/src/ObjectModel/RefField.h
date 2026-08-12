@@ -94,8 +94,8 @@ public:
 
     zpointer Exchange(zpointer newRef, std::memory_order order = std::memory_order_relaxed)
     {
-        CHECK(fieldVal < std::numeric_limits<RefFieldValue>::max());
         MAddress newRaw = raw(newRef);
+        CHECK(newRaw < std::numeric_limits<RefFieldValue>::max());
         AssertColouredWriteIfEnabled(this, newRaw);
         MAddress ret = 0;
 #if defined(CANGJIE_TSAN_SUPPORT)
