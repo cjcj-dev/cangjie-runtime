@@ -18,6 +18,7 @@
 #include <mutex>
 #include <set>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 #ifdef _WIN64
 #include <errhandlingapi.h>
@@ -1388,10 +1389,17 @@ public:
 
     // Geometric derive; domain is guaranteed by RouteTicket. No survivor re-check.
     // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; ops/design/ROUTE_DOMAIN.md §2.
+    // Compacted: dest is the dense pack slot recorded by CompactRegion, not prefix-sum.
     BaseObject* GetRoute(RouteTicket t)
     {
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        if (metadata.compactRouteTable != nullptr) {
+            BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress));
+            if (packed != nullptr) {
+                return packed;
+            }
+        }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
         // routedom: observe mark-domain at geometric GetRoute call site (default off).
@@ -1399,6 +1407,37 @@ public:
             RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
         }
         return from_region_addr(toAddr);
+    }
+
+    void FreeCompactRouteTable()
+    {
+        if (metadata.compactRouteTable != nullptr) {
+            delete static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
+            metadata.compactRouteTable = nullptr;
+        }
+    }
+
+    void RecordCompactRoute(size_t fromOff, MAddress dest)
+    {
+        auto* table = static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
+        if (table == nullptr) {
+            table = new std::unordered_map<size_t, MAddress>();
+            metadata.compactRouteTable = table;
+        }
+        (*table)[fromOff] = dest;
+    }
+
+    BaseObject* LookupCompactRoute(size_t fromOff) const
+    {
+        auto* table = static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
+        if (table == nullptr) {
+            return nullptr;
+        }
+        auto it = table->find(fromOff);
+        if (it == table->end()) {
+            return nullptr;
+        }
+        return from_region_addr(it->second);
     }
 
     // Deleted: asking for a route with a bare BaseObject* is unspellable.
@@ -1516,6 +1555,7 @@ public:
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
         }
+        FreeCompactRouteTable();
         SetRouteState(NORMAL);
         SetMarkFaceSealed(false);
     }
@@ -2172,6 +2212,10 @@ private:
         uint64_t* retainedMarkWords = nullptr;
         uint32_t retainedMarkWordCnt = 0;
 
+        // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
+        // Table maps from-offset → actual dest for COMPACTED regions only.
+        void* compactRouteTable = nullptr;
+
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
@@ -2422,6 +2466,7 @@ private:
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
         metadata.liveInfo0 = nullptr;
+        FreeCompactRouteTable();
         FreeRetainedMarkWords();
         metadata.retainedLiveInfo = nullptr;
         metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
