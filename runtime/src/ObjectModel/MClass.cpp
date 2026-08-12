@@ -23,6 +23,8 @@
 #include "Utils/Demangler.h"
 #include "Flags.h"
 
+#include <type_traits>
+
 #ifdef INTERPRETER_ENABLED
 #include "Interpreter/RuntimeTypes.h"
 #endif
@@ -846,7 +848,7 @@ static void* GetAnnotations(Uptr annotationMethod, TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -1249,11 +1251,89 @@ void EnumCtorInfo::SetName(const char* pName)
 }
 
 #ifdef INTERPRETER_ENABLED
+struct GCTibLayoutCheck {
+    // GCTib and DYN_GCTib are binary mirrors. Keep both standard-layout so
+    // every named union member below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<GCTib>::value,
+            "GCTib must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_GCTib>::value,
+            "DYN_GCTib must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_GCTib) == sizeof(GCTib), "DYN_GCTib size must match GCTib");
+        static_assert(alignof(DYN_GCTib) == alignof(GCTib), "DYN_GCTib alignment must match GCTib");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, tag),
+            "raw/tag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, raw) == __builtin_offsetof(GCTib, bitmap),
+            "raw/bitmap offset mismatch");
+        static_assert(__builtin_offsetof(DYN_GCTib, ptr) == __builtin_offsetof(GCTib, gctib),
+            "ptr/gctib offset mismatch");
+    }
+};
+
+struct ExtensionDataLayoutCheck {
+    // ExtensionData and DYN_ExtensionData are binary mirrors. Keep both
+    // standard-layout so every named field below can be checked with offsetof.
+    static void CheckInterpreterMirror()
+    {
+        static_assert(std::is_standard_layout<ExtensionData>::value,
+            "ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(std::is_standard_layout<DYN_ExtensionData>::value,
+            "DYN_ExtensionData must remain standard-layout for mirror offset checks");
+        static_assert(sizeof(DYN_ExtensionData) == sizeof(ExtensionData),
+            "DYN_ExtensionData size must match ExtensionData");
+        static_assert(alignof(DYN_ExtensionData) == alignof(ExtensionData),
+            "DYN_ExtensionData alignment must match ExtensionData");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, argNum) ==
+                __builtin_offsetof(ExtensionData, argNum),
+            "argNum offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, isInterfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, isInterfaceTypeInfo),
+            "isInterfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, flag) == __builtin_offsetof(ExtensionData, flag),
+            "flag offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTableSize) ==
+                __builtin_offsetof(ExtensionData, funcTableSize),
+            "funcTableSize offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, tt) == __builtin_offsetof(ExtensionData, tt),
+            "tt offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, ti) == __builtin_offsetof(ExtensionData, ti),
+            "ti offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceFn) ==
+                __builtin_offsetof(ExtensionData, interfaceFn),
+            "interfaceFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, interfaceTypeInfo) ==
+                __builtin_offsetof(ExtensionData, interfaceTypeInfo),
+            "interfaceTypeInfo offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, whereCondFn) ==
+                __builtin_offsetof(ExtensionData, whereCondFn),
+            "whereCondFn offset mismatch");
+        static_assert(__builtin_offsetof(DYN_ExtensionData, funcTable) ==
+                __builtin_offsetof(ExtensionData, funcTable),
+            "funcTable offset mismatch");
+    }
+};
+
 struct TypeInfoLayoutCheck {
     // Static layout checks: DYN_TypeInfo is a binary mirror of TypeInfo.
     static void CheckInterpreterMirror()
     {
         static_assert(sizeof(DYN_TypeInfo) == sizeof(TypeInfo), "DYN_TypeInfo size must match TypeInfo");
+        // Alignment was the one property of the mirror nothing here checked, and
+        // it is declared in two files that must move together: TypeInfo carries
+        // ATTR_PACKED in MClass.h, DYN_TypeInfo carries TYPE_INFO_ATTRS in the
+        // public header Interpreter/RuntimeTypes.h. Raising one alone leaves
+        // sizeof and every offset identical, so the checks below all pass while
+        // the two structs disagree about where they may be placed.
+        static_assert(alignof(DYN_TypeInfo) == alignof(TypeInfo),
+            "DYN_TypeInfo alignment must match TypeInfo -- raise ATTR_PACKED in MClass.h and "
+            "TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h together");
+        // The collector treats a tip that is not 8-byte aligned as not-a-TypeInfo
+        // (StateWord::ADDRESS_ALIGN_MASK, consumed at Collector.cpp:104 and :304
+        // and asserted fatally at Mutator.cpp:597 and :754). Declaring less than
+        // that is what let the arena hand out addresses the collector rejects.
+        static_assert(alignof(TypeInfo) >= StateWord::ADDRESS_ALIGN_MASK + 1,
+            "TypeInfo declares weaker alignment than the collector requires of a tip");
         static_assert(__builtin_offsetof(DYN_TypeInfo, typeInfoName) == __builtin_offsetof(TypeInfo, typeInfoName),
             "typeInfoName offset mismatch");
         static_assert(

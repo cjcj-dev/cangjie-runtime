@@ -1,0 +1,117 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#ifndef MRT_COLOUR_MASK_H
+#define MRT_COLOUR_MASK_H
+
+// The bit layout of a reference, and the mask the read barrier tests against.
+//
+// This header includes nothing from the project on purpose. It sits at the bottom of the include
+// graph, below RefField.h and TypeDef.h, both of which need the layout; reaching upward for so
+// much as a typedef would put it in a cycle with them, which is how the first two attempts at
+// declaring the mask failed. <cstdint> is the only dependency.
+
+#include <cstdint>
+
+// Tag-ID generation count for WCollector phase tags (RefField tagID field).
+// Default 2 preserves upstream N=2 behaviour; rebuild with -DMRT_TAG_ID_COUNT=N to widen.
+#ifndef MRT_TAG_ID_COUNT
+#define MRT_TAG_ID_COUNT 2
+#endif
+
+extern "C" {
+// Any bit set means the reference needs the barrier before use: it is mid-evacuation, or it
+// carries a colour other than the one being handed out now. The collector owns the value and
+// swaps it at a phase boundary; see WCollector::set_good_masks. The compiler emits a reference
+// to this symbol by name (CJBarrierLowering.cpp:641), so it is extern "C": a mangled name would
+// drift between compiler versions.
+extern unsigned long g_cjLoadBadMask;
+
+// ⭐ 构建溯源符号的**声明**；⭐ 定义在 `ColourMask.cpp`（⛔ 头里放定义会多重定义）
+extern "C" const char g_cjRuntimeProvenance[];
+
+// Mark barriers use the same dynamic-mask ABI as load barriers. The mark mask additionally rejects
+// references carrying the previous young or old mark epoch (OpenJDK zAddress.hpp:209-217).
+extern unsigned long g_cjMarkBadMask;
+
+// Store barriers reject references that are mark-bad or missing the current Remembered epoch bit
+// (OpenJDK zAddress.hpp:216-217, zAddress.cpp:83-87). Load/mark masks do not include Remembered.
+extern unsigned long g_cjStoreBadMask;
+}
+
+namespace MapleRuntime {
+// OpenJDK zGenerationId.hpp:29-32.
+enum class ZGenerationId : uint8_t {
+    young,
+    old,
+};
+
+constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
+// Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
+constexpr unsigned TAG_ID_BITS =
+    (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
+
+// A reference always carries a colour, so that "this value may be stale" is something the value
+// itself says rather than something the reader has to already know. ZGC uses one physical bit for
+// each RemappedYoung x RemappedOld state. A two-bit binary encoding cannot preserve the compiler's
+// single-AND fast path: when 11 is current, a stale 10 or 01 differs by a missing bit, which AND
+// cannot observe (OpenJDK zAddress.hpp:95-128,168-176).
+//
+// A generation relocate-start flip changes the accepted one-hot subset and republishes
+// g_cjLoadBadMask; see WCollector::flip_young_relocate_start/flip_old_relocate_start.
+constexpr unsigned REMAP_COLOUR_BITS = 4u;
+// MarkedYoung[0,1] and MarkedOld[0,1] are independent one-hot epochs. Each family needs two
+// physical bits so that a mark-start flip makes the previous epoch bad without a zero-bit trust
+// state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
+constexpr unsigned MARKED_YOUNG_BITS = 2u;
+constexpr unsigned MARKED_OLD_BITS = 2u;
+// address:48 + isTagged:1 + tagID:1 + remapColour:4 + markedYoung:2 + markedOld:2
+// + remembered:2 + spare padding == 64 (spare = TAG_ID_PADDING_BITS - REMEMBERED_BITS)
+constexpr unsigned TAG_ID_PADDING_BITS =
+    15u - TAG_ID_BITS - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
+constexpr unsigned REMAP_COLOUR_SHIFT = 48u + 1u + TAG_ID_BITS;
+constexpr uintptr_t ZPointerRemapped00 = uintptr_t(1) << REMAP_COLOUR_SHIFT;
+constexpr uintptr_t ZPointerRemapped01 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 1u);
+constexpr uintptr_t ZPointerRemapped10 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 2u);
+constexpr uintptr_t ZPointerRemapped11 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 3u);
+constexpr uintptr_t REMAP_COLOUR_MASK =
+    ZPointerRemapped00 | ZPointerRemapped01 | ZPointerRemapped10 | ZPointerRemapped11;
+constexpr unsigned MARKED_YOUNG_SHIFT = REMAP_COLOUR_SHIFT + REMAP_COLOUR_BITS;
+constexpr uintptr_t MARKED_YOUNG_0 = uintptr_t(1) << MARKED_YOUNG_SHIFT;
+constexpr uintptr_t MARKED_YOUNG_1 = uintptr_t(1) << (MARKED_YOUNG_SHIFT + 1u);
+constexpr uintptr_t MARKED_YOUNG_MASK = MARKED_YOUNG_0 | MARKED_YOUNG_1;
+constexpr unsigned MARKED_OLD_SHIFT = MARKED_YOUNG_SHIFT + MARKED_YOUNG_BITS;
+constexpr uintptr_t MARKED_OLD_0 = uintptr_t(1) << MARKED_OLD_SHIFT;
+constexpr uintptr_t MARKED_OLD_1 = uintptr_t(1) << (MARKED_OLD_SHIFT + 1u);
+constexpr uintptr_t MARKED_OLD_MASK = MARKED_OLD_0 | MARKED_OLD_1;
+// Remembered[0,1] one-hot epoch (OpenJDK zAddress.hpp:148-154). Lives in former padding at
+// bits 58-59 when TAG_ID_BITS=1 (ops/design/REMEMBERED_BIT_DESIGN.md). Finalizable not introduced.
+constexpr unsigned REMEMBERED_BITS = 2u;
+constexpr unsigned REMEMBERED_SHIFT = MARKED_OLD_SHIFT + MARKED_OLD_BITS;
+constexpr uintptr_t REMEMBERED_0 = uintptr_t(1) << REMEMBERED_SHIFT;
+constexpr uintptr_t REMEMBERED_1 = uintptr_t(1) << (REMEMBERED_SHIFT + 1u);
+constexpr uintptr_t REMEMBERED_MASK = REMEMBERED_0 | REMEMBERED_1;
+static_assert(REMEMBERED_BITS <= TAG_ID_PADDING_BITS,
+              "Remembered family needs free RefField padding bits");
+// Store metadata = remap + MY + MO + Remembered (OpenJDK zAddress.hpp:194; no Finalizable).
+constexpr uintptr_t STORE_METADATA_MASK =
+    REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK | REMEMBERED_MASK;
+// Tagged (mid-evacuation) needs the barrier whichever colour it carries.
+constexpr uintptr_t TAGGED_BITS_MASK = ((uintptr_t(1) << (1u + TAG_ID_BITS)) - 1u) << 48u;
+
+// Self-heal CAS bound for load barriers (ATOMIC_READ_PROTOCOL Q2). ZGC terminates
+// self-heal via colour monotonicity; our Forward-phase writers can re-tag the same
+// slot, so an unbounded heal loop is a livelock. After K failures the reader returns
+// the resolved payload without writing the slot (wait-free escape).
+constexpr int kSelfHealAttempts = 2;
+// Colour-aware identity CAS (CompareAndSwapReferenceImpl family). A concurrent reader
+// may self-heal the slot on every load so the raw expected bits keep moving while the
+// decoded identity stays oldRef; without a bound that is the 47-minute natural_wave spin
+// fixed on main by c3179214. Exhaustion returns false (callers already handle CAS fail).
+constexpr int kCasAttempts = 8;
+} // namespace MapleRuntime
+
+#endif // MRT_COLOUR_MASK_H

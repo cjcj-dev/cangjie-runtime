@@ -19,6 +19,9 @@ union OuterTiUnion {
 };
 
 class ATTR_PACKED(4) ExtensionData {
+#ifdef INTERPRETER_ENABLED
+    friend struct ExtensionDataLayoutCheck;
+#endif
 public:
     bool TargetIsTypeInfo() const { return argNum == 0; }
     void* GetTargetType() const

@@ -8,6 +8,7 @@
 #ifndef MRT_MCLASS_H
 #define MRT_MCLASS_H
 
+#include <cstring>
 #include <functional>
 #include <mutex>
 #include <unordered_map>
@@ -229,15 +230,14 @@ typedef TypeInfo* (*GenericFunc)(TypeInfo**);
 struct ShortGCTib {
     ArchUInt bitmap; // lower 63 bits are valid, each bit indicates 8-byte width, 1:ref, 0:no-ref
 
-    void ForEachBitmapWord(MAddress fieldAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress fieldAddr, const Visitor& visitor) const
     {
         ArchUInt gcInfo = bitmap & (~SIGN_BIT);
         while (LIKELY(gcInfo != 0)) {
-            if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
-            }
-            gcInfo >>= BITS_FOR_REF;
-            fieldAddr += sizeof(RefField<>);
+            U32 bitIndex = static_cast<U32>(__builtin_ctzll(static_cast<unsigned long long>(gcInfo)));
+            visitor(HeapSlotAt<>(fieldAddr + bitIndex * sizeof(HeapSlot<>)));
+            gcInfo &= gcInfo - 1;
         }
     }
     void ForEachBitmapWordInRange(MAddress baseAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -253,7 +253,7 @@ struct ShortGCTib {
                 return;
             }
             if (gcInfo & REF_BIT_MASK) {
-                visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+                visitor(HeapSlotAt<>(fieldAddr));
             }
             gcInfo >>= BITS_FOR_REF;
             fieldAddr += sizeof(RefField<>);
@@ -274,7 +274,7 @@ struct StdGCTib {
     {
         U8 wordBits = bitmapWord & REF_BIT_MASK;
         if (wordBits != 0) {
-            visitor(*reinterpret_cast<RefField<>*>(fieldAddr));
+            visitor(HeapSlotAt<>(fieldAddr));
         }
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
@@ -282,29 +282,46 @@ struct StdGCTib {
     }
     void VisitAllField(U8 &bitmapWord, MAddress &fieldAddr, const RefFieldVisitor &visitor) const
     {
-        visitor(*reinterpret_cast<RefField<> *>(fieldAddr));
+        visitor(HeapSlotAt<>(fieldAddr));
 
         // go next ref word.
         bitmapWord >>= BITS_FOR_REF;
         fieldAddr += sizeof(RefField<>);
     }
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         const U8* bitmaps = bitmapWords;
-
-        // start address of fields.
         MAddress baseAddr = contentAddr;
-        // for each bitmap word.
-        for (U32 i = 0; i < nBitmapWords; ++i) {
-            U8 bitmapWord = bitmaps[i];
-            MAddress fieldAddr = baseAddr;
-
-            // for each bit in bitmap.
-            while (LIKELY(bitmapWord != 0)) {
-                VisitRefField(bitmapWord, fieldAddr, visitor);
+        U32 i = 0;
+        constexpr U32 bitmapWordsPerBatch = sizeof(ArchUInt);
+        constexpr U32 refsPerBatch = bitmapWordsPerBatch * REFS_PER_BIT_WORD;
+        for (; i + bitmapWordsPerBatch <= nBitmapWords; i += bitmapWordsPerBatch) {
+            ArchUInt bitmapBatch;
+            std::memcpy(&bitmapBatch, bitmaps + i, sizeof(bitmapBatch));
+            if (LIKELY(bitmapBatch == 0)) {
+                baseAddr += sizeof(RefField<>) * refsPerBatch;
+                continue;
             }
-            // go next bitmap word.
-            baseAddr += (sizeof(RefField<>) * REFS_PER_BIT_WORD);
+            for (U32 j = 0; j < bitmapWordsPerBatch; ++j) {
+                U8 bitmapWord = bitmaps[i + j];
+                MAddress wordBaseAddr = baseAddr + sizeof(RefField<>) * j * REFS_PER_BIT_WORD;
+                while (LIKELY(bitmapWord != 0)) {
+                    U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                    visitor(HeapSlotAt<>(wordBaseAddr + bitIndex * sizeof(HeapSlot<>)));
+                    bitmapWord &= static_cast<U8>(bitmapWord - 1);
+                }
+            }
+            baseAddr += sizeof(RefField<>) * refsPerBatch;
+        }
+        for (; i < nBitmapWords; ++i) {
+            U8 bitmapWord = bitmaps[i];
+            while (LIKELY(bitmapWord != 0)) {
+                U32 bitIndex = static_cast<U32>(__builtin_ctz(static_cast<unsigned int>(bitmapWord)));
+                visitor(HeapSlotAt<>(baseAddr + bitIndex * sizeof(HeapSlot<>)));
+                bitmapWord &= static_cast<U8>(bitmapWord - 1);
+            }
+            baseAddr += sizeof(RefField<>) * REFS_PER_BIT_WORD;
         }
     }
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -353,13 +370,30 @@ union GCTib {
 #endif
     }
 
-    void ForEachBitmapWord(MAddress contentAddr, const RefFieldVisitor& visitor) const
+    template<typename Visitor>
+    void ForEachBitmapWord(MAddress contentAddr, const Visitor& visitor) const
     {
         if (IsGCTibWord()) {
             bitmap.ForEachBitmapWord(contentAddr, visitor);
         } else {
             gctib->ForEachBitmapWord(contentAddr, visitor);
         }
+    }
+
+    // STACK_ROOTS_STAY_PLAIN: a non-heap destination (static/global storage) is a *root*,
+    // not a heap field. StaticRootTable registers those words as RootSlot and
+    // WCollector::EnumAndTagRawRoot heals them with StorePlain, so a coloured write there is
+    // both pointless (the next root enumeration overwrites it plain) and hazardous (relroroot:
+    // static slots can sit on RELRO read-only pages where lock cmpxchg faults).
+    // Yielding RootSlot makes the coloured spelling not compile: RootSlot has no
+    // CompareExchange / StoreColoured / GetFieldValue, and StorePlain only accepts zaddress.
+    // The bitmap walk itself is unchanged -- this only re-types what it hands out.
+    template<typename Visitor>
+    void ForEachRootSlot(MAddress contentAddr, const Visitor& visitor) const
+    {
+        ForEachBitmapWord(contentAddr, [&visitor](HeapSlot<>& word) {
+            visitor(RootSlotAt(reinterpret_cast<void*>(&word)));
+        });
     }
 
     void ForEachBitmapWordInRange(MAddress contentAddr, const RefFieldVisitor& visitor, MAddress rangeStart,
@@ -557,10 +591,21 @@ private:
 };
 
 // Class is a generalization of type information
+//
+// The alignment here is not cosmetic: the collector treats a tip whose low three
+// bits are set as not-a-TypeInfo (StateWord::ADDRESS_ALIGN_MASK), softly at
+// Collector.cpp:104 and :304 and fatally at Mutator.cpp:597 and :754. Declaring
+// 4 while requiring 8 is what let TypeInfoManager's arena hand out addresses the
+// collector then rejected. Raising 4 -> 8 costs nothing in layout: sizeof stays
+// 96 (already a multiple of 8) and every field offset is unchanged, because
+// offsets come from __packed__ and not from __aligned__.
+//
+// This must stay in step with TYPE_INFO_ATTRS in include/Interpreter/RuntimeTypes.h;
+// MClass.cpp's TypeInfoLayoutCheck now asserts that, which it previously did not.
 #ifdef __arm__
 class TypeInfo {
 #else
-class ATTR_PACKED(4) TypeInfo {
+class ATTR_PACKED(8) TypeInfo {
 #endif
     friend class TypeInfoManager;
 #ifdef INTERPRETER_ENABLED

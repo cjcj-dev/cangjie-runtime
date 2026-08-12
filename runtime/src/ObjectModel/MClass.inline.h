@@ -231,7 +231,10 @@ inline EnumInfo* TypeInfo::GetEnumInfo() const
 
 inline bool TypeInfo::HasRefField() const
 {
-    if (IsArrayType()) {
+    // RawArray and VArray both store a homogeneous component sequence.
+    // VArray is a value aggregate, but its component may still be a managed
+    // ref or a value type that embeds refs (WRITE_SIDE_CLOSURE_PLAN G-C1..C3).
+    if (IsArrayType() || IsVArray()) {
         TypeInfo* componentTi = GetComponentTypeInfo();
         if (componentTi->IsRef()) {
             return true;
