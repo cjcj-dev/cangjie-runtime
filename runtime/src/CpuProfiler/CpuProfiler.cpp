@@ -21,9 +21,15 @@ bool CpuProfiler::StartCpuProfilerForFile()
         return false;
     }
     generator.SetIsStart(true);
-
-    tid = std::thread(CpuProfiler::SamplingThread, std::ref(generator));
+    try {
+        tid = std::thread(CpuProfiler::SamplingThread, std::ref(generator));
+    } catch (...) {
+        generator.SetIsStart(false);
+        LOG(RTLOG_ERROR, "Failed to create sampling thread.");
+        return false;
+    }
     if (!tid.joinable()) {
+        generator.SetIsStart(false);
         LOG(RTLOG_ERROR, "Failed to create sampling thread.");
         return false;
     }
