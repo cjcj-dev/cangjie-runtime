@@ -1843,13 +1843,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (toRegion1 == RegionInfo::NullRegion()) {
         toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
-            // offpast: GetRoute during Compact needs the plan published first.
-            region->SetRouteInfo(region->GetRegionStart(), fromBytes);
             CompactRegion(region);
             toRegion1 = region;
             result = false;
             buffer->ClearRegion();
-            return result;
         } else {
             toRegion1->Alloc(fromBytes);
             result = true;
@@ -1950,25 +1947,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
         if (survivedAt(offset)) {
-            // offpast: place at GetRoute's prefix-sum, not dense size-walk bump.
-            // Orphan mark bits make liveByteCount > packed-walk sum; Resolve then
-            // lands on a hole (si_addr=0xffffc909f978 after leave went 0).
-            OptionalRouteTicket ticket = region->AdmitForRoute(currentObj);
-            MAddress toAddress = 0;
-            if (ticket) {
-                BaseObject* planned = region->GetRoute(ticket.value());
-                if (planned != nullptr) {
-                    toAddress = reinterpret_cast<MAddress>(planned);
-                }
-            }
-            if (toAddress == 0) {
-                toAddress = region->Alloc(size);
-            } else {
-                MAddress next = toAddress + size;
-                if (next > region->GetRegionAllocPtr()) {
-                    region->SetRegionAllocPtr(next);
-                }
-            }
+            MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
             // Pre-copy remset census at from range (Transfer not wired on this path yet).
