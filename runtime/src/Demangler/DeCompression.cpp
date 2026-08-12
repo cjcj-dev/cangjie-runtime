@@ -521,10 +521,13 @@ size_t DeCompression<T>::ForwardName(T& mangled, size_t idx)
     }
     if (mangled[idx] == MANGLE_ANONYMOUS_PREFIX) { return idx + MANGLE_CHAR_LEN; }
     size_t numberLen = 0;
-    while (idx < mangled.Length() && isdigit(mangled[idx + numberLen])) {
+    while (idx + numberLen < mangled.Length() && isdigit(mangled[idx + numberLen])) {
         numberLen++;
     }
     size_t number = atoi(mangled.SubStr(idx, numberLen).Str());
+    if (number > mangled.Length() - idx - numberLen) {
+        return idx;
+    }
     return idx + numberLen + number;
 }
 
