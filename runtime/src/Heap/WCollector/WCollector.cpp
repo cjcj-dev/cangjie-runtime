@@ -83,6 +83,26 @@ std::atomic<size_t> g_installDomainAlready{ 0 };
 std::atomic<size_t> g_installDomainTooLate{ 0 };
 std::atomic<size_t> g_installDomainSkip{ 0 };
 
+// youngstatic: layered static-root mark funnel (default off MRT_GCV2_YOUNGSTATIC=1).
+// Answers Q1: ① enum face / ② SATB drop / ③ PushYoungObject filter.
+namespace {
+bool YoungStaticProbeOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_YOUNGSTATIC");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    return on;
+}
+std::atomic<size_t> g_ysStaticVisit{ 0 };
+std::atomic<size_t> g_ysStaticYoung{ 0 };
+std::atomic<size_t> g_ysStaticOld{ 0 };
+std::atomic<size_t> g_ysPushSeen{ 0 };
+std::atomic<size_t> g_ysPushYoungUnmarked{ 0 };
+std::atomic<size_t> g_ysPushNotYoung{ 0 };
+std::atomic<size_t> g_ysPushAlready{ 0 };
+} // namespace
+
 // fysgrant: FYS mark result × pregrant face 2D (default off; MRT_GCV2_FYSGRANT=1).
 // Early-return BEFORE counters (promotegap shape).
 namespace {
@@ -2537,10 +2557,40 @@ void WCollector::VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stack
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     Heap::GetHeap().VisitStaticRoots([&remset, &visitedRawRootVisitor](RootSlot& root) {
         remset.VisitStaticForCrossCheck(reinterpret_cast<MAddress>(&root));
+        if (YoungStaticProbeOn()) {
+            zaddress_unsafe obs = root.LoadPlain();
+            BaseObject* t = to_object(HeapSlot<>(to_zpointer(raw(obs))).GetTargetObject());
+            if (t != nullptr && Heap::IsHeapAddress(t)) {
+                g_ysStaticVisit.fetch_add(1, std::memory_order_relaxed);
+                RegionInfo* r = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(t));
+                if (r != nullptr && r->IsYoungRegion()) {
+                    g_ysStaticYoung.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    g_ysStaticOld.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
         visitedRawRootVisitor(root);
     });
 #else
-    Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
+    if (YoungStaticProbeOn()) {
+        Heap::GetHeap().VisitStaticRoots([&visitedRawRootVisitor](RootSlot& root) {
+            zaddress_unsafe obs = root.LoadPlain();
+            BaseObject* t = to_object(HeapSlot<>(to_zpointer(raw(obs))).GetTargetObject());
+            if (t != nullptr && Heap::IsHeapAddress(t)) {
+                g_ysStaticVisit.fetch_add(1, std::memory_order_relaxed);
+                RegionInfo* r = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(t));
+                if (r != nullptr && r->IsYoungRegion()) {
+                    g_ysStaticYoung.fetch_add(1, std::memory_order_relaxed);
+                } else {
+                    g_ysStaticOld.fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+            visitedRawRootVisitor(root);
+        });
+    } else {
+        Heap::GetHeap().VisitStaticRoots(visitedRawRootVisitor);
+    }
 #endif
     gMinorRootOrigin = "concurrency";
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&visitedRawRootVisitor);
@@ -2689,6 +2739,26 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         CHECK_DETAIL(false, "minor root/reference %p is not a valid object origin=%s", object, src);
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+    if (YoungStaticProbeOn()) {
+        const char* src = origin;
+        if (src == nullptr || std::strcmp(src, "unknown") == 0 || std::strcmp(src, "minor_root") == 0 ||
+            std::strcmp(src, "minor_root_final") == 0) {
+            if (gMinorRootOrigin != nullptr && std::strcmp(gMinorRootOrigin, "unknown") != 0) {
+                src = gMinorRootOrigin;
+            }
+        }
+        if (src != nullptr && (std::strcmp(src, "static") == 0 || std::strcmp(src, "minor_root") == 0 ||
+                               std::strcmp(src, "minor_root_final") == 0)) {
+            g_ysPushSeen.fetch_add(1, std::memory_order_relaxed);
+            if (!region->IsYoungRegion()) {
+                g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
+            } else if (region->IsMarkedObject(object)) {
+                g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
         workStack.push_back(object);
     }
@@ -4678,6 +4748,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 "[GCV2][installdomain] pregrant grant=%zu already=%zu tooLate=%zu skip=%zu "
                 "note=grant0_means_already_in_domain_not_failure",
                 grant, already, tooLate, skip);
+            if (YoungStaticProbeOn()) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][youngstatic] funnel staticVisit=%zu staticYoung=%zu staticOld=%zu "
+                    "pushSeen=%zu pushYoungUnmarked=%zu pushNotYoung=%zu pushAlready=%zu",
+                    g_ysStaticVisit.load(std::memory_order_relaxed),
+                    g_ysStaticYoung.load(std::memory_order_relaxed),
+                    g_ysStaticOld.load(std::memory_order_relaxed),
+                    g_ysPushSeen.load(std::memory_order_relaxed),
+                    g_ysPushYoungUnmarked.load(std::memory_order_relaxed),
+                    g_ysPushNotYoung.load(std::memory_order_relaxed),
+                    g_ysPushAlready.load(std::memory_order_relaxed));
+            }
 
             // fysgrant: after PrepareForwardTable + pregrant Ensure — classify reachableVec.
             // Gate first; zero product cost when off. Counts are cumulative across minors.
@@ -6004,6 +6086,51 @@ void WCollector::DoYoungGarbageCollection()
         remsetStats.live = liveRememberedSlots.size();
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
              reachableVec.size());
+        // youngstatic: seal static-root young targets into mark face under STW2.
+        // FixMinorRootSlots VisitStaticRoots; concurrent TRACE must leave survivor bits for
+        // those targets (ZGC: live roots have to-version). SATB-on-static write closes the
+        // overwrite window; this seal closes residual enum→mark gaps without HealRoot(null).
+        {
+            size_t sealed = 0;
+            size_t staticYoung = 0;
+            size_t staticOld = 0;
+            Heap::GetHeap().VisitStaticRoots([this, &sealed, &staticYoung, &staticOld, &workStack](RootSlot& root) {
+                zaddress_unsafe observed = root.LoadPlain();
+                HeapSlot<> bits(to_zpointer(raw(observed)));
+                BaseObject* obj = to_object(bits.GetTargetObject());
+                if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("youngstatic.seal", obj)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+                    if (host == nullptr || host == obj) {
+                        return;
+                    }
+                    obj = host;
+                }
+                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                if (region == nullptr) {
+                    return;
+                }
+                if (!region->IsYoungRegion()) {
+                    ++staticOld;
+                    return;
+                }
+                ++staticYoung;
+                if (!region->IsMarkedObject(obj)) {
+                    workStack.push_back(obj);
+                    ++sealed;
+                }
+            });
+            if (!workStack.empty()) {
+                TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
+                                  weakSlots, useBitmapLedger);
+            }
+            VLOG(REPORT,
+                 "[GCV2][youngstatic] stw2_static_seal sealed=%zu staticYoung=%zu staticOld=%zu "
+                 "reachable=%zu",
+                 sealed, staticYoung, staticOld, reachableVec.size());
+        }
     }
     g_minorLedgerCost.Report();
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
