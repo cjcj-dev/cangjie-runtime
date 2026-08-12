@@ -136,6 +136,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             if (cacheSize == 0) {
                 typeInfos = nullptr;
@@ -165,6 +166,7 @@ private:
             if (this == &other) {
                 return *this;
             }
+            delete[] typeInfos;
             cacheSize = other.cacheSize;
             typeInfos = other.typeInfos;
             other.cacheSize = 0;
