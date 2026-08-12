@@ -27,17 +27,12 @@ bool GCExecutor::Execute(void* owner)
             if ((curTime - GCStats::GetPrevGCStartTime()) > CangjieRuntime::GetGCParam().backupGCInterval) {
                 GCStats::SetPrevGCStartTime(curTime);
                 collectorProxy->RunGarbageCollection(GCTask::ASYNC_TASK_INDEX, GC_REASON_BACKUP);
-                GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
             }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_INVOKE_GC: {
             GCStats::SetPrevGCStartTime(TimeUtil::NanoSeconds());
             collectorProxy->RunGarbageCollection(taskIndex, gcReason);
-            // A young collection must not re-arm the heuristic/native full-GC throttle.
-            if (gcReason != GC_REASON_YOUNG) {
-                GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
-            }
             break;
         }
         case GCTask::TaskType::TASK_TYPE_DUMP_HEAP: {

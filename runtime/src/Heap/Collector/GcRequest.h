@@ -8,6 +8,7 @@
 #ifndef MRT_GCREQUEST_H
 #define MRT_GCREQUEST_H
 
+#include <atomic>
 #include <cstdint>
 #include <limits>
 
@@ -44,8 +45,8 @@ struct GCRequest {
     const bool isSync;
     const bool isConcurrent;
 
-    uint64_t minIntervelNs;
-    uint64_t prevRequestTime;
+    std::atomic<uint64_t> minIntervelNs;
+    std::atomic<uint64_t> prevRequestTime;
 
     inline bool IsFrequentGC() const;
     inline bool IsFrequentAsyncGC() const;
@@ -54,8 +55,14 @@ struct GCRequest {
 
     bool IsSyncGC() const { return isSync; }
 
-    void SetMinInterval(const uint64_t intervalNs) { minIntervelNs = intervalNs; }
-    void SetPrevRequestTime(uint64_t timestamp) { prevRequestTime = timestamp; }
+    void SetMinInterval(const uint64_t intervalNs)
+    {
+        minIntervelNs.store(intervalNs, std::memory_order_release);
+    }
+    void SetPrevRequestTime(uint64_t timestamp)
+    {
+        prevRequestTime.store(timestamp, std::memory_order_release);
+    }
 };
 
 // Defined in gcRequest.cpp

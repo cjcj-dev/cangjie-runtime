@@ -192,9 +192,9 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
 void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 {
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_relaxed);
+    isGcStarted.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
-        finishedGcIndex.store(gcIndex);
+        finishedGcIndex.store(gcIndex, std::memory_order_release);
     }
     gcFinishedCondVar.notify_all();
     BroadcastGCCompletion();

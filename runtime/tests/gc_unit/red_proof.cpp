@@ -117,6 +117,13 @@ int main()
     uintptr_t place = coloured + 16;
     RED_EXPECT((broken_field_place(place) & ~mask48) == 0, "field place strips colour at ABI");
 
+    // hunt-coll completion: publish-before-account leaves waiter on stale counters
+    {
+        size_t count = 0;
+        bool published = true; // NotifyGCFinished first
+        RED_EXPECT(published && count == 1, "waiter sees this-cycle g_gcCount [pre late NotifyGCFinished]");
+    }
+
     // bitCover red: near-end offset out of cover
     RED_EXPECT(broken_near_end_in_cover(65504, 65536), "bitCover includes near-end offsets");
 

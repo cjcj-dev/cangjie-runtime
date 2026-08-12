@@ -27,20 +27,26 @@ public:
 
     void Init();
 
-    size_t GetThreshold() const { return heapThreshold; }
+    size_t GetThreshold() const { return heapThreshold.load(std::memory_order_acquire); }
 
     void Dump() const;
 
-    static uint64_t GetPrevGCStartTime() { return prevGcStartTime; }
+    static uint64_t GetPrevGCStartTime() { return prevGcStartTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCStartTime(uint64_t timestamp) { prevGcStartTime = timestamp; }
+    static void SetPrevGCStartTime(uint64_t timestamp)
+    {
+        prevGcStartTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime; }
+    static uint64_t GetPrevGCFinishTime() { return prevGcFinishTime.load(std::memory_order_acquire); }
 
-    static void SetPrevGCFinishTime(uint64_t timestamp) { prevGcFinishTime = timestamp; }
+    static void SetPrevGCFinishTime(uint64_t timestamp)
+    {
+        prevGcFinishTime.store(timestamp, std::memory_order_release);
+    }
 
-    static uint64_t prevGcStartTime;
-    static uint64_t prevGcFinishTime;
+    static std::atomic<uint64_t> prevGcStartTime;
+    static std::atomic<uint64_t> prevGcFinishTime;
 
     GCReason reason;
     bool isConcurrentMark;
@@ -67,10 +73,10 @@ public:
     double garbageRatio;
     double collectionRate; // bytes per nano-second
 
-    size_t heapThreshold;
+    std::atomic<size_t> heapThreshold{ 0 };
 };
-extern size_t g_gcCount;
-extern uint64_t g_gcTotalTimeUs;
-extern size_t g_gcCollectedTotalBytes;
+extern std::atomic<size_t> g_gcCount;
+extern std::atomic<uint64_t> g_gcTotalTimeUs;
+extern std::atomic<size_t> g_gcCollectedTotalBytes;
 } // namespace MapleRuntime
 #endif // MRT_STATS_H

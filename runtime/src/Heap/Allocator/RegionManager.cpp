@@ -2213,8 +2213,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // power-of-four milestones so the final magnitude is still on the record.
             static std::atomic<size_t> emptyCollectGc{ std::numeric_limits<size_t>::max() };
             static std::atomic<size_t> emptyCollectSeq{ 0 };
-            if (emptyCollectGc.load(std::memory_order_relaxed) != g_gcCount) {
-                emptyCollectGc.store(g_gcCount, std::memory_order_relaxed);
+            size_t gcNow = g_gcCount.load(std::memory_order_relaxed);
+            if (emptyCollectGc.load(std::memory_order_relaxed) != gcNow) {
+                emptyCollectGc.store(gcNow, std::memory_order_relaxed);
                 emptyCollectSeq.store(0, std::memory_order_relaxed);
             }
             size_t seq = emptyCollectSeq.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -2229,7 +2230,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 VLOG(REPORT,
                      "[GCRECLAIM][fwd-empty-collect] gc=%zu seq=%zu region=%p start=%#zx alloc=%#zx "
                      "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
-                     g_gcCount, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                     gcNow, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                      region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
                      region->GetLiveByteCount(), region->GetMarkBitmap(), reasonName,
                      static_cast<int>(gcReason));

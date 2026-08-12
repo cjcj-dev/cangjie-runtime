@@ -15,7 +15,10 @@
 #include "Common/ColourMask.h"
 #include "Common/ColourTypes.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/GcStats.h"
 #include "ObjectModel/RefField.h"
+
+extern "C" size_t MCC_GetGCCount();
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -235,4 +238,85 @@ GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
     Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
     Uptr leaPlace = colouredBase + 16;
     GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
+}
+
+// hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and
+// prevGcFinishTime. Waiter could read stale MCC_GetGC* and a HEU in that window
+// would not see the just-finished cycle. Product: CopyCollector.cpp RunGarbageCollection
+// now updates g_gc* + prevGcFinishTime, then NotifyGCFinished.
+namespace {
+struct CompletionState {
+    bool published = false;
+    size_t gcCount = 0;
+    uint64_t gcTimeUs = 0;
+    size_t freedBytes = 0;
+    uint64_t prevFinish = 0;
+};
+
+void BrokenPublishThenAccount(CompletionState& s, uint64_t now, uint64_t timeUs, size_t freed)
+{
+    s.published = true;
+    s.gcCount++;
+    s.gcTimeUs += timeUs;
+    s.freedBytes += freed;
+    s.prevFinish = now;
+}
+
+void FixedAccountThenPublish(CompletionState& s, uint64_t now, uint64_t timeUs, size_t freed)
+{
+    s.gcCount++;
+    s.gcTimeUs += timeUs;
+    s.freedBytes += freed;
+    s.prevFinish = now;
+    s.published = true;
+}
+
+bool HeuSuppressed(uint64_t now, uint64_t prevFinish, uint64_t minInterval)
+{
+    return (now - prevFinish) < minInterval;
+}
+} // namespace
+
+GC_TEST(DefectRegress, GcCompletePublishSeesThisCycleStats)
+{
+    CompletionState broken;
+    BrokenPublishThenAccount(broken, 1'000, 50, 128);
+    // Pre-fix window: a waiter unblocked at publication sees the stores after
+    // the flag, so a snapshot taken at the publish store is still the old values.
+    CompletionState atPublish;
+    atPublish.published = true;
+    GC_EXPECT_TRUE(atPublish.published);
+    GC_EXPECT_EQ(atPublish.gcCount, 0u);
+    GC_EXPECT_EQ(atPublish.gcTimeUs, 0u);
+    GC_EXPECT_EQ(atPublish.freedBytes, 0u);
+
+    CompletionState fixed;
+    FixedAccountThenPublish(fixed, 1'000, 50, 128);
+    GC_EXPECT_TRUE(fixed.published);
+    GC_EXPECT_EQ(fixed.gcCount, 1u);
+    GC_EXPECT_EQ(fixed.gcTimeUs, 50u);
+    GC_EXPECT_EQ(fixed.freedBytes, 128u);
+    GC_EXPECT_EQ(fixed.prevFinish, 1'000u);
+}
+
+GC_TEST(DefectRegress, GcCompleteHeuSuppressedAfterPublish)
+{
+    constexpr uint64_t minInterval = 200;
+    // Broken: HEU uses the previous finish stamp because TaskQueue wrote it after
+    // the waiter already returned from NotifyGCFinished.
+    uint64_t staleFinish = 0;
+    GC_EXPECT_FALSE(HeuSuppressed(1'050, staleFinish, minInterval));
+    // Fixed: prevGcFinishTime is visible before publication.
+    uint64_t publishedFinish = 1'000;
+    GC_EXPECT_TRUE(HeuSuppressed(1'050, publishedFinish, minInterval));
+    GC_EXPECT_FALSE(HeuSuppressed(1'300, publishedFinish, minInterval));
+}
+
+GC_TEST(DefectRegress, GcCountExportReadsAtomic)
+{
+    size_t before = MCC_GetGCCount();
+    g_gcCount.fetch_add(1, std::memory_order_release);
+    GC_EXPECT_EQ(MCC_GetGCCount(), before + 1);
+    g_gcCount.fetch_sub(1, std::memory_order_release);
+    GC_EXPECT_EQ(MCC_GetGCCount(), before);
 }

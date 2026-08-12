@@ -60,7 +60,7 @@ std::atomic<size_t> g_plausibleObjGateSampleGc{ std::numeric_limits<size_t>::max
 
 bool PlausibleObjGateSampleAllowed(size_t budget)
 {
-    size_t gc = g_gcCount;
+    size_t gc = g_gcCount.load(std::memory_order_relaxed);
     if (g_plausibleObjGateSampleGc.load(std::memory_order_relaxed) != gc) {
         g_plausibleObjGateSampleGc.store(gc, std::memory_order_relaxed);
         g_plausibleObjGateSample.store(0, std::memory_order_relaxed);
@@ -361,7 +361,8 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                 LOG(RTLOG_ERROR,
                     "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=non-heap n=%zu phase=%s(%u) "
                     "ra0=%p ra1=%p ra2=%p",
-                    g_gcCount, site, obj, n, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+                    g_gcCount.load(std::memory_order_relaxed), site, obj, n, Collector::GetGCPhaseName(phase),
+                    static_cast<unsigned>(phase),
                     __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
             }
         }
@@ -384,7 +385,8 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                     LOG(RTLOG_ERROR,
                         "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=dead-region n=%zu "
                         "region=%p start=%#zx regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-                        g_gcCount, site, obj, n, region, rstart, rtype, Collector::GetGCPhaseName(phase),
+                        g_gcCount.load(std::memory_order_relaxed), site, obj, n, region, rstart, rtype,
+                        Collector::GetGCPhaseName(phase),
                         static_cast<unsigned>(phase), __builtin_return_address(0),
                         __builtin_return_address(1), __builtin_return_address(2));
                 }
@@ -424,7 +426,7 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                         LOG(RTLOG_ERROR,
                             "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p tip=%p reason=%s n=%zu "
                             "int_off=%u region=%p start=%#zx phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-                            g_gcCount, site, obj, tip, reason, n, off, region, rstart,
+                            g_gcCount.load(std::memory_order_relaxed), site, obj, tip, reason, n, off, region, rstart,
                             Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
                             __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
                     }
