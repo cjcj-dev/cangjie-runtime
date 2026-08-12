@@ -94,8 +94,11 @@ bool DeCompression<T>::IsGlobalEncode(T& mangled)
 template<typename T>
 bool DeCompression<T>::IsSamePrefix(T& first, T second, size_t idx)
 {
-    for (size_t i = idx; i < idx + PREFIX_LEN; i++) {
-        if (first[i] != second[i]) {
+    if (idx + PREFIX_LEN > first.Length() || PREFIX_LEN > second.Length()) {
+        return false;
+    }
+    for (size_t i = 0; i < PREFIX_LEN; i++) {
+        if (first[idx + i] != second[i]) {
             return false;
         }
     }
