@@ -29,6 +29,7 @@ set(SRC_LIST
     "RouteDom.cpp"
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
+    "EmptyLiveDiag.cpp"
     "PermWhoAdmit.cpp"
     "FlipPromoDiag.cpp"
     "O2ORemsetDiag.cpp"
