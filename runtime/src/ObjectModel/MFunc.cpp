@@ -72,7 +72,7 @@ CString ULEBDecode(CString& bytes, Uptr offset)
         tempCode.push_back(bytes[p]);
         if ((bytes[p] & 0x80) == 0) {
             uint64_t decode = ULEBDecodeSingleStr(tempCode);
-            if (decode > dictTotalSize) {
+            if (decode == 0 || decode > dictTotalSize) {
                 LOG(RTLOG_ERROR, "invalid index in stringpool");
                 return result;
             }
@@ -180,7 +180,7 @@ CString FastULEBDecode(CString &bytes, Uptr offset)
         const char mask = 0x80;
         if ((bytes[p] & mask) == 0) {
             uint64_t decode = ULEBDecodeSingleStr(tempCode);
-            if (decode > dictTotalSize) {
+            if (decode == 0 || decode > dictTotalSize) {
                 LOG(RTLOG_ERROR, "invalid index in stringpool");
                 return Merge(segments, totalLen);
             }
