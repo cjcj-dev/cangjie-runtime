@@ -1827,15 +1827,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     PermWhoAdmit::NoteRoutePlan(region, fromBytes, /*densifyOutcome=*/1u);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
-    // offpast: CompactRegion prepends the still-ghost region as TL and the old path
-    // SetRegion'd it. The next Route then packed a *different* region's survivors into
-    // that Compacted tail (liveBytes=63160, foreign offs 63160/63304/…). Resolve rewrote
-    // roots to those to-addrs; Fix Admit'd them against the host's from-offset bits.
-    if (toRegion1 != RegionInfo::NullRegion() &&
-        (toRegion1->IsCompacted() || toRegion1->IsGhostFromRegion() || toRegion1 == region)) {
-        buffer->ClearRegion();
-        toRegion1 = RegionInfo::NullRegion();
-    }
     CHECK(region != toRegion1);
     bool result;
     // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
@@ -1846,12 +1837,11 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             CompactRegion(region);
             toRegion1 = region;
             result = false;
-            buffer->ClearRegion();
         } else {
             toRegion1->Alloc(fromBytes);
             result = true;
-            buffer->SetRegion(toRegion1);
         }
+        buffer->SetRegion(toRegion1);
         size_t toRegion1Start = toRegion1->GetRegionStart();
         region->SetRouteInfo(toRegion1Start, fromBytes);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
@@ -1896,13 +1886,12 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         toRegion1->Alloc(usedBytes1);
         CHECK(toRegion2->Alloc(usedBytes2) != 0);
         result = true;
-        buffer->SetRegion(toRegion2);
     } else {
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
-        buffer->ClearRegion();
     }
+    buffer->SetRegion(toRegion2);
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
     region->SetRouteInfo(toRegion1Addr, usedBytes1, toRegion2Idx);
     DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
