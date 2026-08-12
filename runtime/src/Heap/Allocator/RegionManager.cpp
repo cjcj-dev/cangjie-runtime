@@ -29,6 +29,7 @@
 #include "Heap/Verify/FlipPromoDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/O2ORemsetDiag.h"
+#include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -1816,6 +1817,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
+    OffpastDiag::NoteRouteEnter(region);
     // densifycut (G6): densify apply+walk+census removed. Product path already never applied
     // (MRT_GCV2_DENSIFY default off). Exit net retained: allLiveBitsHaveReceipt + abandon +
     // AdmitForRoute + VisitLiveObjectsUntilFalse. densifyOutcome always "not densified" (1).
@@ -1974,6 +1976,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
 
     region->ResetCensusBoundary();
 
+    OffpastDiag::NoteCompactDone(region);
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
@@ -2088,6 +2091,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 
     region->ResetCensusBoundary();
 
+    OffpastDiag::NoteCompactDone(region);
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
