@@ -18,6 +18,7 @@
 
 #include "GcRequest.h"
 #include "GcStats.h"
+#include "Heap/Verify/ToverFailDiag.h"
 
 namespace MapleRuntime {
 // GCPhase describes phases for stw/concurrent gc.
@@ -166,9 +167,16 @@ public:
         if (target == nullptr || is_load_good(ref)) {
             return target;
         }
+        ToverFailDiag::NoteMlgEnter();
         BaseObject* remapped = relocate_or_remap_object(target, remap_generation(ref));
         if (remapped == nullptr) {
+            ToverFailDiag::NoteMlgKeepFrom();
             return target;
+        }
+        if (remapped == target) {
+            ToverFailDiag::NoteMlgKeepFrom();
+        } else {
+            ToverFailDiag::NoteMlgMoved();
         }
         return remapped;
     }

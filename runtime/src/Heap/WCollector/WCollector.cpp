@@ -53,6 +53,7 @@
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/PlainCensus.h"
 #include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/ToverFailDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
@@ -6593,10 +6594,14 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return from;
     };
 
+    const bool tv = ToverFailDiag::Enabled();
     for (int spins = 0; spins < kMaxSpins; ++spins) {
         if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
             if (diagOn) {
                 tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapWaitTip();
             }
             return to; // receipt
         }
@@ -6606,6 +6611,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (tv) {
+                    ToverFailDiag::NoteRemapWaitTip();
                 }
                 return again; // receipt after object FORWARDED
             }
@@ -6620,6 +6628,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
                 }
+                if (tv) {
+                    ToverFailDiag::NoteRemapWaitTip();
+                }
                 return again;
             }
             return permanentHole(
@@ -6633,12 +6644,18 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (diagOn) {
                 giveUpCount.fetch_add(1, std::memory_order_relaxed);
             }
+            if (tv) {
+                ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
+            }
             return from;
         }
     }
     // Still ROUTED/ROUTING after bound: do not hand geometric null-tip; from is still live.
     if (diagOn) {
         giveUpCount.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (tv) {
+        ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
     }
     return from;
 }
@@ -6647,15 +6664,32 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not
     // GetSize/CopyObject them; leave the slot unchanged (caller keeps obj).
+    const bool tv = ToverFailDiag::Enabled();
+    if (tv) {
+        ToverFailDiag::NoteFwdEnter();
+    }
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObject", obj)) {
         // tipnull: uncopied movable ghost is not VisitLive success.
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            if (tv) {
+                ToverFailDiag::NoteFwdNull();
+            }
             return nullptr;
+        }
+        if (tv) {
+            ToverFailDiag::NoteFwdSame();
         }
         return obj;
     }
     BaseObject* to = TryForwardObject(obj);
     if (to != nullptr) {
+        if (tv) {
+            if (to != obj) {
+                ToverFailDiag::NoteFwdOk();
+            } else {
+                ToverFailDiag::NoteFwdSame();
+            }
+        }
         return to;
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no
@@ -6663,7 +6697,13 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
     // pointer that CollectRegion is about to reclaim → UAF / HANG under ALOT.
     // Unmovable / non-ghost still keep `obj` (in-place / not in route domain).
     if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+        if (tv) {
+            ToverFailDiag::NoteFwdNull();
+        }
         return nullptr;
+    }
+    if (tv) {
+        ToverFailDiag::NoteFwdSame();
     }
     return obj;
 }
