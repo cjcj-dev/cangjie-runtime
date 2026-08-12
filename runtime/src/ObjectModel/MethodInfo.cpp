@@ -687,6 +687,11 @@ void* DynamicMethodInfo::ApplyCangjieMethod(void* argsArray)
 #endif
     argValues.AddReference(instanceObj);
 
+    // Official ABI (SUSPECT-01): this path is FunctionTypeInfo.apply, which
+    // only ever receives Array<Any>. std.reflect already type-checks each
+    // boxed element (checkArgsSizeAndType). The closure callee therefore
+    // takes the boxed Any as a reference. Value-parameter unboxing lives on
+    // MethodInfo::AddCJArg, used by the named-method apply path only.
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
     HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
     for (U64 actualArgIdx = 0; actualArgIdx < actualArgCount; ++actualArgIdx) {
