@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <climits>
+#include <ucontext.h>
 
 #include <algorithm>
 #include <atomic>
@@ -33,7 +34,7 @@ SignalStack SignalStack::stacks[_NSIG];
 static decltype(&sigaction) g_linkedSignalAction;
 static decltype(&sigprocmask) g_linkedSignalProcmask;
 static pthread_key_t g_sigchainKey;
-static constexpr size_t SIGSET_SIZE = _NSIG / 8 / sizeof(long);
+
 
 // AS-safe helpers for the signal handler path (POSIX async-signal-safe only).
 namespace {
@@ -96,12 +97,13 @@ void SigOrSet(sigset_t* dest, const sigset_t* left, const sigset_t* right)
         return;
     }
 
-    unsigned long* destination = reinterpret_cast<unsigned long*>(dest);
-    const unsigned long* leftSet = reinterpret_cast<const unsigned long*>(left);
-    const unsigned long* rightSet = reinterpret_cast<const unsigned long*>(right);
-
-    for (size_t i = 0; i < SIGSET_SIZE; ++i) {
-        destination[i] = leftSet[i] | rightSet[i];
+    // Byte-wise: `_NSIG / 8 / sizeof(long)` is 0 on Apple (NSIG=32, 8-byte
+    // long) and only covers the first word of a 128-byte Linux sigset_t.
+    auto* destination = reinterpret_cast<unsigned char*>(dest);
+    const auto* leftSet = reinterpret_cast<const unsigned char*>(left);
+    const auto* rightSet = reinterpret_cast<const unsigned char*>(right);
+    for (size_t i = 0; i < sizeof(sigset_t); ++i) {
+        destination[i] = static_cast<unsigned char>(leftSet[i] | rightSet[i]);
     }
 }
 
@@ -149,8 +151,8 @@ void SignalStack::RemoveHandler(bool (*fn)(int, siginfo_t*, void*))
 
 struct SignalArgs {
     int signal;
-    siginfo_t* siginfo;
-    void* ucontextRaw;
+    siginfo_t siginfo;
+    ucontext_t ucontext;
     bool isAsync;
 };
 
@@ -162,11 +164,20 @@ static volatile sig_atomic_t g_sigArgsInUse[kSigArgsSlotCount] = {0, 0};
 static SignalArgs* AcquireSignalArgs(int signal, siginfo_t* siginfo, void* ucontextRaw, bool isAsync)
 {
     for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
-        if (g_sigArgsInUse[i] == 0) {
-            g_sigArgsInUse[i] = 1;
+        sig_atomic_t expected = 0;
+        if (__atomic_compare_exchange_n(&g_sigArgsInUse[i], &expected, 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             g_sigArgsSlots[i].signal = signal;
-            g_sigArgsSlots[i].siginfo = siginfo;
-            g_sigArgsSlots[i].ucontextRaw = ucontextRaw;
+            if (siginfo != nullptr) {
+                g_sigArgsSlots[i].siginfo = *siginfo;
+            } else {
+                g_sigArgsSlots[i].siginfo = {};
+            }
+            if (ucontextRaw != nullptr) {
+                g_sigArgsSlots[i].ucontext = *static_cast<ucontext_t*>(ucontextRaw);
+            } else {
+                g_sigArgsSlots[i].ucontext = {};
+            }
             g_sigArgsSlots[i].isAsync = isAsync;
             return &g_sigArgsSlots[i];
         }
@@ -181,7 +192,7 @@ static void ReleaseSignalArgs(SignalArgs* args)
     }
     for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
         if (args == &g_sigArgsSlots[i]) {
-            g_sigArgsInUse[i] = 0;
+            __atomic_store_n(&g_sigArgsInUse[i], 0, __ATOMIC_RELEASE);
             return;
         }
     }
@@ -257,8 +268,8 @@ void SignalStack::HandlerImpl(void* args)
     // Extract signal arguments
     SignalArgs* signalArgs = reinterpret_cast<SignalArgs*>(args);
     int signal = signalArgs->signal;
-    siginfo_t* siginfo = signalArgs->siginfo;
-    void* ucontextRaw = signalArgs->ucontextRaw;
+    siginfo_t* siginfo = &signalArgs->siginfo;
+    void* ucontextRaw = &signalArgs->ucontext;
     if (IsHardFaultSignal(signal)) {
         // Nested hard-fault while already handling: do not re-enter user code.
         if (GetHandlingSignal()) {
@@ -288,13 +299,13 @@ void SignalStack::HandlerImpl(void* args)
                 SetHandlingSignal(true);
             }
             // Execute the signal handler
-            if (handler.saSignalAction(signal, siginfo, ucontextRaw)) {
-                SetHandlingSignal(previous_value);
+            bool handled = handler.saSignalAction(signal, siginfo, ucontextRaw);
+            g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
+            SetHandlingSignal(previous_value);
+            if (handled) {
                 ReleaseSignalArgs(signalArgs);
                 return;
             }
-            g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
-            SetHandlingSignal(previous_value);
         }
     }
     int handlerFlags = SignalStack::stacks[signal].sigAction.sa_flags;

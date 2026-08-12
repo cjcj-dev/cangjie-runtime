@@ -461,6 +461,7 @@ int CJFileLoader::UnloadLibrary(const char* libName)
 Uptr CJFileLoader::FindSymbol(const CString libName, const CString symName) const
 {
     CString baseName = Os::Path::GetBaseName(libName.Str());
+    std::lock_guard<std::mutex> lock(libCjsoHandlersMutex);
     auto handlerIt =
         std::find_if(cjLibHandlers.begin(), cjLibHandlers.end(), [&baseName](const LibNameToHandler& info) {
             return baseName == Os::Path::GetBaseName(info.baseName.Str());
