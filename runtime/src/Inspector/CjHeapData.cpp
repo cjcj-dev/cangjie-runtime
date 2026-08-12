@@ -94,9 +94,11 @@ void CjHeapData::DumpHeap(bool needStopTheWorld)
 {
     // step1 - open file
     CString specifiedPath;
-    if (dumpAfterOOM && !g_oomIsTrigged) {
+    if (dumpAfterOOM && g_oomIsTrigged) {
+        return;
+    }
+    if (dumpAfterOOM) {
         LOG(RTLOG_INFO, "OOM DumpHeap dumpAfterOOM");
-        g_oomIsTrigged = true;
         Logger::GetLogger().GetLogPath("cjHeapDumpLog", specifiedPath);
         auto pid = MapleRuntime::GetPid();
         CString dumpFile = CString("cj_OOM_pid") + CString(pid) + CString(".dat");
@@ -125,6 +127,9 @@ void CjHeapData::DumpHeap(bool needStopTheWorld)
     if (!fp) {
         LOG(RTLOG_ERROR, "Failed to open heap dump file, stop dumping heap info, %s", strerror(errno));
         return;
+    }
+    if (dumpAfterOOM) {
+        g_oomIsTrigged = true;
     }
     InitSerializedIdWrapper();
     // step2 - write file
