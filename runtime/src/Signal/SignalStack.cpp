@@ -33,7 +33,7 @@ SignalStack SignalStack::stacks[_NSIG];
 static decltype(&sigaction) g_linkedSignalAction;
 static decltype(&sigprocmask) g_linkedSignalProcmask;
 static pthread_key_t g_sigchainKey;
-static constexpr size_t SIGSET_SIZE = _NSIG / 8 / sizeof(long);
+
 
 // AS-safe helpers for the signal handler path (POSIX async-signal-safe only).
 namespace {
@@ -96,12 +96,13 @@ void SigOrSet(sigset_t* dest, const sigset_t* left, const sigset_t* right)
         return;
     }
 
-    unsigned long* destination = reinterpret_cast<unsigned long*>(dest);
-    const unsigned long* leftSet = reinterpret_cast<const unsigned long*>(left);
-    const unsigned long* rightSet = reinterpret_cast<const unsigned long*>(right);
-
-    for (size_t i = 0; i < SIGSET_SIZE; ++i) {
-        destination[i] = leftSet[i] | rightSet[i];
+    // Byte-wise: `_NSIG / 8 / sizeof(long)` is 0 on Apple (NSIG=32, 8-byte
+    // long) and only covers the first word of a 128-byte Linux sigset_t.
+    auto* destination = reinterpret_cast<unsigned char*>(dest);
+    const auto* leftSet = reinterpret_cast<const unsigned char*>(left);
+    const auto* rightSet = reinterpret_cast<const unsigned char*>(right);
+    for (size_t i = 0; i < sizeof(sigset_t); ++i) {
+        destination[i] = static_cast<unsigned char>(leftSet[i] | rightSet[i]);
     }
 }
 
