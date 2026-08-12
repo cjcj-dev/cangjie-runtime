@@ -1947,10 +1947,13 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // resolveto: keep dense pack (no holes). Record fromOff→dest so GetRoute on
     // COMPACTED answers the packed slot, not the prefix-sum hole.
     region->FreeCompactRouteTable();
+    region->EnsureCompactRouteTable();
     region->SetRegionAllocPtr(regionStart);
+    bool walkBroke = false;
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = from_region_addr(currentPtr);
         if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            walkBroke = true;
             break;
         }
         size_t size = currentObj->GetSize();
@@ -1981,8 +1984,9 @@ void RegionManager::CompactRegion(RegionInfo* region)
     std::atomic_thread_fence(std::memory_order_release);
 
     // clear unused space which is free after compaction.
+    // Walk-break leftovers are still live at from — do not memset them.
     MAddress cur = region->GetRegionAllocPtr();
-    if (regionLimit > cur) {
+    if (!walkBroke && regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
         TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
         if (!TraceClear::SkipCompactMemset()) {

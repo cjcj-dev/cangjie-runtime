@@ -1399,6 +1399,12 @@ public:
             if (packed != nullptr) {
                 return packed;
             }
+            // Compacted and not packed: prefix-sum dest is a hole (dense pack).
+            // Keep from if Compact left it in place (walk break); else no to-version.
+            if (fromObj->IsValidObject()) {
+                return fromObj;
+            }
+            return nullptr;
         }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
@@ -1417,13 +1423,17 @@ public:
         }
     }
 
+    void EnsureCompactRouteTable()
+    {
+        if (metadata.compactRouteTable == nullptr) {
+            metadata.compactRouteTable = new std::unordered_map<size_t, MAddress>();
+        }
+    }
+
     void RecordCompactRoute(size_t fromOff, MAddress dest)
     {
+        EnsureCompactRouteTable();
         auto* table = static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
-        if (table == nullptr) {
-            table = new std::unordered_map<size_t, MAddress>();
-            metadata.compactRouteTable = table;
-        }
         (*table)[fromOff] = dest;
     }
 
