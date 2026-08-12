@@ -246,6 +246,10 @@ int ScheduleProcessorInit(struct Schedule *schedule, unsigned int processorNum)
         error = ProcessorInit(schedule, &(processorGroup[id]), ProcessorNewId());
         if (error) {
             LOG_ERROR(error, "processor id:%d init failed", id);
+            for (unsigned int done = 0; done < id; done++) {
+                QueueDestroy(&processorGroup[done].runq);
+                PthreadSpinDestroy(&processorGroup[done].lock);
+            }
             MapleRuntime::NativeAllocator::NativeFree(processorGroup, mallocSize);
             return error;
         }
