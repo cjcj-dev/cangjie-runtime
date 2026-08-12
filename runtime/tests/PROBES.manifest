@@ -47,5 +47,6 @@ varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefFie
 objm_uleb_overshift_unit.cpp              orphan     no runner; BUG-23 overlong ULEB shift>=70 unit
 objm_nativealloc_zero_unit.cpp            orphan     no runner; BUG-24 NativeAlloc(0) Index underflow unit
 objm_generic_null_ti_unit.cpp             orphan     no runner; BUG-22 constrained generic null TypeInfo unit
+objm_fieldinfo_malloc_unit.cpp            orphan     no runner; BUG-21 FieldInfo malloc-null OOM unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
