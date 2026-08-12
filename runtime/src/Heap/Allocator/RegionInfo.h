@@ -24,6 +24,7 @@
 #include <handleapi.h>
 #include <memoryapi.h>
 #else
+#include <dlfcn.h>
 #include <sys/mman.h>
 #endif
 #include "Base/Globals.h"
@@ -2159,8 +2160,38 @@ private:
 
             // Named fatal before abort so OOB addresses leave a greppable trail
             // (was bare std::abort; o2fail R3 = 7/17 UNMAPPED SIGABRT with zero text).
-            LOG(RTLOG_FATAL, "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx)",
-                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE);
+            // unitzero: also emit 3 return addresses + dladdr so OOB maps to a site
+            // (cold path only; no hot-path counter).
+            void* ra0 = __builtin_return_address(0);
+            void* ra1 = nullptr;
+            void* ra2 = nullptr;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-address"
+            ra1 = __builtin_return_address(1);
+            ra2 = __builtin_return_address(2);
+#pragma GCC diagnostic pop
+#endif
+            const char* s0 = "?";
+            const char* s1 = "?";
+            const char* s2 = "?";
+            Dl_info di0{};
+            Dl_info di1{};
+            Dl_info di2{};
+            if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
+                s0 = di0.dli_sname;
+            }
+            if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
+                s1 = di1.dli_sname;
+            }
+            if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
+                s2 = di2.dli_sname;
+            }
+            LOG(RTLOG_FATAL,
+                "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
+                "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
+                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
+                ra0, s0, ra1, s1, ra2, s2);
             return 0;
         }
 

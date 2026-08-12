@@ -4852,6 +4852,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         } else {
             for (BaseObject* object : reachableVec) {
                 BaseObject* holder = currentObject(object);
+                // unitzero: ForwardObject returns nullptr for movable ghost-from with no
+                // to-version (WCollector.cpp:6699-6703). GetRegionInfoAt → GetUnitIdxAt
+                // has no null gate → named fatal "OOB addr=0" under young.evac_finish
+                // rebuild (probe 9/9: ra1=EvacuateYoungRegions ra0=GetRegionInfoAt).
+                // Same disposition as FixMinorObjectSlots null early-return; do not walk
+                // edges of a non-object. Boundary check in GetUnitIdxAt stays strict.
+                if (holder == nullptr || !Heap::IsHeapAddress(holder)) {
+                    continue;
+                }
                 RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
                 if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
                     continue;
