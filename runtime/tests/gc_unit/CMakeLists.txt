@@ -19,6 +19,7 @@ set(GC_UNIT_SOURCES
     test_defect_regressions.cpp
     test_region_bitmap.cpp
     test_region_age.cpp
+    test_unwind_regressions.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

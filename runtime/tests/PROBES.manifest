@@ -55,3 +55,4 @@ objm_fieldinfo_malloc_unit.cpp            orphan     no runner; BUG-21 FieldInfo
 objm_same_root_package_unit.cpp           orphan     no runner; SUSPECT-02 IsSameRootPackage NUL walk unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
+interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
