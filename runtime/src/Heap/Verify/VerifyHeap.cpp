@@ -289,7 +289,9 @@ void VerifyHeapObjects(const char* point, bool force)
                 return;
             }
 
-            // H3: each ref field null or target satisfies H1+H2.
+            // H3: each ref field null or target satisfies H1+H2+H4.
+            // H4 on the target is the leave-alone / reclaimed-from case: header bits
+            // can still look valid (H1+H2 pass) while the unit is already free/garbage.
             if (!obj->HasRefField()) {
                 return;
             }
@@ -300,6 +302,13 @@ void VerifyHeapObjects(const char* point, bool force)
                 }
                 if (!Heap::IsHeapAddress(target)) {
                     // Non-heap target (e.g. static / foreign) — not invariant H scope.
+                    return;
+                }
+                RegionInfo* tRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (tRegion == nullptr || tRegion->IsFreeRegion() || tRegion->IsGarbageRegion()) {
+                    ++stats.h3BadRef;
+                    ++stats.h4BadRegion;
+                    ReportDefect(stats, maxFailures, "h3-target-bad-region", target, obj, SampleTypeByte(target));
                     return;
                 }
                 const char* tReason = "ok";
