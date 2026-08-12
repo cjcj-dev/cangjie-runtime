@@ -7,6 +7,10 @@
 
 #include "ObjectModel/MClass.h"
 
+#include <iterator>
+#include <utility>
+#include <vector>
+
 #include "Base/Globals.h"
 #include "Common/TypeDef.h"
 #include "ExceptionManager.inline.h"
@@ -142,10 +146,12 @@ void TypeInfo::SetGCTib(GCTib gctib)
 
 void TypeInfo::SetMTableDesc(MTableDesc* desc)
 {
-    this->mTableDesc = desc;
-    std::atomic_thread_fence(std::memory_order_seq_cst);
-    // 15: The most significant bit indicates whether the mTable is initialized.
-    validInheritNum = validInheritNum & ((1ULL << 15) - 1);
+    // Publish the desc first so a reader that observes the cleared uninit bit
+    // also observes a real MTableDesc (release/acquire with validInheritNum).
+    __atomic_store_n(&this->mTableDesc, desc, __ATOMIC_RELEASE);
+    U16 inherit = __atomic_load_n(&validInheritNum, __ATOMIC_RELAXED);
+    inherit = static_cast<U16>(inherit & ((1U << 15) - 1));
+    __atomic_store_n(&validInheritNum, inherit, __ATOMIC_RELEASE);
 }
 
 void TypeInfo::SetEnumDebugInfo(EnumDebugInfo* enumDebugInfo)
@@ -262,8 +268,11 @@ void TypeInfo::TryUpdateExtensionData(TypeInfo* itf, ExtensionData* extensionDat
         }
 
         TryInitMTable();
+        MTableDesc* desc = GetMTableDesc();
+        CHECK(desc != nullptr);
+        std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
         TraverseInnerExtensionDefs();
-        auto& mTable = mTableDesc->mTable;
+        auto& mTable = desc->mTable;
         for (const auto& superTypePair : mTable) {
             auto superTi = superTypePair.second.GetSuperTi();
             // make sure super is the subtype of itf, and super is the direct super type of this type.
@@ -317,7 +326,10 @@ void TypeInfo::AddMTable(TypeInfo* itf, ExtensionData* extensionData)
     TryInitMTableNoLock();
     U32 itfUUID = itf->GetUUID();
     CHECK(itfUUID != 0);
-    auto& mTable = GetMTableDesc()->mTable;
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+    auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
         mTable.emplace(itfUUID, InheritFuncTable(extensionData, itf, extensionData->GetFuncTableSize()));
@@ -386,6 +398,26 @@ static bool ResolveExtensionData(
     return true;
 }
 
+static void MergeMTableSnapshot(TypeInfo* dest, TypeInfo* src)
+{
+    MTableDesc* destDesc = dest->GetMTableDesc();
+    MTableDesc* srcDesc = src->GetMTableDesc();
+    CHECK(destDesc != nullptr && srcDesc != nullptr);
+    if (destDesc == srcDesc) {
+        return;
+    }
+    std::vector<std::pair<U32, InheritFuncTable>> snapshot;
+    {
+        std::lock_guard<std::recursive_mutex> srcLock(srcDesc->mTableMutex);
+        snapshot.reserve(srcDesc->mTable.size());
+        for (const auto& pair : srcDesc->mTable) {
+            snapshot.emplace_back(pair.first, pair.second);
+        }
+    }
+    std::lock_guard<std::recursive_mutex> destLock(destDesc->mTableMutex);
+    destDesc->mTable.insert(std::make_move_iterator(snapshot.begin()), std::make_move_iterator(snapshot.end()));
+}
+
 static void ResolveInnerExtensionDefs(
     TypeInfo* ti, TypeInfo* resolveTi, const std::function<void(TypeInfo*)> getInterface)
 {
@@ -399,13 +431,11 @@ static void ResolveInnerExtensionDefs(
         if (ti == resolveTi) {
             return;
         }
-        auto& resolve_ti_mtable = resolveTi->GetMTableDesc()->mTable;
-        ti->GetMTableDesc()->mTable.insert(resolve_ti_mtable.begin(), resolve_ti_mtable.end());
+        MergeMTableSnapshot(ti, resolveTi);
         return;
     }
     if (ti != resolveTi) {
-        auto& resolve_ti_mtable = resolveTi->GetMTableDesc()->mTable;
-        ti->GetMTableDesc()->mTable.insert(resolve_ti_mtable.begin(), resolve_ti_mtable.end());
+        MergeMTableSnapshot(ti, resolveTi);
     }
 
     ExtensionData** vExtensionPtr = resolveTi->GetvExtensionDataStart();
@@ -443,11 +473,13 @@ static void ResolveInnerExtensionDefs(
 
 void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
 {
-    if (!this->mTableDesc->needsResolveInner) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    if (!desc->NeedResolveInner()) {
         return;
     }
     TypeInfo* curType = this;
-    this->mTableDesc->pending = true;
+    desc->pending.store(true, std::memory_order_relaxed);
     while (curType) {
         ResolveInnerExtensionDefs(this, curType, getInterface);
         if (curType->IsRawArray() || curType->IsVArray() || curType->IsCPointer()) {
@@ -455,13 +487,15 @@ void TypeInfo::TraverseInnerExtensionDefs(const std::function<void(TypeInfo*)> g
         }
         curType = curType->GetSuperTypeInfo();
     }
-    this->mTableDesc->pending = false;
-    this->mTableDesc->needsResolveInner = false;
+    desc->pending.store(false, std::memory_order_relaxed);
+    desc->MarkInnerResolved();
 }
 
 void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> getInterface)
 {
-    if (!this->mTableDesc->NeedResolveOuter()) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    if (!desc->NeedResolveOuter()) {
         return;
     }
     U16 typeArgNum = GetTypeArgNum();
@@ -498,17 +532,20 @@ void TypeInfo::TraverseOuterExtensionDefs(const std::function<void(TypeInfo*)> g
             return false;
         },
         sourceGeneric);
-    this->mTableDesc->needsResolveOuter = false;
+    desc->MarkOuterResolved();
 }
 
 void TypeInfo::GetInterfaces(std::vector<TypeInfo*> &itfs)
 {
     TryInitMTable();
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
     TraverseInnerExtensionDefs();
     if (IsGenericTypeInfo()) {
         TraverseOuterExtensionDefs();
     }
-    for (const auto& pair : mTableDesc->mTable) {
+    for (const auto& pair : desc->mTable) {
         auto super = pair.second.GetSuperTi();
         if (super->IsInterface()) {
             itfs.emplace_back(super);
@@ -522,8 +559,10 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         return nullptr;
     }
 
-    std::lock_guard<std::recursive_mutex> lock(mTableDesc->mTableMutex);
-    for (const auto& pair : mTableDesc->mTable) {
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
+    for (const auto& pair : desc->mTable) {
         if (pair.first == GetUUID()) {
             // Avoid infinite recursion. The mTAble may contain itself.
             continue;
@@ -532,7 +571,7 @@ ExtensionData* TypeInfo::FindExtensionDataRecursively(TypeInfo* itf)
         auto found = super->FindExtensionData(itf, true);
         if (found) {
             // This won't cause the issue of iterator invalidation since the function will exit immediately.
-            mTableDesc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
+            desc->mTable.emplace(itf->GetUUID(), InheritFuncTable(found, itf, found->GetFuncTableSize()));
             return found;
         }
     }
@@ -543,32 +582,31 @@ ExtensionData* TypeInfo::FindExtensionData(TypeInfo* itf, bool searchRecursively
 {
     TryInitMTable();
     auto itfUUID = itf->GetUUID();
-    if (!mTableDesc->IsFullyHandled()) {
-        std::lock_guard<std::recursive_mutex> lock(mTableDesc->mTableMutex);
-        if (!mTableDesc->IsFullyHandled()) {
-            // Why need this? Consider the following scenarios:
-            // interface I1<T> {}
-            // class CB<T> <: I1<T> where T <: I1<T>
-            // class CA <: CB<CA> {}
-            // Now, generated NonExtensionDatas = [..., CA_CB, CA_I1, ..., CB_I1] (ignore virtual functions).
-            // For the CA, when the CB is traversed, the CA is I1<CA> needs to be checked.
-            // In this case, IsSubType() is invoked to repeatedly generate the mTable of the CA. And The repeated
-            // invoking can be quickly filtered out.
-            if (mTableDesc->pending) {
-                auto it = mTableDesc->mTable.find(itfUUID);
-                if (it != mTableDesc->mTable.end()) {
-                    return it->second.GetExtensionData();
-                } else {
-                    return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
-                }
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> lock(desc->mTableMutex);
+    if (!desc->IsFullyHandled()) {
+        // Why need this? Consider the following scenarios:
+        // interface I1<T> {}
+        // class CB<T> <: I1<T> where T <: I1<T>
+        // class CA <: CB<CA> {}
+        // Now, generated NonExtensionDatas = [..., CA_CB, CA_I1, ..., CB_I1] (ignore virtual functions).
+        // For the CA, when the CB is traversed, the CA is I1<CA> needs to be checked.
+        // In this case, IsSubType() is invoked to repeatedly generate the mTable of the CA. And The repeated
+        // invoking can be quickly filtered out.
+        if (desc->pending.load(std::memory_order_relaxed)) {
+            auto it = desc->mTable.find(itfUUID);
+            if (it != desc->mTable.end()) {
+                return it->second.GetExtensionData();
+            } else {
+                return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
             }
-            TraverseInnerExtensionDefs();
-            TraverseOuterExtensionDefs();
         }
+        TraverseInnerExtensionDefs();
+        TraverseOuterExtensionDefs();
     }
-    auto& mTable = mTableDesc->mTable;
-    auto it = mTable.find(itfUUID);
-    if (it != mTable.end()) {
+    auto it = desc->mTable.find(itfUUID);
+    if (it != desc->mTable.end()) {
         return it->second.GetExtensionData();
     }
     return itf->IsInterface() && searchRecursively ? FindExtensionDataRecursively(itf) : nullptr;
@@ -582,11 +620,15 @@ FuncPtr* TypeInfo::GetMTable(TypeInfo* itf)
     if (UNLIKELY(IsTempEnum() && GetSuperTypeInfo())) {
         return GetSuperTypeInfo()->GetMTable(itf);
     }
-    // Fast path: mTable ready and entry found with func table already updated
-    if (LIKELY(!IsMTableDescUnInitialized() && mTableDesc->IsFullyHandled())) {
+    // Fast path: flags published (acquire) then locked find. The map is never
+    // immutable — FindExtensionDataRecursively can still emplace — so every
+    // find holds mTableMutex. The flags only skip the initial resolve.
+    MTableDesc* desc = GetMTableDesc();
+    if (LIKELY(!IsMTableDescUnInitialized() && desc != nullptr && desc->IsFullyHandled())) {
         const U32 itfUUID = itf->GetUUID();
-        auto it = mTableDesc->mTable.find(itfUUID);
-        if (it != mTableDesc->mTable.end()) {
+        std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+        auto it = desc->mTable.find(itfUUID);
+        if (it != desc->mTable.end()) {
             ExtensionData* ed = it->second.GetExtensionData();
             if (LIKELY(ed->IsFuncTableUpdated())) {
                 return ed->GetFuncTable();
@@ -615,10 +657,14 @@ TypeInfo* TypeInfo::GetMethodOuterTI(TypeInfo* itf, U64 index)
     if (UNLIKELY(IsTempEnum() && superTi != nullptr)) {
         return superTi->GetMethodOuterTI(itf, index);
     }
-    if (UNLIKELY(IsMTableDescUnInitialized() || !mTableDesc->IsFullyHandled())) {
+    if (UNLIKELY(IsMTableDescUnInitialized() || GetMTableDesc() == nullptr ||
+                 !GetMTableDesc()->IsFullyHandled())) {
         (void)FindExtensionData(itf, true);
     }
-    auto& mTable = mTableDesc->mTable;
+    MTableDesc* desc = GetMTableDesc();
+    CHECK(desc != nullptr);
+    std::lock_guard<std::recursive_mutex> tableLock(desc->mTableMutex);
+    auto& mTable = desc->mTable;
     auto it = mTable.find(itfUUID);
     if (it == mTable.end()) {
         LOG(RTLOG_FATAL, "expected interface %s is not in class %s", itf->GetName(), GetName());
