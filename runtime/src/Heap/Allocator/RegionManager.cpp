@@ -486,6 +486,54 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
         pool->WaitFinish();
         size_t nRec = recorded.load(std::memory_order_relaxed);
         VLOG(REPORT, "[GCV2][pinned_scan] parallel=1 regions=%zu workers=%d recorded=%zu", n, workers, nRec);
+        static const bool parwhyOn = []() {
+            const char* v = std::getenv("MRT_GCV2_PARWHY");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (parwhyOn) {
+            size_t bytes = 0;
+            size_t objs = 0;
+            size_t fieldHolders = 0;
+            size_t adj256 = 0;
+            size_t adj4k = 0;
+            size_t far64k = 0;
+            size_t pairs = 0;
+            for (size_t i = 0; i < n; ++i) {
+                RegionInfo* region = regions[i];
+                if (region == nullptr) {
+                    continue;
+                }
+                bytes += region->GetRegionSize();
+                if (i + 1 < n && regions[i + 1] != nullptr) {
+                    uintptr_t a = region->GetRegionStart();
+                    uintptr_t b = regions[i + 1]->GetRegionStart();
+                    uintptr_t d = a > b ? a - b : b - a;
+                    ++pairs;
+                    if (d < 256) {
+                        ++adj256;
+                    }
+                    if (d < 4096) {
+                        ++adj4k;
+                    }
+                    if (d >= 65536) {
+                        ++far64k;
+                    }
+                }
+                region->VisitAllObjects([&objs, &fieldHolders](BaseObject* object) {
+                    if (object == nullptr) {
+                        return;
+                    }
+                    ++objs;
+                    if (object->HasRefField()) {
+                        ++fieldHolders;
+                    }
+                });
+            }
+            LOG(RTLOG_ERROR,
+                "[GCV2][parwhy][drain] hit=1 workers=%d regions=%zu bytes=%zu objs=%zu fieldHolders=%zu "
+                "pairs=%zu adj256=%zu adj4k=%zu far64k=%zu recorded=%zu joins=1",
+                workers, n, bytes, objs, fieldHolders, pairs, adj256, adj4k, far64k, nRec);
+        }
         return nRec;
     }
     // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
@@ -501,7 +549,18 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     unmovableFromRegionList.VisitAllRegions(scanRegion);
     fromRegionList.VisitAllRegions(scanRegion);
     tlRegionList.VisitAllRegions(scanRegion);
-    return recorded.load(std::memory_order_relaxed);
+    size_t nRecSerial = recorded.load(std::memory_order_relaxed);
+    static const bool parwhyOnSerial = []() {
+        const char* v = std::getenv("MRT_GCV2_PARWHY");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (parwhyOnSerial) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][parwhy][drain] hit=0 workers=1 regions=0 bytes=0 objs=0 fieldHolders=0 "
+            "pairs=0 adj256=0 adj4k=0 far64k=0 recorded=%zu joins=0",
+            nRecSerial);
+    }
+    return nRecSerial;
 }
 
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)

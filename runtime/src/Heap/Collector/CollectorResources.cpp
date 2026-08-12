@@ -261,6 +261,18 @@ void CollectorResources::StartGCThreads()
             gcThreadCount = 2;
             concurrentGcThreadCount = 2;
         }
+        // parwhy: exact worker-count override for STW-parallel curves. Unset = product.
+        // N is total workers including the calling GC thread (helper = N-1). Range [1,64].
+        {
+            const char* nEnv = std::getenv("MRT_GCV2_GC_THREADS");
+            if (nEnv != nullptr && nEnv[0] != '\0') {
+                int n = std::atoi(nEnv);
+                if (n >= 1 && n <= 64) {
+                    gcThreadCount = n;
+                    concurrentGcThreadCount = std::max((n + 2) / 4, 1);
+                }
+            }
+        }
         int32_t helperThreads = gcThreadCount - 1;
         VLOG(REPORT,
              "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "

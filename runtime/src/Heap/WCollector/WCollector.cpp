@@ -4878,11 +4878,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Default pool is helper=1 (2 workers). Start/Stop around a 13ms FYS0 walk
             // is a tax (measured +4ms). Parallel only when the pool is already large
             // (MRT_GCV2_JVM_GC_THREADS=1) and the holder set is big enough to amortize.
+            // parwhy: MRT_GCV2_PREGRANT_FORCE=1 drops the workers/nObj gate so the
+            // 1/2-worker points on the curve actually enter the parallel path.
             int32_t pregrantWorkers = 0;
             if (pregrantPool != nullptr) {
                 pregrantWorkers = pregrantPool->GetMaxThreadNum() + 1;
             }
-            const bool usePregrantPar = pregrantPool != nullptr && pregrantWorkers >= 3 && nPreObj >= 4096;
+            static const bool pregrantForce = []() {
+                const char* v = std::getenv("MRT_GCV2_PREGRANT_FORCE");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            const bool usePregrantPar = pregrantPool != nullptr &&
+                (pregrantForce ? pregrantWorkers >= 1 : (pregrantWorkers >= 3 && nPreObj >= 4096));
             if (usePregrantPar) {
                 int32_t workers = pregrantWorkers;
                 if (workers < 1) {
@@ -4972,6 +4979,46 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 LOG(RTLOG_ERROR, "[GCV2][pregrant] parallel=1 workers=%d nObj=%zu nSlot=%zu grant=%zu", workers,
                     nPreObj, nPreSlot, g_installDomainGrant.load(std::memory_order_relaxed));
+                static const bool parwhyOn = []() {
+                    const char* v = std::getenv("MRT_GCV2_PARWHY");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
+                if (parwhyOn) {
+                    size_t adj256 = 0;
+                    size_t adj4k = 0;
+                    size_t far64k = 0;
+                    size_t pairs = 0;
+                    uintptr_t prev = 0;
+                    size_t fieldHolders = 0;
+                    for (size_t i = 0; i < nPreObj; ++i) {
+                        BaseObject* object = reachableVec[i];
+                        if (object == nullptr) {
+                            continue;
+                        }
+                        uintptr_t addr = reinterpret_cast<uintptr_t>(object);
+                        if (prev != 0) {
+                            uintptr_t d = addr > prev ? addr - prev : prev - addr;
+                            ++pairs;
+                            if (d < 256) {
+                                ++adj256;
+                            }
+                            if (d < 4096) {
+                                ++adj4k;
+                            }
+                            if (d >= 65536) {
+                                ++far64k;
+                            }
+                        }
+                        prev = addr;
+                        if (object->HasRefField()) {
+                            ++fieldHolders;
+                        }
+                    }
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][parwhy][pregrant] hit=1 workers=%d nObj=%zu nSlot=%zu fieldHolders=%zu "
+                        "pairs=%zu adj256=%zu adj4k=%zu far64k=%zu joins=%d",
+                        workers, nPreObj, nPreSlot, fieldHolders, pairs, adj256, adj4k, far64k, 1 + 1);
+                }
             } else {
                 for (BaseObject* object : reachableVec) {
                     ensureObj(object);
@@ -5000,6 +5047,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     if (grantAfter == grantBefore) {
                         break;
                     }
+                }
+                static const bool parwhyOnSerial = []() {
+                    const char* v = std::getenv("MRT_GCV2_PARWHY");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
+                if (parwhyOnSerial) {
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][parwhy][pregrant] hit=0 workers=%d nObj=%zu nSlot=%zu fieldHolders=-1 "
+                        "pairs=0 adj256=0 adj4k=0 far64k=0 joins=0",
+                        pregrantWorkers, nPreObj, nPreSlot);
                 }
             }
             // youngstatic: static roots are FixMinor-critical. ensureObj may skip non-from
