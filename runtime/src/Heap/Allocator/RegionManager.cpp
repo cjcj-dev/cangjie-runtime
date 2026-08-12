@@ -1987,6 +1987,12 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+    const bool youngRegion = region->IsYoungRegion();
+    // compactrem: count calls + per-object geometry / remset-in-from (default-off).
+    if (O2ORemsetDiag::Enabled()) {
+        O2ORemsetDiag::NoteCompactCall(/*overload*/ 1, youngRegion);
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress regionLimit = region->GetRegionAllocPtr();
     region->SetRegionAllocPtr(regionStart);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
@@ -2003,8 +2009,22 @@ void RegionManager::CompactRegion(RegionInfo* region)
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            // Pre-copy remset census at from range (Transfer not wired on this path yet).
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
     }
@@ -2039,6 +2059,11 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
         toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
+    const bool youngRegion = region->IsYoungRegion();
+    if (O2ORemsetDiag::Enabled()) {
+        O2ORemsetDiag::NoteCompactCall(/*overload*/ 2, youngRegion);
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress currentPtr = regionStart;
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
@@ -2056,9 +2081,22 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             }
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
         currentObj = from_region_addr(currentPtr);
@@ -2078,9 +2116,22 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
     }

@@ -48,6 +48,16 @@ void NoteOldRegionForwarded(RegionInfo* region, size_t remsetInFrom, size_t live
 // Called from ScrubRememberedSetForRegion when probe on and region is non-young.
 void NoteScrubNonYoung(RegionInfo* region, size_t scrubbed);
 
+// CompactRegion path (separate from ForwardRegion). overload: 1 = CompactRegion(region),
+// 2 = CompactRegion(region, toRegion1). Counts only when Enabled().
+void NoteCompactCall(unsigned overload, bool youngRegion);
+// One survived object moved by CompactRegion. classifies fromBase vs toBase geometry.
+void NoteCompactObjectMove(BaseObject* fromObj, BaseObject* toObj, size_t size, bool youngRegion);
+// Pre-move remset census for one object range [fromBase, fromBase+size).
+void NoteCompactRemsetInFrom(size_t n);
+// Bits re-recorded at to by TransferObjectSlots on compact path (0 until wired).
+void NoteCompactRecordedOnTo(size_t n);
+
 // Emit + optionally reset process counters (call at GC cycle boundaries).
 void DumpAndMaybeReset(const char* point, bool reset);
 
