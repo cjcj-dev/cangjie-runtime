@@ -456,7 +456,7 @@ CString SamplesRecord::ParseUrl(uint64_t funcIdentifier)
 #endif
     CString url =  path.IsEmpty() ? fileName : path + slash + fileName;
     identifierUrlMap.emplace(funcIdentifier, url);
-    return fileName;
+    return url;
 }
 
 CString SamplesRecord::GetDemangleName(uint64_t funcIdentifier)
