@@ -16,12 +16,12 @@
 #include "Common/ColourTypes.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
-#include "Heap/Collector/TracingCollector.h"
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/Collector/TracingCollector.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
