@@ -8,6 +8,10 @@
 #include <cstring>
 #include <cstdint>
 #include <cerrno>
+#ifdef MRT_MACOS
+#include <fcntl.h>
+#include <unistd.h>
+#endif
 #include "schedule_impl.h"
 #include "securec.h"
 #include "sock_impl.h"
@@ -1204,6 +1208,7 @@ int SockSendGeneral(SOCKET fd, const void *buf, unsigned int len, SocketFlag fla
     if (operation == nullptr) {
         ret = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(ret, "get iocp write operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, type);
         return ret;
     }
 
@@ -1254,6 +1259,7 @@ int SockRecvGeneral(SOCKET fd, void *buf, unsigned int len, SocketFlag flags, in
     if (operation == nullptr) {
         ret = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(ret, "update iocp read operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, type);
         return ret;
     }
 
@@ -1305,6 +1311,7 @@ int SockSendtoGeneral(SOCKET fd, void *bufAndLen, SocketFlag flags, const struct
     if (ioperation == nullptr) {
         err = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(err, "get iocp write operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, pollType);
         return err;
     }
 
@@ -1361,6 +1368,7 @@ int SockRecvfromGeneral(SOCKET fd, void *bufAndLen, SocketFlag flags, struct Soc
     if (ioperation == nullptr) {
         err = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(err, "update iocp read operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, pollType);
         return err;
     }
 
@@ -1755,6 +1763,7 @@ int SockCreateInternal(int domain, int type, int protocol, int *socketError)
     if (floexec == -1 || nonblock == -1) {
         *socketError = errno;
         LOG_ERROR(*socketError, "set attribute failed when create socket, sockFd: %d", sockFd);
+        (void)close(sockFd);
         return -1;
     }
     return sockFd;
@@ -1767,11 +1776,15 @@ int SockAcceptInternal(int inFd, struct sockaddr *sockaddr, socklen_t *addrLen, 
     do {
         connFd = accept(inFd, sockaddr, addrLen);
         acceptErr = errno;
+        if (connFd == -1) {
+            continue;
+        }
         int floexec = fcntl(connFd, F_SETFD, fcntl(connFd, F_GETFD, 0) | FD_CLOEXEC);
         int nonblock = fcntl(connFd, F_SETFL, fcntl(connFd, F_GETFL, 0) | O_NONBLOCK);
-        if (connFd != -1 && (floexec == -1 || nonblock == -1)) {
+        if (floexec == -1 || nonblock == -1) {
             LOG_ERROR(errno, "accept failed when fcntl fd: %d", connFd);
             fcntlErr = errno;
+            (void)close(connFd);
             return -1;
         }
     } while ((connFd == -1) && (acceptErr == EINTR || acceptErr == ECONNABORTED));
