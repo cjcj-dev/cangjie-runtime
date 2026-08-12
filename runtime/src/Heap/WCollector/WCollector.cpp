@@ -4726,14 +4726,66 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     break;
                 }
             }
-            RootVisitor rootEnsure = [this, &ensureObj](ObjectRef& root) {
+            // youngstatic: static roots are FixMinor-critical. ensureObj may skip non-from
+            // faces; after PrepareForwardable young cset is ghost — force domain paint and
+            // count residual admit-miss before FixMinorRootSlots.
+            size_t ysRootEnsure = 0;
+            size_t ysRootMissAfter = 0;
+            size_t ysRootYoung = 0;
+            RootVisitor rootEnsure = [this, &ensureObj, &ysRootEnsure, &ysRootMissAfter,
+                                     &ysRootYoung](ObjectRef& root) {
                 zaddress_unsafe observed = root.LoadPlain();
                 HeapSlot<> bits(to_zpointer(raw(observed)));
-                ensureObj(to_object(bits.GetTargetObject()));
+                BaseObject* obj = to_object(bits.GetTargetObject());
+                ensureObj(obj);
+                if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("youngstatic.pregrant", obj)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+                    if (host == nullptr) {
+                        return;
+                    }
+                    obj = host;
+                    ensureObj(obj);
+                }
+                RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                if (region == nullptr || !region->IsYoungRegion()) {
+                    return;
+                }
+                ++ysRootYoung;
+                ++ysRootEnsure;
+                // Second chance: Ensure may have skipped when !ghost&&!from earlier in process;
+                // ghost face is required for AdmitForRoute.
+                EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
+                LiveInfo* g0 = region->GetLiveInfo0ForProbe();
+                size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+                if (g0 == nullptr || !g0->IsSurvivedObject(offset)) {
+                    // Last resort under FORWARDABLE: MarkObject + bind ghost.
+                    (void)MarkObject(obj);
+                    region->BindLiveInfo0FromLiveIfNull();
+                    g0 = region->GetLiveInfo0ForProbe();
+                    if (g0 != nullptr && g0->markBitmap != nullptr &&
+                        reinterpret_cast<uintptr_t>(g0->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+                        size_t objSize = obj->GetSize();
+                        size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
+                        if (objSize > 0 && offset + objSize <= regionSize) {
+                            SealCheck::NotePaint(region, offset, objSize, "youngstatic.pregrant.ghost");
+                            (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+                        }
+                    }
+                    g0 = region->GetLiveInfo0ForProbe();
+                    if (g0 == nullptr || !g0->IsSurvivedObject(offset)) {
+                        ++ysRootMissAfter;
+                    }
+                }
             };
             MutatorManager::Instance().VisitAllMutators(
                 [&rootEnsure](Mutator& mutator) { mutator.VisitMutatorRoots(rootEnsure); });
             Heap::GetHeap().VisitStaticRoots(rootEnsure);
+            LOG(RTLOG_ERROR,
+                "[GCV2][youngstatic] pregrant_static young=%zu ensureCalls=%zu missAfter=%zu",
+                ysRootYoung, ysRootEnsure, ysRootMissAfter);
             Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rootEnsure);
             collectorResources.GetFinalizerProcessor().VisitRawPointers(rootEnsure);
             Heap::GetHeap().VisitAllExportRoots(rootEnsure);
@@ -5745,6 +5797,20 @@ void WCollector::DoYoungGarbageCollection()
         VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
             if (fullYoungScan) {
                 if (Heap::IsHeapAddress(object)) {
+                    // youngstatic: under FYS PushYoungObject is bypassed — still count static
+                    // family for Q1 funnel (TLS origin set by VisitMinorRootSlots).
+                    if (YoungStaticProbeOn() && gMinorRootOrigin != nullptr &&
+                        std::strcmp(gMinorRootOrigin, "static") == 0) {
+                        g_ysPushSeen.fetch_add(1, std::memory_order_relaxed);
+                        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                        if (region == nullptr || !region->IsYoungRegion()) {
+                            g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
+                        } else if (region->IsMarkedObject(object)) {
+                            g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
+                        } else {
+                            g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
+                        }
+                    }
                     workStack.push_back(object);
                 }
             } else {
@@ -6087,14 +6153,17 @@ void WCollector::DoYoungGarbageCollection()
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
              reachableVec.size());
         // youngstatic: seal static-root young targets into mark face under STW2.
-        // FixMinorRootSlots VisitStaticRoots; concurrent TRACE must leave survivor bits for
-        // those targets (ZGC: live roots have to-version). SATB-on-static write closes the
-        // overwrite window; this seal closes residual enum→mark gaps without HealRoot(null).
+        // Probe showed VisitStaticRoots enumerates (staticYoung≫0) but PushYoungObject is
+        // bypassed under FYS (direct workStack). Residual unmarked static young still reach
+        // FixMinor as ghost-from with live0Surv=0. Force MarkObject here (not only push).
         {
             size_t sealed = 0;
+            size_t already = 0;
             size_t staticYoung = 0;
             size_t staticOld = 0;
-            Heap::GetHeap().VisitStaticRoots([this, &sealed, &staticYoung, &staticOld, &workStack](RootSlot& root) {
+            size_t gateSkip = 0;
+            Heap::GetHeap().VisitStaticRoots([this, &sealed, &already, &staticYoung, &staticOld, &gateSkip,
+                                             &workStack](RootSlot& root) {
                 zaddress_unsafe observed = root.LoadPlain();
                 HeapSlot<> bits(to_zpointer(raw(observed)));
                 BaseObject* obj = to_object(bits.GetTargetObject());
@@ -6104,12 +6173,18 @@ void WCollector::DoYoungGarbageCollection()
                 if (!Collector::PlausibleManagedObjectGate("youngstatic.seal", obj)) {
                     BaseObject* host = Collector::TryRecoverInteriorBase(obj);
                     if (host == nullptr || host == obj) {
+                        ++gateSkip;
                         return;
                     }
                     obj = host;
                 }
+                if (!obj->IsValidObject()) {
+                    ++gateSkip;
+                    return;
+                }
                 RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
                 if (region == nullptr) {
+                    ++gateSkip;
                     return;
                 }
                 if (!region->IsYoungRegion()) {
@@ -6117,19 +6192,23 @@ void WCollector::DoYoungGarbageCollection()
                     return;
                 }
                 ++staticYoung;
-                if (!region->IsMarkedObject(obj)) {
-                    workStack.push_back(obj);
-                    ++sealed;
+                if (region->IsMarkedObject(obj)) {
+                    ++already;
+                    return;
                 }
+                // Direct paint (do not rely solely on workStack drain under concurrent residue).
+                (void)MarkObject(obj);
+                workStack.push_back(obj);
+                ++sealed;
             });
             if (!workStack.empty()) {
                 TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
                                   weakSlots, useBitmapLedger);
             }
-            VLOG(REPORT,
-                 "[GCV2][youngstatic] stw2_static_seal sealed=%zu staticYoung=%zu staticOld=%zu "
-                 "reachable=%zu",
-                 sealed, staticYoung, staticOld, reachableVec.size());
+            LOG(RTLOG_ERROR,
+                "[GCV2][youngstatic] stw2_static_seal sealed=%zu already=%zu staticYoung=%zu "
+                "staticOld=%zu gateSkip=%zu reachable=%zu",
+                sealed, already, staticYoung, staticOld, gateSkip, reachableVec.size());
         }
     }
     g_minorLedgerCost.Report();
