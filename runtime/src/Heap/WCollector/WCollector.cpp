@@ -4222,7 +4222,18 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
                 std::fflush(stderr);
             }
         }
-        HealRoot(root, from_object(nullptr));
+        // youngstatic / ZGC zBarrier "Never heal with null": a live RootSlot must not be
+        // cleared when ForwardObject misses. Leave the slot alone (still names from/ghost);
+        // mutator load-barrier / later STW can remap. Heap-field CAS-null path is separate.
+        // ⛔ Do not reinstall from as a "fix"; ⛔ do not StorePlain(null) on roots.
+        static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
+        size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (la <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][youngstatic] root_fwd_null_leave_alone n=%zu root=%p target=%p "
+                "(ZGC never-heal-null; mark miss residual)",
+                la, static_cast<void*>(&root), static_cast<void*>(target));
+        }
         return false;
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
