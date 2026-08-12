@@ -24,6 +24,7 @@ bool Enabled();
 
 // Every young root seen at pregrant / grant-pass. Caps silently.
 void NotePregrant(BaseObject* obj, const char* site);
+void NotePregrantSlot(void* slot, BaseObject* obj, const char* site);
 
 // Region about to freeze geometry (RouteOrCompactRegionImpl entry).
 void NoteRouteEnter(RegionInfo* region);
@@ -33,6 +34,7 @@ void NoteCompactDone(RegionInfo* region);
 
 // Fix admit_miss / leave-alone on a root target.
 void NoteFixMiss(BaseObject* obj);
+void NoteFixMissSlot(void* slot, BaseObject* obj);
 
 } // namespace OffpastDiag
 } // namespace MapleRuntime

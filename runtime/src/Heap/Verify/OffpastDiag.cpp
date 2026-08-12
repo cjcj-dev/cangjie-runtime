@@ -67,6 +67,7 @@ struct Snap {
 struct Slot {
     BaseObject* target = nullptr;
     RegionInfo* region = nullptr;
+    void* rootSlot = nullptr;
     const char* site = "";
     Snap pre{};
     Snap route{};
@@ -77,6 +78,17 @@ struct Slot {
     uint8_t seenCompact = 0;
     uint8_t seenFix = 0;
 };
+
+constexpr size_t kSlotCap = 2048;
+struct RootSeen {
+    void* slot = nullptr;
+    BaseObject* obj = nullptr;
+    uint8_t young = 0;
+    uint8_t ghost = 0;
+    const char* site = "";
+};
+RootSeen gRoots[kSlotCap];
+std::atomic<size_t> gRootN{ 0 };
 
 Slot gSlots[kCap];
 std::atomic<size_t> gN{ 0 };
@@ -186,6 +198,56 @@ bool Enabled()
     return GateOn();
 }
 
+void RememberRoot(void* slot, BaseObject* obj, const char* site, uint8_t young, uint8_t ghost)
+{
+    if (slot == nullptr) {
+        return;
+    }
+    size_t i = gRootN.fetch_add(1, std::memory_order_acq_rel);
+    if (i >= kSlotCap) {
+        return;
+    }
+    gRoots[i].slot = slot;
+    gRoots[i].obj = obj;
+    gRoots[i].young = young;
+    gRoots[i].ghost = ghost;
+    gRoots[i].site = (site != nullptr) ? site : "";
+}
+
+const RootSeen* FindRoot(void* slot)
+{
+    const size_t n = gRootN.load(std::memory_order_acquire);
+    for (size_t i = 0; i < n && i < kSlotCap; ++i) {
+        if (gRoots[i].slot == slot) {
+            return &gRoots[i];
+        }
+    }
+    return nullptr;
+}
+
+void NotePregrantSlot(void* slot, BaseObject* obj, const char* site)
+{
+    if (!GateOn()) {
+        return;
+    }
+    HeartbeatOnce();
+    EnsureAtexit();
+    uint8_t young = 0;
+    uint8_t ghost = 0;
+    if (obj != nullptr) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        if (region != nullptr) {
+            young = region->IsYoungRegion() ? 1 : 0;
+        }
+        region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        ghost = (region != nullptr) ? 1 : 0;
+    }
+    RememberRoot(slot, obj, site, young, ghost);
+    if (obj != nullptr && young != 0) {
+        NotePregrant(obj, site);
+    }
+}
+
 void NotePregrant(BaseObject* obj, const char* site)
 {
     if (!GateOn() || obj == nullptr) {
@@ -256,6 +318,29 @@ void NoteCompactDone(RegionInfo* region)
             ++printed;
         }
     }
+}
+
+void NoteFixMissSlot(void* slot, BaseObject* obj)
+{
+    if (!GateOn()) {
+        return;
+    }
+    HeartbeatOnce();
+    EnsureAtexit();
+    const RootSeen* rs = FindRoot(slot);
+    if (rs == nullptr) {
+        std::fprintf(stderr,
+                     "[GCV2][offpast] slot_unseen slot=%p target=%p (Fix slot not in pregrant visit)\n",
+                     slot, static_cast<void*>(obj));
+    } else {
+        std::fprintf(stderr,
+                     "[GCV2][offpast] slot_seen slot=%p fixTarget=%p preObj=%p young=%u ghost=%u site=%s sameObj=%u\n",
+                     slot, static_cast<void*>(obj), static_cast<void*>(rs->obj),
+                     static_cast<unsigned>(rs->young), static_cast<unsigned>(rs->ghost), rs->site,
+                     static_cast<unsigned>(rs->obj == obj));
+    }
+    std::fflush(stderr);
+    NoteFixMiss(obj);
 }
 
 void NoteFixMiss(BaseObject* obj)

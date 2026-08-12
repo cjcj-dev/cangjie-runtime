@@ -4293,7 +4293,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
                 std::fflush(stderr);
             }
         }
-        OffpastDiag::NoteFixMiss(target);
+        OffpastDiag::NoteFixMissSlot(static_cast<void*>(&root), target);
         // youngstatic / ZGC zBarrier "Never heal with null": a live RootSlot must not be
         // cleared when ForwardObject misses. Leave the slot alone (still names from/ghost);
         // mutator load-barrier / later STW can remap. Heap-field CAS-null path is separate.
@@ -4354,7 +4354,7 @@ void WCollector::FixMinorRootSlots()
         }
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
             (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-            OffpastDiag::NotePregrant(obj, "grant_pass");
+            OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "grant_pass");
         } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
@@ -4470,7 +4470,7 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
         }
         if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
             (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
-            OffpastDiag::NotePregrant(obj, "grant_pass.par");
+            OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "grant_pass.par");
         } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass.par", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
             if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
@@ -4891,6 +4891,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 zaddress_unsafe observed = root.LoadPlain();
                 HeapSlot<> bits(to_zpointer(raw(observed)));
                 BaseObject* obj = to_object(bits.GetTargetObject());
+                OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "pregrant_raw");
                 ensureObj(obj);
                 if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
                     return;
@@ -4933,7 +4934,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                         ++ysRootMissAfter;
                     }
                 }
-                OffpastDiag::NotePregrant(obj, "pregrant_static");
+                OffpastDiag::NotePregrantSlot(static_cast<void*>(&root), obj, "pregrant_static");
             };
             MutatorManager::Instance().VisitAllMutators(
                 [&rootEnsure](Mutator& mutator) { mutator.VisitMutatorRoots(rootEnsure); });
