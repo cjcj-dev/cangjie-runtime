@@ -42,6 +42,7 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+std::atomic<size_t> RegionInfo::UnitInfo::g_unitIdxInRangeHits{ 0 };
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };

@@ -24,6 +24,7 @@
 #include <handleapi.h>
 #include <memoryapi.h>
 #else
+#include <dlfcn.h>
 #include <sys/mman.h>
 #endif
 #include "Base/Globals.h"
@@ -2151,16 +2152,52 @@ private:
         static size_t totalUnitCount;
 
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
+        // unitzero: OOB caller attribution (ra0/ra1/ra2 + positive in-range counter).
+        // Boundary check itself is not relaxed; this only names who fed the OOB addr.
+        static std::atomic<size_t> g_unitIdxInRangeHits;
         static size_t GetUnitIdxAt(uintptr_t allocAddr)
         {
             if (heapStartAddress <= allocAddr && allocAddr < (heapStartAddress + totalUnitCount * UNIT_SIZE)) {
+                // Positive control: same counter family as OOB so a crash log with
+                // oob_n>0 and inrange_n>0 proves the probe is live (not silent).
+                g_unitIdxInRangeHits.fetch_add(1, std::memory_order_relaxed);
                 return (allocAddr - heapStartAddress) / UNIT_SIZE;
             }
 
             // Named fatal before abort so OOB addresses leave a greppable trail
             // (was bare std::abort; o2fail R3 = 7/17 UNMAPPED SIGABRT with zero text).
-            LOG(RTLOG_FATAL, "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx)",
-                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE);
+            // unitzero: also emit 3 return addresses + dladdr so 8/8 OOB map to a site.
+            void* ra0 = __builtin_return_address(0);
+            void* ra1 = nullptr;
+            void* ra2 = nullptr;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-address"
+            ra1 = __builtin_return_address(1);
+            ra2 = __builtin_return_address(2);
+#pragma GCC diagnostic pop
+#endif
+            const char* s0 = "?";
+            const char* s1 = "?";
+            const char* s2 = "?";
+            Dl_info di0{};
+            Dl_info di1{};
+            Dl_info di2{};
+            if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
+                s0 = di0.dli_sname;
+            }
+            if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
+                s1 = di1.dli_sname;
+            }
+            if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
+                s2 = di2.dli_sname;
+            }
+            size_t inrange = g_unitIdxInRangeHits.load(std::memory_order_relaxed);
+            LOG(RTLOG_FATAL,
+                "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) inrange_n=%zu "
+                "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
+                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
+                inrange, ra0, s0, ra1, s1, ra2, s2);
             return 0;
         }
 
