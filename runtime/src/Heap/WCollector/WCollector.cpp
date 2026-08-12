@@ -2313,6 +2313,61 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
         g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
     }
 }
+
+// statresid: force ghost liveInfo0 paint while still FORWARDABLE (before any Route
+// freezes geometry). Used by the root grant pass and as last-chance before Forward.
+// Returns true when AdmitForRoute would accept `obj` after the paint attempt.
+bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return false;
+    }
+    if (!Collector::PlausibleManagedObjectGate("statresid.force_domain", obj)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+        if (host == nullptr || host == obj) {
+            return false;
+        }
+        obj = host;
+        if (!Collector::PlausibleManagedObjectGate("statresid.force_domain.host", obj)) {
+            return false;
+        }
+    }
+    EnsureRouteDomainMembership(collector, obj);
+    RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    if (region == nullptr) {
+        region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    }
+    if (region == nullptr || !region->IsYoungRegion()) {
+        return false;
+    }
+    // Only paint while FORWARDABLE — after ROUTING/ROUTED/COMPACTED liveByteCount is
+    // frozen (S2); late MarkBits would desync Admit from geometry.
+    if (region->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
+        LiveInfo* g0 = region->GetLiveInfo0ForProbe();
+        size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        return g0 != nullptr && g0->IsSurvivedObject(offset);
+    }
+    (void)collector->MarkObject(obj);
+    region->BindLiveInfo0FromLiveIfNull();
+    LiveInfo* g0 = region->GetLiveInfo0ForProbe();
+    size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+    if (g0 != nullptr && g0->markBitmap != nullptr &&
+        reinterpret_cast<uintptr_t>(g0->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+        if (!g0->IsSurvivedObject(offset)) {
+            size_t objSize = 0;
+            if (Collector::PlausibleManagedObjectGate("statresid.force_domain.size", obj)) {
+                objSize = obj->GetSize();
+            }
+            size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
+            if (objSize > 0 && offset + objSize <= regionSize) {
+                SealCheck::NotePaint(region, offset, objSize, "statresid.force_domain.ghost");
+                (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+            }
+        }
+    }
+    g0 = region->GetLiveInfo0ForProbe();
+    return g0 != nullptr && g0->IsSurvivedObject(offset);
+}
 } // namespace
 
 // Install a logical resolved target into a heap field. Callers cannot supply a
@@ -4135,7 +4190,8 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
-            EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
+            // grant-before-route: paint only; bulk grant pass already did peers.
+            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
             if (toHost != nullptr && toHost != host) {
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
@@ -4150,8 +4206,18 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     }
     BaseObject* current = target;
     if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
-        EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
+        // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
+        // this catches roots dirtied after the grant pass or parallel races).
+        (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
+        // Third disposition (statresid): if still null and region still FORWARDABLE,
+        // force-paint once more and retry Forward — never HealRoot(null), never leave
+        // a reclaimable from named by a live root without a second attempt.
+        if (current == nullptr) {
+            if (ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), target)) {
+                current = const_cast<WCollector*>(this)->ForwardObject(target);
+            }
+        }
     }
     if (current == nullptr) {
         // fwdnull: classify why ForwardObject returned null on a root (default off).
@@ -4226,12 +4292,14 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
         // cleared when ForwardObject misses. Leave the slot alone (still names from/ghost);
         // mutator load-barrier / later STW can remap. Heap-field CAS-null path is separate.
         // ⛔ Do not reinstall from as a "fix"; ⛔ do not StorePlain(null) on roots.
+        // statresid: leave-alone is residual only after force-domain+retry; preferred
+        // path is grant-before-route so Forward succeeds and from is not reclaimed.
         static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
         size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
         if (la <= 32) {
             LOG(RTLOG_ERROR,
                 "[GCV2][youngstatic] root_fwd_null_leave_alone n=%zu root=%p target=%p "
-                "(ZGC never-heal-null; mark miss residual)",
+                "(ZGC never-heal-null; mark miss residual after force-domain)",
                 la, static_cast<void*>(&root), static_cast<void*>(target));
         }
         return false;
@@ -4263,6 +4331,37 @@ void WCollector::FixMinorRootSlots()
                      nullBefore);
         std::fflush(stderr);
     }
+    // statresid grant-before-route: paint every root-named young ghost into liveInfo0
+    // *before* any Forward/Route. Per-slot Ensure+Forward (old shape) Routes the whole
+    // region on the first root of a shared region, freezes liveByteCount (COMPACTED/ROUTED),
+    // then later roots in the same region hit admit_miss + leave-alone → reclaim UAF
+    // (GetSize si_addr=0xffff…). Two-pass: grant all, then fix.
+    RootVisitor grantVisitor = [this](ObjectRef& root) {
+        zaddress_unsafe observed = root.LoadPlain();
+        if (is_null(observed)) {
+            return;
+        }
+        HeapSlot<> bits(to_zpointer(raw(observed)));
+        BaseObject* obj = to_object(bits.GetTargetObject());
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return;
+        }
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
+        } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
+            }
+        }
+    };
+    MutatorManager::Instance().VisitAllMutators(
+        [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
+    Heap::GetHeap().VisitStaticRoots(grantVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
+    Heap::GetHeap().VisitAllExportRoots(grantVisitor);
+
     RootVisitor rawRootVisitor = [this](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
@@ -4350,6 +4449,34 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 // Env: MRT_GCV2_REFFIX_WORKERS, MRT_GCV2_REFFIX_FORCE_SERIAL.
 void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 {
+    // statresid: serial grant-before-route for all root families (must complete before
+    // any parallel Forward/Route freezes a shared region's geometry).
+    RootVisitor grantVisitor = [this](ObjectRef& root) {
+        zaddress_unsafe observed = root.LoadPlain();
+        if (is_null(observed)) {
+            return;
+        }
+        HeapSlot<> bits(to_zpointer(raw(observed)));
+        BaseObject* obj = to_object(bits.GetTargetObject());
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return;
+        }
+        if (IsGhostFromObject(obj) && !IsUnmovableFromObject(obj)) {
+            (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), obj);
+        } else if (!Collector::PlausibleManagedObjectGate("statresid.grant_pass.par", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
+                (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), host);
+            }
+        }
+    };
+    MutatorManager::Instance().VisitAllMutators(
+        [&grantVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(grantVisitor); });
+    Heap::GetHeap().VisitStaticRoots(grantVisitor);
+    Runtime::Current().GetConcurrencyModel().VisitGCRoots(&grantVisitor);
+    collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
+    Heap::GetHeap().VisitAllExportRoots(grantVisitor);
+
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
     auto rootFix = [this](ObjectRef& root) {
