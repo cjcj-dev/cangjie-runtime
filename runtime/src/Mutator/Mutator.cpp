@@ -322,8 +322,8 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);
-    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
     epochHandshakeCompletion.store(epoch, std::memory_order_release);
+    epochHandshakeState.store(EPOCH_HANDSHAKE_ACKNOWLEDGED, std::memory_order_release);
     return true;
 }
 
