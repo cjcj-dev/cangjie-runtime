@@ -14,6 +14,7 @@
 #include <csignal>
 #include <cstdlib>
 #include <climits>
+#include <ucontext.h>
 
 #include <algorithm>
 #include <atomic>
@@ -150,8 +151,8 @@ void SignalStack::RemoveHandler(bool (*fn)(int, siginfo_t*, void*))
 
 struct SignalArgs {
     int signal;
-    siginfo_t* siginfo;
-    void* ucontextRaw;
+    siginfo_t siginfo;
+    ucontext_t ucontext;
     bool isAsync;
 };
 
@@ -163,11 +164,20 @@ static volatile sig_atomic_t g_sigArgsInUse[kSigArgsSlotCount] = {0, 0};
 static SignalArgs* AcquireSignalArgs(int signal, siginfo_t* siginfo, void* ucontextRaw, bool isAsync)
 {
     for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
-        if (g_sigArgsInUse[i] == 0) {
-            g_sigArgsInUse[i] = 1;
+        sig_atomic_t expected = 0;
+        if (__atomic_compare_exchange_n(&g_sigArgsInUse[i], &expected, 1, false,
+                                        __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
             g_sigArgsSlots[i].signal = signal;
-            g_sigArgsSlots[i].siginfo = siginfo;
-            g_sigArgsSlots[i].ucontextRaw = ucontextRaw;
+            if (siginfo != nullptr) {
+                g_sigArgsSlots[i].siginfo = *siginfo;
+            } else {
+                g_sigArgsSlots[i].siginfo = {};
+            }
+            if (ucontextRaw != nullptr) {
+                g_sigArgsSlots[i].ucontext = *static_cast<ucontext_t*>(ucontextRaw);
+            } else {
+                g_sigArgsSlots[i].ucontext = {};
+            }
             g_sigArgsSlots[i].isAsync = isAsync;
             return &g_sigArgsSlots[i];
         }
@@ -182,7 +192,7 @@ static void ReleaseSignalArgs(SignalArgs* args)
     }
     for (size_t i = 0; i < kSigArgsSlotCount; ++i) {
         if (args == &g_sigArgsSlots[i]) {
-            g_sigArgsInUse[i] = 0;
+            __atomic_store_n(&g_sigArgsInUse[i], 0, __ATOMIC_RELEASE);
             return;
         }
     }
@@ -258,8 +268,8 @@ void SignalStack::HandlerImpl(void* args)
     // Extract signal arguments
     SignalArgs* signalArgs = reinterpret_cast<SignalArgs*>(args);
     int signal = signalArgs->signal;
-    siginfo_t* siginfo = signalArgs->siginfo;
-    void* ucontextRaw = signalArgs->ucontextRaw;
+    siginfo_t* siginfo = &signalArgs->siginfo;
+    void* ucontextRaw = &signalArgs->ucontext;
     if (IsHardFaultSignal(signal)) {
         // Nested hard-fault while already handling: do not re-enter user code.
         if (GetHandlingSignal()) {
