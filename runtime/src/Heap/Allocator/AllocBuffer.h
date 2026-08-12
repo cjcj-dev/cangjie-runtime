@@ -62,6 +62,22 @@ public:
         stackRoots.clear();
     }
 
+    // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
+    // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
+    void PushYoungAllocBlack(BaseObject* obj) { youngAllocBlack.emplace_back(obj); }
+
+    template<class WorkStack>
+    inline void MergeYoungAllocBlack(WorkStack& workStack)
+    {
+        if (youngAllocBlack.empty()) {
+            return;
+        }
+        for (BaseObject* obj : youngAllocBlack) {
+            workStack.push_back(obj);
+        }
+        youngAllocBlack.clear();
+    }
+
     void FlushRegion();
 
 private:
@@ -81,6 +97,8 @@ private:
     RegionList tlLargeRawPointerRegions;
     // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
     std::list<BaseObject*> stackRoots;
+    // youngconc allocate-black greys (see PushYoungAllocBlack)
+    std::list<BaseObject*> youngAllocBlack;
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H

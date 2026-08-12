@@ -7,8 +7,15 @@
 #ifndef MRT_REGION_INFO_H
 #define MRT_REGION_INFO_H
 
+#include <algorithm>
+#include <atomic>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <list>
 #include <map>
+#include <mutex>
 #include <set>
 #include <thread>
 #include <vector>
@@ -17,15 +24,26 @@
 #include <handleapi.h>
 #include <memoryapi.h>
 #else
+#include <dlfcn.h>
 #include <sys/mman.h>
 #endif
 #include "Base/Globals.h"
+#include "Base/Log.h"
 #include "Base/MemUtils.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Allocator/RouteTicket.h"
+#include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/NullRouteCaller.h"
+#include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/TagReuseProbe.h"
+#include "Heap/Verify/MarkWhyProbe.h"
+#include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/RouteDom.h"
+#include "Heap/Verify/SealCheck.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -75,6 +93,32 @@ private:
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
 public:
+    enum class RetainedLiveInfoState : uint8_t {
+        NEVER_EXAMINED,
+        SNAPSHOT_VALID,
+        SNAPSHOT_EMPTY,
+    };
+
+    // holderlive (F2): the only object-level holder-liveness filter we have reads
+    // GetRetainedLiveInfoState() at WCollector.cpp:3579 and measured NEVER_EXAMINED for
+    // 100% of holders (never=2787/originFound=2787 per minor). NEVER_EXAMINED has three
+    // distinct producers and the state word cannot tell them apart:
+    //   - nobody ever called Preserve* on this region during its current life,
+    //   - Preserve* ran but had no live info to keep (it writes NEVER_EXAMINED itself),
+    //   - Preserve* ran and stored a snapshot, then a clear path wiped it.
+    // These counters name which one happened. Maintained unconditionally (three stores on
+    // cold region-lifecycle paths); read only under MRT_GCV2_RETLIVE_PROBE.
+    enum RetainedOp : uint8_t {
+        RETAINED_OP_NONE = 0,
+        RETAINED_OP_PRESERVE_VALID = 1,
+        RETAINED_OP_PRESERVE_EMPTY = 2,
+        RETAINED_OP_PRESERVE_NEVER = 3,
+        RETAINED_OP_CLEAR_CHECKED = 4,   // CheckAndClearLiveInfo (RegionInfo.h:1271)
+        RETAINED_OP_CLEAR_ALL = 5,       // ClearLiveInfo (RegionInfo.h:1297)
+        RETAINED_OP_CLEAR_RANGE = 6,     // NullLiveInfoFieldsInRange (RegionInfo.h:1327)
+        RETAINED_OP_COUNT = 7,
+    };
+
     enum RouteState : uint8_t {
         NORMAL = 0,
         FORWARDABLE,
@@ -113,6 +157,64 @@ public:
 
     void SetRouteState(RouteState state) { __atomic_store_n(&(metadata.routeState), state, std::memory_order_release); }
 
+    // sealcheck: mark face frozen for geometry (M3). Set at RouteRegion ROUTING entry.
+    bool IsMarkFaceSealed() const
+    {
+        return __atomic_load_n(&metadata.markFaceSealed, std::memory_order_acquire) != 0;
+    }
+    void SetMarkFaceSealed(bool v)
+    {
+        __atomic_store_n(&metadata.markFaceSealed, static_cast<uint8_t>(v ? 1 : 0), std::memory_order_release);
+    }
+
+    uint64_t GetSnapshotEpoch() const
+    {
+        return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
+    }
+
+    void BumpSnapshotEpoch()
+    {
+        __atomic_fetch_add(&metadata.snapshotEpoch, 1, std::memory_order_acq_rel);
+    }
+
+    // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
+    void BumpSnapshotEpochFromClearLiveInfo()
+    {
+        size_t n;
+        if (IsYoungRegion()) {
+            n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
+        } else {
+            n = oneseqBumpClearOld.fetch_add(1, std::memory_order_relaxed) + 1;
+        }
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        // Milestone dump so timeout-killed ALOT runs still leave a line (atexit may not run).
+        if (n == 1 || n == 8 || n == 64 || n == 256 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts(IsYoungRegion() ? "clear_young_milestone" : "clear_old_milestone");
+        }
+    }
+    void BumpSnapshotEpochFromInitRegion()
+    {
+        size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("init_milestone");
+        }
+    }
+    void BumpSnapshotEpochFromResetAfterForward()
+    {
+        size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
+        BumpSnapshotEpoch();
+        EnsureOneseqAtexit();
+        if (n == 1 || n == 64 || n == 1024 || (n >= 4096 && (n & (n - 1)) == 0)) {
+            ReportOneseqCounts("reset_fwd_milestone");
+        }
+    }
+
+    static void EnsureOneseqAtexit();
+    static void ReportOneseqCounts(const char* point);
+
     bool IsCompacted() { return GetRouteState() == RouteState::COMPACTED; }
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
@@ -125,11 +227,10 @@ public:
         return CompareExchangeRouteState(curState, RouteState::ROUTING);
     }
 
-    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
+    size_t GetPreLiveBytesInGhostRegionForProbe(MAddress address)
     {
-        DCHECK(metadata.liveInfo0 != nullptr);
-        size_t offset = GetAddressOffset(address);
-        return metadata.liveInfo0->GetPreLiveBytes(offset, GetGhostRegionSize());
+        return GetPreLiveBytesInGhostRegion(address);
     }
 
     RegionInfo()
@@ -152,6 +253,249 @@ public:
         return liveInfo;
     }
 
+    // Probe-only: raw ghost liveInfo0 (no TEMPORARY filter; ghost never uses TEMPORARY).
+    LiveInfo* GetLiveInfo0ForProbe() const { return metadata.liveInfo0; }
+
+    // permhit, probe-only: the route's own to-side plan. RouteInfo records a bare start
+    // address plus a used-bytes split (LiveInfo.h:246-248) and carries no epoch, so a
+    // to-region that was reclaimed and re-taken keeps answering the same geometry. Only
+    // the recorded plan, next to the region that lives at that address now, separates
+    // "no path ever filled this tip" from "a tip was filled and the memory was reused".
+    // Precedent: GetLiveInfo0ForProbe.
+    RouteInfo GetRouteInfoForProbe() const { return metadata.routeInfo; }
+
+    // installdomain: if PrepareForwardable snapshotted a null liveInfo, GetRoute always
+    // rejects. After MarkObject created current liveInfo, bind it as ghost while still
+    // FORWARDABLE so the paint is route-visible (pointer-share, same as PrepareForwardable).
+    void BindLiveInfo0FromLiveIfNull()
+    {
+        if (metadata.liveInfo0 != nullptr) {
+            return;
+        }
+        LiveInfo* live = GetLiveInfo();
+        if (live == nullptr) {
+            return;
+        }
+        metadata.liveInfo0 = live;
+        if (metadata.regionEnd0 == 0 || metadata.regionEnd0 < metadata.regionEnd) {
+            metadata.regionEnd0 = metadata.regionEnd;
+        }
+    }
+
+    LiveInfo* GetRetainedLiveInfo() const { return metadata.retainedLiveInfo; }
+
+    RetainedLiveInfoState GetRetainedLiveInfoState() const { return metadata.retainedLiveInfoState; }
+
+    uint64_t GetRetainedLiveInfoEpoch() const { return metadata.retainedLiveInfoEpoch; }
+
+    MAddress GetRetainedLiveInfoCoveredUpTo() const { return metadata.retainedLiveInfoCoveredUpTo; }
+
+    // holderlive (F2): the retained snapshot has to answer "was this holder live at the last
+    // mark" during every minor until the next major re-marks the region. It cannot do that as a
+    // borrowed LiveInfo*: LiveInfo lives in a per-tag arena that is recycled one GC cycle later
+    // (ForwardDataManager::ClearPreviousForwardData → ReleaseMemory), and UnbindPreviousLiveInfo
+    // (DoGarbageCollection, WCollector.cpp:6122 at 7924d28f) drops every borrowed pointer
+    // into it at the end of each major.
+    // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
+    // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
+    // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
+    // are actually preserved. Default off (MRT_GCV2_RETAINED_OWN_COPY=1).
+    static bool RetainedOwnCopyEnabled()
+    {
+        static const bool enabled = []() {
+            const char* value = std::getenv("MRT_GCV2_RETAINED_OWN_COPY");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        return enabled;
+    }
+
+    // Union of markBitmap and resurrectBitmap — the same two bitmaps LiveInfo::IsSurvivedObject
+    // reads, collapsed into one array so the copy answers exactly the same question.
+    void CaptureRetainedMarkWords(LiveInfo* liveInfo)
+    {
+        FreeRetainedMarkWords();
+        if (liveInfo == nullptr) {
+            return;
+        }
+        RegionBitmap* mark = liveInfo->markBitmap;
+        RegionBitmap* resurrect = liveInfo->resurrectBitmap;
+        size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
+        size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
+        size_t wordCnt = std::max(markWords, resurrectWords);
+        if (wordCnt == 0) {
+            return;
+        }
+        uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
+        if (words == nullptr) {
+            // Out of memory for a diagnostic-grade copy: leave the snapshot absent. The
+            // consumer treats "no snapshot" as keep, i.e. this degrades to today's fail-open.
+            return;
+        }
+        for (size_t i = 0; i < wordCnt; ++i) {
+            uint64_t bits = 0;
+            if (i < markWords) {
+                bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < resurrectWords) {
+                bits |= resurrect->markWords[i].load(std::memory_order_acquire);
+            }
+            words[i] = bits;
+        }
+        metadata.retainedMarkWords = words;
+        metadata.retainedMarkWordCnt = static_cast<uint32_t>(wordCnt);
+    }
+
+    bool HasRetainedMarkWords() const { return metadata.retainedMarkWords != nullptr; }
+
+    // Same indexing as RegionBitmap::IsMarked.
+    bool RetainedMarkWordsSay(size_t offset) const
+    {
+        if (metadata.retainedMarkWords == nullptr) {
+            return false;
+        }
+        size_t bitIdx = offset / kMarkedBytesPerBit;
+        size_t wordIdx = bitIdx / kBitsPerWord;
+        if (wordIdx >= metadata.retainedMarkWordCnt) {
+            return false;
+        }
+        return (metadata.retainedMarkWords[wordIdx] &
+                (static_cast<uint64_t>(1) << (bitIdx % kBitsPerWord))) != 0;
+    }
+
+    void FreeRetainedMarkWords()
+    {
+        if (metadata.retainedMarkWords != nullptr) {
+            free(metadata.retainedMarkWords);
+            metadata.retainedMarkWords = nullptr;
+        }
+        metadata.retainedMarkWordCnt = 0;
+    }
+
+    uint32_t GetRetainedPreserveCount() const { return metadata.retainedPreserveCnt; }
+
+    uint32_t GetRetainedClearCount() const { return metadata.retainedClearCnt; }
+
+    uint8_t GetRetainedLastOp() const { return metadata.retainedLastOp; }
+
+    void PreserveRetainedLiveInfo()
+    {
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
+        if (RetainedOwnCopyEnabled() && !IsLargeRegion()) {
+            CaptureRetainedMarkWords(metadata.retainedLiveInfo);
+        }
+        if (IsLargeRegion()) {
+            if (GetLiveByteCount() == 0) {
+                metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+                    ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+                    : RetainedLiveInfoState::NEVER_EXAMINED;
+                NoteRetainedPreserve();
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        if (metadata.retainedLiveInfo != nullptr) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        CHECK(GetLiveByteCount() == 0);
+        metadata.retainedLiveInfoState = GetRegionAllocPtr() <= GetRegionStart()
+            ? RetainedLiveInfoState::SNAPSHOT_EMPTY
+            : RetainedLiveInfoState::NEVER_EXAMINED;
+        NoteRetainedPreserve();
+    }
+
+    MAddress GetCensusBoundary() const
+    {
+        return GetRegionStart() + metadata.censusBoundaryOffset;
+    }
+
+    void StampCensusBoundary()
+    {
+        uintptr_t offset = GetRegionAllocPtr() - GetRegionStart();
+        metadata.censusBoundaryOffset =
+            static_cast<uint32_t>(std::min<uintptr_t>(offset, std::numeric_limits<uint32_t>::max()));
+    }
+
+    void ResetCensusBoundary() { metadata.censusBoundaryOffset = 0; }
+
+    void PreserveRetainedLiveInfoUpTo(MAddress boundary)
+    {
+        CHECK(boundary >= GetRegionStart() && boundary <= GetRegionAllocPtr());
+        if (IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+            return;
+        }
+        metadata.retainedLiveInfo = GetLiveInfo();
+        metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+        metadata.retainedLiveInfoCoveredUpTo = boundary;
+        if (RetainedOwnCopyEnabled()) {
+            CaptureRetainedMarkWords(metadata.retainedLiveInfo);
+        }
+        if (metadata.retainedLiveInfo == nullptr && boundary > GetRegionStart()) {
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            NoteRetainedPreserve();
+            return;
+        }
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+        NoteRetainedPreserve();
+    }
+
+    ALWAYS_INLINE void PreserveRetainedLiveInfo(MAddress coveredUpToOverride)
+    {
+        if (coveredUpToOverride == GetRegionStart() && GetRegionAllocPtr() != GetRegionStart()) {
+            CHECK(GetLiveByteCount() == 0);
+            metadata.retainedLiveInfo = GetLiveInfo();
+            metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
+            metadata.retainedLiveInfoCoveredUpTo = coveredUpToOverride;
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::SNAPSHOT_VALID;
+            NoteRetainedPreserve();
+            return;
+        }
+        CHECK(coveredUpToOverride == GetRegionAllocPtr());
+        PreserveRetainedLiveInfo();
+    }
+
+    // holderlive (F2): record the outcome of a Preserve* call. Called after the state word
+    // is already written, so the op code is derived from it rather than duplicated.
+    ALWAYS_INLINE void NoteRetainedPreserve()
+    {
+        ++metadata.retainedPreserveCnt;
+        switch (metadata.retainedLiveInfoState) {
+            case RetainedLiveInfoState::SNAPSHOT_VALID:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_VALID;
+                break;
+            case RetainedLiveInfoState::SNAPSHOT_EMPTY:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_EMPTY;
+                break;
+            default:
+                metadata.retainedLastOp = RETAINED_OP_PRESERVE_NEVER;
+                break;
+        }
+    }
+
+    // holderlive (F2): a clear only destroys information if there was a snapshot to destroy.
+    ALWAYS_INLINE void NoteRetainedClear(RetainedOp op)
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return;
+        }
+        ++metadata.retainedClearCnt;
+        metadata.retainedLastOp = static_cast<uint8_t>(op);
+    }
+
+    bool IsRetainedSnapshotValid() const
+    {
+        if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
+            return false;
+        }
+        return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
+    }
+
     LiveInfo* GetOrAllocLiveInfo()
     {
         do {
@@ -167,6 +511,11 @@ public:
                                             std::memory_order_relaxed)) {
                 LiveInfo* allocatedLiveInfo = ForwardDataManager::GetForwardDataManager().AllocateLiveInfo();
                 allocatedLiveInfo->bindedRegion = this;
+                // markepoch: stamp face to current region snapshot (ZGC reset→release_store seqnum).
+                allocatedLiveInfo->markEpoch = GetSnapshotEpoch();
+                allocatedLiveInfo->markBitmap = nullptr;
+                allocatedLiveInfo->resurrectBitmap = nullptr;
+                allocatedLiveInfo->enqueueBitmap = nullptr;
                 __atomic_store_n(&metadata.liveInfo, allocatedLiveInfo, std::memory_order_release);
                 DLOG(REGION, "region %p@%#zx liveinfo %p", this, GetRegionStart(), metadata.liveInfo);
                 return allocatedLiveInfo;
@@ -206,6 +555,7 @@ public:
                 RegionBitmap* allocated =
                     ForwardDataManager::GetForwardDataManager().AllocateRegionBitmap(GetRegionSize());
                 __atomic_store_n(&liveInfo->markBitmap, allocated, std::memory_order_release);
+                MarkWhyProbe::NoteMarkBitmapAlloc(this, allocated);
                 DLOG(REGION, "region %p@%#zx markbitmap %p", this, GetRegionStart(), metadata.liveInfo->markBitmap);
                 return allocated;
             }
@@ -299,21 +649,36 @@ public:
         SetResurrectedRegionFlag(0);
     }
 
+    // livesame / ZGC zMark.inline.hpp + zBitMap.inline.hpp:inc_live — count only on 0→1.
+    // MarkBits returns true if already marked; false on first paint. AddLive only then.
     bool MarkObject(const BaseObject* obj)
     {
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);
+                AddLiveByteCount(obj->GetSize());
                 return false;
             }
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject");
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized0");
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
+                                              "MarkObject_sized0");
         CHECK(IsMarkedObject(offset));
-        return marked;
+        return already;
     }
 
     bool MarkObject(const BaseObject* obj, size_t objSize)
@@ -321,15 +686,28 @@ public:
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);
+                AddLiveByteCount(objSize);
                 return false;
             }
             return true;
         }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocMarkBitmap()->MarkBits(offset, objSize, regionSize);
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t offset = objAddr - regionStart;
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* writeBm = GetOrAllocMarkBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::MarkObject_sized");
+        bool already = writeBm->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
+        (void)TagReuseProbe::NoteMarkBitsSticky(this, offset, true, "MarkObject_sized");
+        (void)MarkWhyProbe::NoteAfterMarkBits(this, obj, offset, objSize, regionSize, writeBm, already,
+                                              "MarkObject_sized");
         CHECK(IsMarkedObject(offset));
-        return marked;
+        return already;
     }
 
     bool ResurrectObject(const BaseObject* obj, size_t offset)
@@ -337,15 +715,24 @@ public:
         if (IsLargeRegion()) {
             if (metadata.isResurrected != 1) {
                 SetResurrectedRegionFlag(1);
+                AddLiveByteCount(obj->GetSize());
                 return false;
             }
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
-        bool marked = GetOrAllocResurrectBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsResurrectedObject(offset));
-        return marked;
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t regionSize = regionEnd - regionStart;
+        RegionBitmap* bitmap = GetOrAllocResurrectBitmap();
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::ResurrectObject");
+        bool already = bitmap->MarkBits(offset, objSize, regionSize);
+        if (!already) {
+            AddLiveByteCount(objSize);
+        }
+        CHECK(bitmap->IsMarked(offset));
+        return already;
     }
 
     bool EnqueueObject(const BaseObject* obj, size_t offset)
@@ -358,10 +745,16 @@ public:
             return true;
         }
         U32 objSize = obj->GetSize();
-        size_t regionSize = offset + GetRegionEnd() - reinterpret_cast<MAddress>(obj);
+        MAddress regionStart = GetRegionStart();
+        MAddress regionEnd = GetRegionEnd();
+        CheckObjectSize(obj, objSize, regionStart, regionEnd);
+        size_t regionSize = regionEnd - regionStart;
         CHECK(regionSize > 0);
-        bool marked = GetOrAllocEnqueueBitmap()->MarkBits(offset, objSize, regionSize);
-        CHECK(IsEnqueuedObject(offset));
+        RegionBitmap* bitmap = GetOrAllocEnqueueBitmap();
+        // enqueue face is not the route geometry face; still report if mark-face sealed.
+        SealCheck::NotePaint(this, offset, objSize, "RegionInfo::EnqueueObject");
+        bool marked = bitmap->MarkBits(offset, objSize, regionSize);
+        CHECK(bitmap->IsMarked(offset));
         return marked;
     }
 
@@ -390,13 +783,92 @@ public:
         return resurrectBitmap->IsMarked(offset);
     }
 
+    // markepoch: count reads of a LiveInfo whose markEpoch != region snapshotEpoch.
+    // Default product still returns false (same as "no bit"); MRT_GCV2_MARK_EPOCH_ASSERT=1 aborts.
+    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §5 (ZGC zLiveMap.inline.hpp:41-43).
+    // Hot path: epoch match is load+cmp only (no atomic). Stale path always counts.
+    static std::atomic<size_t> markEpochStaleReadCount;
+    static std::atomic<bool> markEpochAtexitInstalled;
+
+    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-on counters, atexit dump).
+    static std::atomic<size_t> oneseqBumpClearYoung;
+    static std::atomic<size_t> oneseqBumpClearOld;
+    static std::atomic<size_t> oneseqBumpInitRegion;
+    static std::atomic<size_t> oneseqBumpResetAfterForward;
+    static std::atomic<size_t> oneseqIsKnownEmptyCalls;
+    static std::atomic<size_t> oneseqAuthBlocksReclaim;   // !auth && emptyByEpoch
+    static std::atomic<size_t> oneseqAuthAndEmpty;        // auth && emptyByEpoch (= IsKnownEmpty true)
+    static std::atomic<size_t> oneseqAuthNotEmpty;        // auth && !emptyByEpoch
+    static std::atomic<size_t> oneseqNoAuthNotEmpty;      // !auth && !emptyByEpoch
+    static std::atomic<bool> oneseqAtexitInstalled;
+
+    static bool MarkEpochAssertEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_MARK_EPOCH_ASSERT");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        return on;
+    }
+
+    static void ReportMarkEpochCounts(const char* point)
+    {
+        const size_t stale = markEpochStaleReadCount.load(std::memory_order_relaxed);
+        std::fprintf(stderr, "[GCV2][mark-epoch] point=%s stale_read=%zu env_assert=%d\n",
+                     point != nullptr ? point : "?", stale, MarkEpochAssertEnabled() ? 1 : 0);
+        std::fflush(stderr);
+    }
+
+    static void EnsureMarkEpochAtexit()
+    {
+        bool expected = false;
+        if (markEpochAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() { ReportMarkEpochCounts("atexit"); });
+        }
+    }
+
+    // Returns false if face is stale (counts as unmarked). true ⇒ epoch matches; caller checks bits.
+    bool NoteMarkEpochOnRead(LiveInfo* liveInfo)
+    {
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        const uint64_t face = liveInfo->markEpoch;
+        const uint64_t now = GetSnapshotEpoch();
+        if (face == now) {
+            return true;
+        }
+        EnsureMarkEpochAtexit();
+        size_t n = markEpochStaleReadCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (MarkEpochAssertEnabled()) {
+            LOG(RTLOG_FATAL,
+                "[GCV2][mark-epoch] stale LiveInfo read region=%p faceEpoch=%llu regionEpoch=%llu n=%zu "
+                "env=MRT_GCV2_MARK_EPOCH_ASSERT=1",
+                this, static_cast<unsigned long long>(face), static_cast<unsigned long long>(now), n);
+        }
+        if (n <= 8) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][mark-epoch] stale_read region=%p faceEpoch=%llu regionEpoch=%llu n=%zu",
+                this, static_cast<unsigned long long>(face), static_cast<unsigned long long>(now), n);
+        }
+        return false;
+    }
+
     bool IsMarkedObject(const BaseObject* obj)
     {
         if (IsLargeRegion()) {
             return (metadata.isMarked == 1);
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        // markepoch §5: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+        if (!NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
         size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
@@ -408,8 +880,15 @@ public:
         if (IsLargeRegion()) {
             return (metadata.isMarked == 1);
         }
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap == nullptr) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr) {
+            return false;
+        }
+        if (!NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
         return markBitmap->IsMarked(offset);
@@ -421,13 +900,18 @@ public:
             return metadata.isMarked == 1 || metadata.isResurrected == 1;
         }
 
-        RegionBitmap* markBitmap = GetMarkBitmap();
-        if (markBitmap && markBitmap->IsMarked(offset)) {
+        LiveInfo* liveInfo = GetLiveInfo();
+        if (liveInfo == nullptr || !NoteMarkEpochOnRead(liveInfo)) {
+            return false;
+        }
+        RegionBitmap* markBitmap = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
+        if (markBitmap != nullptr && reinterpret_cast<MAddress>(markBitmap) != LiveInfo::TEMPORARY_PTR &&
+            markBitmap->IsMarked(offset)) {
             return true;
         }
-
-        RegionBitmap* resurrectBitmap = GetResurrectBitmap();
-        if (resurrectBitmap && resurrectBitmap->IsMarked(offset)) {
+        RegionBitmap* resurrectBitmap = __atomic_load_n(&liveInfo->resurrectBitmap, std::memory_order_acquire);
+        if (resurrectBitmap != nullptr && reinterpret_cast<MAddress>(resurrectBitmap) != LiveInfo::TEMPORARY_PTR &&
+            resurrectBitmap->IsMarked(offset)) {
             return true;
         }
         return false;
@@ -493,24 +977,36 @@ public:
     {
         UnitInfo::totalUnitCount = nUnit;
         UnitInfo::heapStartAddress = heapAddress;
+        // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
+        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
+        UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfo(idx);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
     }
 
-    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    // Safely query a heap address whose unit may no longer have a live owning region.
+    ALWAYS_INLINE static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion;
         }
         return reinterpret_cast<RegionInfo*>(unit);
+    }
+
+    // The caller must know that allocAddr resolves to an extant region owner.
+    static RegionInfo* GetRegionInfoAt(uintptr_t allocAddr)
+    {
+        RegionInfo* region = TryGetRegionInfoAt(allocAddr);
+        CHECK_DETAIL(region != nullptr, "heap address %#zx has no owning region", allocAddr);
+        return region;
     }
 
     static bool InGhostFromRegion(BaseObject* obj)
@@ -522,10 +1018,11 @@ public:
     static RegionInfo* GetGhostFromRegionAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
-        if (unit->GetMetadata().inGhostFromRegion == 0) {
+        if (unit->GetMetadata().regionStateBitField.GetAtomicValue(
+                RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) == 0) {
             return nullptr;
         }
-        if (static_cast<UnitRole>(unit->GetMetadata().unitRole0) == UnitRole::SUBORDINATE_UNIT) {
+        if (LoadUnitRole0(unit) == UnitRole::SUBORDINATE_UNIT) {
             return unit->GetMetadata().ownerRegion0;
         }
         return reinterpret_cast<RegionInfo*>(unit);
@@ -558,6 +1055,8 @@ public:
         size_t size = cnt * RegionInfo::UNIT_SIZE;
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              RegionInfo::GetUnitAddress(idx + cnt));
+        // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
+        TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
@@ -587,7 +1086,7 @@ public:
 #endif
     }
 
-    BaseObject* GetFirstObject() const { return reinterpret_cast<BaseObject*>(GetRegionStart()); }
+    BaseObject* GetFirstObject() const { return from_region_addr(GetRegionStart()); }
 
     bool IsEmpty() const
     {
@@ -645,27 +1144,232 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
-    BaseObject* GetRoute(BaseObject* fromObj)
+    // Sole mint of RouteTicket. Guard logic = former GetRoute(BaseObject*) domain check
+    // (IsSurvivedObject on liveInfo0). Miss = empty OptionalRouteTicket; never silent derive.
+    // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
+    ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj)
     {
+        MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
+        size_t offset = GetAddressOffset(fromAddress);
+        LiveInfo* ghostLiveInfo = metadata.liveInfo0;
+        if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
+            // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
+            // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
+            static const bool nullRouteDiag = []() {
+                const char* v = std::getenv("MRT_GCV2_NULLROUTE_DIAG");
+                return v != nullptr && v[0] == '1' && v[1] == '\0';
+            }();
+            // eatarm: only ROUTED/FORWARDABLE/ROUTING (same exclusive arm as IOR CHECK).
+            if (EatArmDiag::Enabled()) {
+                RouteState rsEat = GetRouteState();
+                if (rsEat == RouteState::ROUTED || rsEat == RouteState::FORWARDABLE ||
+                    rsEat == RouteState::ROUTING) {
+                    EatArmDiag::NoteIorTarget(fromObj, EatArmDiag::GetFixHost(), offset);
+                }
+            }
+            if (nullRouteDiag) {
+                // Prefer ROUTED (exclusive CHECK arm). Skip FORWARDED flood that
+                // exhausts the sample budget before the size=16 region-end hits.
+                RouteState rs = GetRouteState();
+                if (rs == RouteState::ROUTED || rs == RouteState::FORWARDABLE ||
+                    rs == RouteState::ROUTING) {
+                    static std::atomic<size_t> g_nullRouteDiagN{ 0 };
+                    size_t n = g_nullRouteDiagN.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (n <= 64) {
+                        size_t ghostSz = (metadata.regionEnd0 > GetRegionStart())
+                            ? static_cast<size_t>(metadata.regionEnd0 - GetRegionStart())
+                            : 0;
+                        size_t curSz = GetRegionSize();
+                        size_t bitCover = 0;
+                        size_t wordCnt = 0;
+                        bool markNull = true;
+                        bool resNull = true;
+                        bool liveMarked = false;
+                        bool live0Marked = false;
+                        bool regionMarked = false;
+                        size_t allocOff = 0;
+                        if (metadata.allocPtr > GetRegionStart()) {
+                            allocOff = static_cast<size_t>(metadata.allocPtr - GetRegionStart());
+                        }
+                        if (ghostLiveInfo != nullptr) {
+                            RegionBitmap* mb = ghostLiveInfo->markBitmap;
+                            RegionBitmap* rb = ghostLiveInfo->resurrectBitmap;
+                            markNull = (mb == nullptr);
+                            resNull = (rb == nullptr);
+                            if (mb != nullptr) {
+                                wordCnt = mb->wordCnt.load(std::memory_order_acquire);
+                                bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
+                                live0Marked = mb->IsMarked(offset);
+                            }
+                            if (!live0Marked && rb != nullptr) {
+                                live0Marked = rb->IsMarked(offset);
+                            }
+                        }
+                        LiveInfo* curLive = GetLiveInfo();
+                        if (curLive != nullptr) {
+                            liveMarked = curLive->IsSurvivedObject(offset);
+                        }
+                        regionMarked = IsSurvivedObject(offset);
+                        // marklate: per-region last-alloc phase (no TLS).
+                        // blackmark: isTraceAtAlloc + clearTraceCnt for H3.
+                        AllocPhaseDiag::Lookup ap =
+                            AllocPhaseDiag::Find(fromObj, GetRegionStart());
+                        unsigned curIsTrace = static_cast<unsigned>(IsTraceRegion());
+                        // iorsource/alotior: slot provenance + host (only on sample path).
+                        BaseObject* hostObj =
+                            reinterpret_cast<BaseObject*>(NullRouteCaller::Host());
+                        uintptr_t slotAddr = NullRouteCaller::Slot();
+                        if (hostObj == nullptr && slotAddr != 0) {
+                            RegionInfo* hostReg = TryGetRegionInfoAt(slotAddr);
+                            if (hostReg != nullptr && !hostReg->IsFreeRegion() &&
+                                !hostReg->IsGarbageRegion()) {
+                                hostReg->VisitAllObjects(
+                                    [&hostObj, slotAddr](BaseObject* holder) {
+                                        if (hostObj != nullptr || holder == nullptr ||
+                                            !holder->HasRefField()) {
+                                            return;
+                                        }
+                                        holder->ForEachRefField(
+                                            [holder, &hostObj, slotAddr](RefField<>& field) {
+                                                if (reinterpret_cast<uintptr_t>(&field) ==
+                                                    slotAddr) {
+                                                    hostObj = holder;
+                                                }
+                                            });
+                                    });
+                            }
+                        }
+                        unsigned hostKnown = 0;
+                        unsigned hostMarked = 0;
+                        unsigned hostYoung = 0;
+                        unsigned hostType = 0;
+                        unsigned hostFree = 0;
+                        unsigned hostGarbage = 0;
+                        unsigned hostGhost = 0;
+                        size_t fieldOff = 0;
+                        if (hostObj != nullptr &&
+                            Heap::IsHeapAddress(reinterpret_cast<MAddress>(hostObj))) {
+                            hostKnown = 1;
+                            if (slotAddr >= reinterpret_cast<uintptr_t>(hostObj)) {
+                                fieldOff = slotAddr - reinterpret_cast<uintptr_t>(hostObj);
+                            }
+                            RegionInfo* hr =
+                                TryGetRegionInfoAt(reinterpret_cast<MAddress>(hostObj));
+                            if (hr != nullptr) {
+                                hostYoung = static_cast<unsigned>(hr->IsYoungRegion());
+                                hostType = static_cast<unsigned>(hr->GetRegionType());
+                                hostFree = static_cast<unsigned>(hr->IsFreeRegion());
+                                hostGarbage = static_cast<unsigned>(hr->IsGarbageRegion());
+                                hostGhost = static_cast<unsigned>(hr->IsFromRegion());
+                                hostMarked = static_cast<unsigned>(hr->IsMarkedObject(hostObj));
+                            }
+                        }
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
+                            "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
+                            "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
+                            "type=%u oob=%u allocOff=%zu nearEnd=%u "
+                            "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u usedNear=%u "
+                            "allocMutPhase=%u(%s) allocHeapPhase=%u(%s) allocInMarkNew=%u "
+                            "lastObj=%#zx curIsTrace=%u isTraceAtAlloc=%u clearTraceCnt=%u "
+                            "everWasTrace=%u caller=%s edgeSrc=%s slot=%#zx host=%p "
+                            "fieldOff=%zu hostKnown=%u hostMarked=%u hostYoung=%u hostType=%u "
+                            "hostFree=%u hostGarbage=%u hostGhost=%u",
+                            n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
+                            static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
+                            static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
+                            static_cast<unsigned>(regionMarked),
+                            static_cast<unsigned>(rs), GetLiveByteCount(),
+                            static_cast<unsigned>(IsYoungRegion()),
+                            static_cast<unsigned>(GetRegionType()),
+                            static_cast<unsigned>(offset >= bitCover && bitCover > 0),
+                            allocOff,
+                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
+                            static_cast<unsigned>(ap.found),
+                            static_cast<unsigned>(ap.isRegionLast),
+                            static_cast<unsigned>(ap.usedFrozen),
+                            static_cast<unsigned>(ap.usedNear),
+                            static_cast<unsigned>(ap.mutatorPhase),
+                            AllocPhaseDiag::PhaseName(ap.mutatorPhase),
+                            static_cast<unsigned>(ap.heapPhase),
+                            AllocPhaseDiag::PhaseName(ap.heapPhase),
+                            static_cast<unsigned>(ap.found &&
+                                AllocPhaseDiag::IsMarkNewPhase(ap.mutatorPhase)),
+                            static_cast<size_t>(ap.lastObj),
+                            curIsTrace,
+                            static_cast<unsigned>(ap.isTraceAtAlloc),
+                            static_cast<unsigned>(ap.clearTraceCnt),
+                            static_cast<unsigned>(ap.everWasTrace),
+                            NullRouteCaller::Current(), NullRouteCaller::EdgeSrc(),
+                            static_cast<size_t>(slotAddr), hostObj, fieldOff, hostKnown,
+                            hostMarked, hostYoung, hostType, hostFree, hostGarbage, hostGhost);
+                    }
+                }
+            }
+            return OptionalRouteTicket();
+        }
+        return OptionalRouteTicket(fromObj);
+    }
+
+    // Geometric derive; domain is guaranteed by RouteTicket. No survivor re-check.
+    // Anchor: LiveInfo.h:230-245; LiveInfo.cpp:15-24; ops/design/ROUTE_DOMAIN.md §2.
+    BaseObject* GetRoute(RouteTicket t)
+    {
+        BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
         MAddress toAddr = metadata.routeInfo.GetRoute(preLiveBytes);
-        return reinterpret_cast<BaseObject*>(toAddr);
+        // routedom: observe mark-domain at geometric GetRoute call site (default off).
+        if (RouteDom::Enabled()) {
+            RouteDom::NoteRoute(this, fromObj, preLiveBytes, static_cast<uintptr_t>(toAddr));
+        }
+        return from_region_addr(toAddr);
     }
+
+    // Deleted: asking for a route with a bare BaseObject* is unspellable.
+    // Call AdmitForRoute first; product miss arms name nullopt; probes use GetRouteForProbe.
+    BaseObject* GetRoute(BaseObject* fromObj) = delete;
+
+    // Probe/diagnostics only — same Admit+derive as product, never a public bypass.
+    // Precedent: GetLiveInfo0ForProbe. Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    BaseObject* GetRouteForProbe(BaseObject* fromObj)
+    {
+        OptionalRouteTicket ticket = AdmitForRoute(fromObj);
+        if (!ticket) {
+            return nullptr;
+        }
+        return GetRoute(ticket.value());
+    }
+
+    // Probe-only: pure RouteInfo geometry for a preLiveBytes rank (no survivor gate).
+    MAddress GetRoutePlanAddr(uint64_t preLiveBytes)
+    {
+        return metadata.routeInfo.GetRoute(preLiveBytes);
+    }
+
+    ZGenerationId generation_id() const { return metadata._generation_id; }
 
     void PrepareForwardableRegion()
     {
         CHECK(IsFromRegion());
         CHECK(static_cast<UnitRole>(metadata.unitRole) == UnitRole::SMALL_SIZED_UNITS);
         CHECK(metadata.inGhostFromRegion == 0);
+        // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
+        AllocPhaseDiag::FreezeRegion(GetRegionStart());
         metadata.routeState = FORWARDABLE;
+        // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
+        SetMarkFaceSealed(false);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
-        if (GetLiveByteCount() > 0) {
-            SetInGhostRegion(1);
-        }
+        metadata._generation_id = IsYoungRegion() ? ZGenerationId::young : ZGenerationId::old;
+        // fysfixb / a2e7ee37: always install ghost, including liveBytes==0.
+        // ForwardRegion only early-exits IsKnownEmpty (LIVE_AUTHORITY|0). Regions with
+        // liveBytes==0 but no mark authority (neverExamined) still call RouteRegion;
+        // without ghost that hits CHECK(IsGhostFromRegion). Ghost retention also
+        // holds dead-from until PrepareFromRegionList dispel (plainedge).
+        SetInGhostRegion(1);
 
         metadata.nextRegionIdx0 = metadata.nextRegionIdx;
 
@@ -681,9 +1385,7 @@ public:
 
             array[i].SetUnitRole0(UnitRole::SUBORDINATE_UNIT);
             mdata.ownerRegion0 = this;
-            if (GetLiveByteCount() > 0) {
-                array[i].SetInGhostRegion(1);
-            }
+            array[i].SetInGhostRegion(1);
         }
     }
 
@@ -691,6 +1393,9 @@ public:
     {
         if (IsGhostFromRegion()) {
             size_t nUnit = GetUnitCount();
+            TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "clear_ghost", this,
+                                        GetLiveByteCount(), 1, static_cast<unsigned int>(GetRegionType()),
+                                        static_cast<unsigned int>(GetRouteState()));
             UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
             UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
             for (size_t i = 0; i < nUnit; i++) {
@@ -702,20 +1407,61 @@ public:
     // dispel all units of this region.
     // inGhostFromRegion is the unique guard condition.
 
+    // T-D guardian (MINOR_CONCURRENCY_0805 §八): parallel windows assert this is frozen.
+    // Public for reffix parallel window assert + positive-control inject.
+    static std::atomic<size_t> dispelGhostCount;
+
+    static size_t GetDispelGhostCount()
+    {
+        return dispelGhostCount.load(std::memory_order_relaxed);
+    }
+
+    // Positive control only (MRT_GCV2_REFFIX_INJECT_DISPEL=1): bump without real dispel.
+    static void InjectDispelCountForTest()
+    {
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void DispelGhostFromRegion()
     {
-        metadata.routeState = NORMAL;
+        dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
+        TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
+                                    static_cast<unsigned int>(IsGhostFromRegion()),
+                                    static_cast<unsigned int>(GetRegionType()),
+                                    static_cast<unsigned int>(GetRouteState()));
+        // fysfixb: name who clears the ghost bit (PrepareFromRegionList peer path).
+        VLOG(REPORT,
+             "[GCV2][ghost-dispel] region=%p start=%#zx nUnit=%zu live=%zu route=%u young=%u",
+             this, GetRegionStart(), nUnit, GetLiveByteCount(),
+             static_cast<unsigned int>(GetRouteState()),
+             static_cast<unsigned>(IsYoungRegion()));
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
         }
+        SetRouteState(NORMAL);
+        SetMarkFaceSealed(false);
     }
 
     bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
 
+    // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
+    void AssertGhostClearedAfterReuse(size_t nUnit) const
+    {
+        CHECK(!IsGhostFromRegion());
+        size_t baseIdx = GetUnitIdx();
+        for (size_t i = 1; i < nUnit; i++) {
+            MAddress addr = GetUnitAddress(baseIdx + i);
+            CHECK(!InGhostFromRegion(from_region_addr(addr)));
+        }
+    }
+
     // the interface can only be used to clear live info after gc.
+    // Same rule for liveInfo / liveInfo0 / retained: if the slot still holds this LiveInfo*, drop it.
+    // Garbage is skipped here (may be mid-reuse); NullLiveInfoFieldsInRange covers garbage before
+    // ReleaseMemory so dangling into a dying tag cannot survive.
     void CheckAndClearLiveInfo(LiveInfo* liveInfo)
     {
         // Garbage region may be reused by other thread. For the sake of safety, we don't clean it here.
@@ -726,15 +1472,91 @@ public:
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
             metadata.liveInfo = nullptr;
-            metadata.liveByteCount = 0;
+            // Tracking phase ended: live counter is no longer a mark-period truth.
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        }
+        if (metadata.liveInfo0 == liveInfo) {
+            metadata.liveInfo0 = nullptr;
+        }
+        if (metadata.retainedLiveInfo == liveInfo) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_CHECKED);
+            metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): this unbind exists because the borrowed LiveInfo* is about to
+            // dangle — it says nothing about whether the snapshot is still true. When we own
+            // the bits, drop the pointer and keep the verdict.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
         }
     }
     void ClearLiveInfo()
     {
+        UnitRole unitRole = LoadUnitRole(reinterpret_cast<UnitInfo*>(this));
+        if (unitRole == UnitRole::FREE_UNITS) {
+            return;
+        }
+        CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
+                     "ClearLiveInfo must be called on a region head");
+        BumpSnapshotEpochFromClearLiveInfo();
         if (metadata.liveInfo != nullptr) {
             metadata.liveInfo = nullptr;
         }
-        metadata.liveByteCount = 0;
+        // Same carrier rule as liveInfo/retained: mark-cycle start drops ghost too.
+        // PrepareForwardableRegion copies liveInfo→liveInfo0; without this, liveInfo0
+        // can outlive ReleaseMemory(previous tag) (tagreuse T2).
+        metadata.liveInfo0 = nullptr;
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(0);
+        }
+        NoteRetainedClear(RETAINED_OP_CLEAR_ALL);
+        // holderlive (F2): a new mark cycle starts for this region — the old snapshot is about
+        // to be superseded by a better one, so the owned copy goes with it.
+        FreeRetainedMarkWords();
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
+        // Start of a mark cycle for this region: live=0 is authoritative until proven otherwise.
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        SetMarkFaceSealed(false);
+    }
+
+    // Structural: drop any liveInfo/liveInfo0/retained that land in [rangeStart, rangeStart+rangeSize).
+    // Called under STW immediately before ForwardDataSpace::ReleaseMemory so pointer validity
+    // is a structure guarantee (not a "do not read after phase X" convention). Covers garbage.
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto inRange = [rangeStart, rangeSize](LiveInfo* p) -> bool {
+            if (p == nullptr || rangeSize == 0) {
+                return false;
+            }
+            uintptr_t addr = reinterpret_cast<uintptr_t>(p);
+            return addr >= rangeStart && addr < (rangeStart + rangeSize);
+        };
+        LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+        if (reinterpret_cast<MAddress>(liveInfo) != LiveInfo::TEMPORARY_PTR && inRange(liveInfo)) {
+            __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
+            // Tracking phase for this LiveInfo ended with its backing store about to vanish.
+            __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
+        }
+        if (inRange(metadata.liveInfo0)) {
+            metadata.liveInfo0 = nullptr;
+        }
+        if (inRange(metadata.retainedLiveInfo)) {
+            NoteRetainedClear(RETAINED_OP_CLEAR_RANGE);
+            metadata.retainedLiveInfo = nullptr;
+            // holderlive (F2): same rule as CheckAndClearLiveInfo — the range is about to be
+            // madvise'd, so the pointer must go; an owned copy is not in that range.
+            if (metadata.retainedMarkWords != nullptr) {
+                return;
+            }
+            metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+            metadata.retainedLiveInfoEpoch = 0;
+            metadata.retainedLiveInfoCoveredUpTo = 0;
+        }
     }
 
     // only from-region should be locked.
@@ -772,7 +1594,25 @@ public:
     }
     void SetTraceRegionFlag(uint8_t flag)
     {
+        uint8_t prev = metadata.isTraceRegion;
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::TRACE_REGION_FLAG, 1, flag);
+        // blackmark: track 1→0 clears (EnlistFullThreadLocalRegion / HandleTraceRegions).
+        if (AllocPhaseDiag::Enabled()) {
+            if (flag == 0 && prev != 0) {
+                AllocPhaseDiag::NoteTraceFlagCleared(GetRegionStart());
+            } else if (flag != 0) {
+                AllocPhaseDiag::NoteTraceFlagSet(GetRegionStart());
+            }
+        }
+    }
+    // twoflags: CSet/route exclusion only. Independent of isTraceRegion lifetime.
+    void SetNotRelocatableThisCycle(uint8_t flag)
+    {
+        __atomic_store_n(&metadata.notRelocatableThisCycle, flag, __ATOMIC_RELEASE);
+    }
+    bool IsNotRelocatableThisCycle() const
+    {
+        return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
     }
     void SetInGhostRegion(uint8_t flag)
     {
@@ -791,6 +1631,30 @@ public:
     void SetResurrectedRegionFlag(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
+    }
+
+    void SetYoungRegionFlag(uint8_t flag);
+
+    bool IsYoungRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::YOUNG_REGION_FLAG, 1) != 0;
+    }
+
+    static size_t GetYoungRegionCount();
+
+    static bool HasYoungRegions();
+
+    void SetYoungAge(uint8_t age)
+    {
+        CHECK(age <= MAX_YOUNG_AGE);
+        metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH, age);
+    }
+
+    uint8_t GetYoungAge() const
+    {
+        return static_cast<uint8_t>(metadata.regionStateBitField.GetAtomicValue(
+                                        RegionStateBitPos::YOUNG_AGE_FLAG, YOUNG_AGE_BIT_LENGTH) >>
+                                    RegionStateBitPos::YOUNG_AGE_FLAG);
     }
 
     RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
@@ -953,13 +1817,144 @@ public:
             static_cast<UnitRole>(metadata.unitRole) == UnitRole::LARGE_SIZED_UNITS;
     }
 
-    uint32_t GetLiveByteCount() const { return metadata.liveByteCount; }
+    // liveByteCount: bit63 = LIVE_AUTHORITY (mark-period established), bits0-62 = live bytes.
+    // densify / fragmentation still use the byte count; reclaim-empty uses IsKnownEmpty()
+    // which mirrors ZGC page->is_marked() (mark face epoch), not the byte counter alone.
+    static constexpr uint64_t LIVE_AUTHORITY_BIT = 1ull << 63;
+    static constexpr uint64_t LIVE_BYTES_MASK = LIVE_AUTHORITY_BIT - 1ull;
 
-    void ResetLiveByteCount() { metadata.liveByteCount = 0; }
+    // livesame crosscheck (ZGC ZPage::verify_live): live book vs mark face.
+    static std::atomic<size_t> liveCrossMismatchCount;
+    static std::atomic<size_t> liveCrossCheckCount;
+    static std::atomic<bool> liveCrossAtexitInstalled;
 
-    void AddLiveByteCount(uint32_t count)
+    uint64_t GetLiveByteCount() const
     {
-        (void)__atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        return __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_BYTES_MASK;
+    }
+
+    bool IsLiveCountAuthoritative() const
+    {
+        return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
+    }
+
+    // ZGC zGeneration.cpp:205-225 / zPage.inline.hpp:223-225:
+    //   free iff !page->is_marked() where is_marked = livemap.seqnum == generation.seqnum.
+    // Ours: mark-period authority required (minor must not reclaim non-young on bare zero),
+    // then empty iff this region has no *current-cycle* mark face
+    // (liveInfo null/TEMPORARY, or LiveInfo.markEpoch != snapshotEpoch, or large isMarked==0).
+    // liveByteCount alone is NOT the reclaim predicate (ZGC live_bytes is relocation only).
+    bool IsKnownEmpty() const
+    {
+        uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
+        const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
+        bool emptyByEpoch = false;
+        if (IsLargeRegion()) {
+            emptyByEpoch = (metadata.isMarked == 0);
+        } else {
+            LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
+            if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
+                emptyByEpoch = true;
+            } else if (liveInfo->markEpoch != GetSnapshotEpoch()) {
+                // markepoch: stale face ⇒ unmarked (ZGC is_marked false before bit test).
+                emptyByEpoch = true;
+            } else {
+                // Current-cycle mark face present ⇒ ZGC is_marked true ⇒ not empty for reclaim.
+                emptyByEpoch = false;
+            }
+        }
+        // oneseq: authority vs epoch-empty divergence (const path uses relaxed atomics only).
+        oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
+        if (!auth && emptyByEpoch) {
+            oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
+        } else if (auth && emptyByEpoch) {
+            oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
+        } else if (auth && !emptyByEpoch) {
+            oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (!auth) {
+            return false;
+        }
+        return emptyByEpoch;
+    }
+
+    bool IsSafeKnownEmpty()
+    {
+        if (!IsKnownEmpty()) {
+            return false;
+        }
+        if (GetRegionAllocPtr() <= GetRegionStart()) {
+            return true;
+        }
+        // Examined: either large, or we had a mark face this cycle that is now stale/null
+        // (authority already required by IsKnownEmpty). Residual bitmap pointer may remain.
+        return GetMarkBitmap() != nullptr || GetResurrectBitmap() != nullptr || IsLargeRegion() ||
+            __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire) != nullptr;
+    }
+
+    void ResetLiveByteCount()
+    {
+        // densify rebuild: clear byte counter only (mark face rewritten in place next).
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+    }
+
+    // ZGC zForwarding.cpp:71-74 reset_livemap after from-page iteration — one publish:
+    // empty live bytes + invalidate mark face (bump snapshotEpoch; large clears isMarked).
+    // MARK_EPOCH_DISCIPLINE §4.2: no memset of shared markWords.
+    void ResetLiveMapAfterForward()
+    {
+        __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
+        if (IsLargeRegion()) {
+            SetMarkedRegionFlag(0);
+        }
+        BumpSnapshotEpochFromResetAfterForward();
+    }
+
+    void AddLiveByteCount(uint64_t count)
+    {
+        uint64_t prev = __atomic_fetch_add(&metadata.liveByteCount, count, __ATOMIC_ACQ_REL);
+        if ((prev & LIVE_AUTHORITY_BIT) == 0) {
+            (void)__atomic_fetch_or(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, __ATOMIC_ACQ_REL);
+        }
+    }
+
+    // ZGC ZPage::verify_live — live_objects/bytes must match livemap. Always-on counter;
+    // MRT_GCV2_LIVE_CROSSCHECK=1 aborts on mismatch.
+    void VerifyLiveBooks(const char* where)
+    {
+        liveCrossCheckCount.fetch_add(1, std::memory_order_relaxed);
+        if (!IsLiveCountAuthoritative()) {
+            return;
+        }
+        const uint64_t liveBytes = GetLiveByteCount();
+        const bool emptyByMark = IsKnownEmpty();
+        // Homology: liveBytes==0 ⇔ empty-by-mark (and vice versa) under authority.
+        const bool emptyByLive = (liveBytes == 0);
+        if (emptyByMark == emptyByLive) {
+            return;
+        }
+        size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        static const bool abortOn = []() {
+            const char* v = std::getenv("MRT_GCV2_LIVE_CROSSCHECK");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr, "[GCV2][livesame][crosscheck] atexit checks=%zu mismatch=%zu\n",
+                             liveCrossCheckCount.load(std::memory_order_relaxed),
+                             liveCrossMismatchCount.load(std::memory_order_relaxed));
+                std::fflush(stderr);
+            });
+        }
+        if (n <= 32 || abortOn) {
+            LOG(abortOn ? RTLOG_FATAL : RTLOG_ERROR,
+                "[GCV2][livesame][crosscheck] where=%s region=%p liveBytes=%llu emptyByMark=%u "
+                "emptyByLive=%u n=%zu",
+                where != nullptr ? where : "?", this, static_cast<unsigned long long>(liveBytes),
+                static_cast<unsigned>(emptyByMark), static_cast<unsigned>(emptyByLive), n);
+        }
     }
 
     void RemoveFromList()
@@ -977,15 +1972,94 @@ public:
     }
 
 private:
+    // Product geometry only — reachable from GetRoute(RouteTicket). External product
+    // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
+    size_t GetPreLiveBytesInGhostRegion(MAddress address)
+    {
+        DCHECK(metadata.liveInfo0 != nullptr);
+        size_t offset = GetAddressOffset(address);
+        return metadata.liveInfo0->GetPreLiveBytes(offset, GetGhostRegionSize());
+    }
+
+    ALWAYS_INLINE void CheckObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
+    {
+        // Always-on TypeInfo range check: same predicate as CheckTypeInfoRegion rule 3
+        // (VerifyHeap.cpp:105-108) — tip ∈ heap address range is a defect.
+        // Default: count + one-shot dump (no abort). Fatal: MRT_GCV2_TIPINHEAP_FATAL=1.
+        TypeInfo* tip = obj->GetTypeInfo();
+        if (UNLIKELY(Heap::IsHeapAddress(tip))) {
+            ReportTypeInfoInHeap(obj, tip, objSize, regionStart, regionEnd);
+        }
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        // kMarkedBytesPerBit is 8, matching Allocator::ALLOC_ALIGN (Allocator.h:19).
+        if (UNLIKELY(objSize == 0 || (objSize % kMarkedBytesPerBit) != 0 || objSize > regionEnd - objAddr)) {
+            ReportInvalidObjectSize(obj, objSize, regionStart, regionEnd);
+        }
+    }
+
+    // Cold path for tip ∈ heap. Reuses Heap::IsHeapAddress (CheckTypeInfoRegion rule 3 body);
+    // does not reimplement the full VERIFY_HEAP channel (stats / misaligned / ContainsAddress).
+    ATTR_COLD ATTR_NO_INLINE void ReportTypeInfoInHeap(const BaseObject* obj, TypeInfo* tip, size_t objSize,
+                                                       MAddress regionStart, MAddress regionEnd) const
+    {
+        size_t n = tipInHeapHits.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n == 1) {
+            GCPhase phase = Heap::GetHeap().GetGCPhase();
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipguard][TYPEINFO_IN_HEAP] obj=%p tip=%p objSize=%zu region=%p regionStart=%#zx "
+                "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u "
+                "(default=count; fatal=MRT_GCV2_TIPINHEAP_FATAL=1)",
+                obj, tip, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(),
+                static_cast<unsigned>(GetRegionType()), static_cast<unsigned>(IsYoungRegion()),
+                static_cast<unsigned>(phase));
+        } else if ((n & 0x3ffU) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
+        }
+        const char* fatal = std::getenv("MRT_GCV2_TIPINHEAP_FATAL");
+        if (fatal != nullptr && fatal[0] == '1' && fatal[1] == '\0') {
+            LOG(RTLOG_FATAL,
+                "[GCV2][tipguard][TYPEINFO_IN_HEAP_FATAL] obj=%p tip=%p objSize=%zu hits=%zu",
+                obj, tip, objSize, n);
+            std::abort();
+        }
+    }
+
+    NO_RETURN ATTR_COLD ATTR_NO_INLINE void ReportInvalidObjectSize(
+        const BaseObject* obj, size_t objSize, MAddress regionStart, MAddress regionEnd) const
+    {
+        MAddress objAddr = reinterpret_cast<MAddress>(obj);
+        size_t bitCapacity = (regionEnd - regionStart) / kMarkedBytesPerBit;
+        size_t bitIndex = objAddr >= regionStart ? (objAddr - regionStart) / kMarkedBytesPerBit :
+                                                   std::numeric_limits<size_t>::max();
+        GCPhase phase = Heap::GetHeap().GetGCPhase();
+        LOG(RTLOG_FATAL,
+            "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
+            "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
+            obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(), static_cast<unsigned>(GetRegionType()),
+            static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
+            kMarkedBytesPerBit);
+        std::abort();
+    }
+
+    static std::atomic<size_t> tipInHeapHits;
+
+    static std::atomic<size_t> youngRegionCount;
+    static std::mutex youngRegionFlagMutex;
     static constexpr int32_t MAX_RAW_POINTER_COUNT = std::numeric_limits<int32_t>::max();
     static constexpr int32_t BIT_LENGTH = 4;
+    static constexpr uint8_t YOUNG_AGE_BIT_LENGTH = 6;
+    static constexpr uint8_t YOUNG_STATE_BIT_LENGTH = 1 + YOUNG_AGE_BIT_LENGTH;
+    static constexpr uint8_t MAX_YOUNG_AGE = (1U << YOUNG_AGE_BIT_LENGTH) - 1;
     enum RegionStateBitPos : uint8_t {
         REGION_TYPE_FLAG = 0,
         TRACE_REGION_FLAG = BIT_LENGTH,
         IN_GHOST_FROM_REGION_FLAG,
         MARKED_REGION_FLAG,
         ENQUEUED_REGION_FLAG,
-        RESURRECTED_REGION_FLAG
+        RESURRECTED_REGION_FLAG,
+        YOUNG_REGION_FLAG,
+        YOUNG_AGE_FLAG
     };
 
     struct UnitMetadata {
@@ -997,22 +2071,35 @@ private:
             uint32_t nextRegionIdx;
             uint32_t prevRegionIdx; // support fast deletion for region list.
 
-            uint32_t liveByteCount;
+            uint64_t liveByteCount;
             int32_t rawPointerObjectCount;
+            uint32_t censusBoundaryOffset;
         };
 
-        union {
-            LiveInfo* liveInfo = nullptr;
-            RegionInfo* ownerRegion; // if unit is SUBORDINATE_UNIT
-        };
+        LiveInfo* liveInfo = nullptr;
+        RegionInfo* ownerRegion = nullptr; // if unit is SUBORDINATE_UNIT
 
-        union {
-            LiveInfo* liveInfo0 = nullptr;
-            RegionInfo* ownerRegion0; // if unit is SUBORDINATE_UNIT
-        };
+        LiveInfo* liveInfo0 = nullptr;
+        RegionInfo* ownerRegion0 = nullptr; // if unit is SUBORDINATE_UNIT
+
+        LiveInfo* retainedLiveInfo = nullptr;
+        RetainedLiveInfoState retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        uint64_t retainedLiveInfoEpoch = 0;
+        MAddress retainedLiveInfoCoveredUpTo = 0;
+        // holderlive (F2): per-region-life history of the three fields above. Reset by
+        // InitRegionInfo so "preserve count 0" means "never preserved in this life", not
+        // "never preserved since boot".
+        uint32_t retainedPreserveCnt = 0;
+        uint32_t retainedClearCnt = 0;
+        uint8_t retainedLastOp = RETAINED_OP_NONE;
+        // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
+        // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
+        uint64_t* retainedMarkWords = nullptr;
+        uint32_t retainedMarkWordCnt = 0;
 
         uintptr_t regionEnd0;
         RouteInfo routeInfo;
+        uint64_t snapshotEpoch = 0;
 
         // used to traverse ghost region.
         uint32_t nextRegionIdx0;
@@ -1050,6 +2137,14 @@ private:
             BitField<uint16_t> regionStateBitField;
         };
         RouteState routeState; // todo: put in RouteInfo
+        // twoflags: orthogonal to isTraceRegion.
+        // isTraceRegion = implicit-black / ShouldEnqueue skip (cleared by HandleTraceRegions).
+        // notRelocatableThisCycle = allocated after mark start this cycle → not a
+        // relocation / CSet candidate until next PrepareTrace. Never read by ShouldEnqueue.
+        uint8_t notRelocatableThisCycle = 0;
+        // sealcheck: 1 after RouteRegion enters ROUTING (geometry face frozen).
+        uint8_t markFaceSealed = 0;
+        ZGenerationId _generation_id;
         RwLock rwLock;
     };
 
@@ -1058,18 +2153,47 @@ private:
         // propgated from RegionManager
         static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
         static size_t totalUnitCount;
+        // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
+        // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
+        static size_t unitSizeShift;
 
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
-        static size_t GetUnitIdxAt(uintptr_t allocAddr)
-        {
-            if (heapStartAddress <= allocAddr && allocAddr < (heapStartAddress + totalUnitCount * UNIT_SIZE)) {
-                return (allocAddr - heapStartAddress) / UNIT_SIZE;
-            }
 
-            std::abort();
+        // gatehot: OOB path used to live in the same function as the hot index math.
+        // That forced a full frame (dladdr + FormatLog + stack canary) on every call and
+        // blocked inlining into TryGetRegionInfoAt / PlausibleManagedObjectGate.
+        // Cold-only: same greppable FATAL text as before (unitzero trail).
+        ATTR_NO_INLINE ATTR_COLD static size_t GetUnitIdxAtOOB(uintptr_t allocAddr);
+
+        // Hot path: range check + shift. Must stay tiny enough to inline at every call site.
+        ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
+        {
+            uintptr_t start = heapStartAddress;
+            size_t units = totalUnitCount;
+            size_t shift = unitSizeShift;
+            // UNIT_SIZE == (1 << shift); keep arithmetic identical to
+            //   start <= addr < start + units * UNIT_SIZE
+            // without loading the UNIT_SIZE global or emitting a DIV.
+            if (LIKELY(start <= allocAddr &&
+                       ((allocAddr - start) >> shift) < units)) {
+                size_t idx = (allocAddr - start) >> shift;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                // Debug builds always cross-check shift vs div (GATEEQUIV math).
+                size_t divIdx = (allocAddr - start) / UNIT_SIZE;
+                if (UNLIKELY(idx != divIdx)) {
+                    LOG(RTLOG_FATAL, "GetUnitIdxAt GATEEQUIV mismatch addr=%#zx shift=%zu div=%zu",
+                        allocAddr, idx, divIdx);
+                }
+#endif
+                return idx;
+            }
+            return GetUnitIdxAtOOB(allocAddr);
         }
 
-        static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr) { return GetUnitInfo(GetUnitIdxAt(allocAddr)); }
+        ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
+        {
+            return GetUnitInfo(GetUnitIdxAt(allocAddr));
+        }
 
         // get the unit address by index
         static MAddress GetUnitAddress(size_t idx)
@@ -1138,10 +2262,15 @@ private:
             metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::RESURRECTED_REGION_FLAG, 1, flag);
         }
 
+        // Publish the owner before the discriminator that guards it, so a reader which observes
+        // SUBORDINATE_UNIT always finds a non-null ownerRegion (:530-546). SetUnitRole is an
+        // acq_rel compare-exchange (BitField::SetAtomicValue :46-58), which orders the store
+        // above it.
         void InitSubordinateUnit(RegionInfo* owner)
         {
-            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
             metadata.ownerRegion = owner;
+            SetInGhostRegion(0);
+            SetUnitRole(UnitRole::SUBORDINATE_UNIT);
         }
 
         void ToFreeRegion() { InitFreeRegion(GetUnitIdx(this), 1); }
@@ -1177,21 +2306,71 @@ private:
         UnitMetadata metadata;
     };
 
+    // unitRole selects the ownerRegion/liveInfo payload, and its writers publish it with an acq_rel
+    // compare-exchange (UnitInfo::InitSubordinateUnit, InitRegionInfo below). Read it with
+    // acquire so that the selected payload read which follows in GetRegionInfo/GetRegionInfoAt/
+    // GetGhostFromRegionAt cannot be hoisted above the discriminator: a plain pair of loads may
+    // be reordered, or folded into an unconditional load plus a select, either of which would
+    // defeat the writer's ordering. On x86_64 an acquire load is the same instruction as a
+    // relaxed one, so this constrains the compiler and costs nothing at run time.
+    static UnitRole LoadUnitRole(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(unit->GetMetadata().unitRoleBitField.GetAtomicValue(0, BIT_LENGTH));
+    }
+
+    static UnitRole LoadUnitRole0(UnitInfo* unit)
+    {
+        return static_cast<UnitRole>(
+            unit->GetMetadata().unitRoleBitField.GetAtomicValue(BIT_LENGTH, BIT_LENGTH) >> BIT_LENGTH);
+    }
+
+    // unitRole selects between the ownerRegion/liveInfo payloads and allocPtr/regionEnd:
+    // a reader that observes SUBORDINATE_UNIT dereferences metadata.ownerRegion (:530-546),
+    // and a reader that observes SMALL_SIZED_UNITS or LARGE_SIZED_UNITS treats this unit as a
+    // region head and reads metadata.regionEnd (IsValidRegion :1018-1022). This function both
+    // leaves the first state and enters the second, and the readers are not stopped by
+    // ScopedStopTheWorld -- the collector's own promotion walk (RegionManager.cpp:549-551) runs
+    // while the finalizer thread reclaims regions through here. So the role is moved to the
+    // neutral FREE_UNITS first, the payload is rewritten, and only then is the real role
+    // published. FREE_UNITS is safe to expose at any moment: it makes readers treat the unit as
+    // itself, and it is neither a valid region nor a subordinate one.
+    // SetUnitRole is an acq_rel compare-exchange (BitField::SetAtomicValue :46-58), so neither
+    // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        SetUnitRole(UnitRole::FREE_UNITS);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
-        metadata.liveByteCount = 0;
+        metadata.censusBoundaryOffset = 0;
+        __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
+        metadata.liveInfo0 = nullptr;
+        FreeRetainedMarkWords();
+        metadata.retainedLiveInfo = nullptr;
+        metadata.retainedLiveInfoState = RetainedLiveInfoState::NEVER_EXAMINED;
+        metadata.retainedLiveInfoEpoch = 0;
+        metadata.retainedLiveInfoCoveredUpTo = 0;
+        // holderlive (F2): new region life — its predecessor's snapshot history does not
+        // describe the objects that are about to be allocated here.
+        metadata.retainedPreserveCnt = 0;
+        metadata.retainedClearCnt = 0;
+        metadata.retainedLastOp = RETAINED_OP_NONE;
+        BumpSnapshotEpochFromInitRegion();
         SetRegionType(RegionType::FREE_REGION);
-        SetUnitRole(uClass);
         SetTraceRegionFlag(0);
+        SetNotRelocatableThisCycle(0);
+        // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
+        // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
+        SetInGhostRegion(0);
         SetMarkedRegionFlag(0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
+        SetYoungRegionFlag(0);
+        SetMarkFaceSealed(false);
         __atomic_store_n(&metadata.rawPointerObjectCount, 0, __ATOMIC_SEQ_CST);
+        SetUnitRole(uClass);
     }
 
     void InitRegion(size_t nUnit, UnitRole uClass)
@@ -1205,6 +2384,7 @@ private:
         for (size_t i = 1; i < nUnit; i++) {
             array[i].InitSubordinateUnit(this);
         }
+        AssertGhostClearedAfterReuse(nUnit);
     }
 
     static constexpr uint32_t NULLPTR_IDX = UnitInfo::INVALID_IDX;

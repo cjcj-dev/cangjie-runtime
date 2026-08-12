@@ -7,15 +7,31 @@
 
 #include "Allocator/RegionManager.h"
 
+#include <atomic>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <cstring>
+#include <limits>
 #include <unistd.h>
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
+#include "Base/TimeUtils.h"
 #include "Collector/Collector.h"
 #include "Collector/CopyCollector.h"
+#include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
+#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/FlipPromoDiag.h"
+#include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/O2ORemsetDiag.h"
+#include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/Zap.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -27,6 +43,428 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+size_t RegionInfo::UnitInfo::unitSizeShift = 0;
+
+// gatehot: cold OOB for GetUnitIdxAt — kept out of the hot function so the common
+// path can inline (was ~128 insns with dladdr/FATAL in the same body).
+// Semantics unchanged: greppable FATAL + return 0 (unitzero trail).
+size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
+{
+    void* ra0 = __builtin_return_address(0);
+    void* ra1 = nullptr;
+    void* ra2 = nullptr;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-address"
+    ra1 = __builtin_return_address(1);
+    ra2 = __builtin_return_address(2);
+#pragma GCC diagnostic pop
+#endif
+    const char* s0 = "?";
+    const char* s1 = "?";
+    const char* s2 = "?";
+#if !defined(_WIN64)
+    Dl_info di0{};
+    Dl_info di1{};
+    Dl_info di2{};
+    if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
+        s0 = di0.dli_sname;
+    }
+    if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
+        s1 = di1.dli_sname;
+    }
+    if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
+        s2 = di2.dli_sname;
+    }
+#endif
+    LOG(RTLOG_FATAL,
+        "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
+        "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
+        allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
+        ra0, s0, ra1, s1, ra2, s2);
+    return 0;
+}
+std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
+std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
+std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
+std::atomic<bool> RegionInfo::markEpochAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::oneseqBumpClearYoung { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpClearOld { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpInitRegion { 0 };
+std::atomic<size_t> RegionInfo::oneseqBumpResetAfterForward { 0 };
+std::atomic<size_t> RegionInfo::oneseqIsKnownEmptyCalls { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthBlocksReclaim { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthAndEmpty { 0 };
+std::atomic<size_t> RegionInfo::oneseqAuthNotEmpty { 0 };
+std::atomic<size_t> RegionInfo::oneseqNoAuthNotEmpty { 0 };
+std::atomic<bool> RegionInfo::oneseqAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
+std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
+std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
+
+void RegionInfo::ReportOneseqCounts(const char* point)
+{
+    std::fprintf(stderr,
+                 "[GCV2][oneseq] point=%s bump_clear_young=%zu bump_clear_old=%zu "
+                 "bump_init=%zu bump_reset_fwd=%zu "
+                 "ike_calls=%zu auth_blocks=%zu auth_empty=%zu auth_not_empty=%zu noauth_not_empty=%zu "
+                 "stale_read=%zu live_cross_check=%zu live_cross_mismatch=%zu\n",
+                 point != nullptr ? point : "?",
+                 oneseqBumpClearYoung.load(std::memory_order_relaxed),
+                 oneseqBumpClearOld.load(std::memory_order_relaxed),
+                 oneseqBumpInitRegion.load(std::memory_order_relaxed),
+                 oneseqBumpResetAfterForward.load(std::memory_order_relaxed),
+                 oneseqIsKnownEmptyCalls.load(std::memory_order_relaxed),
+                 oneseqAuthBlocksReclaim.load(std::memory_order_relaxed),
+                 oneseqAuthAndEmpty.load(std::memory_order_relaxed),
+                 oneseqAuthNotEmpty.load(std::memory_order_relaxed),
+                 oneseqNoAuthNotEmpty.load(std::memory_order_relaxed),
+                 markEpochStaleReadCount.load(std::memory_order_relaxed),
+                 liveCrossCheckCount.load(std::memory_order_relaxed),
+                 liveCrossMismatchCount.load(std::memory_order_relaxed));
+    std::fflush(stderr);
+}
+
+void RegionInfo::EnsureOneseqAtexit()
+{
+    bool expected = false;
+    if (oneseqAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() { ReportOneseqCounts("atexit"); });
+    }
+}
+std::mutex RegionInfo::youngRegionFlagMutex;
+std::atomic<size_t> g_promotedCrossGenEdgeCount { 0 };
+
+// promotegap: offset histogram for promote re-registration (MRT_GCV2_PROMOTEGAP_PROBE=1).
+namespace {
+constexpr size_t kPromoteGapOffBuckets = 64;
+std::atomic<uint64_t> g_pgInplaceSeen { 0 };
+std::atomic<uint64_t> g_pgInplaceRec { 0 };
+std::atomic<uint64_t> g_pgInplaceNode { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10Seen { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10Rec { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10SkipOldT { 0 };
+std::atomic<uint64_t> g_pgInplaceNode10SkipNull { 0 };
+std::atomic<uint64_t> g_pgFwdSeen { 0 };
+std::atomic<uint64_t> g_pgFwdRec { 0 };
+std::atomic<uint64_t> g_pgFwdNode { 0 };
+std::atomic<uint64_t> g_pgFwdNode10Seen { 0 };
+std::atomic<uint64_t> g_pgFwdNode10Rec { 0 };
+std::atomic<uint64_t> g_pgFwdNode10SkipOldT { 0 };
+std::atomic<uint64_t> g_pgFwdNode10SkipNull { 0 };
+std::atomic<uint64_t> g_pgOffInplace[kPromoteGapOffBuckets] {};
+std::atomic<uint64_t> g_pgOffFwd[kPromoteGapOffBuckets] {};
+std::atomic<uint64_t> g_pgDumpSeq { 0 };
+
+bool PromoteGapProbeOn()
+{
+    static const bool on = []() {
+        return DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promote") ||
+            DiagGate::LegacyOrToken("MRT_GCV2_PROMOTEGAP_PROBE", "promotegap");
+    }();
+    return on;
+}
+
+bool IsDefaultNode(BaseObject* object)
+{
+    if (object == nullptr) {
+        return false;
+    }
+    TypeInfo* ti = object->GetTypeInfo();
+    if (ti == nullptr) {
+        return false;
+    }
+    const char* name = ti->GetName();
+    return name != nullptr && std::strcmp(name, "default:Node") == 0;
+}
+
+void NotePromoteGapField(BaseObject* object, RefField<>& field, bool recorded, bool fwdPath)
+{
+    if (!PromoteGapProbeOn() || object == nullptr) {
+        return;
+    }
+    MAddress base = reinterpret_cast<MAddress>(object);
+    MAddress slot = reinterpret_cast<MAddress>(&field);
+    if (slot < base) {
+        return;
+    }
+    size_t off = static_cast<size_t>(slot - base);
+    if (fwdPath) {
+        g_pgFwdSeen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgFwdRec.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (off < kPromoteGapOffBuckets) {
+            g_pgOffFwd[off].fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        g_pgInplaceSeen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgInplaceRec.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (off < kPromoteGapOffBuckets) {
+            g_pgOffInplace[off].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    if (!IsDefaultNode(object)) {
+        return;
+    }
+    if (fwdPath) {
+        g_pgFwdNode.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_pgInplaceNode.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (off != 0x10) {
+        return;
+    }
+    BaseObject* target = to_object(field.GetTargetObject());
+    if (fwdPath) {
+        g_pgFwdNode10Seen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgFwdNode10Rec.fetch_add(1, std::memory_order_relaxed);
+        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            g_pgFwdNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_pgFwdNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        g_pgInplaceNode10Seen.fetch_add(1, std::memory_order_relaxed);
+        if (recorded) {
+            g_pgInplaceNode10Rec.fetch_add(1, std::memory_order_relaxed);
+        } else if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            g_pgInplaceNode10SkipNull.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_pgInplaceNode10SkipOldT.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+}
+
+void DumpPromoteGapProbe(const char* tag)
+{
+    if (!PromoteGapProbeOn()) {
+        return;
+    }
+    uint64_t seq = g_pgDumpSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+    VLOG(REPORT,
+         "[PROMOTEGAP][%s] seq=%llu inplace seen=%llu rec=%llu node=%llu "
+         "node10seen=%llu node10rec=%llu node10skipOldT=%llu node10skipNull=%llu | "
+         "fwd seen=%llu rec=%llu node=%llu node10seen=%llu node10rec=%llu "
+         "node10skipOldT=%llu node10skipNull=%llu",
+         tag, static_cast<unsigned long long>(seq),
+         static_cast<unsigned long long>(g_pgInplaceSeen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceRec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10Seen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10Rec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10SkipOldT.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgInplaceNode10SkipNull.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdSeen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdRec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10Seen.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10Rec.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10SkipOldT.load(std::memory_order_relaxed)),
+         static_cast<unsigned long long>(g_pgFwdNode10SkipNull.load(std::memory_order_relaxed)));
+    for (size_t off = 0; off < kPromoteGapOffBuckets; ++off) {
+        uint64_t a = g_pgOffInplace[off].load(std::memory_order_relaxed);
+        uint64_t b = g_pgOffFwd[off].load(std::memory_order_relaxed);
+        if (a == 0 && b == 0) {
+            continue;
+        }
+        VLOG(REPORT,
+             "[PROMOTEGAP][OFF] seq=%llu offset=0x%zx inplace=%llu fwd=%llu",
+             static_cast<unsigned long long>(seq), off,
+             static_cast<unsigned long long>(a), static_cast<unsigned long long>(b));
+    }
+}
+} // namespace
+
+size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
+{
+    if (region == nullptr || !region->IsYoungRegion()) {
+        return 0;
+    }
+    static const bool fysGapProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (region->IsSafeKnownEmpty()) {
+        if (fysGapProbe) {
+            VLOG(REPORT,
+                 "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
+                 "knownEmpty=1 hasBitmap=%u mode=safe-empty",
+                 region,
+                 static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                                       region->GetResurrectBitmap() != nullptr));
+        }
+        return 0;
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t recorded = 0;
+    size_t liveEdges = 0;
+    size_t deadEdges = 0;
+    size_t unknownEdges = 0;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
+    bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
+    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
+                             &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
+        if (object == nullptr || !object->HasRefField()) {
+            return;
+        }
+        bool survived = hasObjectLiveness &&
+            region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        if (useLiveOnly && !survived) {
+            if (fysGapProbe) {
+                object->ForEachRefField([&deadEdges](RefField<>& field) {
+                    BaseObject* target = to_object(field.GetTargetObject());
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                        ++deadEdges;
+                    }
+                });
+            }
+            return;
+        }
+        object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
+                                hasObjectLiveness, survived, object](RefField<>& field) {
+            BaseObject* target = to_object(field.GetTargetObject());
+            MAddress slot = reinterpret_cast<MAddress>(&field);
+            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                NotePromoteGapField(object, field, false, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
+                return;
+            }
+            RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                rememberedSet.Record(slot);
+                ++recorded;
+                // promodomain dual-run: old product edge set for bidirectional reconcile.
+                PromotedRegionDomain::NoteOldProductRecord(slot);
+                FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
+                NotePromoteGapField(object, field, true, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
+                if (fysGapProbe) {
+                    if (!hasObjectLiveness) {
+                        ++unknownEdges;
+                    } else if (survived) {
+                        ++liveEdges;
+                    } else {
+                        ++deadEdges;
+                    }
+                }
+            } else {
+                NotePromoteGapField(object, field, false, false);
+                IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+            }
+        });
+    };
+    region->VisitAllObjects([&recordFromObject](BaseObject* object) { recordFromObject(object); });
+    if (recorded != 0) {
+        g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
+    }
+    FlipPromoDiag::NotePromotedRegion(region, /*path*/ 0, recorded);
+    if (fysGapProbe) {
+        VLOG(REPORT,
+             "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
+             "knownEmpty=%u hasBitmap=%u mode=%s",
+             region, recorded, liveEdges, deadEdges, unknownEdges, static_cast<unsigned>(region->IsKnownEmpty()),
+             static_cast<unsigned>(hasObjectLiveness), useLiveOnly ? "live-only" : "scan-all");
+    }
+    return recorded;
+}
+
+size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
+{
+    size_t n = g_promotedCrossGenEdgeCount.exchange(0, std::memory_order_relaxed);
+    DumpPromoteGapProbe("consume");
+    return n;
+}
+
+size_t RegionManager::RecordPinnedCrossGenEdges()
+{
+    // gcscanoff blocking test: skip whole conservative pinned/old scan (default off).
+    {
+        static const bool skip = []() {
+            const char* v = std::getenv("MRT_GCV2_SKIP_PINNED_SCAN");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (skip) {
+            VLOG(REPORT, "[GCV2][block] skip RecordPinnedCrossGenEdges env=MRT_GCV2_SKIP_PINNED_SCAN=1");
+            return 0;
+        }
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t recorded = 0;
+    auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
+        if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
+            return;
+        }
+        region->VisitAllObjects([&rememberedSet, &recorded, region](BaseObject* object) {
+            if (object == nullptr || !object->HasRefField()) {
+                return;
+            }
+            object->ForEachRefField([&rememberedSet, &recorded, region](RefField<>& field) {
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    rememberedSet.Record(slot);
+                    ++recorded;
+                    FlipPromoDiag::NoteBroadRecord(region, slot);
+                }
+            });
+        });
+    };
+    // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
+    // scanRegion already skips IsYoungRegion, so candidate young lists are free.
+    recentPinnedRegionList.VisitAllRegions(scanRegion);
+    oldPinnedRegionList.VisitAllRegions(scanRegion);
+    rawPointerPinnedRegionList.VisitAllRegions(scanRegion);
+    recentLargeRegionList.VisitAllRegions(scanRegion);
+    oldLargeRegionList.VisitAllRegions(scanRegion);
+    largeTraceRegions.VisitAllRegions(scanRegion);
+    recentFullRegionList.VisitAllRegions(scanRegion);
+    fullTraceRegions.VisitAllRegions(scanRegion);
+    unmovableFromRegionList.VisitAllRegions(scanRegion);
+    fromRegionList.VisitAllRegions(scanRegion);
+    tlRegionList.VisitAllRegions(scanRegion);
+    return recorded;
+}
+
+void RegionInfo::SetYoungRegionFlag(uint8_t flag)
+{
+    std::lock_guard<std::mutex> lock(youngRegionFlagMutex);
+    bool wasYoung = IsYoungRegion();
+    bool makeYoung = flag != 0;
+    if (!wasYoung && makeYoung) {
+        youngRegionCount.fetch_add(1, std::memory_order_release);
+    }
+    metadata.regionStateBitField.SetAtomicValue(
+        RegionStateBitPos::YOUNG_REGION_FLAG, YOUNG_STATE_BIT_LENGTH, makeYoung ? 1 : 0);
+    if (wasYoung && !makeYoung) {
+        size_t count = youngRegionCount.load(std::memory_order_relaxed);
+        CHECK(count > 0);
+        youngRegionCount.fetch_sub(1, std::memory_order_release);
+    }
+}
+
+size_t RegionInfo::GetYoungRegionCount()
+{
+    return youngRegionCount.load(std::memory_order_acquire);
+}
+
+bool RegionInfo::HasYoungRegions()
+{
+    return GetYoungRegionCount() != 0;
+}
 
 static size_t GetPageSize() noexcept
 {
@@ -114,14 +552,27 @@ const char* RegionInfo::GetTypeName() const
 void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 {
     if (IsLargeRegion()) {
-        func(reinterpret_cast<BaseObject*>(GetRegionStart()));
+        BaseObject* obj = from_region_addr(GetRegionStart());
+        // getsize7: dense walk steps via GetSize; reject bad headers instead of SEGV.
+        // On reject: stop the walk (cannot invent a step size). Caller sees partial visit.
+        if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
+            return;
+        }
+        func(obj);
     } else if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         uintptr_t allocPtr = GetRegionAllocPtr();
         while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            // getsize7: GetAllocSize → GetSize reads TypeInfo; interiors/holes SEGV here
+            // (deadlock_enqfrontier: VisitLiveObjectsUntilFalse ← RouteRegion ← TryForward).
+            // Refuse: break without inventing size — remaining stream is unwalkable.
+            if (!Collector::PlausibleManagedObjectGate("VisitAllObjects", obj)) {
+                break;
+            }
             // GetAllocSize should before call func, because object maybe destroy in compact gc.
-            size_t size = RegionSpace::GetAllocSize(*reinterpret_cast<BaseObject*>(position));
-            func(reinterpret_cast<BaseObject*>(position));
+            size_t size = RegionSpace::GetAllocSize(*obj);
+            func(obj);
             position += size;
         }
     }
@@ -129,23 +580,60 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 
 bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func)
 {
-    // no need to visit this region.
-    if (GetLiveByteCount() == 0) {
+    // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
+    // is not an emptiness proof — fall through and consult the mark bitmap.
+    if (IsKnownEmpty()) {
         return true;
     }
+    // tipnull arm R: Admit/GetRoute use liveInfo0 after PrepareForwardable; walk same face.
+    LiveInfo* ghostFace = metadata.liveInfo0;
+    auto survivedAt = [this, ghostFace](size_t offset) -> bool {
+        if (ghostFace != nullptr) {
+            return ghostFace->IsSurvivedObject(offset);
+        }
+        return IsSurvivedObject(offset);
+    };
     if (IsLargeRegion()) {
-        return func(reinterpret_cast<BaseObject*>(GetRegionStart()));
+        BaseObject* obj = from_region_addr(GetRegionStart());
+        if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+            return !survivedAt(0);
+        }
+        return func(obj);
     }
     if (IsSmallRegion()) {
         uintptr_t position = GetRegionStart();
         size_t offset = 0;
         uintptr_t allocPtr = GetRegionAllocPtr();
+        size_t regionBytes = allocPtr > GetRegionStart() ? (allocPtr - GetRegionStart()) : 0;
+
+        // tipalign 丙 attempt: cannot skip-and-continue without size (GetAllocSize needs
+        // tip; gate tip-misaligned blocks that). Stepping to next liveInfo0 bit lands on
+        // multi-bit MarkBits interiors (not object starts) → SEGV. So on gate reject we
+        // only refuse to treat the walk as complete if survivors remain (return false).
+        // Gate itself is not relaxed.
+        auto remainingSurvivor = [&](size_t fromOff) -> bool {
+            for (size_t rest = fromOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
+                if (survivedAt(rest)) {
+                    return true;
+                }
+            }
+            return false;
+        };
 
         while (position < allocPtr) {
-            BaseObject* obj = reinterpret_cast<BaseObject*>(position);
+            BaseObject* obj = from_region_addr(position);
+            // getsize7: bitten site — PreForward → ForwardObject → RouteRegion → here → GetSize.
+            if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
+                // tipwho tip-misaligned at e.g. +6424: do NOT return true (walk success).
+                // Incomplete if any liveInfo0 bit remains at/after break (orphan@19400).
+                return !remainingSurvivor(offset);
+            }
             size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                return !remainingSurvivor(offset);
+            }
             position += allocSize;
-            if (IsSurvivedObject(offset) && !func(obj)) { return false; }
+            if (survivedAt(offset) && !func(obj)) { return false; }
             offset += allocSize;
         }
     }
@@ -398,6 +886,93 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
+namespace {
+// STEER4: metering gated by MRT_GCV2_SCRUB_COST (default off). Product path must not
+// emit per-Collect VLOG floods (calls_per_run ~1161 under ALOT).
+bool ScrubCostMeterEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_SCRUB_COST");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+std::atomic<uint64_t> g_scrubCalls{ 0 };
+std::atomic<uint64_t> g_scrubNs{ 0 };
+std::atomic<uint64_t> g_scrubWordsSum{ 0 };
+std::atomic<uint64_t> g_scrubErasedSum{ 0 };
+std::atomic<size_t> g_scrubWordsMax{ 0 };
+std::atomic<size_t> g_staleAtCollect{ 0 };
+} // namespace
+
+void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return;
+    }
+    MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
+    MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
+    // Product path clears only the two bitmap slices owned by this region.
+    if (!ScrubCostMeterEnabled() && !O2ORemsetDiag::Enabled()) {
+        (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
+        return;
+    }
+    size_t words = 0;
+    uint64_t t0 = TimeUtil::NanoSeconds();
+    size_t scrubbed = Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, &words);
+    if (O2ORemsetDiag::Enabled() && !region->IsYoungRegion()) {
+        O2ORemsetDiag::NoteScrubNonYoung(region, scrubbed);
+    }
+    if (!ScrubCostMeterEnabled()) {
+        return;
+    }
+    uint64_t dt = TimeUtil::NanoSeconds() - t0;
+    uint64_t callNo = g_scrubCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_scrubNs.fetch_add(dt, std::memory_order_relaxed);
+    g_scrubWordsSum.fetch_add(words, std::memory_order_relaxed);
+    g_scrubErasedSum.fetch_add(scrubbed, std::memory_order_relaxed);
+    size_t prevMax = g_scrubWordsMax.load(std::memory_order_relaxed);
+    while (words > prevMax && !g_scrubWordsMax.compare_exchange_weak(prevMax, words, std::memory_order_relaxed)) {
+    }
+    VLOG(REPORT,
+         "[GCV2][scrub-cost] call=%llu ns=%llu bitmapWords=%zu erased=%zu young=%u type=%u "
+         "env=MRT_GCV2_SCRUB_COST=1",
+         static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), words, scrubbed,
+         static_cast<unsigned>(region->IsYoungRegion()), region->GetRegionType());
+    if (scrubbed != 0) {
+        size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
+        VLOG(REPORT,
+             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu bitmapWords=%zu ns=%llu region=%p "
+             "[%#zx,%#zx) type=%u young=%u sample=%zu env=MRT_GCV2_SCRUB_COST=1",
+             scrubbed, words, static_cast<unsigned long long>(dt), region,
+             static_cast<size_t>(rStart), static_cast<size_t>(rEnd), region->GetRegionType(),
+             static_cast<unsigned>(region->IsYoungRegion()), n);
+    }
+}
+
+void RegionManager::DumpScrubCostAndReset(const char* point)
+{
+    if (!ScrubCostMeterEnabled()) {
+        return;
+    }
+    uint64_t calls = g_scrubCalls.exchange(0, std::memory_order_relaxed);
+    uint64_t ns = g_scrubNs.exchange(0, std::memory_order_relaxed);
+    uint64_t wordsSum = g_scrubWordsSum.exchange(0, std::memory_order_relaxed);
+    uint64_t erasedSum = g_scrubErasedSum.exchange(0, std::memory_order_relaxed);
+    size_t wordsMax = g_scrubWordsMax.exchange(0, std::memory_order_relaxed);
+    if (calls == 0) {
+        return;
+    }
+    VLOG(REPORT,
+         "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu bitmapWordsSum=%llu "
+         "bitmapWordsMax=%zu erasedSum=%llu env=MRT_GCV2_SCRUB_COST=1",
+         point == nullptr ? "?" : point, static_cast<unsigned long long>(calls),
+         static_cast<unsigned long long>(ns), static_cast<unsigned long long>(ns / calls),
+         static_cast<unsigned long long>(wordsSum), wordsMax,
+         static_cast<unsigned long long>(erasedSum));
+}
+
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {
     size_t num = region->GetUnitCount();
@@ -408,8 +983,27 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     DLOG(REGION, "reclaim region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
+    // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
+    // must not re-scan O(N) under remset mutex.
+
+    // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
+    HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
     freeRegionManager.AddGarbageUnits(unitIndex, num);
+}
+
+void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
+{
+    size_t num = region->GetUnitCount();
+    size_t unitIndex = region->GetUnitIdx();
+    if (num >= HUGE_PAGE) {
+        UntagHugePage(region, num);
+    }
+    DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
+         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+    HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
+    region->InitFreeUnits();
+    freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
 }
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
@@ -417,6 +1011,9 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
+    // Large regions above the release threshold bypass CollectRegion. Invalidate
+    // their two owned bitmap slices before the address range can be unmapped/reused.
+    ScrubRememberedSetForRegion(region);
     if (num >= HUGE_PAGE) {
         UntagHugePage(region, num);
     }
@@ -443,8 +1040,30 @@ void RegionManager::CountLiveObject(const BaseObject* obj)
 void RegionManager::AssembleSmallGarbageCandidates()
 {
     fromRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FROM_REGION);
-    fromRegionList.MergeRegionList(recentFullRegionList, RegionInfo::RegionType::FROM_REGION);
-    fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
+    // twoflags: regions stamped post-mark-start of the previous major stay off from-space
+    // until PrepareTrace clears the stamp (after this Assemble).
+    {
+        RegionInfo* region = recentFullRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsNotRelocatableThisCycle()) {
+                recentFullRegionList.DeleteRegion(region);
+                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            }
+            region = next;
+        }
+    }
+    {
+        RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
+        while (region != nullptr) {
+            RegionInfo* next = region->GetNextRegion();
+            if (!region->IsNotRelocatableThisCycle()) {
+                unmovableFromRegionList.DeleteRegion(region);
+                fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+            }
+            region = next;
+        }
+    }
 
     fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
 }
@@ -455,6 +1074,25 @@ void RegionManager::AssembleLargeGarbageCandidates()
     for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
         region->ClearLiveInfo();
     }
+}
+
+void RegionManager::ClearNotRelocatableThisCycleFlags()
+{
+    auto clearList = [](RegionList& list) {
+        list.VisitAllRegions([](RegionInfo* region) { region->SetNotRelocatableThisCycle(0); });
+    };
+    clearList(tlRegionList);
+    clearList(recentFullRegionList);
+    clearList(unmovableFromRegionList);
+    clearList(fromRegionList);
+    clearList(recentPinnedRegionList);
+    clearList(oldPinnedRegionList);
+    clearList(rawPointerPinnedRegionList);
+    clearList(recentLargeRegionList);
+    clearList(oldLargeRegionList);
+    // Region caches may hold stamped regions until HandleTraceRegions merges them.
+    clearList(fullTraceRegions);
+    clearList(largeTraceRegions);
 }
 
 void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
@@ -471,6 +1109,60 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
         region = nextRegion;
     }
 }
+
+YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor)
+{
+    YoungCollectionStats stats;
+    RegionInfo* oldRegion = fromRegionList.GetHeadRegion();
+    while (oldRegion != nullptr) {
+        RegionInfo* next = oldRegion->GetNextRegion();
+        fromRegionList.DeleteRegion(oldRegion);
+        ExemptFromRegion(oldRegion);
+        oldRegion = next;
+    }
+
+    RegionInfo* region = unmovableFromRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        // twoflags: notRelocatable is major-Assemble only. Young mark re-establishes
+        // liveness for POST_TRACE-stamped regions — do not skip minor CSet.
+        region->ClearLiveInfo();
+        visitor(region);
+        ++stats.candidateRegions;
+        stats.candidateBytes += region->GetRegionAllocatedSize();
+        if (region->GetRawPointerObjectCount() == 0) {
+            unmovableFromRegionList.DeleteRegion(region);
+            fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        }
+        region = next;
+    }
+
+    region = recentFullRegionList.GetHeadRegion();
+    while (region != nullptr) {
+        RegionInfo* next = region->GetNextRegion();
+        if (!region->IsYoungRegion()) {
+            region = next;
+            continue;
+        }
+        region->ClearLiveInfo();
+        visitor(region);
+        ++stats.candidateRegions;
+        stats.candidateBytes += region->GetRegionAllocatedSize();
+        if (region->GetRawPointerObjectCount() != 0) {
+            region = next;
+            continue;
+        }
+        recentFullRegionList.DeleteRegion(region);
+        fromRegionList.PrependRegion(region, RegionInfo::RegionType::FROM_REGION);
+        region = next;
+    }
+    return stats;
+}
+
 void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
 {
     regionList->DeleteRegionLocked(region);
@@ -483,26 +1175,36 @@ size_t RegionManager::ExemptFromRegions()
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     double exempt = exemptedRegionThreshold;
+    rawPointerPinnedRegionList.VisitAllRegions([](RegionInfo* region) {
+        if (region->GetLiveByteCount() > 0) {
+            region->PreserveRetainedLiveInfoUpTo(
+                std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+        }
+    });
     auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
         size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         if (liveBytes > threshold) { // ignore this region
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %u live bytes", del,
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %zu live bytes", del,
                 del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount());
 
             CHECK(del->IsFromRegion());
+            del->PreserveRetainedLiveInfo();
             RemoveRegionLocked(&fromRegionList, del);
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         } else if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %u live bytes rawPtr cnt %u",
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
             CHECK(del->IsFromRegion());
+            if (liveBytes > 0) {
+                del->PreserveRetainedLiveInfo();
+            }
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
@@ -517,12 +1219,29 @@ size_t RegionManager::ExemptFromRegions()
     return newFromBytes - forwardBytes;
 }
 
-void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor) const
+void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
+                                     bool skipKnownEmptyRegions) const
 {
     for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
         RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
-        regionAddr = region->GetRegionEnd();
-        if (!region->IsValidRegion() || region->IsFreeRegion() || region -> IsGarbageRegion()) {
+        // Finalizer reclaims concurrently (not a mutator ⇒ STW does not stop it). A unit
+        // mid-InitRegionInfo can expose a transient extent (0/garbage) before the final
+        // role is published. Following a bogus end lands GetUnitIdxAt(0) → named fatal+abort
+        // (S1: SIGABRT under InvalidateOldTaggedRefs). Step one unit instead —
+        // such units are never visitable.
+        // Anchor: a1f81854 (fix/gcfix), landed here as e2293c2b; the guard below is
+        // character-identical to it. Its other hunk targeted PromoteAllRegions, which
+        // no longer exists on this line.
+        uintptr_t nextAddr = region->GetRegionEnd();
+        if (nextAddr <= regionAddr || nextAddr > inactiveZone) {
+            regionAddr += RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        regionAddr = nextAddr;
+        if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            continue;
+        }
+        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
             continue;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
@@ -536,28 +1255,119 @@ void RegionManager::ForEachObjSafe(const std::function<void(BaseObject*)>& visit
     ForEachObjUnsafe(visitor);
 }
 
-RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem)
+void RegionManager::StampCensusBoundaries()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            region->StampCensusBoundary();
+        }
+    }
+}
+
+void RegionManager::PromoteAllRegions()
+{
+    for (uintptr_t regionAddr = regionHeapStart; regionAddr < inactiveZone;) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(regionAddr);
+        regionAddr = region->GetRegionEnd();
+        if (region->IsValidRegion() && !region->IsGarbageRegion()) {
+            size_t liveBytes = region->GetLiveByteCount();
+            if (liveBytes > 0) {
+                region->PreserveRetainedLiveInfoUpTo(
+                    std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
+            } else if (region->GetRawPointerObjectCount() == 0) {
+                region->PreserveRetainedLiveInfo(region->GetRegionStart());
+            }
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+    }
+}
+
+RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
+                                      bool allowSaferegion)
 {
     // a chance to invoke heuristic gc.
-    if (!Heap::GetHeap().IsGcStarted()) {
+    // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
+    if (allowSaferegion && !Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
-        size_t threshold = collector.GetGCStats().GetThreshold();
-        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-        if (allocated >= threshold) {
-            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, threshold);
-            collector.RequestGC(GC_REASON_HEU, true);
+        size_t heapThreshold = collector.GetGCStats().GetThreshold();
+        size_t youngRegionTriggerBytes = 32 * MB;
+        // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
+        // barriers/remset still run. Unset must match product path bit-for-bit.
+        // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
+        static const bool disableMinor = []() {
+            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
+            return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
+        }();
+        if (disableMinor) {
+            youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
+        }
+        static const bool jvmYoungTriggerOn = []() {
+            const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
+            return jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
+        }();
+        const bool useJvmYoungTrigger = !disableMinor && jvmYoungTriggerOn;
+        size_t youngTriggerFloor = 0;
+        size_t youngTriggerTarget = 0;
+        size_t youngTriggerCeiling = 0;
+        if (useJvmYoungTrigger) {
+            // G1 sizes young between 5% and 60% of its heap. This runtime has no eden/survivor
+            // pause controller, so apply those bounds to the HEU budget and target half that budget.
+            constexpr size_t youngTriggerFloorPercent = 5;
+            constexpr size_t youngTriggerTargetPercent = 50;
+            constexpr size_t youngTriggerCeilingPercent = 60;
+            youngTriggerFloor = heapThreshold * youngTriggerFloorPercent / 100;
+            youngTriggerTarget = heapThreshold * youngTriggerTargetPercent / 100;
+            youngTriggerCeiling = heapThreshold * youngTriggerCeilingPercent / 100;
+            youngRegionTriggerBytes =
+                std::min(std::max(youngTriggerTarget, youngTriggerFloor), youngTriggerCeiling);
+            CHECK_DETAIL(youngRegionTriggerBytes < heapThreshold,
+                         "young GC threshold %zu must stay below HEU threshold %zu",
+                         youngRegionTriggerBytes, heapThreshold);
+        }
+        size_t youngAllocated = GetYoungAllocatedSize();
+        if (youngAllocated >= youngRegionTriggerBytes) {
+            if (useJvmYoungTrigger) {
+                VLOG(REPORT,
+                     "[GCV2][jvm-young-trigger] young=%zu trigger=%zu HEU=%zu floor=%zu target=%zu ceiling=%zu "
+                     "invariant=%d",
+                     youngAllocated, youngRegionTriggerBytes, heapThreshold, youngTriggerFloor, youngTriggerTarget,
+                     youngTriggerCeiling, youngRegionTriggerBytes < heapThreshold);
+            }
+            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
+            collector.RequestGC(GC_REASON_YOUNG, true);
+        } else {
+            size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
+            if (allocated >= heapThreshold) {
+                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
+                collector.RequestGC(GC_REASON_HEU, true);
+            }
         }
     }
 
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * RegionInfo::UNIT_SIZE;
-    RequestForRegion(size);
+    // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
+    if (allowSaferegion) {
+        RequestForRegion(size);
+    }
 
 #if !defined(__OHOS__)
-    RegionInfo* head = garbageRegionList.TakeHeadRegion();
+    size_t gatedBytes = 0;
+    // routefix: ReclaimRegion → AddGarbageUnits ScopedEnterSaferegion; skip under ROUTING.
+    RegionInfo* head = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
     if (head != nullptr) {
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
+            TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
+                                        head->GetLiveByteCount(),
+                                        static_cast<unsigned int>(head->IsGhostFromRegion()),
+                                        static_cast<unsigned int>(head->GetRegionType()),
+                                        static_cast<unsigned int>(head->GetRouteState()));
+            // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
+            PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -567,9 +1377,11 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             ReclaimRegion(head);
         }
     }
+#else
+    size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
-    RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
+    RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem, allowSaferegion);
     if (region != nullptr) {
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
@@ -602,6 +1414,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         }
     }
 
+    if (gatedBytes > 0) {
+        static std::atomic<size_t> supplyGatedPressureCount { 0 };
+        size_t n = supplyGatedPressureCount.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((n & (n - 1)) == 0) {
+            VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
+        }
+    }
     return nullptr;
 }
 
@@ -677,7 +1496,7 @@ size_t RegionManager::CollectPinnedGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
-        if (region->GetLiveByteCount() == 0) {
+        if (region->IsKnownEmpty()) {
             RegionInfo* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
@@ -927,14 +1746,21 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion, bool allowSaferegion)
 {
-    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem);
+    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+                                    allowSaferegion);
     if (region != nullptr) {
         {
+            region->SetYoungRegionFlag(youngRegion ? 1 : 0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
+            }
+            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion). No CLEAR_SATB.
+            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
+                phase == GC_PHASE_FORWARD) {
+                region->SetNotRelocatableThisCycle(1);
             }
             tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
             DLOG(REGION, "alloc tl-region %p @[0x%zx+%zu, 0x%zx) units[%zu+%zu, %zu) type %u",
@@ -981,13 +1807,315 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
 {
     CHECK(region->IsRoutingState());
     CHECK_DETAIL(region->GetRawPointerObjectCount() <= 0, "pinned region shouldn't be moved");
+    // tipnull densify (FULL size-walk only): MarkBits multi-bit ranges let interiors pass
+    // Admit while VisitLive only copies starts → FORWARDED + null tip. Rebuild liveInfo0
+    // to size-walk ∩ prior-survived starts so Admit domain ⊆ Copy domain (H1a).
+    //
+    // densifyseal: PrepareForwardable shares liveInfo→liveInfo0; clearAll on that face
+    // wipes MarkObject bits. Partial walk (gate break) then only re-MarkBits walked
+    // starts → unwalked sealed start bits stay 0 → F3 IsMarkedObject=0 / soft-null
+    // (marksurvive sameWord1∧mBit1∧f3Bit0). Only densify when walk reaches allocPtr so
+    // every size-walk start is in the re-paint set. nStarts==0: never clear (empty wipe
+    // → SEGV si_addr=0x8). Anchor: e32383c9; fe96aab8 partial densify is the wipe root.
+    // permwho: which arm this region took. 0=densified 1=gate 2=walk1 3=nStarts0 4=malloc
+    // 5=walk2broke 6=walk2short. Only arm 0 rebuilds both faces from one walk, i.e. only
+    // arm 0 leaves the reservation (counter) and the placement (bitmap prefix-sum) equal
+    // by construction.
+    //
+    // densifydel (G6): apply is gated by MRT_GCV2_DENSIFY=1 (default off = no-op). The walk
+    // still classifies densifyOutcome so census can answer "never finished" under product
+    // default; clearAll/re-MarkBits only runs when the switch is on and the walk completes.
+    unsigned densifyOutcome = 1;
+    // densifydel census: always-on atexit histogram (no env gate) — measures product path.
+    static std::atomic<size_t> densifyCensusTotal{ 0 };
+    static std::atomic<size_t> densifyCensusByOutcome[8];
+    static std::atomic<size_t> densifyCensusSumNStarts{ 0 };
+    static std::atomic<size_t> densifyCensusSumFilled{ 0 };
+    static std::atomic<size_t> densifyCensusSumFillWalkObjs{ 0 };
+    static std::atomic<size_t> densifyCensusSumRegionObjs{ 0 };
+    static std::atomic<size_t> densifyCensusPosShort{ 0 };   // filled==nStarts but pos < alloc
+    static std::atomic<size_t> densifyCensusWouldApply{ 0 }; // walk would densify (outcome 0 path)
+    static std::atomic<size_t> densifyCensusApplied{ 0 };
+    static std::atomic<size_t> densifyCensusLastSurv{ 0 };   // last object in region is survivor
+    static std::atomic<bool> densifyCensusAtexit{ false };
+    static const bool densifyApply = []() {
+        // densifydel: default off. MRT_GCV2_DENSIFY=1 re-enables the former product apply.
+        const char* v = std::getenv("MRT_GCV2_DENSIFY");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    {
+        bool expected = false;
+        if (densifyCensusAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr,
+                             "[GCV2][densifydel] atexit total=%zu byOutcome["
+                             "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                             "walk2broke=%zu walk2short=%zu other=%zu] "
+                             "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                             "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                             densifyCensusTotal.load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                             densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                             densifyCensusSumFilled.load(std::memory_order_relaxed),
+                             densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                             densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                             densifyCensusPosShort.load(std::memory_order_relaxed),
+                             densifyCensusWouldApply.load(std::memory_order_relaxed),
+                             densifyCensusApplied.load(std::memory_order_relaxed),
+                             densifyCensusLastSurv.load(std::memory_order_relaxed),
+                             densifyApply ? 1u : 0u);
+                std::fflush(stderr);
+            });
+        }
+    }
+    if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
+        !region->IsKnownEmpty()) {
+        // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
+        // DEFAULT_STACK_SIZE 512KiB guard MAPERR (si_addr=rbp-0x20058). Heap via malloc
+        // (not managed heap — no GC re-entry). Exact nStarts, no silent truncate.
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        RegionBitmap* mb = ghost->markBitmap;
+        RegionBitmap* rb = ghost->resurrectBitmap;
+        uintptr_t regionStart = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        size_t nStarts = 0;
+        size_t liveBytes = 0;
+        size_t regionObjs = 0;
+        uintptr_t position = regionStart;
+        bool fullWalk = true;
+        bool lastSurvived = false;
+        while (position < allocPtr) {
+            BaseObject* obj = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
+                fullWalk = false;
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*obj);
+            if (allocSize == 0) {
+                fullWalk = false;
+                break;
+            }
+            size_t offset = position - regionStart;
+            ++regionObjs;
+            if (ghost->IsSurvivedObject(offset)) {
+                ++nStarts;
+                liveBytes += allocSize;
+                lastSurvived = true;
+            } else {
+                lastSurvived = false;
+            }
+            position += allocSize;
+        }
+        if (!fullWalk || position != allocPtr) {
+            densifyOutcome = 2;
+        } else if (nStarts == 0) {
+            densifyOutcome = 3;
+        }
+        size_t filled = 0;
+        size_t fillWalkObjs = 0;
+        uintptr_t fillEnd = regionStart;
+        if (fullWalk && position == allocPtr && nStarts > 0) {
+            size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
+            densifyOutcome = 4;
+            if (startOff != nullptr && startSz != nullptr) {
+                densifyOutcome = 5;
+                // permwho: this loop stops at `filled < nStarts` — "I have everything I need" —
+                // while the completeness test below demands `position == allocPtr` — "I walked
+                // everything there is". Both hold only when the last object in the region is
+                // itself a survivor; otherwise densify is skipped and liveInfo0 keeps the
+                // multi-bit ranges this block exists to remove. Measured on
+                // natural_wave_notime.O0: 11,028 of 16,080 route plans (68.6%) skip for exactly
+                // this reason, and no other skip reason occurs at all.
+                // MRT_GCV2_DENSIFY_FULLWALK=1 walks to allocPtr so the test can pass. Default
+                // off: it triples how many regions get densified, which is a change on the
+                // forward path and wants its own measurement before it becomes the default.
+                static const bool densifyFullWalk = []() {
+                    const char* v = std::getenv("MRT_GCV2_DENSIFY_FULLWALK");
+                    return v != nullptr && std::strcmp(v, "1") == 0;
+                }();
+                position = regionStart;
+                while (position < allocPtr && (densifyFullWalk || filled < nStarts)) {
+                    BaseObject* obj = from_region_addr(position);
+                    if (!Collector::PlausibleManagedObjectGate("tipnull-densify-fill", obj)) {
+                        fullWalk = false;
+                        break;
+                    }
+                    size_t allocSize = RegionSpace::GetAllocSize(*obj);
+                    if (allocSize == 0) {
+                        fullWalk = false;
+                        break;
+                    }
+                    size_t offset = position - regionStart;
+                    ++fillWalkObjs;
+                    if (ghost->IsSurvivedObject(offset) && filled < nStarts) {
+                        startOff[filled] = offset;
+                        startSz[filled] = allocSize;
+                        ++filled;
+                    }
+                    position += allocSize;
+                }
+                fillEnd = position;
+                // permwho: split the two ways the second walk can fail its completeness test.
+                // The loop above stops at `filled < nStarts`, so once every survived start has
+                // been collected it exits with position still short of allocPtr whenever the
+                // last object in the region is not itself a survivor. That is arm 6, and it is
+                // not the same failure as the walk breaking on the gate (arm 5).
+                if (!fullWalk) {
+                    densifyOutcome = 5;
+                } else if (filled == nStarts && filled > 0 && position != allocPtr) {
+                    densifyOutcome = 6;
+                }
+                // Second walk must also reach allocPtr with full start set before clearAll.
+                // densifydel: classify would-apply (outcome 0) even when apply switch is off.
+                if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
+                    densifyOutcome = 0;
+                    densifyCensusWouldApply.fetch_add(1, std::memory_order_relaxed);
+                    if (densifyApply) {
+                        auto clearAll = [](RegionBitmap* bm) {
+                            if (bm == nullptr) {
+                                return;
+                            }
+                            size_t wc = bm->wordCnt.load(std::memory_order_acquire);
+                            for (size_t i = 0; i < wc; ++i) {
+                                bm->markWords[i].store(0, std::memory_order_relaxed);
+                            }
+                            for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
+                                bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                            }
+                            bm->liveBytes.store(0, std::memory_order_relaxed);
+                        };
+                        clearAll(mb);
+                        clearAll(rb);
+                        size_t regionSize = region->GetGhostRegionSize();
+                        if (regionSize == 0) {
+                            regionSize = region->GetRegionSize();
+                        }
+                        size_t liveBytesFilled = 0;
+                        for (size_t i = 0; i < filled; ++i) {
+                            liveBytesFilled += startSz[i];
+                            if (mb != nullptr) {
+                                (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                            }
+                        }
+                        region->ResetLiveByteCount();
+                        if (liveBytesFilled > 0) {
+                            region->AddLiveByteCount(liveBytesFilled);
+                        }
+                        densifyCensusApplied.fetch_add(1, std::memory_order_relaxed);
+                        static std::atomic<size_t> densifyN{ 0 };
+                        size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (dn <= 32) {
+                            LOG(RTLOG_ERROR,
+                                "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu "
+                                "walkEnd=%#zx alloc=%#zx n=%zu (full)",
+                                region, filled, liveBytesFilled, static_cast<size_t>(position),
+                                static_cast<size_t>(allocPtr), dn);
+                        }
+                    }
+                }
+            }
+            std::free(startOff);
+            std::free(startSz);
+        }
+        size_t cTot = densifyCensusTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+        densifyCensusByOutcome[densifyOutcome < 8 ? densifyOutcome : 7].fetch_add(
+            1, std::memory_order_relaxed);
+        densifyCensusSumNStarts.fetch_add(nStarts, std::memory_order_relaxed);
+        densifyCensusSumFilled.fetch_add(filled, std::memory_order_relaxed);
+        densifyCensusSumFillWalkObjs.fetch_add(fillWalkObjs, std::memory_order_relaxed);
+        densifyCensusSumRegionObjs.fetch_add(regionObjs, std::memory_order_relaxed);
+        if (densifyOutcome == 6) {
+            densifyCensusPosShort.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (lastSurvived) {
+            densifyCensusLastSurv.fetch_add(1, std::memory_order_relaxed);
+        }
+        // densifydel: heartbeat so timeout kills still leave a sample (atexit may not run).
+        if (cTot == 1 || cTot % 500 == 0) {
+            std::fprintf(stderr,
+                         "[GCV2][densifydel] heartbeat n=%zu byOutcome["
+                         "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                         "walk2broke=%zu walk2short=%zu other=%zu] "
+                         "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                         "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                         cTot,
+                         densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                         densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                         densifyCensusSumFilled.load(std::memory_order_relaxed),
+                         densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                         densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                         densifyCensusPosShort.load(std::memory_order_relaxed),
+                         densifyCensusWouldApply.load(std::memory_order_relaxed),
+                         densifyCensusApplied.load(std::memory_order_relaxed),
+                         densifyCensusLastSurv.load(std::memory_order_relaxed),
+                         densifyApply ? 1u : 0u);
+            std::fflush(stderr);
+        }
+        (void)fillEnd;
+        (void)liveBytes;
+    } else {
+        size_t cTot = densifyCensusTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+        densifyCensusByOutcome[1].fetch_add(1, std::memory_order_relaxed);
+        if (cTot == 1 || cTot % 500 == 0) {
+            std::fprintf(stderr,
+                         "[GCV2][densifydel] heartbeat n=%zu byOutcome["
+                         "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                         "walk2broke=%zu walk2short=%zu other=%zu] "
+                         "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                         "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                         cTot,
+                         densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                         densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                         densifyCensusSumFilled.load(std::memory_order_relaxed),
+                         densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                         densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                         densifyCensusPosShort.load(std::memory_order_relaxed),
+                         densifyCensusWouldApply.load(std::memory_order_relaxed),
+                         densifyCensusApplied.load(std::memory_order_relaxed),
+                         densifyCensusLastSurv.load(std::memory_order_relaxed),
+                         densifyApply ? 1u : 0u);
+            std::fflush(stderr);
+        }
+    }
     size_t fromBytes = region->GetLiveByteCount();
+    // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
+    // by bitmap prefix-sum. Nothing compares the two magnitudes; record them here.
+    // densifydel: report applied densify only — would-apply with switch off is not densified.
+    unsigned planOutcome = densifyOutcome;
+    if (densifyOutcome == 0 && !densifyApply) {
+        planOutcome = 7; // would densify, apply switch off
+    }
+    PermWhoAdmit::NoteRoutePlan(region, fromBytes, planOutcome);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);
     bool result;
+    // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
+    // Fail → CompactRegion (same as product null path); geometry still freezes at NoteSeal.
     if (toRegion1 == RegionInfo::NullRegion()) {
-        toRegion1 = AllocateThreadLocalRegion();
+        toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
             CompactRegion(region);
             toRegion1 = region;
@@ -1035,7 +2163,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         EnlistFullThreadLocalRegion(toRegion1);
     }
 
-    RegionInfo* toRegion2 = AllocateThreadLocalRegion();
+    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
     CHECK(region != toRegion2);
     if (toRegion2 != nullptr) {
         toRegion1->Alloc(usedBytes1);
@@ -1061,19 +2189,44 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress regionStart = region->GetRegionStart();
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u", region, regionStart,
         region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+    const bool youngRegion = region->IsYoungRegion();
+    // compactrem: count calls + per-object geometry / remset-in-from (default-off).
+    if (O2ORemsetDiag::Enabled()) {
+        O2ORemsetDiag::NoteCompactCall(/*overload*/ 1, youngRegion);
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress regionLimit = region->GetRegionAllocPtr();
     region->SetRegionAllocPtr(regionStart);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
-        BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        BaseObject* currentObj = from_region_addr(currentPtr);
+        // getsize7: dense compact walk — same GetSize hazard as VisitLiveObjects.
+        // On reject: stop; leave remaining bytes uncleared beyond current allocPtr rebuild.
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
+            BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            // Pre-copy remset census at from range (Transfer not wired on this path yet).
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
     }
@@ -1083,8 +2236,17 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
+        if (!TraceClear::SkipCompactMemset()) {
+            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
+                         "clear buffer failed");
+        } else {
+            VLOG(REPORT, "[GCV2][block] skip compact memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
+                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
+        }
     }
+
+    region->ResetCensusBoundary();
 
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
@@ -1099,26 +2261,47 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     DLOG(REGION, "compact region %p@[%#zx+%zu, %#zx) type %u to region %p@%#zx:%#zx",
         region, regionStart, region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType(),
         toRegion1, toRegion1->GetRegionStart(), toRegion1->GetRegionAllocPtr());
+    const bool youngRegion = region->IsYoungRegion();
+    if (O2ORemsetDiag::Enabled()) {
+        O2ORemsetDiag::NoteCompactCall(/*overload*/ 2, youngRegion);
+    }
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress currentPtr = regionStart;
-    BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+    BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
             if (toAddress == 0) {
                 break;
             }
-            BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
+            BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
-        currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        currentObj = from_region_addr(currentPtr);
     };
 
     MAddress regionLimit = region->GetRegionAllocPtr();
@@ -1126,15 +2309,31 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     while (currentPtr < regionLimit) {
         CHECK(currentPtr >= regionStart);
         size_t offset = currentPtr - regionStart;
-        BaseObject* currentObj = reinterpret_cast<BaseObject*>(currentPtr);
+        BaseObject* currentObj = from_region_addr(currentPtr);
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
+            break;
+        }
         size_t size = currentObj->GetSize();
         if (region->IsSurvivedObject(offset)) {
             MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = reinterpret_cast<BaseObject*>(toAddress);
+            BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromEnd = currentPtr + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= currentPtr && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
             collector.CopyObject(*currentObj, *toObj, size);
             toObj->SetStateCode(ObjectState::NORMAL);
             std::atomic_thread_fence(std::memory_order_release);
+            if (O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
+            }
         }
         currentPtr += size;
     }
@@ -1143,8 +2342,17 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     MAddress cur = region->GetRegionAllocPtr();
     if (regionLimit > cur) {
         size_t reclaimSize = regionLimit - cur;
-        CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK, "clear buffer failed");
+        TraceClear::NoteRange(cur, reclaimSize, "compact_partial", region, region->GetLiveByteCount());
+        if (!TraceClear::SkipCompactMemset()) {
+            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
+                         "clear buffer failed");
+        } else {
+            VLOG(REPORT, "[GCV2][block] skip compact_partial memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
+                 static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
+        }
     }
+
+    region->ResetCensusBoundary();
 
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
@@ -1153,33 +2361,525 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
 }
 
+namespace {
+// permhit: the receipt gate below (allLiveBitsHaveReceipt) accepts o->IsForwarded() as proof
+// that this cycle copied o. That state code carries no target and no cycle stamp — it is set
+// by UnlockObject(FORWARDED) (WCollector.cpp:6617) and only cleared when the memory is reused
+// (ClearUnits, RegionInfo.h:850-860). A route that is abandoned after copying part of the
+// region (:2346-2347) leaves those objects FORWARDED inside a region that survives on
+// unmovableFromRegionList (:1338-1341), so the next route reads a stale bit as a receipt.
+//
+// Consequence if it happens: the copy pass skips the object (:2317-2318, :2226 receipt), the gate
+// passes, the region publishes FORWARDED, and no path ever fills that object's tip — which is
+// what the read barrier reports as permhole. Audit it at the producer, where the answer is a
+// population per run instead of one rare abort.
+//
+// Gate: MRT_GCV2_PERMHIT_RECEIPT=1 (default off; the walk is the same shape the gate already
+// does twice, and it runs only for regions that are about to be published).
+bool PermhitReceiptOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_PERMHIT_RECEIPT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+std::atomic<size_t> g_phRegions{ 0 };
+std::atomic<size_t> g_phStarts{ 0 };
+std::atomic<size_t> g_phFwdStarts{ 0 };
+std::atomic<size_t> g_phNoTip{ 0 };
+std::atomic<size_t> g_phNoTipAbandon{ 0 };
+std::atomic<size_t> g_phRouteNull{ 0 };
+std::atomic<size_t> g_phLogged{ 0 };
+std::atomic<bool> g_phAtexit{ false };
+
+// point = "publish" (gate passed, about to SetRouteState(FORWARDED)) or "abandon" (gate
+// refused). Both are after the synchronous copy pass, so at either point a start that reads
+// FORWARDED must already have a tip-valid route unless its bit is stale.
+void PermhitReceiptAudit(RegionInfo* region, const char* point)
+{
+    if (!PermhitReceiptOn() || region == nullptr || !region->IsSmallRegion()) {
+        return;
+    }
+    const bool abandon = point != nullptr && point[0] == 'a';
+    bool expected = false;
+    if (g_phAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr,
+                         "[GCV2][permhit-receipt] atexit regions=%zu starts=%zu fwdStarts=%zu "
+                         "routeNull=%zu noTipPublish=%zu noTipAbandon=%zu\n",
+                         g_phRegions.load(std::memory_order_relaxed), g_phStarts.load(std::memory_order_relaxed),
+                         g_phFwdStarts.load(std::memory_order_relaxed),
+                         g_phRouteNull.load(std::memory_order_relaxed), g_phNoTip.load(std::memory_order_relaxed),
+                         g_phNoTipAbandon.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+    g_phRegions.fetch_add(1, std::memory_order_relaxed);
+    uintptr_t start = region->GetRegionStart();
+    uintptr_t allocPtr = region->GetRegionAllocPtr();
+    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+    uintptr_t position = start;
+    while (position < allocPtr) {
+        BaseObject* o = from_region_addr(position);
+        if (!Collector::PlausibleManagedObjectGate("permhit-receipt", o)) {
+            break;
+        }
+        size_t allocSize = RegionSpace::GetAllocSize(*o);
+        if (allocSize == 0) {
+            break;
+        }
+        size_t offset = position - start;
+        bool survived = ghost != nullptr ? ghost->IsSurvivedObject(offset) : region->IsSurvivedObject(offset);
+        if (survived) {
+            g_phStarts.fetch_add(1, std::memory_order_relaxed);
+            if (o->IsForwarded()) {
+                g_phFwdStarts.fetch_add(1, std::memory_order_relaxed);
+                BaseObject* to = region->GetRouteForProbe(o);
+                bool tipValid = to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject();
+                if (to == nullptr) {
+                    g_phRouteNull.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!tipValid) {
+                    if (abandon) {
+                        g_phNoTipAbandon.fetch_add(1, std::memory_order_relaxed);
+                    } else {
+                        g_phNoTip.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    size_t n = g_phLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+                    if (n <= 32) {
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][permhit-receipt] n=%zu point=%s region=%p start=%#zx off=%zu size=%zu "
+                            "from=%p to=%p route=%u rtype=%u young=%u live=%zu "
+                            "— FORWARDED start whose route has no tip",
+                            n, point, region, start, offset, allocSize, o, to,
+                            static_cast<unsigned>(region->GetRouteState()),
+                            static_cast<unsigned>(region->GetRegionType()),
+                            static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount());
+                    }
+                }
+            }
+        }
+        position += allocSize;
+    }
+}
+} // namespace
+
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
-    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %u",
+    DLOG(FORWARD, "try forward region %p @[0x%zx+%zu, 0x%zx) type %u, live bytes %zu",
         region, region->GetRegionStart(), region->GetRegionAllocatedSize(), region->GetRegionEnd(),
         region->GetRegionType(), region->GetLiveByteCount());
 
-    if (region->GetLiveByteCount() == 0) {
+    bool youngRegion = region->IsYoungRegion();
+    if (region->IsKnownEmpty()) {
+        // ClearLiveInfo arms LIVE_AUTHORITY|0 before mark. MarkObject is the only path that
+        // allocates the mark bitmap and raises live bytes. A region with allocated payload but
+        // no mark bitmap was never entered by MarkObject — under a correct mark that means
+        // nothing reachable points into it, so it is dead.
+        //
+        // hangfloor (0808): the young-only "fwd-empty-keep" arm (d6b77bc0) promoted every such
+        // region to unmovable-from instead of CollectRegion. Under PLAIN_ROOTS arm A' that was
+        // ~500 regions x 64KiB per minor with liveBytes~64 and reclaimedBytes~65KiB — young
+        // thrash (10/10 HANG, minor+major alternating, promoteReplay~420k). Full GC already
+        // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
+        // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
+        // young regions is what produces the hang.
+        bool neverExamined = region->GetMarkBitmap() == nullptr &&
+            region->GetRegionAllocPtr() > region->GetRegionStart();
+        if (neverExamined) {
+            // Volume control, not detail reduction. This line fired 50,282 times in a 60s run
+            // (nwdiag 0808) and every one of them said the same thing, which buried the gate
+            // samples that explain *why*. Print the first few of each GC cycle, then only at
+            // power-of-four milestones so the final magnitude is still on the record.
+            static std::atomic<size_t> emptyCollectGc{ std::numeric_limits<size_t>::max() };
+            static std::atomic<size_t> emptyCollectSeq{ 0 };
+            if (emptyCollectGc.load(std::memory_order_relaxed) != g_gcCount) {
+                emptyCollectGc.store(g_gcCount, std::memory_order_relaxed);
+                emptyCollectSeq.store(0, std::memory_order_relaxed);
+            }
+            size_t seq = emptyCollectSeq.fetch_add(1, std::memory_order_relaxed) + 1;
+            bool milestone = (seq & (seq - 1)) == 0;   // 1,2,4,8,16,...
+            if (seq <= 8 || milestone) {
+                GCReason gcReason = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const char* reasonName =
+                    gcReason < GC_REASON_MAX ? g_gcRequests[gcReason].name : "invalid";
+                // markBitmap and allocPtr>start are the two inputs behind neverExamined; print
+                // them rather than only the verdict, and carry gc= so this stream can be joined
+                // against [GCV2][markfloor-obj-gate] REJECT lines from the same cycle.
+                VLOG(REPORT,
+                     "[GCRECLAIM][fwd-empty-collect] gc=%zu seq=%zu region=%p start=%#zx alloc=%#zx "
+                     "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
+                     g_gcCount, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                     region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
+                     region->GetLiveByteCount(), region->GetMarkBitmap(), reasonName,
+                     static_cast<int>(gcReason));
+            }
+        }
+        if (youngRegion) {
+            // No live objects → no out-edges; still demote so young-count stays honest.
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
         CollectRegion(region);
         return;
     }
 
-    if (!RouteRegion(region)) {
+    // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
+    // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
+    // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
+    // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
+    static const bool forceInPlaceEnv = []() {
+        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    const bool forceInPlace =
+        forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    if (forceInPlace || !RouteRegion(region)) {
+        if (youngRegion) {
+            // In-place promote (compacted / unrouted): scan before clearing young flag.
+            // promodomain §A.3: register durable domain (default off); old scan stays.
+            // Register only during young GC (discharge runs in young.evac_finish only).
+            region->PreserveRetainedLiveInfo();
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+                }
+                // domainon COVERAGE: Register gate vs Record site (inplace=0).
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 0, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 0, recEdges);
+            }
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
         return;
     }
 
     int32_t rawPointerCount = region->GetRawPointerObjectCount();
     CHECK(rawPointerCount == 0);
     Collector& collector = Heap::GetHeap().GetCollector();
+    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+    size_t promotedRecords = 0;
+    size_t oldObjForwarded = 0;
+    size_t o2yOnToForOld = 0;
+    size_t recordedOnToForOld = 0;
     bool forwarded = region->VisitLiveObjectsUntilFalse(
-        [&collector](BaseObject* obj) { return collector.ForwardObject(obj); });
+        [&collector, youngRegion, &rememberedSet, &promotedRecords, &oldObjForwarded,
+         &o2yOnToForOld, &recordedOnToForOld](BaseObject* obj) {
+            BaseObject* toObj = collector.ForwardObject(obj);
+            // Remset slots must address the surviving (to-space) holder, not the from copy
+            // that CollectRegion is about to reclaim.
+            //
+            // Young: re-scan to-object and Record O→Y slots (promotion).
+            // Old→old: ZGC update_remset_old_to_old — TransferObjectSlots moves existing
+            // remset bits by field offset (zRelocate.cpp:652-731). From bits are scrubbed
+            // later by CollectRegion → ClearRegion (no in-place overlap on this path:
+            // RouteObject always mints a distinct to address).
+            if (youngRegion && toObj != nullptr && O2ORemsetDiag::Enabled()) {
+                O2ORemsetDiag::NoteYoungObjectForward();
+            }
+            if (youngRegion && toObj != nullptr && toObj->HasRefField()) {
+                toObj->ForEachRefField([&rememberedSet, &promotedRecords, toObj](RefField<>& field) {
+                    BaseObject* target = to_object(field.GetTargetObject());
+                    MAddress slot = reinterpret_cast<MAddress>(&field);
+                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                        NotePromoteGapField(toObj, field, false, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
+                        return;
+                    }
+                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                        rememberedSet.Record(slot);
+                        ++promotedRecords;
+                        FlipPromoDiag::NoteProductRecord(slot, /*path*/ 1);
+                        NotePromoteGapField(toObj, field, true, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
+                    } else {
+                        NotePromoteGapField(toObj, field, false, true);
+                        IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
+                    }
+                });
+            } else if (!youngRegion && toObj != nullptr && toObj != obj && obj->IsForwarded()) {
+                size_t sz = RegionSpace::GetAllocSize(*obj);
+                MAddress fromBase = reinterpret_cast<MAddress>(obj);
+                MAddress toBase = reinterpret_cast<MAddress>(toObj);
+                size_t moved = rememberedSet.TransferObjectSlots(fromBase, toBase, sz);
+                recordedOnToForOld += moved;
+                if (O2ORemsetDiag::Enabled()) {
+                    O2ORemsetDiag::NoteOldObjectForward(obj, toObj, sz);
+                    ++oldObjForwarded;
+                    if (toObj->HasRefField()) {
+                        toObj->ForEachRefField([&o2yOnToForOld](RefField<>& field) {
+                            BaseObject* target = to_object(field.GetTargetObject());
+                            if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                                return;
+                            }
+                            RegionInfo* targetRegion =
+                                RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                            if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
+                                ++o2yOnToForOld;
+                            }
+                        });
+                    }
+                }
+            }
+            // tipnull arm R: receipt = object FORWARDED (Copy wrote tip), not soft-keep from.
+            return obj->IsForwarded();
+        });
 
-    CHECK(forwarded);
+    // tipnull v5 full coverage: FORWARDED only if every liveInfo0 *live bit* is covered by
+    // a size-walk start that is object-FORWARDED (Copy wrote tip). Prior allSurvivorsForwarded
+    // only checked size-walk starts; multi-bit MarkBits interiors/orphans still Admitted
+    // without ever being Copy'd → region_FORWARDED_tip_null (arm R refuse=0).
+    // Incomplete: DispelGhost (no geometric plan) + Exempt — never FORWARDED empty, never
+    // ROUTED forever (TIMEOUT), never soft-null after Collect (SEGV si_addr=0x8).
+    auto allLiveBitsHaveReceipt = [region]() -> bool {
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        auto survivedAt = [region, ghost](size_t offset) -> bool {
+            if (ghost != nullptr) {
+                return ghost->IsSurvivedObject(offset);
+            }
+            return region->IsSurvivedObject(offset);
+        };
+        if (region->IsLargeRegion()) {
+            if (!survivedAt(0)) {
+                return true;
+            }
+            BaseObject* o = from_region_addr(region->GetRegionStart());
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", o)) {
+                return false;
+            }
+            return o->IsForwarded();
+        }
+        if (!region->IsSmallRegion()) {
+            return true;
+        }
+        uintptr_t regionStart = region->GetRegionStart();
+        uintptr_t allocPtr = region->GetRegionAllocPtr();
+        size_t regionBytes = allocPtr > regionStart ? (allocPtr - regionStart) : 0;
+        // Pass 1: size-walk starts that are survived must be object-FORWARDED.
+        uintptr_t position = regionStart;
+        while (position < allocPtr) {
+            BaseObject* o = from_region_addr(position);
+            size_t offset = position - regionStart;
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-complete", o)) {
+                // Cannot walk further; any later survived bit is uncovered → fail.
+                for (size_t rest = offset; rest < regionBytes; rest += kMarkedBytesPerBit) {
+                    if (survivedAt(rest)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*o);
+            if (allocSize == 0) {
+                return false;
+            }
+            if (survivedAt(offset) && !o->IsForwarded()) {
+                return false;
+            }
+            position += allocSize;
+        }
+        // Pass 2: every survived 8B bit must lie in some size-walk object whose start
+        // is object-FORWARDED (covers multi-bit interiors of densify MarkBits ranges).
+        // Orphans (survived bit not inside any size-walk object) ⇒ fail.
+        position = regionStart;
+        size_t walkOff = 0;
+        while (position < allocPtr) {
+            BaseObject* o = from_region_addr(position);
+            if (!Collector::PlausibleManagedObjectGate("ForwardRegion-cover", o)) {
+                break;
+            }
+            size_t allocSize = RegionSpace::GetAllocSize(*o);
+            if (allocSize == 0) {
+                break;
+            }
+            bool startFwd = o->IsForwarded();
+            for (size_t d = 0; d < allocSize; d += kMarkedBytesPerBit) {
+                size_t bitOff = walkOff + d;
+                if (survivedAt(bitOff) && !startFwd) {
+                    return false;
+                }
+            }
+            position += allocSize;
+            walkOff += allocSize;
+        }
+        // Bits past last walkable object must not be survived (orphans / unwalkable tail).
+        for (size_t rest = walkOff; rest < regionBytes; rest += kMarkedBytesPerBit) {
+            if (survivedAt(rest)) {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (!forwarded || !allLiveBitsHaveReceipt()) {
+        forwarded = region->VisitLiveObjectsUntilFalse([&collector](BaseObject* obj) {
+            if (obj->IsForwarded()) {
+                return true;
+            }
+            (void)collector.ForwardObject(obj);
+            return obj->IsForwarded();
+        });
+    }
+
+    if (!forwarded || !allLiveBitsHaveReceipt()) {
+        // permhit: same audit on the refusing arm — the copy pass is already done here too.
+        PermhitReceiptAudit(region, "abandon");
+        static std::atomic<size_t> abandonN{ 0 };
+        size_t n = abandonN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][tipnull] abandon-route region=%p start=%#zx live=%zu route=%u n=%zu "
+                "— live bit without receipt; DispelGhost (no FORWARDED)",
+                region, region->GetRegionStart(), region->GetLiveByteCount(),
+                static_cast<unsigned>(region->GetRouteState()), n);
+        }
+        // permwho: this arm's assumption ("RouteObject miss ⇒ mutator keeps from") only holds
+        // for objects this pass did not copy. Objects it did copy already carry
+        // ObjectState::FORWARDED in their own header, and nothing clears that. Count them
+        // before the region is exempted and can be routed again under a fresh RouteInfo.
+        if (PermWhoAdmit::Enabled() && region->IsSmallRegion()) {
+            size_t walked = 0;
+            size_t forwarded = 0;
+            uintptr_t pos = region->GetRegionStart();
+            uintptr_t end = region->GetRegionAllocPtr();
+            while (pos < end) {
+                BaseObject* o = from_region_addr(pos);
+                if (!Collector::PlausibleManagedObjectGate("permwho-abandon", o)) {
+                    break;
+                }
+                size_t sz = RegionSpace::GetAllocSize(*o);
+                if (sz == 0) {
+                    break;
+                }
+                ++walked;
+                if (o->IsForwarded()) {
+                    ++forwarded;
+                }
+                pos += sz;
+            }
+            PermWhoAdmit::NoteAbandon(region, walked, forwarded);
+        }
+        if (youngRegion) {
+            // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
+            // Register only on young GC (domain discharge is minor-only).
+            region->PreserveRetainedLiveInfo();
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+                }
+                // domainon COVERAGE: Register gate vs Record site (abandon=1).
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
+            }
+            region->SetYoungRegionFlag(0);
+            region->SetYoungAge(0);
+        }
+        // DispelGhost → NORMAL + clear ghost bit: GetGhostFromRegionAt null ⇒ RouteObject
+        // miss ⇒ mutator keeps from (valid). Do not SetRouteInfo(0): that sets
+        // toRegion2Idx=INVALID and GetRoute CHECKs when preLive >= to1used (wb gate).
+        region->DispelGhostFromRegion();
+        ExemptFromRegion(region);
+        return;
+    }
     {
+        static const bool probe = []() {
+            const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (probe && !region->IsLargeRegion()) {
+            size_t start = region->GetRegionStart();
+            size_t alloc = region->GetRegionAllocPtr();
+            size_t totalObjs = 0;
+            size_t survivedObjs = 0;
+            size_t residualValid = 0;
+            uintptr_t pos = start;
+            while (pos < alloc) {
+                BaseObject* o = from_region_addr(pos);
+                if (!o->IsValidObject()) {
+                    break;
+                }
+                size_t sz = o->GetSize();
+                if (sz == 0) {
+                    break;
+                }
+                ++totalObjs;
+                size_t off = pos - start;
+                if (region->IsSurvivedObject(off)) {
+                    ++survivedObjs;
+                } else {
+                    ++residualValid;
+                }
+                pos += sz;
+            }
+            if (residualValid > 0) {
+                VLOG(REPORT,
+                     "[GCRECLAIM][fwd-residual] region=%p start=%#zx alloc=%#zx live=%zu totalObjs=%zu "
+                     "survived=%zu residualUnmarked=%zu young=%u BYPASS=1",
+                     region, start, alloc, region->GetLiveByteCount(), totalObjs, survivedObjs, residualValid,
+                     static_cast<unsigned>(youngRegion));
+            }
+        }
+        // permhit: last point at which a real receipt must already be tip-valid.
+        PermhitReceiptAudit(region, "publish");
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+        // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
+        // live bytes + mark face (ResetLiveMapAfterForward).
+        {
+            const uint64_t liveBefore = region->GetLiveByteCount();
+            size_t validBefore = 0;
+            size_t markedBefore = 0;
+            F3Why2Diag::CountMarks(region, validBefore, markedBefore);
+            region->VerifyLiveBooks("pre-ResetLiveMapAfterForward");
+            // Simulated split for ORDER: live-only then mark-only was the old bug;
+            // measure residual marks after live-zero before joint reset.
+            region->ResetLiveByteCount();
+            const uint64_t liveAfterReset = region->GetLiveByteCount();
+            size_t validAfterReset = 0;
+            size_t markedAfterReset = 0;
+            F3Why2Diag::CountMarks(region, validAfterReset, markedAfterReset);
+            // Joint publish (restores live empty + epoch bump in one API).
+            region->ResetLiveMapAfterForward();
+            size_t validAfterInv = 0;
+            size_t markedAfterInv = 0;
+            F3Why2Diag::CountMarks(region, validAfterInv, markedAfterInv);
+            F3Why2Diag::NoteForwardOrder(region, liveBefore, markedBefore, liveAfterReset, markedAfterReset,
+                                         markedAfterInv);
+            region->VerifyLiveBooks("post-ResetLiveMapAfterForward");
+            if (youngRegion) {
+                if (promotedRecords != 0) {
+                    g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
+                }
+                region->SetYoungRegionFlag(0);
+                region->SetYoungAge(0);
+            } else if (O2ORemsetDiag::Enabled()) {
+                // Pre-scrub census: remset bits still at from-addresses (Transfer moved to to).
+                size_t remsetInFrom = 0;
+                MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
+                MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= rStart && slot < rEnd) {
+                        ++remsetInFrom;
+                    }
+                }
+                O2ORemsetDiag::NoteOldRegionForwarded(region, remsetInFrom, oldObjForwarded, o2yOnToForOld,
+                                                     recordedOnToForOld);
+            }
+            (void)validBefore;
+            (void)validAfterReset;
+            (void)validAfterInv;
+        }
         CollectRegion(region);
     }
 }
@@ -1193,16 +2893,24 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
         return 0;
     }
     uintptr_t allocPtr = freePinnedSlotLists.PopFront(size);
+    if (allocPtr != 0) {
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(allocPtr);
+        region->ResetCensusBoundary();
+        region->PreserveRetainedLiveInfoUpTo(region->GetRegionStart());
+    }
     // For making bitmap comform with live object count, do not mark object repeated.
-    if (allocPtr == 0 ||
-        (mutatorPhase != GCPhase::GC_PHASE_ENUM &&
-        mutatorPhase != GCPhase::GC_PHASE_TRACE &&
-        mutatorPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
+    bool barrierClosedMarking = mutatorPhase == GCPhase::GC_PHASE_ENUM ||
+        mutatorPhase == GCPhase::GC_PHASE_TRACE ||
+        mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+    bool censusSafeMarking = mutatorPhase == GCPhase::GC_PHASE_PREFORWARD ||
+        mutatorPhase == GCPhase::GC_PHASE_FORWARD ||
+        (mutatorPhase == GCPhase::GC_PHASE_IDLE && !Heap::GetHeap().IsGcStarted());
+    if (allocPtr == 0 || (!barrierClosedMarking && !censusSafeMarking)) {
         return allocPtr;
     }
 
     // Mark new allocated pinned object.
-    BaseObject* object = reinterpret_cast<BaseObject*>(allocPtr);
+    BaseObject* object = from_alloc_addr(allocPtr);
     (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
     return allocPtr;
 }

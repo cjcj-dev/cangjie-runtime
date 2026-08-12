@@ -7,18 +7,27 @@
 #ifndef MRT_REGION_MANAGER_H
 #define MRT_REGION_MANAGER_H
 
+#include <cstdlib>
+#include <cstring>
 #include <list>
 #include <map>
 #include <set>
 #include <thread>
+#include <unordered_set>
 #include <vector>
 
 #include "AllocBuffer.h"
 #include "Allocator.h"
+#include "Base/Log.h"
+#include "Common/BaseObject.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
+#include "Heap/Verify/EmptyLiveDiag.h"
+#include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/PermWhoAdmit.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -26,6 +35,15 @@
 namespace MapleRuntime {
 class CopyCollector;
 class CompactCollector;
+class VerifyRegions;
+class TagReuseProbe;
+
+struct YoungCollectionStats {
+    size_t candidateRegions = 0;
+    size_t candidateBytes = 0;
+    size_t reclaimedRegions = 0;
+    size_t reclaimedBytes = 0;
+};
 
 struct FreePinnedSlotLists {
     static constexpr size_t ATOMIC_OBJECT_SIZE = 16;
@@ -33,6 +51,8 @@ struct FreePinnedSlotLists {
     SlotList freeAtomicSlotList;
     SlotList freeSyncSlotList;
 
+private:
+    friend class RegionManager;
     uintptr_t PopFront(size_t size)
     {
         switch (size) {
@@ -45,6 +65,7 @@ struct FreePinnedSlotLists {
         }
     }
 
+public:
     void PushFront(BaseObject* slot)
     {
         size_t size = slot->GetSize();
@@ -70,6 +91,9 @@ struct FreePinnedSlotLists {
 // RegionManager needs to know header size and alignment in order to iterate objects linearly
 // and thus its Alloc should be rewrite with AllocObj(objSize)
 class RegionManager {
+    friend class VerifyRegions;
+    friend class TagReuseProbe;
+
 public:
     /* region memory layout:
         1. region info for each region, part of heap metadata
@@ -116,11 +140,23 @@ public:
 
     RegionManager& operator=(const RegionManager&) = delete;
 
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false);
+    // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
+    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
+                                          bool allowSaferegion = true);
 
     void ForwardFromRegions(GCThreadPool* threadPool);
     void ForwardFromRegions();
     void ForwardRegion(RegionInfo* region);
+    // Before clearing the young flag on a promoted region, record every live
+    // old→young out-edge that mutators skipped while the source was still young.
+    static size_t RecordPromotedCrossGenEdges(RegionInfo* region);
+    static size_t ConsumePromotedCrossGenEdgeCount();
+    // Non-young holders (pinned/large at birth, or post-promote old) + IDLE bare store:
+    // edges never enter RecordCrossGenEdge. Stamp remset before each minor.
+    // See ops/design/G1_WRITE_BARRIER_DESIGN.md (phase≤INIT fast path).
+    size_t RecordPinnedCrossGenEdges();
+    void StampCensusBoundaries();
+    void PromoteAllRegions();
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
@@ -143,54 +179,69 @@ public:
     ~RegionManager() = default;
 
     // take a region with *num* units for allocation
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false);
+    // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
+    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
+                           bool allowSaferegion = true);
 
     uintptr_t AllocPinnedFromFreeList(size_t size);
 
     uintptr_t AllocPinned(size_t size)
     {
-        uintptr_t addr = 0;
         std::mutex& regionListMutex = recentPinnedRegionList.GetListMutex();
 
-        // enter saferegion when wait lock to avoid gc timeout.
-        // note that release the mutex when function end.
-        {
-            ScopedEnterSaferegion enterSaferegion(true);
-            regionListMutex.lock();
+        LockRegionListInSaferegion(regionListMutex);
+        uintptr_t addr = AllocPinnedLocked(size);
+        regionListMutex.unlock();
+        if (addr != 0) {
+            DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
+            return addr;
         }
 
-        RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
-        if (headRegion != nullptr) {
-            addr = headRegion->Alloc(size);
-        }
-        if (addr == 0) {
-            addr = AllocPinnedFromFreeList(size);
-        }
-        if (addr == 0) {
-            size_t needUnitCount = maxUnitCountPerRegion;
+        // TakeRegion() must not run while this mutator owns the pinned region list mutex: it
+        // enters a saferegion between try-lock rounds (FreeRegionManager.h:91) and again in
+        // ReclaimRegion() -> FreeRegionManager::AddGarbageUnits() (RegionManager.cpp:420,
+        // FreeRegionManager.h:100). Being in a saferegion lets StopTheWorld complete while the
+        // mutex is held, and the minor collection then blocks on that very mutex inside the
+        // stopped world (RegionManager.cpp:500 -> RegionList.h:117).
+        size_t needUnitCount = maxUnitCountPerRegion;
 #if defined(__EULER__)
-            needUnitCount = maxUnitCountPerPinnedRegion;
+        needUnitCount = maxUnitCountPerPinnedRegion;
 #endif
-            RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
-            if (region == nullptr) {
-                regionListMutex.unlock();
-                return 0;
-            }
-            DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
-                 region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
-                 region->GetRegionType());
+        RegionInfo* region = TakeRegion(needUnitCount, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+        if (region == nullptr) {
+            return 0;
+        }
+        DLOG(REGION, "alloc pinned region @[0x%zx+%zu, 0x%zx) unit idx %zu type %u", region->GetRegionStart(),
+             region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetUnitIdx(),
+             region->GetRegionType());
+
+        LockRegionListInSaferegion(regionListMutex);
+        // another mutator may have installed a pinned region while the mutex was released.
+        addr = AllocPinnedLocked(size);
+        if (addr == 0) {
             // If allocate pinned obj during tracing, set region to traced new region.
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
             }
+            // twoflags: POST_TRACE+ only (TRACE uses isTraceRegion).
+            if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
+                phase == GC_PHASE_FORWARD) {
+                region->SetNotRelocatableThisCycle(1);
+            }
             // To make sure the allocedSize are consistent, it must prepend region first then alloc object.
             recentPinnedRegionList.PrependRegionLocked(region, RegionInfo::RegionType::RECENT_PINNED_REGION);
             addr = region->Alloc(size);
+            region = nullptr;
+        }
+        regionListMutex.unlock();
+        if (region != nullptr) {
+            // the region was not needed after all, hand it back the same way
+            // RegionSpace::FeedHungryBuffers() does (RegionSpace.cpp:302-306).
+            (void)CollectRegion(region);
         }
 
         DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
-        regionListMutex.unlock();
         return addr;
     }
 
@@ -217,6 +268,11 @@ public:
         } else {
             recentLargeRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_LARGE_REGION);
             region->SetTraceRegionFlag(0);
+        }
+        // twoflags: POST_TRACE+ only (independent of isTraceRegion).
+        if (phase == GC_PHASE_POST_TRACE || phase == GC_PHASE_PREFORWARD ||
+            phase == GC_PHASE_FORWARD) {
+            region->SetNotRelocatableThisCycle(1);
         }
 
         return addr;
@@ -249,6 +305,7 @@ public:
     void AssembleSmallGarbageCandidates();
     void AssembleLargeGarbageCandidates();
     void AssemblePinnedGarbageCandidates(bool collectAll);
+    YoungCollectionStats PrepareYoungGarbageCandidates(const std::function<void(RegionInfo*)>& visitor);
 
     void MergeRawPointerPinnedRegions()
     {
@@ -258,10 +315,15 @@ public:
     void CollectFromSpaceGarbage()
     {
 #if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path: reclaim from-regions directly to dirtyTree.
+        // OHOS keeps the low-fragmentation path for ordinary regions. A ghost carrier
+        // remains in the garbage list until PrepareFromRegionList dispels it.
         RegionInfo* region = fromRegionList.TakeHeadRegion();
         while (region != nullptr) {
-            ReclaimRegion(region);
+            if (region->IsGhostFromRegion()) {
+                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            } else {
+                ReclaimRegion(region);
+            }
             region = fromRegionList.TakeHeadRegion();
         }
 #else
@@ -274,15 +336,75 @@ public:
         return maxUnitCountPerRegion * RegionInfo::UNIT_SIZE;
     }
 
+    size_t GetYoungAllocatedSize() const
+    {
+        return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
+    }
+
     size_t CollectRegion(RegionInfo* region)
     {
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
+        // f3why2/livesame: always-on enter + knownEmpty_marked class.
+        F3Why2Diag::NoteCollectEnter(region);
+        // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
+        EmptyLiveDiag::NoteCollectEnter(region);
+        // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
+        {
+            static const bool probe = []() {
+                const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
+            if (probe && region != nullptr && region->IsKnownEmpty()) {
+                size_t start = region->GetRegionStart();
+                size_t alloc = region->GetRegionAllocPtr();
+                size_t end = region->GetRegionEnd();
+                size_t residual = alloc > start ? (alloc - start) : 0;
+                size_t validObjs = 0;
+                size_t markedObjs = 0;
+                if (residual > 0 && !region->IsLargeRegion()) {
+                    uintptr_t pos = start;
+                    while (pos < alloc) {
+                        BaseObject* o = from_region_addr(pos);
+                        if (!o->IsValidObject()) {
+                            break;
+                        }
+                        size_t sz = o->GetSize();
+                        if (sz == 0) {
+                            break;
+                        }
+                        ++validObjs;
+                        if (region->IsMarkedObject(o)) {
+                            ++markedObjs;
+                        }
+                        pos += sz;
+                    }
+                }
+                if (validObjs > 0) {
+                    VLOG(REPORT,
+                         "[GCRECLAIM][collect-empty] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
+                         "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
+                         region, start, alloc, end, region->GetRegionType(),
+                         static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
+                         validObjs, markedObjs, static_cast<unsigned>(region->GetRouteState()));
+                }
+            }
+        }
+
+        // STEER3 CALLSITE_AUDIT: scrub HERE (once), not at ReclaimRegion.
+        // Linux TakeRegion often reuses garbage via ClearUnits WITHOUT ReclaimRegion
+        // (RegionManager.cpp TakeRegion same-size head path). Scrub-only-at-Reclaim
+        // therefore never ran on the hot path. Collect is the unique "region dies" edge.
+        ScrubRememberedSetForRegion(region);
 
         region->LockWriteRegion();
 #if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path: reclaim directly to dirtyTree.
-        ReclaimRegion(region);
+        // Do not publish an installed ghost carrier to dirtyTree before its dispel point.
+        if (region->IsGhostFromRegion()) {
+            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+        } else {
+            ReclaimRegion(region);
+        }
 #else
         garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
@@ -297,7 +419,11 @@ public:
 
     void AddRawPointerObject(BaseObject* obj)
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        // Pin needs a plain load-good address. High colour bits ⇒ missing barrier
+        // at the call site (would OOB in GetUnitIdxAt; fail closed here).
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->IncRawPointerObjectCount();
         if (region->IsFromRegion() && fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                            RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
@@ -314,20 +440,31 @@ public:
 
     void RemoveRawPointerObject(BaseObject* obj)
     {
-        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        MAddress rawAddr = reinterpret_cast<MAddress>(obj);
+        CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->DecRawPointerObjectCount();
     }
 
     void ReclaimRegion(RegionInfo* region);
+    // Like ReclaimRegion but units enter mark-quarantine tree, not dirty tree.
+    void ReclaimRegionToMarkQuarantine(RegionInfo* region);
     size_t ReleaseRegion(RegionInfo* region);
+    // Clear the two exact bitmap slices owned by [regionStart, regionEnd).
+    // Called on both CollectRegion and the direct large-region release path.
+    static void ScrubRememberedSetForRegion(RegionInfo* region);
+    // Emit + reset process-local scrub cost counters (STEER3).
+    static void DumpScrubCostAndReset(const char* point);
 
     void ReclaimGarbageRegions()
     {
-        RegionInfo* garbage = garbageRegionList.TakeHeadRegion();
+        RegionInfo* garbage = TakeReclaimableGarbageRegion();
         while (garbage != nullptr) {
             ReclaimRegion(garbage);
-            garbage = garbageRegionList.TakeHeadRegion();
+            garbage = TakeReclaimableGarbageRegion();
         }
+        // STEER3: scrub runs here (async reclaim), not inside young STW.
+        DumpScrubCostAndReset("post-reclaim-batch");
     }
 
     size_t CollectLargeGarbage();
@@ -343,7 +480,8 @@ public:
     size_t ExemptFromRegions();
     void ReassembleFromSpace();
 
-    void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor) const;
+    void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
+                          bool skipKnownEmptyRegions = false) const;
     void ForEachObjSafe(const std::function<void(BaseObject*)>& visitor) const;
 
     size_t GetUsedRegionSize() const { return GetUsedUnitCount() * RegionInfo::UNIT_SIZE; }
@@ -444,15 +582,28 @@ public:
     {
         fullTraceRegions.ActivateRegionCache();
         largeTraceRegions.ActivateRegionCache();
+        // twoflags: Assemble just filtered previous-cycle stamps; clear so this TRACE
+        // re-stamps only regions that allocate after this mark start.
+        ClearNotRelocatableThisCycleFlags();
     }
+
+    // twoflags: walk live region lists and clear notRelocatableThisCycle.
+    void ClearNotRelocatableThisCycleFlags();
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
+    // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
-            return toAddr;
+            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
+            if (!ticket) {
+                return nullptr;
+            }
+            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
+            // permwho: classify the answer (default off, early return inside).
+            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
+            return to;
         }
         return nullptr;
     }
@@ -466,15 +617,35 @@ public:
 
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            BaseObject* toAddr = fromRegionInfo->GetRoute(fromObj);
-            return toAddr;
+            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
+            if (!ticket) {
+                return nullptr;
+            }
+            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
+            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
+            return to;
         }
         return nullptr;
     }
 
     bool RouteRegion(RegionInfo* fromRegionInfo)
     {
-        CHECK(fromRegionInfo->IsGhostFromRegion());
+        // fysfixb / 352ed4e8: non-ghost is a defined negative answer, not invariant break.
+        // Producers that clear ghost: DispelGhostFromRegion (PrepareFromRegionList),
+        // ClearGhostRegionBit (raw-pin POST_TRACE), TakeRegion reuse. Consumers
+        // (ForwardRegion / TryForwardObject) may still hold a region* after the
+        // carrier retired or after liveBytes==0 skipped install (pre-a2e7ee37).
+        // Soft-null matches RouteObject's GetGhostFromRegionAt==null path.
+        if (UNLIKELY(!fromRegionInfo->IsGhostFromRegion())) {
+            VLOG(REPORT,
+                 "[GCV2][ghost-softnull] region=%p start=%#zx live=%zu route=%u young=%u "
+                 "auth=%u — RouteRegion soft-miss (ghost cleared or never installed)",
+                 fromRegionInfo, fromRegionInfo->GetRegionStart(), fromRegionInfo->GetLiveByteCount(),
+                 static_cast<unsigned>(fromRegionInfo->GetRouteState()),
+                 static_cast<unsigned>(fromRegionInfo->IsYoungRegion()),
+                 static_cast<unsigned>(fromRegionInfo->IsLiveCountAuthoritative()));
+            return false;
+        }
         do {
             RegionInfo::RouteState oldState = fromRegionInfo->GetRouteState();
             if (oldState == RegionInfo::RouteState::ROUTED || oldState == RegionInfo::RouteState::FORWARDED) {
@@ -490,6 +661,9 @@ public:
 
             CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
             if (fromRegionInfo->TryLockRouting(oldState)) {
+                // sealcheck E_seal (per-region): face freezes before geometry read.
+                // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
+                SealCheck::NoteSeal(fromRegionInfo);
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
                     return true;
@@ -503,11 +677,34 @@ public:
 
     void PrepareFromRegionList()
     {
-        ghostFromRegionList.VisitAllGhostRegions([](RegionInfo* region) {
+        size_t retainedRegions = 0;
+        size_t retainedBytes = 0;
+        size_t markQuarantinedRegions = 0;
+        size_t markQuarantinedBytes = 0;
+        ghostFromRegionList.VisitAllGhostRegions(
+            [this, &retainedRegions, &retainedBytes, &markQuarantinedRegions,
+             &markQuarantinedBytes](RegionInfo* region) {
             DLOG(REGION, "visit ghost from region %p@[%#zx, %#zx)", region, region->GetRegionStart(),
                  region->GetRegionEnd());
+            // Count ghost garbage retention before dispel (historical GhostRetention metric).
+            if (region->IsGhostFromRegion() && region->IsGarbageRegion()) {
+                ++retainedRegions;
+                retainedBytes += region->GetGhostRegionSize();
+            }
             region->DispelGhostFromRegion();
+            if (TryTakeGarbageRegionAfterDispel(region)) {
+                // mark-epoch gate (OPTION_2): do not publish to dirty tree until major mark ends.
+                // Mutator TakeRegion would ClearUnits payload while concurrent mark may still
+                // follow plain SATB edges into this range (REPORT-tracewin 16/16).
+                size_t bytes = region->GetRegionSize();
+                ReclaimRegionToMarkQuarantine(region);
+                ++markQuarantinedRegions;
+                markQuarantinedBytes += bytes;
+            }
         });
+        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
+        VLOG(REPORT, "[MarkQuarantine] installed_regions=%zu installed_bytes=%zu held_units=%u",
+             markQuarantinedRegions, markQuarantinedBytes, freeRegionManager.GetMarkQuarantineUnitCount());
 
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
@@ -516,6 +713,25 @@ public:
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
+    }
+
+    // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
+    // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined
+    // ranges are no longer traced. Safe to publish units to dirty tree for ClearUnits reuse.
+    // Note: this major's just-installed quarantine (from PrepareForwardTable above) is also
+    // released here — mark is already done, so no TRACE can race those units. Units held from
+    // prior minor PrepareForwardTable are the ones that covered the TRACE window.
+    void ReleaseMarkQuarantine()
+    {
+        size_t heldBefore = freeRegionManager.GetMarkQuarantineUnitCount();
+        size_t units = freeRegionManager.ReleaseMarkQuarantineToDirty();
+        size_t bytes = units * RegionInfo::UNIT_SIZE;
+        VLOG(REPORT,
+             "[MarkQuarantine] released_units=%zu released_bytes=%zu held_before=%zu held_after=%u",
+             units, bytes, heldBefore, freeRegionManager.GetMarkQuarantineUnitCount());
+        // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
+        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
+             heldBefore * RegionInfo::UNIT_SIZE);
     }
 
     void ClearAllLiveInfo()
@@ -532,7 +748,136 @@ public:
         ClearLiveInfo(largeTraceRegions);
     }
 
+    // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
+    template <typename F>
+    void VisitAllManagedRegionsForProbe(F&& visitor)
+    {
+        auto walk = [&visitor](const char* name, RegionList& list) {
+            list.VisitAllRegions([&visitor, name](RegionInfo* region) { visitor(region, name); });
+        };
+        walk("tlRegionList", tlRegionList);
+        walk("recentFullRegionList", recentFullRegionList);
+        walk("fromRegionList", fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(
+            [&visitor](RegionInfo* region) { visitor(region, "ghostFromRegionList"); });
+        walk("unmovableFromRegionList", unmovableFromRegionList);
+        walk("garbageRegionList", garbageRegionList);
+        walk("recentPinnedRegionList", recentPinnedRegionList);
+        walk("oldPinnedRegionList", oldPinnedRegionList);
+        walk("rawPointerPinnedRegionList", rawPointerPinnedRegionList);
+        walk("oldLargeRegionList", oldLargeRegionList);
+        walk("recentLargeRegionList", recentLargeRegionList);
+        walk("fullTraceRegions", fullTraceRegions);
+        walk("largeTraceRegions", largeTraceRegions);
+    }
+
+    // Production: before ReleaseMemory(previous tag), null liveInfo/liveInfo0/retained that
+    // still point into the dying range. Same region set as the probe walk (incl. garbage).
+    // Phase: STW inside PrepareForwardTable → ClearPreviousForwardData (minor ×2, major ×1).
+    void NullLiveInfoFieldsInRange(uintptr_t rangeStart, size_t rangeSize)
+    {
+        auto nullOne = [rangeStart, rangeSize](RegionInfo* region) {
+            if (region != nullptr) {
+                region->NullLiveInfoFieldsInRange(rangeStart, rangeSize);
+            }
+        };
+        auto walk = [&nullOne](RegionList& list) {
+            list.VisitAllRegions([&nullOne](RegionInfo* region) { nullOne(region); });
+        };
+        walk(tlRegionList);
+        walk(recentFullRegionList);
+        walk(fromRegionList);
+        ghostFromRegionList.VisitAllGhostRegions(nullOne);
+        walk(unmovableFromRegionList);
+        walk(garbageRegionList);
+        walk(recentPinnedRegionList);
+        walk(oldPinnedRegionList);
+        walk(rawPointerPinnedRegionList);
+        walk(oldLargeRegionList);
+        walk(recentLargeRegionList);
+        walk(fullTraceRegions);
+        walk(largeTraceRegions);
+    }
+
 private:
+    RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr)
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        RegionInfo* candidate = nullptr;
+        size_t bytes = 0;
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region->IsGhostFromRegion()) {
+                bytes += region->GetGhostRegionSize();
+            } else if (candidate == nullptr) {
+                candidate = region;
+            }
+        }
+        if (candidate != nullptr) {
+            RemoveRegionLocked(&garbageRegionList, candidate);
+        }
+        if (gatedBytes != nullptr) {
+            *gatedBytes = bytes;
+        }
+        return candidate;
+    }
+
+    bool TryTakeGarbageRegionAfterDispel(RegionInfo* target)
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region == target) {
+                CHECK(region->IsGarbageRegion());
+                CHECK(!region->IsGhostFromRegion());
+                RemoveRegionLocked(&garbageRegionList, region);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    size_t GetGatedGarbageBytes()
+    {
+        std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
+        size_t bytes = 0;
+        for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
+             region = region->GetNextRegion()) {
+            if (region->IsGhostFromRegion()) {
+                bytes += region->GetGhostRegionSize();
+            }
+        }
+        return bytes;
+    }
+
+    // Acquire a region list mutex which the collector also takes while the world is stopped.
+    // Waiting for it in a saferegion is required so that a contended mutator cannot stall
+    // StopTheWorld (MutatorManager.cpp:485-490), but the mutex must never be owned while the
+    // saferegion guard is destroyed: LeaveSaferegion() parks the mutator in SuspendForSync()
+    // (Mutator.h:172-186, Mutator.cpp:229-280) and the collector would then wait for that mutex
+    // forever. Wait in try-lock rounds so every saferegion transition happens unlocked, exactly
+    // as FreeRegionManager::TakeRegion() does for the free unit trees (FreeRegionManager.h:45-92).
+    static void LockRegionListInSaferegion(std::mutex& listMutex)
+    {
+        while (!listMutex.try_lock()) {
+            ScopedEnterSaferegion enterSaferegion(true);
+        }
+    }
+
+    // caller must own recentPinnedRegionList's list mutex, and must not release it in between.
+    uintptr_t AllocPinnedLocked(size_t size)
+    {
+        uintptr_t addr = 0;
+        RegionInfo* headRegion = recentPinnedRegionList.GetHeadRegion();
+        if (headRegion != nullptr) {
+            addr = headRegion->Alloc(size);
+        }
+        if (addr == 0) {
+            addr = AllocPinnedFromFreeList(size);
+        }
+        return addr;
+    }
+
     static const size_t MAX_UNIT_COUNT_PER_REGION;
     static const size_t HUGE_PAGE;
     inline void CheckRegionWhetherCreatedInFixPhase(RegionInfo* region);
