@@ -140,7 +140,9 @@ public:
 
     RegionManager& operator=(const RegionManager&) = delete;
 
-    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true);
+    // allowSaferegion=false: no ScopedEnterSaferegion under ROUTING (routefix / REPORT-routespin).
+    RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
+                                          bool allowSaferegion = true);
 
     void ForwardFromRegions(GCThreadPool* threadPool);
     void ForwardFromRegions();
@@ -177,7 +179,9 @@ public:
     ~RegionManager() = default;
 
     // take a region with *num* units for allocation
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false);
+    // allowSaferegion=false: best-effort, never enter saferegion (ROUTING critical section).
+    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole, bool expectPhysicalMem = false,
+                           bool allowSaferegion = true);
 
     uintptr_t AllocPinnedFromFreeList(size_t size);
 

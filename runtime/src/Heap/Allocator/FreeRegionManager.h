@@ -37,7 +37,11 @@ public:
         markQuarantineTree.Init(regionCnt);
     }
 
-    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem)
+    // allowSaferegion: when false, never ScopedEnterSaferegion (ROUTING critical section —
+    // holding routeState=ROUTING while waiting on phase transition deadlocks PreForward;
+    // see REPORT-routespin.md). Best-effort one pass; caller falls back to CompactRegion.
+    RegionInfo* TakeRegion(size_t num, RegionInfo::UnitRole uclass, bool expectPhysicalMem,
+                           bool allowSaferegion = true)
     {
         UnitIndex idx = 0;
         bool tryDirtyTree = true;
@@ -95,6 +99,10 @@ public:
                 }
                 tryReleasedTree = false; // once we fail to take units, stop trying.
                 releasedUnitTreeMutex.unlock();
+            }
+            // routefix: ROUTING holders must not park here (LeaveSaferegion → WaitForPhaseTransition).
+            if (!allowSaferegion) {
+                return nullptr;
             }
             ScopedEnterSaferegion enterSaferegion(true);
         }
