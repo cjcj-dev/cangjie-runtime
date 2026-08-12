@@ -236,11 +236,10 @@ void StackInfo::GetStackTraceByLiteFrameInfos(const std::vector<uint64_t>& liteF
 {
     constexpr int liteFrameInfoElementSize = 3;
     for (size_t i = 0; i < liteFrameInfos.size(); i += liteFrameInfoElementSize) {
-        // Each function stack frame is represented by a triple {ip, startPC, funcDesc}
-        StackMetadataHelper stackMetadataHelper(reinterpret_cast<uint32_t*>(liteFrameInfos[i]),
-                                                reinterpret_cast<uint32_t*>(liteFrameInfos[i + 1]),
-                                                reinterpret_cast<uint64_t*>(liteFrameInfos[i + 2]));
-
+        // Each function stack frame is represented by a triple {ip, startPC, funcDesc}.
+        // Do not construct StackMetadataHelper here: INTERPRETED_FRAME_FDESC is 0, and the
+        // helper ctor immediately dereferences that as FuncDesc. The native path constructs
+        // its own helper inside GetStackTraceByLiteFrameInfo.
         StackTraceElement tmpElement;
         GetStackTraceByLiteFrameInfo(liteFrameInfos[i], liteFrameInfos[i + 1], liteFrameInfos[i + 2], tmpElement);
         if (tmpElement.lineNumber != NEED_FILTED_FLAG) {
