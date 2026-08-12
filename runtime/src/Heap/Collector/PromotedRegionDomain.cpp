@@ -145,7 +145,15 @@ void DiffAndStore(size_t minorRunIndex, const char* tag)
 
 bool Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PROMO_DOMAIN");
+    // domainon: default ON. MRT_GCV2_PROMO_DOMAIN=0 disables; unset or any other value keeps on.
+    // Old RecordPromotedCrossGenEdges still runs as shadow (not deleted this lane).
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN");
+        if (v == nullptr) {
+            return true;
+        }
+        return std::strcmp(v, "0") != 0;
+    }();
     return on;
 }
 
