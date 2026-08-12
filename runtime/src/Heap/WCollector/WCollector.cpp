@@ -6177,6 +6177,47 @@ void WCollector::DoYoungGarbageCollection()
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
     }
+    {
+        static const bool parwhyOn = []() {
+            const char* v = std::getenv("MRT_GCV2_PARWHY");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        if (parwhyOn) {
+            size_t nObj = reachableVec.size();
+            size_t fieldHolders = 0;
+            size_t adj256 = 0;
+            size_t adj4k = 0;
+            size_t far64k = 0;
+            size_t pairs = 0;
+            uintptr_t prev = 0;
+            for (BaseObject* object : reachableVec) {
+                if (object == nullptr) {
+                    continue;
+                }
+                uintptr_t addr = reinterpret_cast<uintptr_t>(object);
+                if (prev != 0) {
+                    uintptr_t d = addr > prev ? addr - prev : prev - addr;
+                    ++pairs;
+                    if (d < 256) {
+                        ++adj256;
+                    }
+                    if (d < 4096) {
+                        ++adj4k;
+                    }
+                    if (d >= 65536) {
+                        ++far64k;
+                    }
+                }
+                prev = addr;
+                if (object->HasRefField()) {
+                    ++fieldHolders;
+                }
+            }
+            LOG(RTLOG_ERROR,
+                "[GCV2][parwhy][mark] nObj=%zu fieldHolders=%zu pairs=%zu adj256=%zu adj4k=%zu far64k=%zu",
+                nObj, fieldHolders, pairs, adj256, adj4k, far64k);
+        }
+    }
     g_markInternalCost.Report("mark_closure");
     g_markInternalCost.Reset();
     // fysdesign: O→Y edges on FYS-claimed holders vs remset membership (default off).
