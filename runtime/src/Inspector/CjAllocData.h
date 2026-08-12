@@ -71,7 +71,7 @@ class AllocStackInfo : public GCStackInfo {
 public:
     ~AllocStackInfo();
     int32_t ProcessTraceInfo(FrameInfo &frame);
-    void ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, MSize allocSize);
+    int32_t ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, MSize allocSize);
     void ProcessStackTrace(const TypeInfo* ti, MSize size);
 private:
     void ClearFrames();

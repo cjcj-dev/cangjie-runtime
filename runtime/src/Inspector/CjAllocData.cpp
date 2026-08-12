@@ -256,13 +256,13 @@ void AllocStackInfo::ClearFrames()
     }
 }
 
-void AllocStackInfo::ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, MSize allocSize)
+int32_t AllocStackInfo::ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, MSize allocSize)
 {
     // Initialize nodes and fill nodes in head in sequence.
     if (frames.empty()) {
         // This node is the root node.
         head->selfSize += allocSize;
-        return;
+        return head->id;
     }
     while (!frames.empty()) {
         FrameInfo* f = frames.top();
@@ -289,6 +289,7 @@ void AllocStackInfo::ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, 
         f = nullptr;
     }
     head->selfSize += allocSize;
+    return head->id;
 }
 void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
 {
@@ -303,7 +304,14 @@ void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
         TraceNodeField* node = CjAllocData::GetCjAllocData()->FindNode(FA, f->GetFuncName().Str());
         if (node != nullptr) {
             delete f;
-            ProcessTraceNode(node, ti, size);
+            int32_t leafNodeId = ProcessTraceNode(node, ti, size);
+            Sample* sample = new Sample();
+            sample->size = size;
+            sample->nodeId = leafNodeId;
+            auto now = std::chrono::system_clock::now();
+            auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+            sample->orinal = static_cast<int32_t>(timestamp);
+            CjAllocData::GetCjAllocData()->samples.push_back(sample);
             return;
         }
         frames.push(f);
@@ -320,12 +328,12 @@ void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
         uwContext = caller;
     }
     // 2. If the stack back is not recorded, the call chain is a new call chain and the root node is the root node.
-    ProcessTraceNode(CjAllocData::GetCjAllocData()->traceNodeHead, ti, size);
+    int32_t leafNodeId = ProcessTraceNode(CjAllocData::GetCjAllocData()->traceNodeHead, ti, size);
 
     // 3. Record the samples at this time.
     Sample* sample = new Sample();
     sample->size = size;
-    sample->nodeId = CjAllocData::GetCjAllocData()->traceFunctionInfo.size();
+    sample->nodeId = leafNodeId;
     auto now = std::chrono::system_clock::now();
     auto timestamp = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
     sample->orinal = static_cast<int32_t>(timestamp);
