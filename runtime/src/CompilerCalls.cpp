@@ -32,6 +32,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
 #include "LoaderManager.h"
 #include "TypeInfoManager.h"
@@ -408,6 +409,22 @@ extern "C" ArrayRef MCC_NewArray64(const TypeInfo* arrayInfo, MIndex nElems)
     return array;
 }
 
+// stackarr: default-off guard — stack value must not be written into a heap ref
+// field. Catches PEA stack-promoted RawArray/NewObject later stored via
+// WriteRefField (HashMap.init buckets). Gate: MRT_GCV2_STACKREF=1 or
+// MRT_GCV2_DIAG=stackref. Probe-only abort; product path unchanged when off.
+namespace {
+bool StackrefGuardEnabled()
+{
+    static const bool on = []() {
+        return MapleRuntime::DiagGate::LegacyOrToken("MRT_GCV2_STACKREF", "stackref");
+    }();
+    return on;
+}
+std::atomic<uint64_t> g_stackrefChecks{ 0 };
+std::atomic<uint64_t> g_stackrefHits{ 0 };
+} // namespace
+
 extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefField<false>* field)
 {
     // arrayinit2: compiler GEP of coloured base yields coloured field place; strip before use.
@@ -423,6 +440,26 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
         // Non-heap holder (static/global): same remset duty as WriteStaticRef.
         Heap::GetBarrier().WriteStaticRef(RootSlotAt(plainField), plainRef);
         return;
+    }
+    // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
+    // via WriteRefField (HashMap.init buckets). Use Mutator::IsStackAddr so
+    // legitimate non-heap constants / image pointers are not false-positive.
+    if (StackrefGuardEnabled()) {
+        g_stackrefChecks.fetch_add(1, std::memory_order_relaxed);
+        Mutator* mu = Mutator::GetMutator();
+        if (plainRef != nullptr && mu != nullptr &&
+            mu->IsStackAddr(reinterpret_cast<uintptr_t>(plainRef))) {
+            g_stackrefHits.fetch_add(1, std::memory_order_relaxed);
+            fprintf(stderr,
+                    "[GCV2][stackref] stack value written into heap field: "
+                    "ref=%p obj=%p field=%p checks=%llu hits=%llu\n",
+                    reinterpret_cast<void*>(plainRef), reinterpret_cast<void*>(plainObj),
+                    reinterpret_cast<void*>(plainField),
+                    static_cast<unsigned long long>(g_stackrefChecks.load(std::memory_order_relaxed)),
+                    static_cast<unsigned long long>(g_stackrefHits.load(std::memory_order_relaxed)));
+            fflush(stderr);
+            abort();
+        }
     }
     Heap::GetBarrier().WriteReference(plainObj, *plainField, plainRef);
 }
