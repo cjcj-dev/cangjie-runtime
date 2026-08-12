@@ -32,6 +32,7 @@ class WCollector;
 //   MRT_GCV2_PROMO_DOMAIN_SKIP_ONE=1     — positive: skip first domain edge
 //   MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED=1 — positive: leave one undischarged
 //   MRT_GCV2_PROMO_DOMAIN_FATAL=1        — CHECK on reconcile mismatch / undischarged reuse
+//   MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 — force ForwardRegion in-place arm (dual-run only)
 //
 // Lifecycle:
 //   Register at in-place / abandon / residual promote sites (with old scan still on).

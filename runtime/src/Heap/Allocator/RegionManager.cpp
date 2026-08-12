@@ -2479,7 +2479,14 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         return;
     }
 
-    if (!RouteRegion(region)) {
+    // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
+    // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
+    // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
+    static const bool forceInPlace = []() {
+        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    if (forceInPlace || !RouteRegion(region)) {
         if (youngRegion) {
             // In-place promote (compacted / unrouted): scan before clearing young flag.
             // promodomain §A.3: register durable domain (default off); old scan stays.
