@@ -73,7 +73,11 @@ inline size_t GetNumber(T base62)
     long long decimal = 0;
     long long power = 1;
     for (size_t i = newBase62.Length() - 1; i != NPOS; i--) {
-        decimal += base62Chars.at(newBase62[i]) * power;
+        auto it = base62Chars.find(newBase62[i]);
+        if (it == base62Chars.end()) {
+            return static_cast<size_t>(-1);
+        }
+        decimal += it->second * power;
         power *= n;
     }
     return decimal + 1;
