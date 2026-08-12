@@ -39,7 +39,7 @@ public:
     bool IsDirect() const { return flag & 0b10000000; }
     bool IsFuncTableUpdated() const
     {
-        return __atomic_load_n(&flag, __ATOMIC_ACQUIRE) &
+        return (__atomic_load_n(&flag, __ATOMIC_ACQUIRE) & 0b00000110) ==
                0b00000110; // "bit-1&2 is 11" means updated already
     }
     bool TryLockFuncTable()
