@@ -25,19 +25,29 @@ void InitCleaner()
     std::atomic_thread_fence(std::memory_order_seq_cst);
 }
 #else
+// Exact product shape: process-shared function-local volatile, unsynchronized
+// read then write. Reset each pair so later iterations still race.
+volatile bool* SharedInitFlag()
+{
+    static volatile bool isInit = false;
+    return &isInit;
+}
+
 void InitCleaner()
 {
     std::atomic_thread_fence(std::memory_order_seq_cst);
-    static volatile bool isInit = false;
-    if (!isInit) {
-        isInit = true;
+    volatile bool* isInit = SharedInitFlag();
+    if (!*isInit) {
+        *isInit = true;
     }
+    *isInit = false;
 }
 #endif
 
 int main()
 {
     constexpr int kThreads = 8;
+    constexpr int kIters = 20000;
     std::atomic<int> ready { 0 };
     std::atomic<int> go { 0 };
     std::vector<std::thread> threads;
@@ -47,7 +57,9 @@ int main()
             ready.fetch_add(1, std::memory_order_acq_rel);
             while (go.load(std::memory_order_acquire) == 0) {
             }
-            InitCleaner();
+            for (int n = 0; n < kIters; ++n) {
+                InitCleaner();
+            }
         });
     }
     while (ready.load(std::memory_order_acquire) < kThreads) {
