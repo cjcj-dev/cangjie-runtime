@@ -73,6 +73,9 @@ public:
     static void VisitStackRoots(const UnwindContext& topFrame, const RootVisitor& func, Mutator& mutator);
     static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& rootVisitor,
                                            const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator);
+    static void VisitHeapReferencesOnStack(const UnwindContext& topFrame, const RootVisitor& regRootVisitor,
+                                           const RootVisitor& slotRootVisitor,
+                                           const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator);
 
     static void VisitStackPtrMap(const UnwindContext& topFrame, const StackPtrVisitor& traceAndFixPtrVisitor,
                                  const StackPtrVisitor& fixPtrVisitor, const DerivedPtrVisitor& derivedPtrVisitor,

@@ -126,7 +126,7 @@ public:
 
 private:
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class MethodMap : public StackMap {
@@ -214,7 +214,7 @@ protected:
     SlotRoot stackPtrSlotRoot;
     RegRoot stackPtrRegRoot;
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class StackMapBuilder {
@@ -249,6 +249,16 @@ public:
             return MapType(stackBase, std::move(closure));
         }
         return MapType(true, stackBase, entry, std::move(closure));
+    }
+
+    StackMapInvalidReason GetInvalidReason() const
+    {
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        return head.GetInvalidReason(startPC, framePC);
     }
 
 protected:

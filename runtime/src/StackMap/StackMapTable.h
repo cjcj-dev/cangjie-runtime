@@ -492,6 +492,12 @@ struct IdxSet {
     U32 stackSlotIdx;
 };
 
+enum class StackMapLookupResult : U8 {
+    FOUND,
+    ZERO_ENTRIES,
+    PC_MISS,
+};
+
 class StackMapTable : public TableAPI {
 public:
     StackMapTable(U8* tableAddrStart, U32 tableBitStart) : TableAPI(tableAddrStart, tableBitStart) { Init(); }
@@ -548,6 +554,35 @@ public:
             }
         }
         return IdxSet();
+    }
+
+    StackMapLookupResult GetLookupResult(Uptr startPC, Uptr framePC) const
+    {
+        U32 recordNum = headerInfo[RECORD_NUM];
+        if (recordNum == 0) {
+            return StackMapLookupResult::ZERO_ENTRIES;
+        }
+        U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 left = 0;
+        U32 right = recordNum - 1;
+        U32 leftPCOff = PCAt(left);
+        U32 rightPCOff = PCAt(right);
+        if (targetPCOff < leftPCOff || targetPCOff > rightPCOff) {
+            return StackMapLookupResult::PC_MISS;
+        }
+        while (left <= right) {
+            U32 mid = (left + right) >> 1;
+            U32 midPCOff = PCAt(mid);
+            if (midPCOff == targetPCOff) {
+                return StackMapLookupResult::FOUND;
+            }
+            if (midPCOff < targetPCOff) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+        return StackMapLookupResult::PC_MISS;
     }
 
     U32 GetRegBitsLen() const { return headerInfo[REG_BITS_LEN]; }

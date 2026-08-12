@@ -27,19 +27,19 @@ using PCOff = U32;
 using LineNum = U32;
 using SlotBits = U32;
 using BitsMapSize = U32;
-using SlotDebugVisitor = std::function<void(SlotBias, BaseObject*)>;
+using SlotDebugVisitor = std::function<void(SlotBias, zaddress_unsafe)>;
 using RegisterNum = uint32_t;
-using RegDebugVisitor = std::function<void(RegisterNum, const BaseObject*)>;
+using RegDebugVisitor = std::function<void(RegisterNum, zaddress_unsafe)>;
 constexpr uintptr_t METHOD_DESC_OFFSET = 4;
 using RegBits = uint32_t;
 using PrologueBits = uint16_t;
 using PrologueBias = int16_t;
 using namespace Register;
-using BasePtrType = Uptr;
-using DerivedPtrType = Uptr;
+using BasePtrType = zaddress_unsafe;
+using DerivedPtrType = zaddress_unsafe;
 constexpr U32 PURE_COMPRESSED_STACKMAP = 0;
 // derivedptr visitor parameters: basePtr, the reference of derivedptr
-using DerivedPtrVisitor = std::function<void(BasePtrType, DerivedPtrType&)>;
+using DerivedPtrVisitor = std::function<void(BasePtrType, DerivedSlot&)>;
 using DerivedPtrDebugVisitor = std::function<void(BasePtrType, DerivedPtrType)>;
 struct RegSlotsMap {
     SlotAddress addrMap[REGISTERS_COUNT]{ nullptr };
@@ -54,17 +54,17 @@ struct RegSlotsMap {
     inline void Erase(RegisterNum reg) { isRecorded[reg] = false; }
 
     bool VisitSingleSlotsRoot(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegisterNum reg,
-                              std::list<Uptr>* rootsList = nullptr)
+                              std::list<BasePtrType>* rootsList = nullptr)
     {
         if (!HasReg(reg)) {
             LOG(RTLOG_ERROR, "register %s is not recorded", GetRegisterName(reg));
             return false;
         }
         if (rootsList != nullptr) {
-            rootsList->push_back(reinterpret_cast<Uptr>(addrMap[reg]->object));
+            rootsList->push_back(addrMap[reg]->LoadPlain());
         }
         if (debugFunc != nullptr) {
-            debugFunc(reg, addrMap[reg]->object);
+            debugFunc(reg, addrMap[reg]->LoadPlain());
         }
         visitor(*addrMap[reg]);
         Erase(reg);
@@ -79,8 +79,8 @@ struct RegSlotsMap {
         }
         SlotAddress slot = addrMap[reg];
         if (debugFunc != nullptr) {
-            debugFunc(reg, slot->object);
-            debugFunc(reg, (slot + 1)->object);
+            debugFunc(reg, slot->LoadPlain());
+            debugFunc(reg, (slot + 1)->LoadPlain());
         }
         visitor(*slot);
         visitor(*(slot + 1));

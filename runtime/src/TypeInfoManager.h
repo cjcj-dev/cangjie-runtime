@@ -7,7 +7,12 @@
 #ifndef MRT_TYPE_INFO_MANAGER_H
 #define MRT_TYPE_INFO_MANAGER_H
 
+#include <array>
+#include <atomic>
+#include <mutex>
 #include <unordered_map>
+#include <unordered_set>
+#include <vector>
 
 #include "ObjectModel/MClass.h"
 #include "Base/SysCall.h"
@@ -31,7 +36,7 @@ class TypeInfoManager {
     friend class CJFileLoader;
 public:
     // 1024: number of buckets for the hash map.
-    explicit TypeInfoManager() : genericTypeInfoDescMap(1024) {}
+    explicit TypeInfoManager() : genericTypeInfoDescMap(1024), genericTypeInfoFastMap(4096) {}
     ~TypeInfoManager() = default;
 
     void Init();
@@ -41,6 +46,7 @@ public:
     static TypeInfoManager& GetTypeInfoManager();
 
     TypeInfo* GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
+    void InvalidateGenericTypeInfoFastMap();
     void AddTypeInfo(TypeInfo* ti);
     static U32 GetTypeSize(TypeInfo* ti);
     void ParseEnumInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[], TypeInfo* ti);
@@ -60,6 +66,18 @@ public:
     TypeInfo* GetObjectTypeInfo() { return objectTi; }
     void FillOffsets(TypeInfo* newTypeInfo, TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
     void CalculateGCTib(TypeInfo* typeInfo);
+    // Online range test for TypeInfo pointers allocated by this manager (generic TI mmap).
+    // Static TypeInfos live in load modules and are outside these ranges — callers must
+    // also accept non-heap addresses (see VerifyHeap / VerifyRoots).
+    bool ContainsAddress(uintptr_t addr) const
+    {
+        for (const auto& m : mmapList) {
+            if (addr >= m.first && addr < m.first + m.second) {
+                return true;
+            }
+        }
+        return false;
+    }
 private:
     uintptr_t Allocate(size_t size);
     CString GetGCTibStr(TypeInfo* typeInfo);
@@ -141,6 +159,46 @@ private:
 
         std::vector<Bucket> buckets;
     };
+    class GenericTiDescFastMap {
+    public:
+        explicit GenericTiDescFastMap(size_t initialCapacity);
+        ~GenericTiDescFastMap();
+        GenericTiDesc* Get(TypeTemplate* tt, U32 argSize, TypeInfo* args[], U64& observedGeneration) const;
+        void Insert(TypeTemplate* tt, U32 argSize, TypeInfo* args[], GenericTiDesc* desc, U64 expectedGeneration);
+        void Invalidate();
+    private:
+        static constexpr U32 MAX_INLINE_ARGS = 3;
+        struct Entry {
+            Entry(U64 keyHash, TypeTemplate* keyTT, U32 keyArgSize, TypeInfo* keyArgs[], GenericTiDesc* value);
+            bool Matches(U64 keyHash, TypeTemplate* keyTT, U32 keyArgSize, TypeInfo* keyArgs[]) const;
+
+            U64 hash;
+            TypeTemplate* tt;
+            U32 argSize;
+            std::array<TypeInfo*, MAX_INLINE_ARGS> args;
+            GenericTiDesc* desc;
+        };
+        struct Table {
+            explicit Table(size_t tableCapacity);
+            ~Table();
+
+            size_t capacity;
+            size_t size { 0 };
+            std::atomic<Entry*>* slots;
+        };
+
+        static size_t NormalizeCapacity(size_t capacity);
+        static U64 ComputeHash(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
+        static Entry* FindInTable(Table* table, U64 hash, TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
+        static void InsertIntoTable(Table* table, Entry* entry);
+        void PublishResizedTable(size_t capacity);
+
+        std::atomic<Table*> activeTable { nullptr };
+        std::atomic<U64> generation { 1 };
+        std::mutex writerMutex;
+        std::vector<Table*> tables;
+        std::vector<Entry*> entries;
+    };
     GenericTiDesc* InsertGenericTiDesc(GenericTiDesc& desc);
     GenericTiDesc* GetGenericTiDesc(GenericTiDesc& desc);
     GenericTiDesc* GetTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
@@ -156,6 +214,7 @@ private:
     std::unordered_map<const char*, TypeInfo*, HashString, EqualString> genericTypeInfos;
     std::unordered_map<const char*, TypeTemplate*, HashString, EqualString> typeTemplates;
     GenericTiDescHashMap genericTypeInfoDescMap;
+    GenericTiDescFastMap genericTypeInfoFastMap;
     uintptr_t startAddress;
     uintptr_t endAddress;
     std::atomic<U32> tiMaxUUID { 1 };

@@ -115,9 +115,9 @@ void MRT_FutureWait(const void* ptr, int64_t timeout)
         }
     }
 
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(future));
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(future));
     MRT_SuspendWithTimeout(&future->wq, MCC_FutureIsComplete, future, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(future));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(future));
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire(future);
@@ -283,9 +283,9 @@ static bool MCC_MutexLockSlowPathImpl(CJMutex* mutex, uint64_t count)
         if (firstWaitTime == 0) {
             firstWaitTime = TimeUtil::MicroSeconds();
         }
-        Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
+        Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
         MRT_SemAcquire(&mutex->sema, isPushToHead);
-        Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
+        Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
 
         // ========== After wake up ==============
         // If waiting too long, the current thread becomes starved
@@ -532,13 +532,13 @@ int MCC_WaitQueueInit(void* ptr)
 bool MonitorWait(CJMutex* mutex, void* wq, int64_t timeout)
 {
     // 1. Keep the #mutex-hold before release the mutex.
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
     uint64_t ownCount = mutex->ownCount;
     // 2. Release and wait
     bool wakeStatus = MRT_SuspendWithTimeout(wq, MRT_MutexFullyUnlock, mutex, timeout);
     // 3. Hold the mutex again
     MRT_MutexFullyLock(mutex, ownCount);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
     if (wakeStatus) {
         // Notified by other threads
         return true;
@@ -560,12 +560,15 @@ bool MonitorWait(CJMutex* mutex, void* wq, int64_t timeout)
 bool MCC_MonitorWait(const void* ptr, int64_t timeout)
 {
     CJMonitor* monitor = CastToT<CJMonitor*>(ptr);
-    CJMutex* mutex = monitor->mutexPtr;
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(monitor));
+    // True read barrier (not uncolor_bits): pin must land on load-good / to-copy.
+    BaseObject* mutexObj =
+        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+    CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(monitor));
     bool ret = MonitorWait(mutex, &monitor->wq, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(monitor));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(monitor));
     return ret;
 }
 
@@ -592,12 +595,15 @@ void MCC_MonitorNotifyAll(const void* ptr)
 bool MCC_MultiConditionMonitorWait(const void* ptr, void* waitQueuePtr, int64_t timeout)
 {
     CJMultiConditionMonitor* monitor = CastToT<CJMultiConditionMonitor*>(ptr);
-    CJMutex* mutex = monitor->mutexPtr;
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
-    Heap::GetHeap().GetCollector().AddRawPointerObject(reinterpret_cast<BaseObject*>(waitQueuePtr));
+    // Same as MCC_MonitorWait: HeapSlot load must go through the real barrier.
+    BaseObject* mutexObj =
+        Heap::GetBarrier().ReadReference(reinterpret_cast<BaseObject*>(monitor), monitor->mutexPtr);
+    CJMutex* mutex = reinterpret_cast<CJMutex*>(mutexObj);
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(mutex));
+    Heap::GetHeap().GetCollector().AddRawPointerObject(from_native_ref(waitQueuePtr));
     bool ret = MonitorWait(mutex, &CastToT<CJWaitQueue*>(waitQueuePtr)->wq, timeout);
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(mutex));
-    Heap::GetHeap().GetCollector().RemoveRawPointerObject(reinterpret_cast<BaseObject*>(waitQueuePtr));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(mutex));
+    Heap::GetHeap().GetCollector().RemoveRawPointerObject(from_native_ref(waitQueuePtr));
     return ret;
 }
 
@@ -629,12 +635,11 @@ bool MCC_IsThreadObjectInited()
 void* MRT_GetCurrentCJThreadObject()
 {
     void* argStart = CJThreadGetArg();
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(
-        &reinterpret_cast<LWTData*>(argStart)->threadObject);
+    RootSlot& root = RootSlotAt(&reinterpret_cast<LWTData*>(argStart)->threadObject);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    auto res = Heap::GetBarrier().ReadStaticRef(*refField);
+    auto res = Heap::GetBarrier().ReadStaticRef(root);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
@@ -650,8 +655,7 @@ void MCC_SetCurrentCJThreadObject(void* ptr)
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
 #endif
-    Heap::GetBarrier().WriteStaticRef(*reinterpret_cast<RefField<false>*>(&data->threadObject),
-        reinterpret_cast<BaseObject*>(ptr));
+    Heap::GetBarrier().WriteStaticRef(RootSlotAt(&data->threadObject), from_native_ref(ptr));
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanRelease(Sanitizer::ReleaseType::K_RELEASE_MERGE);
 #endif
