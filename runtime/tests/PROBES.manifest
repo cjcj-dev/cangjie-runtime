@@ -46,3 +46,4 @@ remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::E
 varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefField false-negative unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
+interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
