@@ -4084,6 +4084,74 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
         current = const_cast<WCollector*>(this)->ForwardObject(target);
     }
     if (current == nullptr) {
+        // fwdnull: classify why ForwardObject returned null on a root (default off).
+        // Gate MRT_GCV2_FWDNULL=1. Answers Q1 ① survivor / ② Admit / ③ mark / ④ Route.
+        static const bool fwdnullOn = []() {
+            const char* v = std::getenv("MRT_GCV2_FWDNULL");
+            return v != nullptr && v[0] == '1' && v[1] == '\0';
+        }();
+        if (fwdnullOn) {
+            static std::atomic<size_t> g_fwdnullN{ 0 };
+            size_t n = g_fwdnullN.fetch_add(1, std::memory_order_relaxed);
+            if (n < 64) {
+                const bool marked = IsMarkedObject(target);
+                const bool survived = IsSurvivedObject(target);
+                const bool ghost = IsGhostFromObject(target);
+                const bool unmov = IsUnmovableFromObject(target);
+                RegionInfo* reg = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+                if (reg == nullptr) {
+                    reg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                }
+                unsigned rs = 0xffu;
+                size_t liveBytes = 0;
+                size_t offset = 0;
+                int live0Surv = -1;
+                int liveSurv = -1;
+                int admitOk = -1;
+                int routeNull = -1;
+                int ghostNull = (reg == nullptr) ? 1 : 0;
+                if (reg != nullptr) {
+                    rs = static_cast<unsigned>(reg->GetRouteState());
+                    liveBytes = reg->GetLiveByteCount();
+                    offset = reg->GetAddressOffset(reinterpret_cast<MAddress>(target));
+                    LiveInfo* g0 = reg->GetLiveInfo0ForProbe();
+                    LiveInfo* li = reg->GetLiveInfo();
+                    live0Surv = (g0 != nullptr && g0->IsSurvivedObject(offset)) ? 1 : 0;
+                    liveSurv = (li != nullptr && li->IsSurvivedObject(offset)) ? 1 : 0;
+                    OptionalRouteTicket ticket = reg->AdmitForRoute(target);
+                    admitOk = ticket ? 1 : 0;
+                    if (ticket) {
+                        BaseObject* to = reg->GetRoute(ticket.value());
+                        routeNull = (to == nullptr) ? 1 : 0;
+                    }
+                }
+                // Classification priority: not-ghost → unmovable → no-region → admit-miss
+                // (survivor-gate) → route-geometry-null → other.
+                const char* why = "other";
+                if (!ghost) {
+                    why = "not_ghost";
+                } else if (unmov) {
+                    why = "unmovable";
+                } else if (reg == nullptr) {
+                    why = "no_ghost_region";
+                } else if (admitOk == 0) {
+                    why = "admit_miss"; // ① survivor gate / liveInfo0
+                } else if (routeNull == 1) {
+                    why = "route_null"; // ④ geometry soft-miss
+                } else if (admitOk == 1 && routeNull == 0) {
+                    why = "route_ok_but_fwd_null"; // exclusive/soft after admit
+                }
+                std::fprintf(stderr,
+                             "[GCV2][fwdnull] n=%zu slot=%p target=%p marked=%d survived=%d "
+                             "ghost=%d unmov=%d ghostNull=%d rs=%u liveBytes=%zu off=%zu "
+                             "live0Surv=%d liveSurv=%d admit=%d routeNull=%d why=%s\n",
+                             n, static_cast<void*>(&root), static_cast<void*>(target),
+                             static_cast<int>(marked), static_cast<int>(survived),
+                             static_cast<int>(ghost), static_cast<int>(unmov), ghostNull, rs,
+                             liveBytes, offset, live0Surv, liveSurv, admitOk, routeNull, why);
+                std::fflush(stderr);
+            }
+        }
         HealRoot(root, from_object(nullptr));
         return false;
     }
