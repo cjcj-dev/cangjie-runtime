@@ -4875,8 +4875,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             GCThreadPool* pregrantPool = pregrantParEnv ? threadPool : nullptr;
             const size_t nPreObj = reachableVec.size();
             const size_t nPreSlot = remsetVec.size();
+            // Default pool is helper=1 (2 workers). Start/Stop around a 13ms FYS0 walk
+            // is a tax (measured +4ms). Parallel only when the pool is already large
+            // (MRT_GCV2_JVM_GC_THREADS=1) and the holder set is big enough to amortize.
+            int32_t pregrantWorkers = 0;
             if (pregrantPool != nullptr) {
-                int32_t workers = pregrantPool->GetMaxThreadNum() + 1;
+                pregrantWorkers = pregrantPool->GetMaxThreadNum() + 1;
+            }
+            const bool usePregrantPar = pregrantPool != nullptr && pregrantWorkers >= 3 && nPreObj >= 4096;
+            if (usePregrantPar) {
+                int32_t workers = pregrantWorkers;
                 if (workers < 1) {
                     workers = 1;
                 }
@@ -4962,8 +4970,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                         break;
                     }
                 }
-                VLOG(REPORT, "[GCV2][pregrant] parallel=1 workers=%d nObj=%zu nSlot=%zu grant=%zu", workers, nPreObj,
-                     nPreSlot, g_installDomainGrant.load(std::memory_order_relaxed));
+                LOG(RTLOG_ERROR, "[GCV2][pregrant] parallel=1 workers=%d nObj=%zu nSlot=%zu grant=%zu", workers,
+                    nPreObj, nPreSlot, g_installDomainGrant.load(std::memory_order_relaxed));
             } else {
                 for (BaseObject* object : reachableVec) {
                     ensureObj(object);
