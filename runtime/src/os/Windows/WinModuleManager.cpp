@@ -40,6 +40,9 @@ struct LdrDataTableEntry {
 
 RuntimeFunction* WinModule::GetRuntimeFunction(Uptr pc) const
 {
+    if (funcTableCount == 0 || funcTable == nullptr) {
+        return nullptr;
+    }
     uint32_t start = 0;
     uint32_t end = funcTableCount - 1;
     uint32_t mid = 0;
@@ -50,6 +53,9 @@ RuntimeFunction* WinModule::GetRuntimeFunction(Uptr pc) const
         } else if (pc - imageBaseStart > funcTable[mid].endAddress) {
             start = mid + 1;
         } else {
+            if (mid == 0) {
+                break;
+            }
             end = mid - 1;
         }
     }
