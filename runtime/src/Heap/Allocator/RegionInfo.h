@@ -1175,6 +1175,17 @@ public:
                     !Heap::IsHeapAddress(tipAddr)) {
                     startOk = true;
                 }
+                // uafclose: after CompactRegion copies survivors and memset free-tail, the
+                // from header at the old address is zeroed. RouteState COMPACTED (and
+                // FORWARDED after VisitLive) still needs Admit so FindToVersion can return
+                // the geometric to — tip is no longer a valid start oracle. Survivor bit
+                // on liveInfo0 is the domain membership proof (VisitLive already walked starts).
+                if (!startOk) {
+                    RouteState rsTip = GetRouteState();
+                    if (rsTip == RouteState::COMPACTED || rsTip == RouteState::FORWARDED) {
+                        startOk = true;
+                    }
+                }
             }
         }
         // Domain-eq probe (admitstart): MRT_GCV2_DOMAINEQ=1. Counts survived-but-not-start

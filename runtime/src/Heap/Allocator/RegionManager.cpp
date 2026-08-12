@@ -1913,6 +1913,17 @@ void RegionManager::CompactRegion(RegionInfo* region)
     MAddress regionLimit = region->GetRegionAllocPtr();
     region->SetRegionAllocPtr(regionStart);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    // uafclose: Admit/GetRoute/VisitLive use liveInfo0 after PrepareForwardable. Compact must
+    // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
+    // can disagree with the ghost face. Wrong face ⇒ copy nothing / wrong set, memset free-tail
+    // that still holds root-named from → leave-alone → reclaim → GetSize UAF (FYS1 deadold).
+    LiveInfo* ghostFace = region->GetLiveInfo0ForProbe();
+    auto survivedAt = [region, ghostFace](size_t offset) -> bool {
+        if (ghostFace != nullptr) {
+            return ghostFace->IsSurvivedObject(offset);
+        }
+        return region->IsSurvivedObject(offset);
+    };
     for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
         BaseObject* currentObj = from_region_addr(currentPtr);
         // getsize7: dense compact walk — same GetSize hazard as VisitLiveObjects.
@@ -1922,7 +1933,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
         size_t size = currentObj->GetSize();
         size_t offset = currentPtr - regionStart;
-        if (region->IsSurvivedObject(offset)) {
+        if (survivedAt(offset)) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
@@ -1984,6 +1995,14 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     MAddress currentPtr = regionStart;
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
+    // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
+    LiveInfo* ghostFace = region->GetLiveInfo0ForProbe();
+    auto survivedAt = [region, ghostFace](size_t offset) -> bool {
+        if (ghostFace != nullptr) {
+            return ghostFace->IsSurvivedObject(offset);
+        }
+        return region->IsSurvivedObject(offset);
+    };
     while (true) {
         CHECK(currentPtr>=regionStart);
         size_t offset = currentPtr - regionStart;
@@ -1991,7 +2010,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             break;
         }
         size_t size = currentObj->GetSize();
-        if (region->IsSurvivedObject(offset)) {
+        if (survivedAt(offset)) {
             MAddress toAddress = toRegion1->Alloc(size);
             if (toAddress == 0) {
                 break;
@@ -2029,7 +2048,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
             break;
         }
         size_t size = currentObj->GetSize();
-        if (region->IsSurvivedObject(offset)) {
+        if (survivedAt(offset)) {
             MAddress toAddress = region->Alloc(size);
             BaseObject* toObj = from_region_addr(toAddress);
             DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
