@@ -38,21 +38,33 @@ U32 GetStrPoolDictSplitSize(U32 TotalSize)
 }
 
 // ULEB: The highest bit of each byte is used to indicate whether the encoding is complete,
-// and the remaining 7 bits are used to represent the integer value
+// and the remaining 7 bits are used to represent the integer value.
+// A uint64 value occupies at most 10 groups (9*7+1). More continuation bytes make
+// `shift` exceed 63 and turn `1 << shift` into C++ undefined behavior (BUG-23).
+// Malformed input returns 0; callers already reject a 0 string-pool index.
 uint64_t ULEBDecodeSingleStr(std::vector<uint8_t>& bytes)
 {
     uint64_t result = 0;
     uint32_t shift = 0;
     constexpr uint8_t IntValueBits = 7;
+    constexpr uint32_t MaxShift = 63;
+    size_t consumed = 0;
     for (auto byte : bytes) {
+        if (shift > MaxShift) {
+            LOG(RTLOG_ERROR, "malformed ULEB encoding in stringpool");
+            bytes.clear();
+            return 0;
+        }
         result |= static_cast<uint64_t>(byte & 0x7f) << shift;
+        ++consumed;
         if ((byte & 0x80) == 0) {
-            break;
+            bytes.erase(bytes.begin(), bytes.begin() + static_cast<std::ptrdiff_t>(consumed));
+            return result;
         }
         shift += IntValueBits;
     }
-    bytes.erase(bytes.begin(), bytes.begin() + (shift / IntValueBits) + 1);
-    return result;
+    bytes.clear();
+    return 0;
 }
 
 CString ULEBDecode(CString& bytes, Uptr offset)

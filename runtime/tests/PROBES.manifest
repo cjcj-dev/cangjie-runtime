@@ -44,5 +44,10 @@ epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C chur
 epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress
 remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::EraseRange
 varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefField false-negative unit
+objm_uleb_overshift_unit.cpp              orphan     no runner; BUG-23 overlong ULEB shift>=70 unit
+objm_nativealloc_zero_unit.cpp            orphan     no runner; BUG-24 NativeAlloc(0) Index underflow unit
+objm_generic_null_ti_unit.cpp             orphan     no runner; BUG-22 constrained generic null TypeInfo unit
+objm_fieldinfo_malloc_unit.cpp            orphan     no runner; BUG-21 FieldInfo malloc-null OOM unit
+objm_same_root_package_unit.cpp           orphan     no runner; SUSPECT-02 IsSameRootPackage NUL walk unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default

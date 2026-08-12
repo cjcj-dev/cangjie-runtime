@@ -13,6 +13,7 @@ namespace MapleRuntime {
 void* ThreadCache::Allocate(size_t bytes)
 {
     // ThreadCache can only allocate object space that is less than or equal to 256KB
+    CHECK(bytes > 0);
     CHECK(bytes <= MAX_BYTES);
     // 1. Determine the size of the aligned small fixed-size memory block and the free list bucket it maps to
     size_t index = SizeManager::Index(bytes);
@@ -30,6 +31,7 @@ void* ThreadCache::Allocate(size_t bytes)
 void ThreadCache::Deallocate(void* ptr, size_t bytes)
 {
     CHECK(ptr != nullptr);
+    CHECK(bytes > 0);
     CHECK(bytes <= MAX_BYTES);
     // 1. Calculate the free list bucket it maps to
     size_t index = SizeManager::Index(bytes);

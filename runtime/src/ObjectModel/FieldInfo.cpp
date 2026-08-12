@@ -57,6 +57,10 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
             return obj;
         }
         void* tmp = malloc(fieldSize);
+        if (tmp == nullptr) {
+            ExceptionManager::OutOfMemory();
+            return nullptr;
+        }
         Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj, fieldAddr, fieldSize);
         Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, fieldSize,
             reinterpret_cast<MAddress>(tmp), fieldSize);
@@ -107,6 +111,10 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
             return;
         }
         void* tmp = malloc(fieldSize);
+        if (tmp == nullptr) {
+            ExceptionManager::OutOfMemory();
+            return;
+        }
         Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj,
             reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize);
         Heap::GetBarrier().WriteStruct(instanceObj, fieldAddr, fieldSize,
