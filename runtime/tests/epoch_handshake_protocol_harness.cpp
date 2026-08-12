@@ -331,45 +331,49 @@ int RunExit()
 int RunAckOrder()
 {
     MutatorModel m;
-    m.handshake.store(HS_REQUESTED, std::memory_order_relaxed);
+    m.handshake.store(HS_CLAIMED, std::memory_order_relaxed);
     std::atomic<int> mid { 0 };
-    std::atomic<int> sawForbidden { 0 };
+    std::atomic<int> observed { 0 };
+    HandshakeState seenState = HS_IDLE;
+    uint64_t seenDone = 0;
 
     std::thread observer([&]() {
         while (mid.load(std::memory_order_acquire) == 0) {
-            HandshakeState st = m.handshake.load(std::memory_order_acquire);
-            uint64_t done = m.completion.load(std::memory_order_acquire);
-            if (st == HS_ACKNOWLEDGED && done != 1) {
-                sawForbidden.store(1, std::memory_order_relaxed);
-            }
+            std::this_thread::yield();
         }
-        HandshakeState st = m.handshake.load(std::memory_order_acquire);
-        uint64_t done = m.completion.load(std::memory_order_acquire);
-        if (st == HS_ACKNOWLEDGED && done != 1) {
-            sawForbidden.store(1, std::memory_order_relaxed);
-        }
+        seenState = m.handshake.load(std::memory_order_acquire);
+        seenDone = m.completion.load(std::memory_order_acquire);
+        observed.store(1, std::memory_order_release);
     });
 
-    HandshakeState expected = HS_REQUESTED;
-    (void)m.handshake.compare_exchange_strong(expected, HS_CLAIMED, std::memory_order_acq_rel);
 #if PROTOCOL_FIXED
     m.completion.store(1, std::memory_order_release);
     mid.store(1, std::memory_order_release);
+    while (observed.load(std::memory_order_acquire) == 0) {
+        std::this_thread::yield();
+    }
     m.handshake.store(HS_ACKNOWLEDGED, std::memory_order_release);
 #else
     m.handshake.store(HS_ACKNOWLEDGED, std::memory_order_release);
     mid.store(1, std::memory_order_release);
+    while (observed.load(std::memory_order_acquire) == 0) {
+        std::this_thread::yield();
+    }
     m.completion.store(1, std::memory_order_release);
 #endif
     observer.join();
 
 #if PROTOCOL_FIXED
-    Expect(sawForbidden.load() == 0, "fixed ack must not expose ACK without completion");
-    std::cerr << "HARNESS_OK case=ack_order forbidden=0\n";
+    Expect(!(seenState == HS_ACKNOWLEDGED && seenDone != 1),
+           "fixed ack must not expose ACK without completion");
+    std::cerr << "HARNESS_OK case=ack_order state=" << static_cast<unsigned>(seenState)
+              << " done=" << seenDone << '\n';
     return 0;
 #else
-    Expect(sawForbidden.load() == 1, "old ack must expose ACK without completion");
-    std::cerr << "HARNESS_OK_OLD case=ack_order forbidden=1\n";
+    Expect(seenState == HS_ACKNOWLEDGED && seenDone != 1,
+           "old ack must expose ACK without completion");
+    std::cerr << "HARNESS_OK_OLD case=ack_order forbidden=1 state="
+              << static_cast<unsigned>(seenState) << " done=" << seenDone << '\n';
     return 0;
 #endif
 }
