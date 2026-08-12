@@ -2152,21 +2152,16 @@ private:
         static size_t totalUnitCount;
 
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
-        // unitzero: OOB caller attribution (ra0/ra1/ra2 + positive in-range counter).
-        // Boundary check itself is not relaxed; this only names who fed the OOB addr.
-        static std::atomic<size_t> g_unitIdxInRangeHits;
         static size_t GetUnitIdxAt(uintptr_t allocAddr)
         {
             if (heapStartAddress <= allocAddr && allocAddr < (heapStartAddress + totalUnitCount * UNIT_SIZE)) {
-                // Positive control: same counter family as OOB so a crash log with
-                // oob_n>0 and inrange_n>0 proves the probe is live (not silent).
-                g_unitIdxInRangeHits.fetch_add(1, std::memory_order_relaxed);
                 return (allocAddr - heapStartAddress) / UNIT_SIZE;
             }
 
             // Named fatal before abort so OOB addresses leave a greppable trail
             // (was bare std::abort; o2fail R3 = 7/17 UNMAPPED SIGABRT with zero text).
-            // unitzero: also emit 3 return addresses + dladdr so 8/8 OOB map to a site.
+            // unitzero: also emit 3 return addresses + dladdr so OOB maps to a site
+            // (cold path only; no hot-path counter).
             void* ra0 = __builtin_return_address(0);
             void* ra1 = nullptr;
             void* ra2 = nullptr;
@@ -2192,12 +2187,11 @@ private:
             if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
                 s2 = di2.dli_sname;
             }
-            size_t inrange = g_unitIdxInRangeHits.load(std::memory_order_relaxed);
             LOG(RTLOG_FATAL,
-                "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) inrange_n=%zu "
+                "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
                 "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
                 allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
-                inrange, ra0, s0, ra1, s1, ra2, s2);
+                ra0, s0, ra1, s1, ra2, s2);
             return 0;
         }
 
