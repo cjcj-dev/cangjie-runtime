@@ -7,6 +7,7 @@
 
 #include "Allocator/RegionManager.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <cstdio>
@@ -14,16 +15,20 @@
 #include <cstring>
 #include <limits>
 #include <unistd.h>
+#include <vector>
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
+#include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
 #include "Collector/Collector.h"
+#include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/HeapWork.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/FlipPromoDiag.h"
@@ -399,8 +404,9 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
             return 0;
         }
     }
+    MRT_PHASE_TIMER("young.pinned_scan");
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    size_t recorded = 0;
+    std::atomic<size_t> recorded{ 0 };
     auto scanRegion = [&rememberedSet, &recorded](RegionInfo* region) {
         if (region == nullptr || region->IsYoungRegion() || region->IsGarbageRegion()) {
             return;
@@ -418,12 +424,70 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
                 if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                     MAddress slot = reinterpret_cast<MAddress>(&field);
                     rememberedSet.Record(slot);
-                    ++recorded;
+                    recorded.fetch_add(1, std::memory_order_relaxed);
                     FlipPromoDiag::NoteBroadRecord(region, slot);
                 }
             });
         });
     };
+    // STW-parallel of the same conservative walk. Record is fetch_or, so order
+    // does not change the remset. Default OFF — mutator-visible state is identical.
+    // Env MRT_GCV2_PINNED_SCAN_PARALLEL=1.
+    static const bool parallelEnv = []() {
+        const char* v = std::getenv("MRT_GCV2_PINNED_SCAN_PARALLEL");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    GCThreadPool* pool = parallelEnv ? Heap::GetHeap().GetCollectorResources().GetThreadPool() : nullptr;
+    if (pool != nullptr) {
+        std::vector<RegionInfo*> regions;
+        auto collect = [&regions](RegionInfo* region) {
+            if (region != nullptr && !region->IsYoungRegion() && !region->IsGarbageRegion()) {
+                regions.push_back(region);
+            }
+        };
+        recentPinnedRegionList.VisitAllRegions(collect);
+        oldPinnedRegionList.VisitAllRegions(collect);
+        rawPointerPinnedRegionList.VisitAllRegions(collect);
+        recentLargeRegionList.VisitAllRegions(collect);
+        oldLargeRegionList.VisitAllRegions(collect);
+        largeTraceRegions.VisitAllRegions(collect);
+        recentFullRegionList.VisitAllRegions(collect);
+        fullTraceRegions.VisitAllRegions(collect);
+        unmovableFromRegionList.VisitAllRegions(collect);
+        fromRegionList.VisitAllRegions(collect);
+        tlRegionList.VisitAllRegions(collect);
+        const size_t n = regions.size();
+        if (n == 0) {
+            return 0;
+        }
+        int32_t workers = pool->GetMaxThreadNum() + 1;
+        if (workers < 1) {
+            workers = 1;
+        }
+        std::atomic<size_t> cursor{ 0 };
+        const size_t chunk = std::max<size_t>(1, (n + static_cast<size_t>(workers) * 4 - 1) /
+                                                    (static_cast<size_t>(workers) * 4 + 1));
+        for (int32_t w = 0; w < workers; ++w) {
+            pool->AddWork(new (std::nothrow) LambdaWork(
+                [&scanRegion, &regions, &cursor, n, chunk](size_t) {
+                    for (;;) {
+                        size_t i0 = cursor.fetch_add(chunk, std::memory_order_relaxed);
+                        if (i0 >= n) {
+                            break;
+                        }
+                        size_t i1 = std::min(i0 + chunk, n);
+                        for (size_t i = i0; i < i1; ++i) {
+                            scanRegion(regions[i]);
+                        }
+                    }
+                }));
+        }
+        pool->Start();
+        pool->WaitFinish();
+        size_t nRec = recorded.load(std::memory_order_relaxed);
+        VLOG(REPORT, "[GCV2][pinned_scan] parallel=1 regions=%zu workers=%d recorded=%zu", n, workers, nRec);
+        return nRec;
+    }
     // All never-young alloc paths + post-promote old holders (IDLE bare-store gap).
     // scanRegion already skips IsYoungRegion, so candidate young lists are free.
     recentPinnedRegionList.VisitAllRegions(scanRegion);
@@ -437,7 +501,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     unmovableFromRegionList.VisitAllRegions(scanRegion);
     fromRegionList.VisitAllRegions(scanRegion);
     tlRegionList.VisitAllRegions(scanRegion);
-    return recorded;
+    return recorded.load(std::memory_order_relaxed);
 }
 
 void RegionInfo::SetYoungRegionFlag(uint8_t flag)
