@@ -1391,8 +1391,19 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
     // when free regions are not enough for allocation
     if (num <= GetInactiveUnitCount()) {
-        uintptr_t addr = inactiveZone.fetch_add(size);
-        if (addr <= regionHeapEnd - size) {
+        // Reserve the extent with CAS. A failed fetch_add reservation cannot be rolled back
+        // with fetch_sub: another thread may have committed a later extent in between, so
+        // subtracting here would move inactiveZone back over that live allocation.
+        uintptr_t addr = inactiveZone.load(std::memory_order_relaxed);
+        bool reserved = false;
+        while (addr <= regionHeapEnd - size) {
+            if (inactiveZone.compare_exchange_weak(addr, addr + size, std::memory_order_acq_rel,
+                                                   std::memory_order_relaxed)) {
+                reserved = true;
+                break;
+            }
+        }
+        if (reserved) {
             region = RegionInfo::InitRegionAt(addr, num, type);
             size_t idx = region->GetUnitIdx();
 #ifdef _WIN64
@@ -1409,8 +1420,6 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 RegionInfo::ClearUnits(idx, num);
             }
             return region;
-        } else {
-            (void)inactiveZone.fetch_sub(size);
         }
     }
 
