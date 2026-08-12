@@ -1765,9 +1765,63 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // every size-walk start is in the re-paint set. nStarts==0: never clear (empty wipe
     // → SEGV si_addr=0x8). Anchor: e32383c9; fe96aab8 partial densify is the wipe root.
     // permwho: which arm this region took. 0=densified 1=gate 2=walk1 3=nStarts0 4=malloc
-    // 5=walk2. Only arm 0 rebuilds both faces from one walk, i.e. only arm 0 leaves the
-    // reservation (counter) and the placement (bitmap prefix-sum) equal by construction.
+    // 5=walk2broke 6=walk2short. Only arm 0 rebuilds both faces from one walk, i.e. only
+    // arm 0 leaves the reservation (counter) and the placement (bitmap prefix-sum) equal
+    // by construction.
+    //
+    // densifydel (G6): apply is gated by MRT_GCV2_DENSIFY=1 (default off = no-op). The walk
+    // still classifies densifyOutcome so census can answer "never finished" under product
+    // default; clearAll/re-MarkBits only runs when the switch is on and the walk completes.
     unsigned densifyOutcome = 1;
+    // densifydel census: always-on atexit histogram (no env gate) — measures product path.
+    static std::atomic<size_t> densifyCensusTotal{ 0 };
+    static std::atomic<size_t> densifyCensusByOutcome[8];
+    static std::atomic<size_t> densifyCensusSumNStarts{ 0 };
+    static std::atomic<size_t> densifyCensusSumFilled{ 0 };
+    static std::atomic<size_t> densifyCensusSumFillWalkObjs{ 0 };
+    static std::atomic<size_t> densifyCensusSumRegionObjs{ 0 };
+    static std::atomic<size_t> densifyCensusPosShort{ 0 };   // filled==nStarts but pos < alloc
+    static std::atomic<size_t> densifyCensusWouldApply{ 0 }; // walk would densify (outcome 0 path)
+    static std::atomic<size_t> densifyCensusApplied{ 0 };
+    static std::atomic<size_t> densifyCensusLastSurv{ 0 };   // last object in region is survivor
+    static std::atomic<bool> densifyCensusAtexit{ false };
+    static const bool densifyApply = []() {
+        // densifydel: default off. MRT_GCV2_DENSIFY=1 re-enables the former product apply.
+        const char* v = std::getenv("MRT_GCV2_DENSIFY");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    {
+        bool expected = false;
+        if (densifyCensusAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr,
+                             "[GCV2][densifydel] atexit total=%zu byOutcome["
+                             "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                             "walk2broke=%zu walk2short=%zu other=%zu] "
+                             "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                             "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                             densifyCensusTotal.load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                             densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                             densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                             densifyCensusSumFilled.load(std::memory_order_relaxed),
+                             densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                             densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                             densifyCensusPosShort.load(std::memory_order_relaxed),
+                             densifyCensusWouldApply.load(std::memory_order_relaxed),
+                             densifyCensusApplied.load(std::memory_order_relaxed),
+                             densifyCensusLastSurv.load(std::memory_order_relaxed),
+                             densifyApply ? 1u : 0u);
+                std::fflush(stderr);
+            });
+        }
+    }
     if (region->IsSmallRegion() && region->GetLiveInfo0ForProbe() != nullptr &&
         !region->IsKnownEmpty()) {
         // densifystack: was size_t startOff/Sz[8192] on stack (~128KiB) → GC worker
@@ -1780,8 +1834,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         uintptr_t allocPtr = region->GetRegionAllocPtr();
         size_t nStarts = 0;
         size_t liveBytes = 0;
+        size_t regionObjs = 0;
         uintptr_t position = regionStart;
         bool fullWalk = true;
+        bool lastSurvived = false;
         while (position < allocPtr) {
             BaseObject* obj = from_region_addr(position);
             if (!Collector::PlausibleManagedObjectGate("tipnull-densify", obj)) {
@@ -1794,9 +1850,13 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                 break;
             }
             size_t offset = position - regionStart;
+            ++regionObjs;
             if (ghost->IsSurvivedObject(offset)) {
                 ++nStarts;
                 liveBytes += allocSize;
+                lastSurvived = true;
+            } else {
+                lastSurvived = false;
             }
             position += allocSize;
         }
@@ -1805,6 +1865,9 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         } else if (nStarts == 0) {
             densifyOutcome = 3;
         }
+        size_t filled = 0;
+        size_t fillWalkObjs = 0;
+        uintptr_t fillEnd = regionStart;
         if (fullWalk && position == allocPtr && nStarts > 0) {
             size_t* startOff = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
             size_t* startSz = static_cast<size_t*>(std::malloc(nStarts * sizeof(size_t)));
@@ -1825,7 +1888,6 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     const char* v = std::getenv("MRT_GCV2_DENSIFY_FULLWALK");
                     return v != nullptr && std::strcmp(v, "1") == 0;
                 }();
-                size_t filled = 0;
                 position = regionStart;
                 while (position < allocPtr && (densifyFullWalk || filled < nStarts)) {
                     BaseObject* obj = from_region_addr(position);
@@ -1839,6 +1901,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                         break;
                     }
                     size_t offset = position - regionStart;
+                    ++fillWalkObjs;
                     if (ghost->IsSurvivedObject(offset) && filled < nStarts) {
                         startOff[filled] = offset;
                         startSz[filled] = allocSize;
@@ -1846,6 +1909,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     }
                     position += allocSize;
                 }
+                fillEnd = position;
                 // permwho: split the two ways the second walk can fail its completeness test.
                 // The loop above stops at `filled < nStarts`, so once every survived start has
                 // been collected it exits with position still short of allocPtr whenever the
@@ -1857,57 +1921,85 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
                     densifyOutcome = 6;
                 }
                 // Second walk must also reach allocPtr with full start set before clearAll.
+                // densifydel: classify would-apply (outcome 0) even when apply switch is off.
                 if (fullWalk && position == allocPtr && filled == nStarts && filled > 0) {
                     densifyOutcome = 0;
-                    auto clearAll = [](RegionBitmap* bm) {
-                        if (bm == nullptr) {
-                            return;
+                    densifyCensusWouldApply.fetch_add(1, std::memory_order_relaxed);
+                    if (densifyApply) {
+                        auto clearAll = [](RegionBitmap* bm) {
+                            if (bm == nullptr) {
+                                return;
+                            }
+                            size_t wc = bm->wordCnt.load(std::memory_order_acquire);
+                            for (size_t i = 0; i < wc; ++i) {
+                                bm->markWords[i].store(0, std::memory_order_relaxed);
+                            }
+                            for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
+                                bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                            }
+                            bm->liveBytes.store(0, std::memory_order_relaxed);
+                        };
+                        clearAll(mb);
+                        clearAll(rb);
+                        size_t regionSize = region->GetGhostRegionSize();
+                        if (regionSize == 0) {
+                            regionSize = region->GetRegionSize();
                         }
-                        size_t wc = bm->wordCnt.load(std::memory_order_acquire);
-                        for (size_t i = 0; i < wc; ++i) {
-                            bm->markWords[i].store(0, std::memory_order_relaxed);
+                        size_t liveBytesFilled = 0;
+                        for (size_t i = 0; i < filled; ++i) {
+                            liveBytesFilled += startSz[i];
+                            if (mb != nullptr) {
+                                (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                            }
                         }
-                        for (uint8_t p = 0; p < RegionBitmap::factor; ++p) {
-                            bm->partLiveBytes[p].store(0, std::memory_order_relaxed);
+                        region->ResetLiveByteCount();
+                        if (liveBytesFilled > 0) {
+                            region->AddLiveByteCount(liveBytesFilled);
                         }
-                        bm->liveBytes.store(0, std::memory_order_relaxed);
-                    };
-                    clearAll(mb);
-                    clearAll(rb);
-                    size_t regionSize = region->GetGhostRegionSize();
-                    if (regionSize == 0) {
-                        regionSize = region->GetRegionSize();
-                    }
-                    size_t liveBytesFilled = 0;
-                    for (size_t i = 0; i < filled; ++i) {
-                        liveBytesFilled += startSz[i];
-                        if (mb != nullptr) {
-                            (void)mb->MarkBits(startOff[i], startSz[i], regionSize);
+                        densifyCensusApplied.fetch_add(1, std::memory_order_relaxed);
+                        static std::atomic<size_t> densifyN{ 0 };
+                        size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
+                        if (dn <= 32) {
+                            LOG(RTLOG_ERROR,
+                                "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu "
+                                "walkEnd=%#zx alloc=%#zx n=%zu (full)",
+                                region, filled, liveBytesFilled, static_cast<size_t>(position),
+                                static_cast<size_t>(allocPtr), dn);
                         }
-                    }
-                    region->ResetLiveByteCount();
-                    if (liveBytesFilled > 0) {
-                        region->AddLiveByteCount(liveBytesFilled);
-                    }
-                    static std::atomic<size_t> densifyN{ 0 };
-                    size_t dn = densifyN.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (dn <= 32) {
-                        LOG(RTLOG_ERROR,
-                            "[GCV2][tipnull] densify region=%p starts=%zu liveBytes=%zu "
-                            "walkEnd=%#zx alloc=%#zx n=%zu (full)",
-                            region, filled, liveBytesFilled, static_cast<size_t>(position),
-                            static_cast<size_t>(allocPtr), dn);
                     }
                 }
             }
             std::free(startOff);
             std::free(startSz);
         }
+        densifyCensusTotal.fetch_add(1, std::memory_order_relaxed);
+        densifyCensusByOutcome[densifyOutcome < 8 ? densifyOutcome : 7].fetch_add(
+            1, std::memory_order_relaxed);
+        densifyCensusSumNStarts.fetch_add(nStarts, std::memory_order_relaxed);
+        densifyCensusSumFilled.fetch_add(filled, std::memory_order_relaxed);
+        densifyCensusSumFillWalkObjs.fetch_add(fillWalkObjs, std::memory_order_relaxed);
+        densifyCensusSumRegionObjs.fetch_add(regionObjs, std::memory_order_relaxed);
+        if (densifyOutcome == 6) {
+            densifyCensusPosShort.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (lastSurvived) {
+            densifyCensusLastSurv.fetch_add(1, std::memory_order_relaxed);
+        }
+        (void)fillEnd;
+        (void)liveBytes;
+    } else {
+        densifyCensusTotal.fetch_add(1, std::memory_order_relaxed);
+        densifyCensusByOutcome[1].fetch_add(1, std::memory_order_relaxed);
     }
     size_t fromBytes = region->GetLiveByteCount();
     // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
     // by bitmap prefix-sum. Nothing compares the two magnitudes; record them here.
-    PermWhoAdmit::NoteRoutePlan(region, fromBytes, densifyOutcome);
+    // densifydel: report applied densify only — would-apply with switch off is not densified.
+    unsigned planOutcome = densifyOutcome;
+    if (densifyOutcome == 0 && !densifyApply) {
+        planOutcome = 7; // would densify, apply switch off
+    }
+    PermWhoAdmit::NoteRoutePlan(region, fromBytes, planOutcome);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);
