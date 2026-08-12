@@ -34,6 +34,7 @@ set(SRC_LIST
     "FlipPromoDiag.cpp"
     "O2ORemsetDiag.cpp"
     "ToverFailDiag.cpp"
+    "OffpastDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
