@@ -187,7 +187,7 @@ public:
         size_t num = LimitSize(alignBytes);
         size_t npage = num * alignBytes;
 
-        npage >>= PAGE_SHIFT;
+        npage = (npage + (1 << PAGE_SHIFT) - 1) >> PAGE_SHIFT;
         if (npage == 0) {
             npage = 1;
         }
