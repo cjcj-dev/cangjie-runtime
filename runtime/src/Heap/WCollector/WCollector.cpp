@@ -2367,7 +2367,6 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
                 // Ghost-only MarkBits must not double-count (FYS0 OverflowException risk).
                 (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
             }
-            }
         }
     }
     g0 = region->GetLiveInfo0ForProbe();
