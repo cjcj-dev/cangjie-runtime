@@ -7,6 +7,7 @@
 
 #include <pthread.h>
 #include <sys/event.h>
+#include <unistd.h>
 #include <cerrno>
 #include <cstdlib>
 #include <fcntl.h>
