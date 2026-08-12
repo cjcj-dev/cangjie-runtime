@@ -358,6 +358,8 @@ void CJThreadStackInfo::GetInfoFromStackTrace(uint32_t* framePcArr, char** funcN
     if (arrIdx == 0 && stackSize > 0) {
         funcNameArr[arrIdx] = GetFuncOrFileNameStr(CString("?"));
         fileNameArr[arrIdx] = GetFuncOrFileNameStr(CString("unknown"));
+        framePcArr[arrIdx] = 0;
+        lineNumberArr[arrIdx] = 0;
         arrIdx = 1;
     }
     realStackSize = arrIdx;
