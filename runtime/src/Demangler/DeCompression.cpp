@@ -711,8 +711,12 @@ void DeCompression<T>::SpanningVarDeclTree()
 {
     this->isRecord = true;
     size_t idx = this->currentIndex;
+    if (idx >= this->decompressed.Length()) {
+        this->isRecord = false;
+        return;
+    }
     size_t change = std::get<0>(UpdateCompressedName(this->decompressed, idx));
-    if (this->decompressed.Length() > 0 && isdigit(this->decompressed[idx])) {
+    if (isdigit(this->decompressed[idx])) {
         idx = ForwardName(this->decompressed, idx);
         if (idx != this->currentIndex && change == 0) {
             std::tuple<size_t, size_t> pos(this->currentIndex, idx - this->currentIndex);
@@ -730,8 +734,7 @@ template<typename T>
 void DeCompression<T>::SpanningFuncDeclTree()
 {
     size_t idx = this->currentIndex;
-    if (this->decompressed.Length() == 0 || (this->decompressed.Length() > 0 &&
-        this->decompressed[idx] == MANGLE_LAMBDA_PREFIX)) {
+    if (idx >= this->decompressed.Length() || this->decompressed[idx] == MANGLE_LAMBDA_PREFIX) {
         return;
     }
     this->isRecord = true;
