@@ -8,6 +8,7 @@
 #include "Collector/Collector.h"
 
 #include <atomic>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 
@@ -94,6 +95,77 @@ bool PlausibleObjGateAccountOn()
 // Raising the floor rejects large-length interiors so TryRecoverInteriorBase can
 // re-host them — does NOT relax the gate (stricter reject set only).
 constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
+
+// gatehot GATEEQUIV: dual-run the pure reject/admit decision under a second independent
+// implementation and count mismatches. Default off. Positive control:
+//   MRT_GCV2_GATEEQUIV_INJECT=1 forces one synthetic mismatch so a silent harness is visible.
+// Report via g_gateEquivMismatch / g_gateEquivChecked (read under MRT_GCV2_GATEEQUIV=1).
+std::atomic<size_t> g_gateEquivMismatch{ 0 };
+std::atomic<size_t> g_gateEquivChecked{ 0 };
+std::atomic<size_t> g_gateEquivInjected{ 0 };
+
+void GateEquivAtexitReport()
+{
+    LOG(RTLOG_ERROR,
+        "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
+        g_gateEquivChecked.load(std::memory_order_relaxed),
+        g_gateEquivMismatch.load(std::memory_order_relaxed),
+        g_gateEquivInjected.load(std::memory_order_relaxed));
+}
+
+bool GateEquivOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_GATEEQUIV");
+        bool enabled = v != nullptr && std::strcmp(v, "1") == 0;
+        if (enabled) {
+            std::atexit(GateEquivAtexitReport);
+        }
+        return enabled;
+    }();
+    return on;
+}
+
+bool GateEquivInjectOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_GATEEQUIV_INJECT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+// Pure predicate copy: same reject set as PlausibleManagedObjectGate, no counters.
+// Used only for GATEEQUIV dual-run. Must track the product gate branch-for-branch.
+bool PlausibleManagedObjectGatePure(BaseObject* obj)
+{
+    if (obj == nullptr) {
+        return false;
+    }
+    if (!Heap::IsHeapAddress(obj)) {
+        return false;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+        region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+        return false;
+    }
+    TypeInfo* tip = obj->GetTypeInfo();
+    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+    if (tipAddr == 0) {
+        return false;
+    }
+    if (tipAddr < kMinPlausibleTypeInfoAddr) {
+        return false;
+    }
+    if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+        return false;
+    }
+    if (Heap::IsHeapAddress(tipAddr)) {
+        return false;
+    }
+    return true;
+}
 
 // interiorsrc2: classify tip word without calling IsVaildType (may SEGV on bad tip).
 bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)
@@ -253,18 +325,36 @@ void Collector::ReportMarkGoodHeapGateCounts()
         g_markGoodHeapGateReject.load(std::memory_order_relaxed));
 }
 
+// gatehot: product path no longer pays a shared-line atomic on every reject.
+// Accounting (total / bysite / byintoff / samples) is entirely behind
+// MRT_GCV2_MARKFLOOR_OBJ_GATE=1 — same switch that already gated SiteBucket.
+// "Did the gate fire?" under product defaults → set that env and read
+// ReportPlausibleManagedObjectGateCounts / [markfloor-obj-gate] reject= lines.
+// Reject/admit predicate is bit-identical (GATEEQUIV); only side-effect counters move.
 bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
 {
     if (obj == nullptr) {
+        if (GateEquivOn()) {
+            g_gateEquivChecked.fetch_add(1, std::memory_order_relaxed);
+            // pure also rejects null — match.
+            if (GateEquivInjectOn() &&
+                g_gateEquivInjected.fetch_add(1, std::memory_order_relaxed) == 0) {
+                g_gateEquivMismatch.fetch_add(1, std::memory_order_relaxed);
+                LOG(RTLOG_ERROR,
+                    "[GCV2][gateequiv] INJECT mismatch site=%s obj=%p product=0 pure=1", site, obj);
+            }
+        }
         return false;
     }
     // gchot: SiteBucket is strstr over 13 tags — only needed for bysite accounting.
     // Product path (MARKFLOOR_OBJ_GATE unset) must not pay strstr on every reject.
     // Reject/admit predicate below is unchanged; GATEEQUIV = identical reject set.
     const bool account = PlausibleObjGateAccountOn();
+    bool product = true;
     if (!Heap::IsHeapAddress(obj)) {
-        size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+        product = false;
         if (account) {
+            size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
             g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
             if (PlausibleObjGateSampleAllowed(32)) {
                 GCPhase phase = Heap::GetHeap().GetGCPhase();
@@ -275,73 +365,95 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                     __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
             }
         }
-        return false;
-    }
-    // sizeguard: work stack may hold a pointer into a FREE/GARBAGE region whose payload
-    // still looks like a valid object (stale tip ⇒ plausible GetSize, but obj+size crosses
-    // regionEnd). Reject before MarkObject/GetSize. Observed: regionType=0 allocPtr=start
-    // bitIdx=510/511 objSize=24 under concurrent stack scan.
-    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
-    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
-        region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
-        size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (account) {
-            g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
-            if (PlausibleObjGateSampleAllowed(48)) {
-                GCPhase phase = Heap::GetHeap().GetGCPhase();
-                unsigned rtype = region == nullptr ? 255U : static_cast<unsigned>(region->GetRegionType());
-                uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
-                LOG(RTLOG_ERROR,
-                    "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=dead-region n=%zu "
-                    "region=%p start=%#zx regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-                    g_gcCount, site, obj, n, region, rstart, rtype, Collector::GetGCPhaseName(phase),
-                    static_cast<unsigned>(phase), __builtin_return_address(0),
-                    __builtin_return_address(1), __builtin_return_address(2));
+    } else {
+        // sizeguard: work stack may hold a pointer into a FREE/GARBAGE region whose payload
+        // still looks like a valid object (stale tip ⇒ plausible GetSize, but obj+size crosses
+        // regionEnd). Reject before MarkObject/GetSize. Observed: regionType=0 allocPtr=start
+        // bitIdx=510/511 objSize=24 under concurrent stack scan.
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+            region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+            product = false;
+            if (account) {
+                size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+                g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+                if (PlausibleObjGateSampleAllowed(48)) {
+                    GCPhase phase = Heap::GetHeap().GetGCPhase();
+                    unsigned rtype = region == nullptr ? 255U : static_cast<unsigned>(region->GetRegionType());
+                    uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p reason=dead-region n=%zu "
+                        "region=%p start=%#zx regionType=%u phase=%s(%u) ra0=%p ra1=%p ra2=%p",
+                        g_gcCount, site, obj, n, region, rstart, rtype, Collector::GetGCPhaseName(phase),
+                        static_cast<unsigned>(phase), __builtin_return_address(0),
+                        __builtin_return_address(1), __builtin_return_address(2));
+                }
+            }
+        } else {
+            // Read tip word only (StateWord load). Do not call IsVaildType / GetSize yet.
+            TypeInfo* tip = obj->GetTypeInfo();
+            uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+            const char* reason = nullptr;
+            if (tipAddr == 0) {
+                reason = "null-tip";
+            } else if (tipAddr < kMinPlausibleTypeInfoAddr) {
+                reason = "tip-small-int";
+            } else if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+                reason = "tip-misaligned";
+            } else if (Heap::IsHeapAddress(tipAddr)) {
+                // TypeInfo lives in binary / TypeInfoManager mmap, never in managed heap.
+                // Heap tip ⇒ interior into another object (classic B-4 shape).
+                reason = "tip-in-heap";
+            }
+            if (reason != nullptr) {
+                product = false;
+                if (account) {
+                    size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
+                    g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
+                    // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
+                    unsigned off = ClassifyInteriorOffset(obj);
+                    g_plausibleObjGateByIntOff[off / 8u < 5u ? off / 8u : 0u].fetch_add(1, std::memory_order_relaxed);
+                    if (PlausibleObjGateSampleAllowed(48)) {
+                        GCPhase phase = Heap::GetHeap().GetGCPhase();
+                        // The region this obj sits in is the join key against [GCRECLAIM][fwd-empty-collect]:
+                        // if the dropped root's region is the one CollectRegion later frees, the "live array
+                        // reclaimed as empty" chain is reconciled rather than inferred. Only the dead-region
+                        // branch above used to print it, and this branch is the one RawArray+8 takes.
+                        uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
+                        // tip-small-int + off=8 ⇒ classic RawArray+8 / &MArray::length.
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p tip=%p reason=%s n=%zu "
+                            "int_off=%u region=%p start=%#zx phase=%s(%u) ra0=%p ra1=%p ra2=%p",
+                            g_gcCount, site, obj, tip, reason, n, off, region, rstart,
+                            Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
+                            __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+                    }
+                }
             }
         }
-        return false;
     }
-    // Read tip word only (StateWord load). Do not call IsVaildType / GetSize yet.
-    TypeInfo* tip = obj->GetTypeInfo();
-    uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-    const char* reason = nullptr;
-    if (tipAddr == 0) {
-        reason = "null-tip";
-    } else if (tipAddr < kMinPlausibleTypeInfoAddr) {
-        reason = "tip-small-int";
-    } else if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
-        reason = "tip-misaligned";
-    } else if (Heap::IsHeapAddress(tipAddr)) {
-        // TypeInfo lives in binary / TypeInfoManager mmap, never in managed heap.
-        // Heap tip ⇒ interior into another object (classic B-4 shape).
-        reason = "tip-in-heap";
-    }
-    if (reason == nullptr) {
-        return true;
-    }
-    size_t n = g_plausibleObjGateReject.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (account) {
-        g_plausibleObjGateBySite[SiteBucket(site)].fetch_add(1, std::memory_order_relaxed);
-        // ⭐ 先无条件（诊断模式下）记 offset，⛔ 再谈采样 —— ⭐ 判据不能建在采样输出上
-        unsigned off = ClassifyInteriorOffset(obj);
-        g_plausibleObjGateByIntOff[off / 8u < 5u ? off / 8u : 0u].fetch_add(1, std::memory_order_relaxed);
-        if (PlausibleObjGateSampleAllowed(48)) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            // The region this obj sits in is the join key against [GCRECLAIM][fwd-empty-collect]:
-            // if the dropped root's region is the one CollectRegion later frees, the "live array
-            // reclaimed as empty" chain is reconciled rather than inferred. Only the dead-region
-            // branch above used to print it, and this branch is the one RawArray+8 takes.
-            uintptr_t rstart = region == nullptr ? 0 : region->GetRegionStart();
-            // tip-small-int + off=8 ⇒ classic RawArray+8 / &MArray::length.
+
+    if (GateEquivOn()) {
+        bool pure = PlausibleManagedObjectGatePure(obj);
+        g_gateEquivChecked.fetch_add(1, std::memory_order_relaxed);
+        bool mismatch = (product != pure);
+        if (GateEquivInjectOn() &&
+            g_gateEquivInjected.fetch_add(1, std::memory_order_relaxed) == 0) {
+            mismatch = true;
             LOG(RTLOG_ERROR,
-                "[GCV2][markfloor-obj-gate] REJECT gc=%zu site=%s obj=%p tip=%p reason=%s n=%zu "
-                "int_off=%u region=%p start=%#zx phase=%s(%u) ra0=%p ra1=%p ra2=%p",
-                g_gcCount, site, obj, tip, reason, n, off, region, rstart,
-                Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-                __builtin_return_address(0), __builtin_return_address(1), __builtin_return_address(2));
+                "[GCV2][gateequiv] INJECT mismatch site=%s obj=%p product=%d pure=%d",
+                site, obj, static_cast<int>(product), static_cast<int>(pure));
+        }
+        if (mismatch) {
+            size_t m = g_gateEquivMismatch.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (m <= 16) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][gateequiv] MISMATCH site=%s obj=%p product=%d pure=%d n=%zu",
+                    site, obj, static_cast<int>(product), static_cast<int>(pure), m);
+            }
         }
     }
-    return false;
+    return product;
 }
 
 BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase)
@@ -351,6 +463,13 @@ BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* known
 
 void Collector::ReportPlausibleManagedObjectGateCounts()
 {
+    if (GateEquivOn()) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
+            g_gateEquivChecked.load(std::memory_order_relaxed),
+            g_gateEquivMismatch.load(std::memory_order_relaxed),
+            g_gateEquivInjected.load(std::memory_order_relaxed));
+    }
     if (!PlausibleObjGateAccountOn()) {
         return;
     }
