@@ -4,16 +4,60 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <cstdlib>
+
+#include "Common/ColourMask.h"
+#include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
+#include "ObjectModel/RefField.inline.h"
+#include "Heap/Verify/PlainCensus.h"
 
 namespace MapleRuntime {
+// COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
+// plaincensus: also feed fail-open writer counters (MRT_GCV2_PLAIN_WRITE_COUNT=1).
+void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
+{
+    static const bool assertOn = []() {
+        const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    static const bool countOn = []() {
+        const char* v = std::getenv("MRT_GCV2_PLAIN_WRITE_COUNT");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    if (LIKELY(!assertOn && !countOn)) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(slot)) {
+        return;
+    }
+    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
+        return;
+    }
+    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+    bool hasColour = (newVal & kColourMask) != 0;
+    bool tagged = ((newVal >> 48) & 1) != 0;
+    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
+    if (!hasColour) {
+        NotePlainHeapWrite(slot, static_cast<uintptr_t>(newVal));
+    }
+    if (LIKELY(!assertOn)) {
+        return;
+    }
+    CHECK_DETAIL(hasColour && (loadGood || tagged),
+                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
+                 "hasColour=%d loadGood=%d tagged=%d",
+                 slot, newVal, hasColour, loadGood, tagged);
+}
+
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -71,7 +115,7 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
-        RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+        HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
         // for each object in array.
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             visitor(arrayContent[i]);
@@ -121,7 +165,7 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
         MRT_ASSERT((alignedStart + contentSize) >= aggEnd, "aggregate element is not align\n");
         MAddress currentAddr = alignedStart;
         for (U64 i = startIndex; (i < arrayLen) && (currentAddr < aggEnd); ++i) {
-            gcTib.ForEachBitmapWord(currentAddr, visitor);
+            gcTib.ForEachBitmapWordInRange(currentAddr, visitor, aggStart, aggEnd);
             currentAddr += contentSize;
         }
     } else {
@@ -171,9 +215,44 @@ bool BaseObject::IsInTraceRegion() const
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
     if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", oldRef.GetFieldValue(), newRef.GetFieldValue());
+        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }
     return false;
 }
 } // namespace MapleRuntime
+
+// Phase B: the read-barrier mask the compiler tests against (see TypeDef.h for why).
+// "All colour bits set" keeps the predicate identical to the shift form it replaces.
+// Phase C: bad = mid-evacuation, or carrying a colour other than the one being handed out.
+// The initial conceptual state is RemappedYoung0 x RemappedOld0, encoded by Remapped00.
+// ⭐⭐⭐ 0809：⭐ 让"⭐ 这枚 .so 是哪个 commit 建的"变成一条 `strings` 能答的问题。
+//   ⛔ 一晚三次：⭐ 修法在源码里，⭐ 而跑的是旧二进制（⭐ 信号死锁修法 · ⭐ opt · ⭐ cjc/std/runtime 三份）
+//   ⇒ ⭐ 而 `.so` 只有 GNU build-id ⇒ ⭐⭐ 能区分两枚，⛔ 说不出来自哪个 commit
+//   ⇒ ⭐ 于是只能靠目录日期猜 —— ⭐⭐ 而 `sdk-stageA2` 目录是 08-07、⭐ 里面的 runtime 更早
+//   ⭐ 判法：`strings <libcangjie-runtime.so> | grep CJRT-COMMIT:`
+#ifndef CJ_RUNTIME_COMMIT
+#define CJ_RUNTIME_COMMIT "unknown"
+#endif
+extern "C" __attribute__((used, visibility("default")))
+const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
+
+extern "C" unsigned long g_cjLoadBadMask =
+    MapleRuntime::TAGGED_BITS_MASK |
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00);
+
+// Mark-good includes load-good plus the current young and old mark epochs. The initial current
+// epochs are *_0, so their *_1 bits are bad (OpenJDK zAddress.cpp:78-87,120-127).
+extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = MapleRuntime::TAGGED_BITS_MASK |
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;
+
+// Store-good = mark-good | current Remembered (initial REMEMBERED_0). Store-bad rejects the
+// other rem bit and all mark-bad bits (OpenJDK zAddress.cpp:83-87).
+// storeGood0 = Remapped00 | MY0 | MO0 | REM0
+// storeBad0  = storeGood0 ^ (REMAP|MY|MO|REM) | TAGGED  — match live set_good_masks shape:
+//              markBad | (REM_MASK & ~currentRem)  with tagged already in markBad.
+extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = MapleRuntime::TAGGED_BITS_MASK |
+    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
+    MapleRuntime::REMEMBERED_1;

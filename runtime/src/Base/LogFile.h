@@ -265,6 +265,11 @@ private:
 
 #define MRT_PHASE_TIMER(...) Timer MRT_pt_##__LINE__(__VA_ARGS__)
 
+// One structured phase record alongside the human-readable line above. The schema, the version
+// and the cycle counter live in Base/GcLog.h; this cannot include it because GcLog.h needs
+// WriteLog from here. Keep the field order identical to GcLog::Phase.
+void EmitPhaseRecord(const char* name, uint64_t us);
+
 class Timer {
 public:
     explicit Timer(const CString& pName, LogType type = REPORT) : name(pName), logType(type)
@@ -280,6 +285,7 @@ public:
             uint64_t stopTime = TimeUtil::MicroSeconds();
             uint64_t diffTime = stopTime - startTime;
             WriteLog(true, logType, "%s time: %sus", name.Str(), Pretty(diffTime).Str());
+            EmitPhaseRecord(name.Str(), diffTime);
         }
     }
 

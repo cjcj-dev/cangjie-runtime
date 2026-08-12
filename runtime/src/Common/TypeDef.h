@@ -12,7 +12,9 @@
 #include <climits>
 
 #include "Base/Macros.h"
+#include "Common/ColourMask.h"  // reference bit layout + g_cjLoadBadMask
 #include "Base/Types.h"
+#include "Common/ColourTypes.h"  // zpointer / zaddress / zaddress_unsafe
 
 // commonly agreed type interfaces for a managed runtime:
 //    they're opaque across modules, but we still want it provides a degree
@@ -21,6 +23,8 @@ namespace MapleRuntime {
 // Those are mostly managed pointer types for GC
 using MAddress = Uptr; // Managed address
 constexpr Uptr NULL_ADDRESS = 0;
+
+
 
 // object model related types
 class BaseObject;

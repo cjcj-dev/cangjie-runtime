@@ -332,10 +332,12 @@ void CjHeapData::ProcessRootLocal()
 
         ProcessStacktrace(recordStackInfo);
         RootVisitor rootVisitor = [this, recordStackInfo](ObjectRef &objRef) {
-            BaseObject* obj = objRef.object;
-            if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            zaddress_unsafe value = objRef.LoadPlain();
+            if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
                 return;
             }
+            // Heap dump runs while these enumerated roots keep their heap targets committed.
+            BaseObject* obj = to_object(safe(value));
             FrameInfo* currentFrame = recordStackInfo->GetCurrentFramePtr();
             CjHeapDataStackFrameId frameId = (currentFrame != nullptr && frames.find(currentFrame) != frames.end())
                 ? frames[currentFrame] : 0;
@@ -352,8 +354,8 @@ void CjHeapData::ProcessRootLocal()
 
 void CjHeapData::ProcessRootGlobal()
 {
-    RefFieldVisitor visitor = [this](RefField<>& refField) {
-        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(refField);
+    RootSlotVisitor visitor = [this](RootSlot& root) {
+        BaseObject* obj = Heap::GetBarrier().ReadStaticRef(root);
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return;
         }
@@ -366,10 +368,12 @@ void CjHeapData::ProcessRootGlobal()
 void CjHeapData::ProcessRootConcurrencyModel()
 {
     RootVisitor visitor = [this](ObjectRef& objRef) {
-        BaseObject* obj = objRef.object;
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        zaddress_unsafe value = objRef.LoadPlain();
+        if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
             return;
         }
+        // The concurrency-model root is locked and retained for this root visit.
+        BaseObject* obj = to_object(safe(value));
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };
@@ -379,10 +383,12 @@ void CjHeapData::ProcessRootConcurrencyModel()
 void CjHeapData::ProcessRootFinalizer()
 {
     RootVisitor visitor = [this](ObjectRef& objRef) {
-        BaseObject* obj = objRef.object;
-        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        zaddress_unsafe value = objRef.LoadPlain();
+        if (is_null(value) || !Heap::IsHeapAddress(reinterpret_cast<void*>(raw(value)))) {
             return;
         }
+        // FinalizerProcessor holds listLock while exposing each retained root.
+        BaseObject* obj = to_object(safe(value));
         DumpObject dumpObject = { obj, TAG_ROOT_UNKNOWN, 0, 0 };
         dumpObjects.push_back(dumpObject);
     };
@@ -548,10 +554,10 @@ void CjHeapData::WriteObjectArray(BaseObject*& obj, const u1 tag)
     // take array length and content.
     MArray* mArray = reinterpret_cast<MArray*>(obj);
     MIndex arrayLengthVal = mArray->GetLength();
-    RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+    HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
     std::vector<BaseObject*> elements(arrayLengthVal);
     for (MIndex i = 0; i < arrayLengthVal; ++i) {
-        elements[i] = arrayContent[i].GetTargetObject();
+        elements[i] = to_object(arrayContent[i].GetTargetObject());
     }
     AddU4(static_cast<u4>(arrayLengthVal));
     AddU4(obj->GetTypeInfo()->GetUUID());
@@ -577,7 +583,7 @@ void CjHeapData::WriteStructArray(BaseObject*& obj, const u1 tag)
     std::vector<BaseObject*> elements;
 
     RefFieldVisitor visitor = [&elements, &num](RefField<>& arrayContent) {
-        elements.push_back(arrayContent.GetTargetObject());
+        elements.push_back(to_object(arrayContent.GetTargetObject()));
         num++;
     };
 
@@ -697,7 +703,7 @@ void CjHeapData::WriteInstance(BaseObject*& obj, const u1 tag)
     std::vector<BaseObject*> elements;
 
     RefFieldVisitor visitor = [&elements, &num](RefField<>& fieldAddr) {
-        elements.push_back(fieldAddr.GetTargetObject());
+        elements.push_back(to_object(fieldAddr.GetTargetObject()));
         num++;
     };
 

@@ -23,6 +23,35 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     return RegionSpace::ShouldEnqueue(obj);
 }
 
+void SatbBuffer::Filter(Node* node)
+{
+    size_t retainedIndex = Node::CONTAINER_CAPACITY;
+    size_t sourceIndex = Node::CONTAINER_CAPACITY;
+    while (sourceIndex != node->index) {
+        BaseObject* obj = node->objectContainer[--sourceIndex];
+        if (Heap::IsHeapAddress(obj) && ShouldEnqueue(obj)) {
+            node->objectContainer[--retainedIndex] = obj;
+        }
+    }
+    while (node->index != retainedIndex) {
+        node->objectContainer[node->index++] = nullptr;
+    }
+}
+
+void SatbBuffer::FlushQueue(Node*& node)
+{
+    if (node == nullptr) {
+        return;
+    }
+    Filter(node);
+    if (node->IsEmpty()) {
+        freeNodes.Push(node);
+    } else {
+        retiredNodes.Push(node);
+    }
+    node = nullptr;
+}
+
 static ImmortalWrapper<WeakRefBuffer> g_weakRefBuffer;
 
 WeakRefBuffer& WeakRefBuffer::Instance() noexcept { return *g_weakRefBuffer; }
