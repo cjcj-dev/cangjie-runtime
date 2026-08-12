@@ -1972,7 +1972,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             std::free(startOff);
             std::free(startSz);
         }
-        densifyCensusTotal.fetch_add(1, std::memory_order_relaxed);
+        size_t cTot = densifyCensusTotal.fetch_add(1, std::memory_order_relaxed) + 1;
         densifyCensusByOutcome[densifyOutcome < 8 ? densifyOutcome : 7].fetch_add(
             1, std::memory_order_relaxed);
         densifyCensusSumNStarts.fetch_add(nStarts, std::memory_order_relaxed);
@@ -1985,11 +1985,66 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         if (lastSurvived) {
             densifyCensusLastSurv.fetch_add(1, std::memory_order_relaxed);
         }
+        // densifydel: heartbeat so timeout kills still leave a sample (atexit may not run).
+        if (cTot == 1 || cTot % 500 == 0) {
+            std::fprintf(stderr,
+                         "[GCV2][densifydel] heartbeat n=%zu byOutcome["
+                         "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                         "walk2broke=%zu walk2short=%zu other=%zu] "
+                         "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                         "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                         cTot,
+                         densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                         densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                         densifyCensusSumFilled.load(std::memory_order_relaxed),
+                         densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                         densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                         densifyCensusPosShort.load(std::memory_order_relaxed),
+                         densifyCensusWouldApply.load(std::memory_order_relaxed),
+                         densifyCensusApplied.load(std::memory_order_relaxed),
+                         densifyCensusLastSurv.load(std::memory_order_relaxed),
+                         densifyApply ? 1u : 0u);
+            std::fflush(stderr);
+        }
         (void)fillEnd;
         (void)liveBytes;
     } else {
-        densifyCensusTotal.fetch_add(1, std::memory_order_relaxed);
+        size_t cTot = densifyCensusTotal.fetch_add(1, std::memory_order_relaxed) + 1;
         densifyCensusByOutcome[1].fetch_add(1, std::memory_order_relaxed);
+        if (cTot == 1 || cTot % 500 == 0) {
+            std::fprintf(stderr,
+                         "[GCV2][densifydel] heartbeat n=%zu byOutcome["
+                         "densified=%zu gate=%zu walk1=%zu nstarts0=%zu malloc=%zu "
+                         "walk2broke=%zu walk2short=%zu other=%zu] "
+                         "sumNStarts=%zu sumFilled=%zu sumFillWalkObjs=%zu sumRegionObjs=%zu "
+                         "posShort=%zu wouldApply=%zu applied=%zu lastSurv=%zu densifyApply=%u\n",
+                         cTot,
+                         densifyCensusByOutcome[0].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[1].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[2].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[3].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[4].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[5].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[6].load(std::memory_order_relaxed),
+                         densifyCensusByOutcome[7].load(std::memory_order_relaxed),
+                         densifyCensusSumNStarts.load(std::memory_order_relaxed),
+                         densifyCensusSumFilled.load(std::memory_order_relaxed),
+                         densifyCensusSumFillWalkObjs.load(std::memory_order_relaxed),
+                         densifyCensusSumRegionObjs.load(std::memory_order_relaxed),
+                         densifyCensusPosShort.load(std::memory_order_relaxed),
+                         densifyCensusWouldApply.load(std::memory_order_relaxed),
+                         densifyCensusApplied.load(std::memory_order_relaxed),
+                         densifyCensusLastSurv.load(std::memory_order_relaxed),
+                         densifyApply ? 1u : 0u);
+            std::fflush(stderr);
+        }
     }
     size_t fromBytes = region->GetLiveByteCount();
     // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
