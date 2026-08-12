@@ -44,15 +44,17 @@ public:
     }
     bool TryLockFuncTable()
     {
-        U8 expectedFlag = flag & 0b11111001;
+        U8 expectedFlag = __atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b11111001;
+        U8 lockedFlag = expectedFlag | 0b00000100;
         return __atomic_compare_exchange_n(&flag, &expectedFlag,
-                                           flag | 0b00000100,    // "bit-1&2 is 10" means funcTable is locked
-                                           false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+                                           lockedFlag,    // "bit-1&2 is 10" means funcTable is locked
+                                           false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     }
     void SetFuncTableUpdated()
     {
+        U8 currentFlag = __atomic_load_n(&flag, __ATOMIC_RELAXED);
         __atomic_store_n(
-            &flag, flag | 0b00000110,    // "bit-1&2 is 11" means updated already
+            &flag, currentFlag | 0b00000110,    // "bit-1&2 is 11" means updated already
             __ATOMIC_RELEASE);
     }
 
