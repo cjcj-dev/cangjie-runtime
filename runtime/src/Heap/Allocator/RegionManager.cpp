@@ -1886,8 +1886,22 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     // (MRT_GCV2_DENSIFY default off). Exit net retained: allLiveBitsHaveReceipt + abandon +
     // AdmitForRoute + VisitLiveObjectsUntilFalse. densifyOutcome always "not densified" (1).
     size_t fromBytes = region->GetLiveByteCount();
-    // permwho: fromBytes sizes the reservation (counter), while GetRoute places each object
-    // by bitmap prefix-sum. Nothing compares the two magnitudes; record them here.
+    // GetRoute (LiveInfo.cpp:15-23) places each survivor by liveInfo0 prefix-sum.
+    // A 1-region plan writes to2=INVALID and to1used=fromBytes. If the bitmap
+    // face is larger than the counter (ghost-only MarkBits never AddLiveByteCount:
+    // EnsureRouteDomainMembership.ghost, youngstatic.pregrant.ghost,
+    // statresid.force_domain.ghost), preLive >= to1used walks into else and
+    // CHECK(toRegion2Idx != INVALID) fires (rareyc C). Size the reservation
+    // by the face GetRoute actually reads. Do not relax that CHECK.
+    LiveInfo* planFace = region->GetLiveInfo0ForProbe();
+    if (planFace == nullptr) {
+        planFace = region->GetLiveInfo();
+    }
+    size_t bitmapLive = (planFace != nullptr) ? planFace->GetBitmapLiveBytes() : 0;
+    if (bitmapLive > fromBytes) {
+        fromBytes = bitmapLive;
+    }
+    // permwho: fromBytes now sizes the reservation to cover the prefix-sum face.
     PermWhoAdmit::NoteRoutePlan(region, fromBytes, /*densifyOutcome=*/1u);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();

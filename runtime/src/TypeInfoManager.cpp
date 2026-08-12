@@ -238,7 +238,6 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
             LoaderManager::GetInstance()->RecordTypeInfo(ti);
         }
         bool needRefresh = ti->NeedRefresh() && !tiDesc->IsIniting();
-        tiDesc->SetTypeInfoStatus(TypeInfoStatus::TYPEINFO_INITED);
         if (UNLIKELY(needRefresh)) {
             CHECK(ti->IsObjectType());
             if (LIKELY(hasExisted)) {
@@ -255,6 +254,7 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
                 CalculateGCTib(ti);
             }
         }
+        tiDesc->SetTypeInfoStatus(TypeInfoStatus::TYPEINFO_INITED);
     } else {
         auto it = nonGenericTypeInfos.find(typeInfoName);
         if (it != nonGenericTypeInfos.end()) {
