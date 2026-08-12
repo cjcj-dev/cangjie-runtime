@@ -219,7 +219,7 @@ void SamplesRecord::AddEmptySample(SampleTask& task)
 
     SetPreviousState(info, FrameType::UNKNOWN);
 
-    IncreaseNodeHitCount(info, ROOT_NODE_ID);
+    IncreaseNodeHitCount(info, IDLE_NODE_ID);
 
     AddSampleNodeId(info, IDLE_NODE_ID);
 
