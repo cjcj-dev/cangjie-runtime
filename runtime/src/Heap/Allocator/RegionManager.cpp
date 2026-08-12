@@ -1392,7 +1392,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // when free regions are not enough for allocation
     if (num <= GetInactiveUnitCount()) {
         uintptr_t addr = inactiveZone.fetch_add(size);
-        if (addr < regionHeapEnd - size) {
+        if (addr <= regionHeapEnd - size) {
             region = RegionInfo::InitRegionAt(addr, num, type);
             size_t idx = region->GetUnitIdx();
 #ifdef _WIN64
