@@ -131,7 +131,17 @@ void TraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, B
 
 void TraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    RememberNewReference(Mutator::GetMutator(), ref);
+    // youngstatic / ZGC SATB: snapshot-at-beginning must retain the *previous* root target.
+    // EnumBarrier::WriteStaticRef already does this; TRACE previously only enqueued `ref`
+    // (RememberNewReference), so a concurrent overwrite of a static root could drop the
+    // pre-write young object from the mark closure while FixMinor still VisitStaticRoots
+    // the slot and ForwardObject-null → HealRoot(null).
+    Mutator* mutator = Mutator::GetMutator();
+    BaseObject* rememberedObject = ReadStaticRef(field);
+    if (rememberedObject != nullptr && mutator != nullptr) {
+        mutator->RememberObjectInSatbBuffer(rememberedObject);
+    }
+    RememberNewReference(mutator, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     StorePlain(field, from_object(ref));
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
@@ -184,7 +194,11 @@ void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen,
 void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
     Mutator* mutator = Mutator::GetMutator();
+    // youngstatic: SATB previous static-struct slots before overwrite (EnumBarrier shape).
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
+        if (mutator != nullptr) {
+            mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
+        }
         MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
         RefField<> srcField(HeapSlotAt<>(src + offset));
         RememberNewReference(mutator, ReadReference(nullptr, srcField));
