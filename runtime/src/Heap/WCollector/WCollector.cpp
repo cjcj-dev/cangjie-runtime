@@ -4842,14 +4842,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // promodomain v1: discharge flip-promoted registry in young.evac_finish (STW).
         // Dual-run: old RecordPromotedCrossGenEdges already ran; domain visitor reconciles.
         if (PromotedRegionDomain::Enabled()) {
+            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
             size_t domainEdges = PromotedRegionDomain::DischargeAll(
-                this,
                 [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
                 [this](RefField<>& field) -> bool { return is_store_good(field); },
                 [this](RefField<>& field, BaseObject* target) {
                     RefField<> coloured = GetAndTryTagRefField(target);
                     field.StoreColoured(coloured.GetFieldValue());
-                });
+                },
+                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
             PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "evac_finish");
             PromotedRegionDomain::DumpProcessTotals("evac_finish");
             VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu promoteReplay=%zu residual=%zu",

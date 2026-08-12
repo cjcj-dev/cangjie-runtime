@@ -17,7 +17,6 @@
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
-#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -222,12 +221,12 @@ void NoteOldProductRecord(MAddress slot)
     g_oldSlots.insert(slot);
 }
 
-size_t DischargeAll(WCollector* collector,
-                    const std::function<BaseObject*(RefField<>&)>& resolve,
+size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                     const std::function<bool(RefField<>&)>& isStoreGood,
-                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood)
+                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood,
+                    const std::function<void(MAddress)>& recordSlot)
 {
-    if (!Enabled() || collector == nullptr) {
+    if (!Enabled()) {
         return 0;
     }
     g_dischargeCalls.fetch_add(1, std::memory_order_relaxed);
@@ -235,7 +234,6 @@ size_t DischargeAll(WCollector* collector,
     static const bool injectUndischarged = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED");
 
     auto t0 = std::chrono::steady_clock::now();
-    RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
     bool skippedOnce = false;
 
@@ -294,7 +292,7 @@ size_t DischargeAll(WCollector* collector,
                     g_skipOneFired.fetch_add(1, std::memory_order_relaxed);
                     return;
                 }
-                rememberedSet.Record(slot);
+                recordSlot(slot);
                 colorStoreGood(field, target);
                 ++recorded;
                 if (ReconcileEnabled()) {

@@ -59,13 +59,14 @@ bool IsRegisteredUndischarged(const RegionInfo* region);
 // Obligation ①: call before reuse / ClearUnits. CHECK if undischarged (when enabled).
 void CheckNotUndischargedForReuse(const RegionInfo* region, const char* site);
 
-// resolve / isStoreGood / colorStoreGood provided by WCollector call site.
+// resolve / isStoreGood / colorStoreGood / recordSlot from WCollector call site
+// (RememberedSet::Record is private to Barrier/WCollector/RegionManager).
 // Visitor = ZGC remap_and_maybe_add_remset: store-good early-exit; else resolve;
 // target still young ⇒ Record + store-good colour.
-size_t DischargeAll(WCollector* collector,
-                    const std::function<BaseObject*(RefField<>&)>& resolve,
+size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                     const std::function<bool(RefField<>&)>& isStoreGood,
-                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood);
+                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood,
+                    const std::function<void(MAddress)>& recordSlot);
 
 // Dual-run: old RecordPromotedCrossGenEdges product edge.
 void NoteOldProductRecord(MAddress slot);
