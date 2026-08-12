@@ -1244,10 +1244,12 @@ void RegionManager::PromoteAllRegions()
     }
 }
 
-RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem)
+RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, bool expectPhysicalMem,
+                                      bool allowSaferegion)
 {
     // a chance to invoke heuristic gc.
-    if (!Heap::GetHeap().IsGcStarted()) {
+    // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
+    if (allowSaferegion && !Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
         size_t heapThreshold = collector.GetGCStats().GetThreshold();
         size_t youngRegionTriggerBytes = 32 * MB;
@@ -1306,11 +1308,15 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 
     // check for allocation since we do not want gc threads and mutators do any harm to each other.
     size_t size = num * RegionInfo::UNIT_SIZE;
-    RequestForRegion(size);
+    // routefix: RequestForRegion may sleep; under ROUTING keep the critical section short.
+    if (allowSaferegion) {
+        RequestForRegion(size);
+    }
 
 #if !defined(__OHOS__)
     size_t gatedBytes = 0;
-    RegionInfo* head = TakeReclaimableGarbageRegion(&gatedBytes);
+    // routefix: ReclaimRegion → AddGarbageUnits ScopedEnterSaferegion; skip under ROUTING.
+    RegionInfo* head = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
     if (head != nullptr) {
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
@@ -1334,7 +1340,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     size_t gatedBytes = GetGatedGarbageBytes();
 #endif
 
-    RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem);
+    RegionInfo* region = freeRegionManager.TakeRegion(num, type, expectPhysicalMem, allowSaferegion);
     if (region != nullptr) {
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
@@ -1699,9 +1705,10 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     TRACE_COUNT("CJRT_GC_unitCapacity", static_cast<size_t>(unitCapacity * decimalPrecision));
 }
 
-RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion)
+RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, bool youngRegion, bool allowSaferegion)
 {
-    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem);
+    RegionInfo* region = TakeRegion(maxUnitCountPerRegion, RegionInfo::UnitRole::SMALL_SIZED_UNITS, expectPhysicalMem,
+                                    allowSaferegion);
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
@@ -2064,8 +2071,10 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     RegionInfo* toRegion1 = buffer->GetRegion();
     CHECK(region != toRegion1);
     bool result;
+    // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
+    // Fail → CompactRegion (same as product null path); geometry still freezes at NoteSeal.
     if (toRegion1 == RegionInfo::NullRegion()) {
-        toRegion1 = AllocateThreadLocalRegion(false, false);
+        toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
             CompactRegion(region);
             toRegion1 = region;
@@ -2113,7 +2122,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         EnlistFullThreadLocalRegion(toRegion1);
     }
 
-    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false);
+    RegionInfo* toRegion2 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
     CHECK(region != toRegion2);
     if (toRegion2 != nullptr) {
         toRegion1->Alloc(usedBytes1);
