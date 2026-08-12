@@ -190,7 +190,9 @@ inline bool IsSameRootPackage(TypeInfo* itf1, TypeInfo* itf2)
     auto name2 = itf2->GetName();
     U32 pos = 0U;
     char ch = name1[pos];
-    while (ch == name2[pos]) {
+    // Stop at NUL: equal names with no '.' / ':' are not a shared root
+    // package, and reading past the terminator is OOB (SUSPECT-02).
+    while (ch != '\0' && ch == name2[pos]) {
         if (ch == '.' || ch == ':') {
             return true;
         }
