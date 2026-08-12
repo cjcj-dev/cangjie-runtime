@@ -122,6 +122,20 @@ public:
         return node;
     }
 
+    bool Remove(K key)
+    {
+        auto it = cache.find(key);
+        if (it == cache.end()) {
+            return false;
+        }
+        DLinkedNode* node = it->second;
+        RemoveNode(node);
+        cache.erase(it);
+        delete node;
+        --size;
+        return true;
+    }
+
 private:
     std::unordered_map<K, DLinkedNode*> cache;
     DLinkedNode* head;
@@ -183,7 +197,9 @@ public:
     void MigrateFromProbationalToProtected(uint32_t key, const std::vector<CString>& value)
     {
         std::pair<uint32_t, std::vector<CString>> valueEliminated = protectedLRU.Put(key, value);
-        probationalLRU.RemoveHead();
+        // Drop this key from probation (map + list + size). RemoveHead only
+        // unlinked the MRU node and left a stale cache entry / leaked node.
+        (void)probationalLRU.Remove(key);
         if (!valueEliminated.second.empty()) {
             probationalLRU.Put(valueEliminated.first, valueEliminated.second);
         }
