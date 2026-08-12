@@ -6,12 +6,185 @@
 
 #include "TracingCollector.h"
 
+#include <cstdlib>
+#include <cstring>
+
+#include "Base/CString.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
+namespace {
+struct SkippedStackMapCounts {
+    std::atomic<size_t> zeroEntries{ 0 };
+    std::atomic<size_t> pcMiss{ 0 };
+    std::atomic<size_t> zeroRootIndices{ 0 };
+};
+
+SkippedStackMapCounts g_skippedStackMapCounts;
+SkippedStackMapCounts g_rootMapMissCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
+
+const bool STRICT_STACKMAP_ENABLED = []() {
+    const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const bool ROOTMAP_MISS_COUNT_ENABLED = []() {
+    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const bool ROOTMAP_MISS_FATAL_ENABLED = []() {
+    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS_FATAL");
+    return value != nullptr && std::strcmp(value, "1") == 0;
+}();
+
+const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
+{
+    switch (reason) {
+        case StackMapInvalidReason::NONE:
+            return "none";
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            return "present-but-zero-entries";
+        case StackMapInvalidReason::PC_MISS:
+            return "pc-miss-exact";
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            return "zero-root-indices";
+    }
+    return "unknown";
+}
+
+void ResetSkippedStackMapCounts()
+{
+    g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.zeroEntries.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.pcMiss.store(0, std::memory_order_relaxed);
+    g_rootMapMissCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
+}
+
+void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
+                       const Mutator& mutator)
+{
+    ++g_currentThreadRootMapMissCount;
+    if (!ROOTMAP_MISS_COUNT_ENABLED && !ROOTMAP_MISS_FATAL_ENABLED) {
+        return;
+    }
+    std::atomic<size_t>* missCount = &g_rootMapMissCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            missCount = &g_rootMapMissCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            missCount = &g_rootMapMissCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            break;
+    }
+    missCount->fetch_add(1, std::memory_order_relaxed);
+    if (ROOTMAP_MISS_FATAL_ENABLED) {
+        CString symbol = frame.GetFuncName();
+        LOG(RTLOG_FATAL,
+            "MRT_GCV2_ROOTMAP_MISS_FATAL=1: reason=%s symbol=%s start_ip=%p frame_ip=%p mutator=%p tid=%u",
+            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), &mutator, mutator.GetTid());
+    }
+}
+
+// Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
+// Default 16 distinct (reason,symbol) pairs; override with MRT_GCV2_SKIPPED_WHO_MAX.
+std::atomic<size_t> g_skippedWhoPrinted{ 0 };
+
+ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP,
+                                          uintptr_t frameIP)
+{
+    std::atomic<size_t>* skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+    switch (reason) {
+        case StackMapInvalidReason::ZERO_ENTRIES:
+            skippedCount = &g_skippedStackMapCounts.zeroEntries;
+            break;
+        case StackMapInvalidReason::PC_MISS:
+            skippedCount = &g_skippedStackMapCounts.pcMiss;
+            break;
+        case StackMapInvalidReason::NONE:
+        case StackMapInvalidReason::ZERO_ROOT_INDICES:
+            skippedCount = &g_skippedStackMapCounts.zeroRootIndices;
+            break;
+    }
+    skippedCount->fetch_add(1, std::memory_order_relaxed);
+
+    // Always-on (cheap): print named identity for first N unique-ish samples so
+    // SKIPPED_PC_MISS is not just a counter. Gate detail volume with env.
+    {
+        size_t maxWho = 16;
+        const char* maxEnv = std::getenv("MRT_GCV2_SKIPPED_WHO_MAX");
+        if (maxEnv != nullptr && maxEnv[0] != '\0') {
+            char* end = nullptr;
+            unsigned long parsed = std::strtoul(maxEnv, &end, 10);
+            if (end != maxEnv) {
+                maxWho = static_cast<size_t>(parsed);
+            }
+        }
+        size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
+        if (printed < maxWho) {
+            if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
+                CString symbol = frame.GetFuncName();
+                uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+                U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+                LOG(RTLOG_ERROR,
+                    "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
+                    "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
+                    StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+                    reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+                    reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
+            }
+        }
+    }
+
+    if (UNLIKELY(STRICT_STACKMAP_ENABLED)) {
+        CString symbol = frame.GetFuncName();
+        LOG(RTLOG_FATAL,
+            "MRT_GC_STRICT_STACKMAP=1: invalid stack map reason=%s symbol=%s start_ip=%p frame_ip=%p",
+            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(), reinterpret_cast<void*>(startIP),
+            reinterpret_cast<void*>(frameIP));
+    }
+}
+
+void ReportSkippedStackMapCounts()
+{
+    size_t zeroEntries = g_skippedStackMapCounts.zeroEntries.load(std::memory_order_relaxed);
+    size_t pcMiss = g_skippedStackMapCounts.pcMiss.load(std::memory_order_relaxed);
+    size_t zeroRootIndices = g_skippedStackMapCounts.zeroRootIndices.load(std::memory_order_relaxed);
+    if (zeroEntries != 0 || pcMiss != 0 || zeroRootIndices != 0) {
+        LOG(RTLOG_ERROR,
+            "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
+            "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
+            zeroEntries, pcMiss, zeroRootIndices);
+    }
+
+    if (ROOTMAP_MISS_COUNT_ENABLED) {
+        size_t rootZeroEntries = g_rootMapMissCounts.zeroEntries.load(std::memory_order_relaxed);
+        size_t rootPcMiss = g_rootMapMissCounts.pcMiss.load(std::memory_order_relaxed);
+        size_t rootOther = g_rootMapMissCounts.zeroRootIndices.load(std::memory_order_relaxed);
+        LOG(RTLOG_ERROR,
+            "[GCV2][rootmap-miss] zero_entries=%zu pc_miss=%zu other=%zu total=%zu "
+            "env=MRT_GCV2_ROOTMAP_MISS=1",
+            rootZeroEntries, rootPcMiss, rootOther, rootZeroEntries + rootPcMiss + rootOther);
+    }
+}
+} // namespace
+
+size_t TracingCollector::CurrentThreadRootMapMissCount()
+{
+    return g_currentThreadRootMapMissCount;
+}
+
 const size_t TracingCollector::MAX_MARKING_WORK_SIZE = 16; // fork task if bigger
 const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking task if smaller
 
@@ -19,7 +192,14 @@ const size_t TracingCollector::MIN_MARKING_WORK_SIZE = 8;  // forbid forking tas
 void StaticRootTable::RegisterRoots(StaticRootArray* addr, U32 size)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
-    gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
+    // L741: map::insert keeps first value; must not inflate totalRootsCount on dup key.
+    auto result = gcRootsBuckets.insert(std::pair<StaticRootArray*, U32>(addr, size));
+    if (!result.second) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::RegisterRoots duplicate key %p size %u (kept size %u); totalRootsCount not increased",
+            addr, size, result.first->second);
+        return;
+    }
     totalRootsCount += size;
 }
 
@@ -27,22 +207,31 @@ void StaticRootTable::UnregisterRoots(StaticRootArray* addr, U32 size)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     auto iter = gcRootsBuckets.find(addr);
-    if (iter != gcRootsBuckets.end()) {
-        gcRootsBuckets.erase(iter);
+    if (iter == gcRootsBuckets.end()) {
+        LOG(RTLOG_ERROR, "StaticRootTable::UnregisterRoots missing key %p size %u", addr, size);
+        return;
+    }
+    if (iter->second != size) {
+        LOG(RTLOG_ERROR,
+            "StaticRootTable::UnregisterRoots size mismatch key %p caller %u registered %u; using registered",
+            addr, size, iter->second);
+        totalRootsCount -= iter->second;
+    } else {
         totalRootsCount -= size;
     }
+    gcRootsBuckets.erase(iter);
 }
 
-void StaticRootTable::VisitRoots(const RefFieldVisitor& visitor)
+void StaticRootTable::VisitRoots(const RootSlotVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(gcRootsLock);
     U32 gcRootsSize = 0;
-    std::unordered_set<RefField<>*> visitedSet;
+    std::unordered_set<RootSlot*> visitedSet;
     for (auto iter = gcRootsBuckets.begin(); iter != gcRootsBuckets.end(); iter++) {
         gcRootsSize = iter->second;
         StaticRootArray* array = iter->first;
         for (USize i = 0; i < gcRootsSize; i++) {
-            RefField<>* root = array->content[i];
+            RootSlot* root = array->content[i];
             // make sure to visit each static root only once time.
             if (!visitedSet.insert(root).second) {
                 continue;
@@ -56,7 +245,7 @@ void ExportRootTable::VisitGCRoots(const RootVisitor& visitor)
 {
     std::lock_guard<std::mutex> lock(tableMutex);
     for (auto &rootInfo : exportRoots) {
-        visitor(reinterpret_cast<ObjectRef&>(rootInfo.exportObj));
+        visitor(rootInfo.exportObj);
     }
 }
 class ConcurrentMarkingWork : public HeapWork {
@@ -116,11 +305,13 @@ public:
                 }
                 // Skip marking the weakRef itself, but trace its children node
                 if (UNLIKELY(obj->IsWeakRef())) {
-                    RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
-                    BaseObject* referent = collector.GetAndTryTagObj(obj, *referentField);
+                    HeapSlot<>& referentField =
+                        HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+                    BaseObject* referent =
+                        collector.GetAndTryTagObj(TracingCollector::RefSlotKind::WEAK_REFERENT, obj, referentField);
                     if (referent != nullptr) {
                         DLOG(TRACE, "trace weakref obj %p ref@%p: 0x%zx", obj, &referent, referent);
-                        collector.TraceObjectRefFields(reinterpret_cast<BaseObject*>(referent), workStack);
+                        collector.TraceObjectRefFields(referent, workStack);
                         WeakRefBuffer::Instance().Insert(obj); // record live weakref objects
                     } // If referent is set to none, the corresponding weakref does not need to be recorded.
                 } else {
@@ -177,11 +368,10 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    RootMap rootMap = builder.Build<RootMap>();
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     DLOG(ENUM, "visit frame 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     auto gcInfo = GCInfoNode::BuildNodeForTrace(startIP, frameIP, frame.mFrame.GetFA());
-    auto slotDebugFunc = [&gcInfo](SlotBias off, const BaseObject* root) {
+    auto slotDebugFunc = [&gcInfo](SlotBias off, BaseObject* root) {
         if (Heap::GetHeap().GetAllocator().IsHeapObject(reinterpret_cast<MAddress>(root))) {
             gcInfo.InsertSlotRoots<true>(off, root);
         } else {
@@ -199,23 +389,92 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     SlotDebugVisitor slotDebugFunc = nullptr;
     RegDebugVisitor regDebugFunc = nullptr;
 #endif
-    if (rootMap.IsValid()) {
-        rootMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!rootMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
+    // gcvroot: optional rich root diagnostics (MRT_GCV2_VERIFY_ROOTS=1). Does not replace CHECKs.
+    if (VerifyRoots::Enabled()) {
+        RootVerifyContext vctx;
+        vctx.phase = "VisitStackRoots";
+        vctx.kind = RootKind::SLOT_STACK;
+        vctx.startIP = startIP;
+        vctx.frameIP = frameIP;
+        vctx.frameFA = frameAddress;
+        static thread_local char gcvrootNameBuf[256];
+        gcvrootNameBuf[0] = '\0';
+        CString fname = frame.GetFuncName();
+        if (fname.Str() != nullptr) {
+            std::strncpy(gcvrootNameBuf, fname.Str(), sizeof(gcvrootNameBuf) - 1);
+            gcvrootNameBuf[sizeof(gcvrootNameBuf) - 1] = '\0';
+            vctx.funcName = gcvrootNameBuf;
+        }
+        SlotDebugVisitor verifySlot = VerifyRoots::MakeSlotDebugVisitor(vctx);
+        RegDebugVisitor verifyReg = VerifyRoots::MakeRegDebugVisitor(vctx);
+#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
+        auto prevSlot = slotDebugFunc;
+        auto prevReg = regDebugFunc;
+        slotDebugFunc = [prevSlot, verifySlot](SlotBias off, BaseObject* root) {
+            verifySlot(off, root);
+            if (prevSlot) {
+                prevSlot(off, root);
+            }
+        };
+        regDebugFunc = [prevReg, verifyReg](RegisterNum i, const BaseObject* root) {
+            verifyReg(i, root);
+            if (prevReg) {
+                prevReg(i, root);
+            }
+        };
+#else
+        slotDebugFunc = verifySlot;
+        regDebugFunc = verifyReg;
+#endif
+    }
+    // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
+    // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
+    if (heapMap.IsValid()) {
+        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForTrace(gcInfo);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
+        // Mark the base of each derived pair. Derived slot itself is not an object root;
+        // leave it for PreForward's derived visitor to rewrite after evacuation.
+        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+            (void)derivedPtr;
+            if (is_null(basePtr)) {
+                return;
+            }
+            // Peel colour if present so gate/PushRoot see the real address.
+            // The stack-map base remains committed until this root pass completes.
+            BaseObject* base = to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
+            if (base == nullptr) {
+                return;
+            }
+            ObjectRef baseRef;
+            StorePlain(baseRef, from_object(base));
+            visitor(baseRef);
+        };
+        heapMap.VisitDerivedPtr(derivedMark, nullptr, regSlotsMap);
+    } else {
+        RecordRootMapMiss(builder.GetInvalidReason(), frame, startIP, frameIP, mutator);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
-    rootMap.RecordCalleeSaved(regSlotsMap);
+    heapMap.RecordCalleeSaved(regSlotsMap);
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
+                                                  const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
+                                                  const FrameInfo& frame, Mutator& mutator)
+{
+    VisitHeapReferencesOnStack(rootVisitor, rootVisitor, derivedPtrVisitor, regSlotsMap, frame, mutator);
+}
+
+void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
+                                                  const RootVisitor& slotRootVisitor,
                                                   const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
                                                   const FrameInfo& frame, Mutator& mutator)
 {
@@ -250,16 +509,18 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(rootVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(rootVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
         heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
+    } else {
+        RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     mutator.PushFrameInfoForFix(infoNode);
@@ -297,7 +558,7 @@ void TracingCollector::EnumConcurrencyModelRoots(RootSet& rootSet) const
 
 void TracingCollector::EnumStaticRoots(RootSet& rootSet) const
 {
-    const RefFieldVisitor& visitor = [&rootSet, this](RefField<>& root) { EnumRefFieldRoot(root, rootSet); };
+    const RootSlotVisitor& visitor = [&rootSet, this](RootSlot& root) { EnumAndTagRawRoot(root, rootSet); };
     VisitStaticRoots(visitor);
 }
 
@@ -460,13 +721,6 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
     constexpr uint64_t maxIterationLoopNum = 1000;
     auto visitSatbObj = [this, &workStack]() {
         WorkStack remarkStack;
-        auto func = [&remarkStack](Mutator& mutator) {
-            const SatbBuffer::Node* node = mutator.GetSatbBufferNode();
-            if (node != nullptr) {
-                const_cast<SatbBuffer::Node*>(node)->GetObjects(remarkStack);
-            }
-        };
-        MutatorManager::Instance().VisitAllMutators(func);
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
@@ -486,6 +740,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "MarkSatbBuffer is done for timeout");
+            visitSatbObj();
             GCThreadPool* threadPool = GetThreadPool();
             WorkStack tmp;
             TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
@@ -514,17 +769,15 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
 {
     workStack.clear();
     RootVisitor func = [&workStack, this](ObjectRef& ref) {
-        RefField<>& refField = reinterpret_cast<RefField<>&>(ref);
-        RefField<> tmpField(refField);
-        BaseObject* finalizerObj = tmpField.GetTargetObject();
+        HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
+        BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
         if (!IsMarkedObject(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             workStack.push_back(finalizerObj);
         }
-        RefField<> newField = GetAndTryTagRefField(finalizerObj);
-        if (tmpField.GetFieldValue() != newField.GetFieldValue() &&
-            refField.CompareExchange(tmpField.GetFieldValue(), newField.GetFieldValue())) {
-            DLOG(FIX, "tag finalizer %p@%p -> %#zx", finalizerObj, &ref, newField.GetFieldValue());
+        if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
+            HealRoot(ref, from_object(finalizerObj));
+            DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
     snapshotFinalizerNum = collectorResources.GetFinalizerProcessor().VisitFinalizers(func);
@@ -617,10 +870,12 @@ ATTR_NO_SANITIZE_ADDRESS
 void TracingCollector::DumpRoots(LogType logType)
 {
     RootVisitor rootVisitor = [this, logType](ObjectRef& ref) {
-        auto obj = ref.object;
-        if (obj == nullptr) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
             return;
         }
+        // DumpRoots is called while the root owner retains the target for inspection.
+        auto obj = to_object(safe(value));
         DLOG(logType, "%p Fast Check %d Accurate Check %d", obj,
              theAllocator.IsHeapAddress(reinterpret_cast<MAddress>(obj)),
              theAllocator.IsHeapObject(reinterpret_cast<MAddress>(obj)));
@@ -633,8 +888,13 @@ void TracingCollector::DumpRoots(LogType logType)
     DLOG(logType, "finalizer processor roots");
     VisitFinalizerRoots(rootVisitor);
 
-    RefFieldVisitor refFieldVisitor = [this, logType](RefField<>& ref) {
-        auto obj = ref.GetTargetObject();
+    RootSlotVisitor rootSlotVisitor = [this, logType](RootSlot& ref) {
+        zaddress_unsafe value = ref.LoadPlain();
+        if (is_null(value)) {
+            return;
+        }
+        // StaticRootTable keeps the referent live while DumpRoots inspects it.
+        auto obj = to_object(safe(value));
         if (obj == nullptr) {
             return;
         }
@@ -644,7 +904,7 @@ void TracingCollector::DumpRoots(LogType logType)
     };
 
     DLOG(logType, "static fields");
-    VisitStaticRoots(refFieldVisitor);
+    VisitStaticRoots(rootSlotVisitor);
 
     DLOG(logType, "Dump GCRoots end");
 }
@@ -652,6 +912,7 @@ void TracingCollector::DumpRoots(LogType logType)
 
 void TracingCollector::PreGarbageCollection(bool isConcurrent)
 {
+    ResetSkippedStackMapCounts();
     VLOG(REPORT, "Begin GC log. GCReason: %s, Current allocated %s, Current threshold %s, current tag %u",
          g_gcRequests[gcReason].name, Pretty(Heap::GetHeap().GetAllocatedSize()).Str(),
          Pretty(Heap::GetHeap().GetCollector().GetGCStats().GetThreshold()).Str(), GetCurrentTagID());
@@ -665,7 +926,9 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 #if defined(__linux__) || defined(hongmeng)
     threadPool->SetPriority(GCPoolThread::GC_THREAD_STW_PRIORITY);
 #endif
-    threadPool->SetMaxActiveThreadNum(threadCount);
+    threadPool->SetMaxActiveThreadNum(threadCount - 1);
+    VLOG(REPORT, "GC active thread count: concurrent=%d total=%d helpers=%d pool-active=%d", isConcurrent,
+         threadCount, threadCount - 1, threadPool->GetMaxActiveThreadNum());
 
     GetGCStats().reason = gcReason;
     GetGCStats().async = !g_gcRequests[gcReason].IsSyncGC();
@@ -678,6 +941,7 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
+    ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
     SatbBuffer::Instance().ReclaimALLPages();
@@ -700,8 +964,12 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
         obj->ForEachRefField([&workStack, obj, this, &externObjs](RefField<>& field) {
             (void)obj;
             RefField<> oldField(field);
-            if (IsCurrentPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
+            // mark-good fast path (zcolor2 @ 84a64e88): already passed this mark epoch.
+            if (is_mark_good(oldField)) {
+                BaseObject* targetObj = to_object(oldField.GetTargetObject());
+                if (!Collector::MarkGoodHeapGate("DFSTraceExportObject", targetObj)) {
+                    return;
+                }
                 if (IsMarkedObject(targetObj)) {
                     return;
                 }
@@ -714,13 +982,9 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                 return;
             }
 
-            BaseObject* latest = nullptr;
-            if (IsOldPointer(oldField)) {
-                BaseObject* targetObj = oldField.GetTargetObject();
-                latest = FindLatestVersion(targetObj);
-            } else {
-                latest = field.GetTargetObject();
-            }
+            // Slow path: load-good + generation route (OpenJDK ZBarrier::make_load_good),
+            // then recolour with current mark/remap. Replaces IsOldPointer/FindLatestVersion.
+            BaseObject* latest = make_load_good(oldField);
 
             // target object could be null or non-heap for some static variable.
             if (!Heap::IsHeapAddress(latest)) {
@@ -733,8 +997,8 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                 DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
                      latest->GetSize());
             } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
-                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, oldField.GetFieldValue(),
-                     newField.GetFieldValue(), latest, latest->GetTypeInfo(), latest->GetSize());
+                DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
+                     raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
             }
 
             if (IsMarkedObject(latest)) {
@@ -798,7 +1062,7 @@ void TracingCollector::EnumAllCommonRoots(GCThreadPool* threadPool, RootSet& roo
     delete[] dynamicRootSets;
 }
 
-void TracingCollector::VisitStaticRoots(const RefFieldVisitor& visitor) const
+void TracingCollector::VisitStaticRoots(const RootSlotVisitor& visitor) const
 {
     Heap::GetHeap().VisitStaticRoots(visitor);
 }

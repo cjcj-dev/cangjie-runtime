@@ -117,6 +117,11 @@ class ForwardDataManager {
 
         void UnbindPreviousLiveInfo();
 
+        uintptr_t GetStartAddress() const { return startAddress; }
+        size_t GetSize() const { return size; }
+        uintptr_t GetZoneStart(Zone::ZoneType type) const { return allocZone[type].zoneStartAddress; }
+        uintptr_t GetZonePos(Zone::ZoneType type) const { return allocZone[type].zonePosition.load(); }
+
     private:
         Zone allocZone[Zone::TOTAL_NUM];
         uintptr_t startAddress = 0;
@@ -146,7 +151,7 @@ public:
 
     void InitializeForwardData();
 
-    void ClearPreviousForwardData() { liveInfoData[GetPreviousTagID()].ReleaseMemory(); }
+    void ClearPreviousForwardData();
 
     RegionBitmap* AllocateRegionBitmap(size_t regionSize)
     {
@@ -164,10 +169,14 @@ public:
             liveInfoData[currentTagID].Allocate(ForwardDataSpace::Zone::ZoneType::LIVE_INFO, sizeof(LiveInfo)));
     }
 
-    uint16_t GetPreviousTagID() const { return currentTagID ^ 1; }
+    uint16_t GetPreviousTagID() const
+    {
+        return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
+    }
 
     void SetTagID(uint16_t id) { currentTagID = id; }
 
+    // Recycle the slot that just left the one-generation window (same timing as N=2).
     void UnbindPreviousLiveInfo() { liveInfoData[GetPreviousTagID()].UnbindPreviousLiveInfo(); }
 
 private:
@@ -184,7 +193,7 @@ private:
         return unitCnt * sizeof(LiveInfo) +
             unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
     }
-    ForwardDataSpace liveInfoData[2];
+    ForwardDataSpace liveInfoData[TAG_ID_COUNT];
     size_t regionUnitCount = 0;
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;

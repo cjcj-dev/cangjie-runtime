@@ -77,14 +77,14 @@ private:
 class StaticRootTable {
 public:
     struct StaticRootArray {
-        RefField<>* content[0];
+        RootSlot* content[0];
     };
 
     StaticRootTable() { totalRootsCount = 0; }
     ~StaticRootTable() = default;
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const RefFieldVisitor& visitor);
+    void VisitRoots(const RootSlotVisitor& visitor);
 
 private:
     std::mutex gcRootsLock;                         // lock gcRootsBuckets
@@ -100,8 +100,8 @@ private:
 };
 
 struct ExportObjectInfo {
-    ExportObjectInfo(BaseObject* obj, bool state) : exportObj(static_cast<ExportObject*>(obj)), activeState(state) {}
-    ExportObject* exportObj = nullptr;
+    ExportObjectInfo(BaseObject* obj, bool state) : activeState(state) { StorePlain(exportObj, from_object(obj)); }
+    RootSlot exportObj;
     bool activeState = true;
 };
 class ExportRootTable {
@@ -115,7 +115,7 @@ public:
         }
         U64 id = accessableId.front();
         accessableId.pop_front();
-        exportRoots[id].exportObj = static_cast<ExportObject*>(exportObj);
+        StorePlain(exportRoots[id].exportObj, from_object(exportObj));
         exportRoots[id].activeState = true;
         return id;
     }
@@ -123,7 +123,7 @@ public:
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (id < exportRoots.size()) {
-            return Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<>&>(exportRoots[id].exportObj));
+            return Heap::GetBarrier().ReadStaticRef(exportRoots[id].exportObj);
         }
         return nullptr;
     }
@@ -131,7 +131,7 @@ public:
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (id < exportRoots.size()) {
-            exportRoots[id].exportObj = nullptr;
+            StorePlain(exportRoots[id].exportObj, zaddress::null);
             exportRoots[id].activeState = true;
             accessableId.push_back(id);
         }
@@ -149,7 +149,8 @@ public:
             return false;
         }
         auto info = exportRoots[id];
-        if (info.exportObj != obj) {
+        // tableMutex excludes GC visitation, so this retained root is live here.
+        if (to_object(safe(info.exportObj.LoadPlain())) != obj) {
             return false;
         }
         return info.activeState;
@@ -168,6 +169,11 @@ class TracingCollector : public Collector {
     friend ConcurrentMarkingWork;
     friend ExportRootsTracingWork;
 public:
+    enum class RefSlotKind : U8 {
+        STRONG,
+        WEAK_REFERENT,
+    };
+
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
         : Collector(), theAllocator(allocator), collectorResources(resources)
     {}
@@ -178,9 +184,14 @@ public:
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
+    static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                            RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+
+    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
+                                           const FrameInfo& frame, Mutator& mutator);
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
@@ -258,12 +269,16 @@ public:
     void DFSTraceExportObject(BaseObject* exportObj);
     virtual bool MarkObject(BaseObject* obj) const
     {
+        // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
+        // WCollector overrides this; keep the base arm safe for non-WCollector builds/tests.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::MarkObject", obj)) {
+            return true;
+        }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        
+        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
         bool marked = regionInfo->MarkObject(obj);
         if (!marked) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -272,16 +287,26 @@ public:
     }
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(BaseObject* obj, RefField<>& field) { std::abort(); }
+    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+    }
+    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");
+    }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
+        // getsize7: same GetSize hazard as MarkObject on the unsized resurrect path.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::ResurrectObject", obj)) {
+            return true;
+        }
+        // livesame: ResurrectObject counts on 0→1 inside.
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -307,7 +332,10 @@ public:
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }
 
     virtual void UpdateGCStats();
-    virtual uint16_t GetCurrentTagID() { std::abort(); }
+    virtual uint16_t GetCurrentTagID()
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
+    }
 
     static const size_t MAX_MARKING_WORK_SIZE;
     static const size_t MIN_MARKING_WORK_SIZE;
@@ -378,7 +406,10 @@ protected:
 
     bool AddConcurrentTracingWork(RootSet& rs);
     void AddExportObjectsTracingWork(RootSet& exportRoots);
-    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const { std::abort(); }
+    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
+    {
+        Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
+    }
 
     void FindUselessExternObjects();
 
@@ -390,7 +421,7 @@ private:
     void EnumFinalizerProcessorRoots(RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
-    void VisitStaticRoots(const RefFieldVisitor& visitor) const;
+    void VisitStaticRoots(const RootSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const RootVisitor& visitor) const;
 };
 } // namespace MapleRuntime
