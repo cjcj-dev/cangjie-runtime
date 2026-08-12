@@ -502,6 +502,7 @@ public:
         SetSafepointStatePtr(nullptr);
         stackWatermark.OnPark();
         if (UNLIKELY((uwContext.GetUnwindContextStatus() == UnwindContextStatus::RISKY) || InSaferegion())) {
+            SetInSaferegion(SaferegionState::SAFE_REGION_TRUE);
             SetEpochHandshakeLifecycle(EPOCH_HANDSHAKE_PARKED);
             return;
         }
