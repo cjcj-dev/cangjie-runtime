@@ -1204,6 +1204,7 @@ int SockSendGeneral(SOCKET fd, const void *buf, unsigned int len, SocketFlag fla
     if (operation == nullptr) {
         ret = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(ret, "get iocp write operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, type);
         return ret;
     }
 
@@ -1254,6 +1255,7 @@ int SockRecvGeneral(SOCKET fd, void *buf, unsigned int len, SocketFlag flags, in
     if (operation == nullptr) {
         ret = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(ret, "update iocp read operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, type);
         return ret;
     }
 
@@ -1305,6 +1307,7 @@ int SockSendtoGeneral(SOCKET fd, void *bufAndLen, SocketFlag flags, const struct
     if (ioperation == nullptr) {
         err = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(err, "get iocp write operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, pollType);
         return err;
     }
 
@@ -1361,6 +1364,7 @@ int SockRecvfromGeneral(SOCKET fd, void *bufAndLen, SocketFlag flags, struct Soc
     if (ioperation == nullptr) {
         err = ERRNO_SOCK_ARG_INVALID;
         LOG_ERROR(err, "update iocp read operation failed , fd: %llu", fd);
+        SchdfdUnlock(fd, pollType);
         return err;
     }
 
