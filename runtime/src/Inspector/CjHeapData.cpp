@@ -754,9 +754,7 @@ void CjHeapData::WriteString()
  */
 void CjHeapData::WriteStackFrame(FrameInfo& frame, uint32_t frameIdx)
 {
-    if (frameIdx > 0 && frame.GetFrameType() == FrameType::NATIVE) {
-        return;
-    }
+    (void)frameIdx;
     if (frame.GetFrameType() == FrameType::MANAGED) {
         StackMetadataHelper stackMetadataHelper(frame);
         lineNumber = stackMetadataHelper.GetLineNumber();
