@@ -344,7 +344,7 @@ size_t DeCompression<T>::ForwardGenericTypes(T& mangled, size_t& cnt, size_t idx
 {
     size_t curCnt = cnt;
     size_t curIdx = ForwardTypes(mangled, cnt, idx + MANGLE_CHAR_LEN);
-    if (curIdx != idx && mangled[curIdx] == END) {
+    if (curIdx != idx && curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -379,12 +379,12 @@ size_t DeCompression<T>::ForwardClassType(T& mangled, size_t& cnt, size_t idx)
         bool isPush = TreeIdMapPushBack(mangled, pos);
         cnt = isPush ? cnt + 1 : cnt;
     }
-    if (mangled[curIdx] == MANGLE_GENERIC_PREFIX) {
+    if (curIdx < mangled.Length() && mangled[curIdx] == MANGLE_GENERIC_PREFIX) {
         size_t genericIdx = ForwardGenericTypes(mangled, cnt, curIdx);
         if (curIdx != genericIdx) {
             return genericIdx;
         }
-    } else if (mangled[curIdx] == END) {
+    } else if (curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -404,7 +404,7 @@ size_t DeCompression<T>::ForwardFunctionType(T& mangled, size_t& cnt, size_t idx
     size_t curCnt = cnt;
     size_t curIdx = ForwardType(mangled, cnt, idx + PREFIX_LEN);
     curIdx = ForwardTypes(mangled, cnt, curIdx);
-    if (curIdx != idx && mangled[curIdx] == END) {
+    if (curIdx != idx && curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -584,6 +584,9 @@ void DeCompression<T>::TreeIdMapAssign(T& mangled, T& mangledCopy, size_t mapId,
 template<typename T>
 size_t DeCompression<T>::ForwardType(T& mangled, size_t& cnt, size_t idx)
 {
+    if (idx >= mangled.Length()) {
+        return idx;
+    }
     char ch = mangled[idx];
     size_t nextIdx = idx;
     size_t curCnt = cnt;
