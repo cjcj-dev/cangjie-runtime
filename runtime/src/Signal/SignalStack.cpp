@@ -299,13 +299,13 @@ void SignalStack::HandlerImpl(void* args)
                 SetHandlingSignal(true);
             }
             // Execute the signal handler
-            if (handler.saSignalAction(signal, siginfo, ucontextRaw)) {
-                SetHandlingSignal(previous_value);
+            bool handled = handler.saSignalAction(signal, siginfo, ucontextRaw);
+            g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
+            SetHandlingSignal(previous_value);
+            if (handled) {
                 ReleaseSignalArgs(signalArgs);
                 return;
             }
-            g_linkedSignalProcmask(SIG_SETMASK, &previous_mask, nullptr);
-            SetHandlingSignal(previous_value);
         }
     }
     int handlerFlags = SignalStack::stacks[signal].sigAction.sa_flags;
