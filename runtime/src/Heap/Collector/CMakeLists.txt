@@ -16,6 +16,7 @@ set(SRC_LIST
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
+    "PromotedRegionDomain.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

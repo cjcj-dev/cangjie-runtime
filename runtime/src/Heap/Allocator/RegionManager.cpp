@@ -31,6 +31,7 @@
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/Zap.h"
+#include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.inline.h"
@@ -301,6 +302,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(slot);
                 ++recorded;
+                // promodomain dual-run: old product edge set for bidirectional reconcile.
+                PromotedRegionDomain::NoteOldProductRecord(slot);
                 FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
                 NotePromoteGapField(object, field, true, false);
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
@@ -1316,6 +1319,8 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                                         static_cast<unsigned int>(head->IsGhostFromRegion()),
                                         static_cast<unsigned int>(head->GetRegionType()),
                                         static_cast<unsigned int>(head->GetRouteState()));
+            // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
+            PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -2474,10 +2479,25 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         return;
     }
 
-    if (!RouteRegion(region)) {
+    // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
+    // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
+    // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
+    // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
+    static const bool forceInPlaceEnv = []() {
+        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    const bool forceInPlace =
+        forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    if (forceInPlace || !RouteRegion(region)) {
         if (youngRegion) {
             // In-place promote (compacted / unrouted): scan before clearing young flag.
+            // promodomain §A.3: register durable domain (default off); old scan stays.
+            // Register only during young GC (discharge runs in young.evac_finish only).
             region->PreserveRetainedLiveInfo();
+            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
+                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+            }
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -2692,7 +2712,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             PermWhoAdmit::NoteAbandon(region, walked, forwarded);
         }
         if (youngRegion) {
+            // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
+            // Register only on young GC (domain discharge is minor-only).
             region->PreserveRetainedLiveInfo();
+            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
+                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+            }
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
