@@ -4149,6 +4149,60 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     // ForwardObject null = movable ghost with no to-version (survivor-gate miss).
     // Drop the edge; do not reinstall the from address that is about to be reclaimed.
     if (current == nullptr) {
+        // concwin: classify which young object Compact/Admit missed (default off).
+        static const bool concwinOn = []() {
+            const char* v = std::getenv("MRT_GCV2_CONCWIN");
+            return v != nullptr && v[0] == '1' && v[1] == '\0';
+        }();
+        if (concwinOn) {
+            static std::atomic<size_t> g_concwinN{ 0 };
+            size_t n = g_concwinN.fetch_add(1, std::memory_order_relaxed);
+            if (n < 32) {
+                RegionInfo* tgtReg = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
+                if (tgtReg == nullptr) {
+                    tgtReg = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                }
+                const char* tgtName = "?";
+                int tgtRaw = -1;
+                int tgtYoung = -1;
+                unsigned rs = 0xffu;
+                size_t off = 0;
+                size_t liveBytes = 0;
+                int live0 = -1;
+                int marked = -1;
+                if (target != nullptr && Heap::IsHeapAddress(target) &&
+                    Collector::PlausibleManagedObjectGate("concwin.target", target)) {
+                    TypeInfo* ti = target->GetTypeInfo();
+                    if (ti != nullptr && ti->GetName() != nullptr) {
+                        tgtName = ti->GetName();
+                    }
+                    tgtRaw = target->IsRawArray() ? 1 : 0;
+                }
+                if (tgtReg != nullptr) {
+                    tgtYoung = tgtReg->IsYoungRegion() ? 1 : 0;
+                    rs = static_cast<unsigned>(tgtReg->GetRouteState());
+                    liveBytes = tgtReg->GetLiveByteCount();
+                    off = tgtReg->GetAddressOffset(reinterpret_cast<MAddress>(target));
+                    LiveInfo* g0 = tgtReg->GetLiveInfo0ForProbe();
+                    live0 = (g0 != nullptr && g0->IsSurvivedObject(off)) ? 1 : 0;
+                    marked = tgtReg->IsMarkedObject(target) ? 1 : 0;
+                }
+                uintptr_t fieldAddr = reinterpret_cast<uintptr_t>(&field);
+                RegionInfo* holderReg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(fieldAddr));
+                size_t fieldOff = 0;
+                int holderYoung = -1;
+                if (holderReg != nullptr) {
+                    fieldOff = holderReg->GetAddressOffset(static_cast<MAddress>(fieldAddr));
+                    holderYoung = holderReg->IsYoungRegion() ? 1 : 0;
+                }
+                std::fprintf(stderr,
+                             "[GCV2][concwin] heap_cas_null n=%zu field=%p fieldOff=%zu holderYoung=%d "
+                             "tgt=%p name=%s raw=%d young=%d rs=%u liveBytes=%zu off=%zu live0=%d marked=%d\n",
+                             n, static_cast<void*>(&field), fieldOff, holderYoung, static_cast<void*>(target),
+                             tgtName, tgtRaw, tgtYoung, rs, liveBytes, off, live0, marked);
+                std::fflush(stderr);
+            }
+        }
         MAddress oldVal = raw(field.GetFieldValue());
         (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(0));
         return false;
@@ -5989,22 +6043,20 @@ void WCollector::DoYoungGarbageCollection()
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
     // Default OFF until STW2 remset/root fixpoint is checksum-clean (see REPORT-youngconc).
     // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
-    // STW1 = prepare + remset drain + root enum; STW2 = concurrent remset drain + re-enum + evacuate.
+    // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
+    // STW2 = concurrent remset drain + re-enum + evacuate.
     static const bool youngConcMark = []() {
         const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
-    if (youngConcMark && stw != nullptr) {
-        // Publish TRACE while mutators are still stopped so resume sees TraceBarrier/SATB.
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
-        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-        stw.reset();
-        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running)");
-    }
     g_minorLedgerCost.Reset();
     g_markInternalCost.Reset();
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
+        // concwin: keep this under STW so the STW1 snapshot is painted before mutators
+        // resume. Prior order released the world first → FixMinor CAS-null of still-live
+        // young Array elems (live0=0) → next TRACE WriteRefField(obj=nil, field=0x10).
+        // ZGC shape: pause_mark_start marks the snapshot; concurrent_mark follows SATB.
         MRT_PHASE_TIMER("young.mark_closure");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
@@ -6052,6 +6104,14 @@ void WCollector::DoYoungGarbageCollection()
                           useBitmapLedger);
     }
     g_markInternalCost.Report("mark_from_remset");
+    if (youngConcMark && stw != nullptr) {
+        // concwin: release only after the STW1 snapshot (roots + remset drain) is marked.
+        // Mutators then run under TraceBarrier/SATB; STW2 still reseals + evacuates.
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        stw.reset();
+        VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running; STW1 snapshot marked)");
+    }
     if (youngConcMark) {
         // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
         CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
