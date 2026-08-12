@@ -85,6 +85,16 @@ bool PlausibleObjGateAccountOn()
     return on;
 }
 
+// Smallest plausible TypeInfo / binary address without touching tip payload.
+//
+// markfloor caught RawArray+8 with small MArray::length (e.g. 0x200) via 64KiB.
+// fys0segv: same interior shape with **large** length (observed tip=0x1fda868 /
+// 0x2793ea8 under e75 ALOT FYS=0 → GetSize SEGV at tip+8, clear_satb young mark).
+// Length is a size count; PIE TypeInfo / TIM mmap live well above 4GiB under ASLR.
+// Raising the floor rejects large-length interiors so TryRecoverInteriorBase can
+// re-host them — does NOT relax the gate (stricter reject set only).
+constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
+
 // gatehot GATEEQUIV: dual-run the pure reject/admit decision under a second independent
 // implementation and count mismatches. Default off. Positive control:
 //   MRT_GCV2_GATEEQUIV_INJECT=1 forces one synthetic mismatch so a silent harness is visible.
@@ -142,16 +152,6 @@ bool PlausibleManagedObjectGatePure(BaseObject* obj)
     }
     return true;
 }
-
-// Smallest plausible TypeInfo / binary address without touching tip payload.
-//
-// markfloor caught RawArray+8 with small MArray::length (e.g. 0x200) via 64KiB.
-// fys0segv: same interior shape with **large** length (observed tip=0x1fda868 /
-// 0x2793ea8 under e75 ALOT FYS=0 → GetSize SEGV at tip+8, clear_satb young mark).
-// Length is a size count; PIE TypeInfo / TIM mmap live well above 4GiB under ASLR.
-// Raising the floor rejects large-length interiors so TryRecoverInteriorBase can
-// re-host them — does NOT relax the gate (stricter reject set only).
-constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
 
 // interiorsrc2: classify tip word without calling IsVaildType (may SEGV on bad tip).
 bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)
