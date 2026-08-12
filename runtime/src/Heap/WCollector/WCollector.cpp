@@ -4134,8 +4134,14 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
         }
         return false;
     }
+    HeapSlot<> oldBits(oldField);
+    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
+    // resolveto: Resolve already rewrote FROM→TO. TO sits in a Compacted ghost
+    // (in-place pack). Forward/Admit indexes liveInfo0 by from-offset — feeding TO
+    // misses → leave-alone. Keep the already-installed to.
+    const bool alreadyTo = (target != oldObj);
     BaseObject* current = target;
-    if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // installdomain: route-domain grant before ForwardObject → GetRoute.
         EnsureRouteDomainMembership(const_cast<WCollector*>(this), target);
         current = const_cast<WCollector*>(this)->ForwardObject(target);
@@ -4209,8 +4215,13 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
         HealRoot(root, from_object(target));
         return false;
     }
+    HeapSlot<> oldBits(to_zpointer(oldValue));
+    BaseObject* oldObj = to_object(oldBits.GetTargetObject());
+    // resolveto: Resolve already remapped FROM→TO. Do not Admit the to-address
+    // against the from-offset bitmap (offpast same-target probe: sameObj=0).
+    const bool alreadyTo = (target != oldObj);
     BaseObject* current = target;
-    if (IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
+    if (!alreadyTo && IsGhostFromObject(target) && !IsUnmovableFromObject(target)) {
         // Last-chance domain paint while FORWARDABLE (grant pass covers the bulk case;
         // this catches roots dirtied after the grant pass or parallel races).
         (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), target);

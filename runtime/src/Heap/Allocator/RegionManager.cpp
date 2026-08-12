@@ -12,8 +12,10 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <unistd.h>
+#include <vector>
 
 #include "Allocator/RegionSpace.h"
 #include "Base/CString.h"
@@ -1827,6 +1829,15 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     PermWhoAdmit::NoteRoutePlan(region, fromBytes, /*densifyOutcome=*/1u);
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     RegionInfo* toRegion1 = buffer->GetRegion();
+    // resolveto / offpast: CompactRegion prepends the still-ghost region as TL and the old
+    // path SetRegion'd it. The next Route then packed a *different* region's survivors into
+    // that Compacted tail. Resolve rewrote roots to those to-addrs; Fix Admit'd them against
+    // the host's from-offset bits (live0Surv=0) → leave-alone → reclaim → GetSize MAPERR.
+    if (toRegion1 != RegionInfo::NullRegion() &&
+        (toRegion1->IsCompacted() || toRegion1->IsGhostFromRegion() || toRegion1 == region)) {
+        buffer->ClearRegion();
+        toRegion1 = RegionInfo::NullRegion();
+    }
     CHECK(region != toRegion1);
     bool result;
     // routefix: already hold ROUTING — allocate without ScopedEnterSaferegion.
@@ -1834,14 +1845,21 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (toRegion1 == RegionInfo::NullRegion()) {
         toRegion1 = AllocateThreadLocalRegion(false, false, /*allowSaferegion=*/false);
         if (toRegion1 == nullptr) {
+            // Publish the in-place plan before Compact so GetRoute dests exist while copying.
+            region->SetRouteInfo(region->GetRegionStart(), fromBytes);
             CompactRegion(region);
             toRegion1 = region;
             result = false;
+            buffer->ClearRegion();
+            DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => compact-in-place %p@[%#zx~%#zx, %#zx)",
+                region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
+                toRegion1->GetRegionStart(), toRegion1->GetRegionStart() + fromBytes, toRegion1->GetRegionEnd());
+            return result;
         } else {
             toRegion1->Alloc(fromBytes);
             result = true;
+            buffer->SetRegion(toRegion1);
         }
-        buffer->SetRegion(toRegion1);
         size_t toRegion1Start = toRegion1->GetRegionStart();
         region->SetRouteInfo(toRegion1Start, fromBytes);
         DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx~%#zx, %#zx)",
@@ -1886,12 +1904,15 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         toRegion1->Alloc(usedBytes1);
         CHECK(toRegion2->Alloc(usedBytes2) != 0);
         result = true;
+        buffer->SetRegion(toRegion2);
     } else {
+        // Publish the split plan before Compact so leftover objects land at GetRoute dests.
+        region->SetRouteInfo(toRegion1Addr, usedBytes1, region->GetUnitIdx());
         CompactRegion(region, toRegion1);
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
+        buffer->ClearRegion();
     }
-    buffer->SetRegion(toRegion2);
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
     region->SetRouteInfo(toRegion1Addr, usedBytes1, toRegion2Idx);
     DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => %p@[%#zx, %#zx~%#zx, %#zx) & %p@[%#zx~%#zx, %#zx)", region,
@@ -1900,6 +1921,84 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         toRegion2->GetRegionStart(), toRegion2->GetRegionStart() + usedBytes2, toRegion2->GetRegionEnd());
     return result;
 }
+
+namespace {
+struct CompactMove {
+    size_t srcOff;
+    size_t size;
+    MAddress dest;
+};
+
+// resolveto: Compact must land each survivor at GetRoute's prefix-sum dest, not at a
+// dense size-walk bump. Resolve/FindToVersion derive TO from liveInfo0 popcount;
+// a dense pack leaves those TOs as holes → next TRACE GetSize MAPERR.
+// Two-pass: plan dests while from tips are intact, snapshot+memset, then copy.
+// 994dca41 copied in place without a snapshot and broke FYS0 (overlapping memmove).
+void CompactApplyRouteMoves(RegionInfo* region, const void* scratch, size_t used,
+                            const std::function<bool(size_t)>& survivedAt,
+                            RememberedSet& rememberedSet, bool youngRegion)
+{
+    std::vector<CompactMove> moves;
+    for (size_t offset = 0; offset < used;) {
+        BaseObject* fromObj = from_region_addr(region->GetRegionStart() + offset);
+        if (!Collector::PlausibleManagedObjectGate("CompactRegion", fromObj)) {
+            break;
+        }
+        size_t size = fromObj->GetSize();
+        if (survivedAt(offset)) {
+            OptionalRouteTicket ticket = region->AdmitForRoute(fromObj);
+            MAddress dest = 0;
+            if (ticket) {
+                BaseObject* planned = region->GetRoute(ticket.value());
+                if (planned != nullptr) {
+                    dest = reinterpret_cast<MAddress>(planned);
+                }
+            }
+            if (dest == 0) {
+                continue;
+            }
+            if (O2ORemsetDiag::Enabled() && !youngRegion) {
+                size_t remIn = 0;
+                MAddress fromStart = reinterpret_cast<MAddress>(fromObj);
+                MAddress fromEnd = fromStart + size;
+                for (MAddress slot : rememberedSet.Snapshot()) {
+                    if (slot >= fromStart && slot < fromEnd) {
+                        ++remIn;
+                    }
+                }
+                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
+            }
+            moves.push_back(CompactMove{ offset, size, dest });
+        }
+        offset += size;
+    }
+    if (used > 0) {
+        CHECK_DETAIL(memset_s(reinterpret_cast<void*>(region->GetRegionStart()), used, 0, used) == EOK,
+                     "compact memset-before-place failed");
+    }
+    region->SetRegionAllocPtr(region->GetRegionStart());
+    for (const CompactMove& m : moves) {
+        const void* src = reinterpret_cast<const void*>(reinterpret_cast<uintptr_t>(scratch) + m.srcOff);
+        CHECK_E(memmove_s(reinterpret_cast<void*>(m.dest), m.size, src, m.size) != EOK,
+                "compact memmove_s fail");
+        BaseObject* toObj = from_region_addr(m.dest);
+        toObj->SetStateCode(ObjectState::NORMAL);
+        BaseObject* fromObj = from_region_addr(region->GetRegionStart() + m.srcOff);
+        DLOG(FORWARD, "compact obj %p(%zu) to %p", fromObj, m.size, toObj);
+        if (O2ORemsetDiag::Enabled()) {
+            O2ORemsetDiag::NoteCompactObjectMove(fromObj, toObj, m.size, youngRegion);
+        }
+        RegionInfo* destReg = RegionInfo::TryGetRegionInfoAt(m.dest);
+        if (destReg == nullptr) {
+            destReg = region;
+        }
+        MAddress next = m.dest + m.size;
+        if (next > destReg->GetRegionAllocPtr()) {
+            destReg->SetRegionAllocPtr(next);
+        }
+    }
+}
+} // namespace
 
 void RegionManager::CompactRegion(RegionInfo* region)
 {
@@ -1913,8 +2012,6 @@ void RegionManager::CompactRegion(RegionInfo* region)
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     MAddress regionLimit = region->GetRegionAllocPtr();
-    region->SetRegionAllocPtr(regionStart);
-    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: Admit/GetRoute/VisitLive use liveInfo0 after PrepareForwardable. Compact must
     // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
     // can disagree with the ghost face. Wrong face ⇒ copy nothing / wrong set, memset free-tail
@@ -1926,37 +2023,17 @@ void RegionManager::CompactRegion(RegionInfo* region)
         }
         return region->IsSurvivedObject(offset);
     };
-    for (MAddress currentPtr = regionStart; currentPtr < regionLimit;) {
-        BaseObject* currentObj = from_region_addr(currentPtr);
-        // getsize7: dense compact walk — same GetSize hazard as VisitLiveObjects.
-        // On reject: stop; leave remaining bytes uncleared beyond current allocPtr rebuild.
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            break;
-        }
-        size_t size = currentObj->GetSize();
-        size_t offset = currentPtr - regionStart;
-        if (survivedAt(offset)) {
-            MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            // Pre-copy remset census at from range (Transfer not wired on this path yet).
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
-        }
-        currentPtr += size;
+    const size_t used = (regionLimit > regionStart) ? static_cast<size_t>(regionLimit - regionStart) : 0;
+    void* scratch = nullptr;
+    if (used > 0) {
+        scratch = std::malloc(used);
+        CHECK_DETAIL(scratch != nullptr, "compact scratch alloc failed size=%zu", used);
+        CHECK_DETAIL(memcpy_s(scratch, used, reinterpret_cast<void*>(regionStart), used) == EOK,
+                     "compact scratch memcpy failed");
+    }
+    CompactApplyRouteMoves(region, scratch, used, survivedAt, rememberedSet, youngRegion);
+    if (scratch != nullptr) {
+        std::free(scratch);
     }
     std::atomic_thread_fence(std::memory_order_release);
 
@@ -1995,9 +2072,6 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         O2ORemsetDiag::NoteCompactCall(/*overload*/ 2, youngRegion);
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-    MAddress currentPtr = regionStart;
-    BaseObject* currentObj = from_region_addr(currentPtr);
-    CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
     LiveInfo* ghostFace = region->GetLiveInfo0ForProbe();
     auto survivedAt = [region, ghostFace](size_t offset) -> bool {
@@ -2006,73 +2080,19 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         }
         return region->IsSurvivedObject(offset);
     };
-    while (true) {
-        CHECK(currentPtr>=regionStart);
-        size_t offset = currentPtr - regionStart;
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            break;
-        }
-        size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
-            MAddress toAddress = toRegion1->Alloc(size);
-            if (toAddress == 0) {
-                break;
-            }
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            std::atomic_thread_fence(std::memory_order_release);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
-        }
-        currentPtr += size;
-        currentObj = from_region_addr(currentPtr);
-    };
-
     MAddress regionLimit = region->GetRegionAllocPtr();
-    region->SetRegionAllocPtr(regionStart);
-    while (currentPtr < regionLimit) {
-        CHECK(currentPtr >= regionStart);
-        size_t offset = currentPtr - regionStart;
-        BaseObject* currentObj = from_region_addr(currentPtr);
-        if (!Collector::PlausibleManagedObjectGate("CompactRegion", currentObj)) {
-            break;
-        }
-        size_t size = currentObj->GetSize();
-        if (survivedAt(offset)) {
-            MAddress toAddress = region->Alloc(size);
-            BaseObject* toObj = from_region_addr(toAddress);
-            DLOG(FORWARD, "compact obj %p<%p>(%zu) to %p", currentObj, currentObj->GetTypeInfo(), size, toObj);
-            if (O2ORemsetDiag::Enabled() && !youngRegion) {
-                size_t remIn = 0;
-                MAddress fromEnd = currentPtr + size;
-                for (MAddress slot : rememberedSet.Snapshot()) {
-                    if (slot >= currentPtr && slot < fromEnd) {
-                        ++remIn;
-                    }
-                }
-                O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
-            }
-            collector.CopyObject(*currentObj, *toObj, size);
-            toObj->SetStateCode(ObjectState::NORMAL);
-            std::atomic_thread_fence(std::memory_order_release);
-            if (O2ORemsetDiag::Enabled()) {
-                O2ORemsetDiag::NoteCompactObjectMove(currentObj, toObj, size, youngRegion);
-            }
-        }
-        currentPtr += size;
+    const size_t used = (regionLimit > regionStart) ? static_cast<size_t>(regionLimit - regionStart) : 0;
+    void* scratch = nullptr;
+    if (used > 0) {
+        scratch = std::malloc(used);
+        CHECK_DETAIL(scratch != nullptr, "compact_partial scratch alloc failed size=%zu", used);
+        CHECK_DETAIL(memcpy_s(scratch, used, reinterpret_cast<void*>(regionStart), used) == EOK,
+                     "compact_partial scratch memcpy failed");
+    }
+    (void)toRegion1;
+    CompactApplyRouteMoves(region, scratch, used, survivedAt, rememberedSet, youngRegion);
+    if (scratch != nullptr) {
+        std::free(scratch);
     }
 
     // clear unused space which is free after compaction.
