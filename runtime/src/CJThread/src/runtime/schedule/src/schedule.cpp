@@ -743,7 +743,10 @@ int ScheduleStart(void)
     if (schedule->state != SCHEDULE_INIT) {
         return ERRNO_SCHD_IS_RUNNING;
     }
-    ScheduleNetpollInit();
+    ret = ScheduleNetpollInit();
+    if (ret != 0) {
+        return ret;
+    }
     if (schedule->scheduleType == SCHEDULE_DEFAULT) {
         ret = SchmonStart(schedule);
         if (ret != 0) {
@@ -792,13 +795,17 @@ bool ScheduleExistTask(void)
 int ScheduleStartNoWait(unsigned long long timeout)
 {
     struct Schedule *schedule;
+    int ret;
 
     schedule = ScheduleGet();
     if (schedule == nullptr || schedule->scheduleType == SCHEDULE_DEFAULT || schedule->state != SCHEDULE_INIT) {
         return ERRNO_SCHD_ATTR_INVALID;
     }
     if (!schedule->noWaitAttr.netpollInit) {
-        ScheduleNetpollInit();
+        ret = ScheduleNetpollInit();
+        if (ret != 0) {
+            return ret;
+        }
         schedule->noWaitAttr.netpollInit = true;
     }
     if (!ScheduleExistTask()) {
