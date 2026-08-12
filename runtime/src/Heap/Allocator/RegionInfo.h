@@ -1144,15 +1144,79 @@ public:
         metadata.routeInfo.SetRouteInfo(to1, to1used, to2);
     }
 
-    // Sole mint of RouteTicket. Guard logic = former GetRoute(BaseObject*) domain check
-    // (IsSurvivedObject on liveInfo0). Miss = empty OptionalRouteTicket; never silent derive.
+    // Sole mint of RouteTicket. Guard = survived on liveInfo0 AND object start.
+    // MarkBits paints multi-byte ranges (LiveInfo.h MarkBits); IsSurvivedObject(interior)
+    // is true for every 8B covered by a marked object, but VisitLive/Copy only run on
+    // size-walk starts (RegionManager.cpp VisitLiveObjectsUntilFalse). Admit⊃Copy at
+    // address granularity is the permanent hole (permrate/permwho). ROUTE_DOMAIN.md §0-②.
+    // Start predicate = tip word looks like TypeInfo (same reject set as
+    // PlausibleManagedObjectGate tip arm) — interiors carry field data, not TypeInfo*.
+    // Miss = empty OptionalRouteTicket; never silent derive.
     // Anchor: ops/design/ROUTE_DOMAIN.md §2; former guard RegionInfo.h GetRoute.
     ATTR_WARN_UNUSED OptionalRouteTicket AdmitForRoute(BaseObject* fromObj)
     {
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
         size_t offset = GetAddressOffset(fromAddress);
         LiveInfo* ghostLiveInfo = metadata.liveInfo0;
-        if (ghostLiveInfo == nullptr || !ghostLiveInfo->IsSurvivedObject(offset)) {
+        bool survived = ghostLiveInfo != nullptr && ghostLiveInfo->IsSurvivedObject(offset);
+        // Large region: single object at start; tip check is the start test for small.
+        bool startOk = false;
+        if (survived) {
+            if (IsLargeRegion()) {
+                startOk = (offset == 0);
+            } else if (fromObj != nullptr) {
+                // Tip-only read (StateWord). No IsVaildType / GetSize — same shape as
+                // Collector::PlausibleManagedObjectGate tip arm (Collector.cpp).
+                TypeInfo* tip = fromObj->GetTypeInfo();
+                uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
+                constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
+                if (tipAddr != 0 && tipAddr >= kMinPlausibleTypeInfoAddr &&
+                    (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 &&
+                    !Heap::IsHeapAddress(tipAddr)) {
+                    startOk = true;
+                }
+            }
+        }
+        // Domain-eq probe (admitstart): MRT_GCV2_DOMAINEQ=1. Counts survived-but-not-start
+        // (would-have-been-Admit under old multi-bit guard). Product fix rejects those.
+        // Inject: MRT_GCV2_DOMAINEQ_INJECT=1 forces one synthetic interior count so a silent
+        // harness is visible. Default off — zero product side effect.
+        static const int domainEqMode = []() {
+            const char* v = std::getenv("MRT_GCV2_DOMAINEQ");
+            if (v != nullptr && v[0] == '1' && v[1] == '\0') {
+                return 1;
+            }
+            return 0;
+        }();
+        if (domainEqMode != 0) {
+            static std::atomic<size_t> g_deAdmitOk{ 0 };
+            static std::atomic<size_t> g_deSurvivedNotStart{ 0 };
+            static std::atomic<size_t> g_deInject{ 0 };
+            static std::atomic<bool> g_deAtexit{ false };
+            bool expect = false;
+            if (g_deAtexit.compare_exchange_strong(expect, true, std::memory_order_relaxed)) {
+                std::atexit([]() {
+                    const char* inj = std::getenv("MRT_GCV2_DOMAINEQ_INJECT");
+                    if (inj != nullptr && inj[0] == '1' && inj[1] == '\0') {
+                        g_deInject.store(1, std::memory_order_relaxed);
+                        g_deSurvivedNotStart.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    std::fprintf(stderr,
+                                 "[GCV2][domaineq] admitOk=%zu survivedNotStart=%zu inject=%zu "
+                                 "env=MRT_GCV2_DOMAINEQ=1\n",
+                                 g_deAdmitOk.load(std::memory_order_relaxed),
+                                 g_deSurvivedNotStart.load(std::memory_order_relaxed),
+                                 g_deInject.load(std::memory_order_relaxed));
+                    std::fflush(stderr);
+                });
+            }
+            if (survived && startOk) {
+                g_deAdmitOk.fetch_add(1, std::memory_order_relaxed);
+            } else if (survived && !startOk) {
+                g_deSurvivedNotStart.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        if (!survived || !startOk) {
             // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
             // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
             static const bool nullRouteDiag = []() {
