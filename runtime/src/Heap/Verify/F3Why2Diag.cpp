@@ -268,7 +268,7 @@ void NoteCollectEnter(RegionInfo* region)
                      static_cast<unsigned>(young), static_cast<unsigned>(large),
                      static_cast<unsigned long long>(liveBytes), static_cast<unsigned>(auth),
                      static_cast<unsigned>(knownEmpty), static_cast<unsigned>(neverExamined), mb, validObjs, markedObjs,
-                     g_gcCount);
+                     g_gcCount.load(std::memory_order_relaxed));
         std::fflush(stderr);
     }
 }
@@ -330,7 +330,7 @@ void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
                      static_cast<unsigned>(latestRegion->GetRouteState()),
                      static_cast<unsigned long long>(liveBytes), static_cast<unsigned>(auth),
                      static_cast<unsigned>(knownEmpty), latestRegion->GetMarkBitmap(), validObjs, markedObjs, objMarked,
-                     g_gcCount);
+                     g_gcCount.load(std::memory_order_relaxed));
         std::fflush(stderr);
     }
 }

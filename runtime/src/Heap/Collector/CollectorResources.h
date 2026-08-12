@@ -46,9 +46,9 @@ public:
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
 
-    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_relaxed); }
+    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_acquire); }
 
-    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_relaxed); }
+    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_release); }
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
 

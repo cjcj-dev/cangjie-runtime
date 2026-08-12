@@ -953,7 +953,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
                      target, &field, obj, static_cast<unsigned>(targetInHeap), static_cast<unsigned>(holderInHeap),
                      static_cast<unsigned>(targetInGhost), targetInGhost ? "ghost" : "current", targetCurrent,
                      targetGhost, selectedTargetRegion, Collector::GetGCPhaseName(phase), static_cast<unsigned>(phase),
-                     g_gcCount, static_cast<unsigned long long>(gcStartNs));
+                     g_gcCount.load(std::memory_order_relaxed), static_cast<unsigned long long>(gcStartNs));
                 dumpRegion("target_current_pre_find", target, targetCurrent);
                 dumpRegion("target_ghost_pre_find", target, targetGhost);
                 dumpRegion("holder_current", obj, holderCurrent);

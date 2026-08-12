@@ -100,55 +100,86 @@ private:
 };
 
 struct ExportObjectInfo {
-    ExportObjectInfo(BaseObject* obj, bool state) : activeState(state) { StorePlain(exportObj, from_object(obj)); }
+    ExportObjectInfo(BaseObject* obj, bool state) : generation(1), occupied(true), activeState(state)
+    {
+        StorePlain(exportObj, from_object(obj));
+    }
     RootSlot exportObj;
+    U32 generation = 0;
+    bool occupied = false;
     bool activeState = true;
 };
 class ExportRootTable {
 public:
+    static constexpr U32 HANDLE_INDEX_BITS = 32;
+
+    static U64 PackExportHandle(U32 index, U32 generation)
+    {
+        return (static_cast<U64>(generation) << HANDLE_INDEX_BITS) | static_cast<U64>(index);
+    }
+    static U32 ExportHandleIndex(U64 handle) { return static_cast<U32>(handle); }
+    static U32 ExportHandleGeneration(U64 handle) { return static_cast<U32>(handle >> HANDLE_INDEX_BITS); }
+
     U64 RegisterExportRoot(BaseObject* exportObj)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (accessableId.empty()) {
             exportRoots.emplace_back(exportObj, true);
-            return exportRoots.size() - 1;
+            U32 index = static_cast<U32>(exportRoots.size() - 1);
+            return PackExportHandle(index, exportRoots[index].generation);
         }
-        U64 id = accessableId.front();
+        U64 index = accessableId.front();
         accessableId.pop_front();
-        StorePlain(exportRoots[id].exportObj, from_object(exportObj));
-        exportRoots[id].activeState = true;
-        return id;
+        ExportObjectInfo& slot = exportRoots[index];
+        U32 nextGen = slot.generation + 1;
+        if (nextGen == 0) {
+            nextGen = 1;
+        }
+        slot.generation = nextGen;
+        StorePlain(slot.exportObj, from_object(exportObj));
+        slot.occupied = true;
+        slot.activeState = true;
+        return PackExportHandle(static_cast<U32>(index), nextGen);
     }
-    BaseObject* GetExportRoot(U64 id)
+    BaseObject* GetExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id < exportRoots.size()) {
-            return Heap::GetBarrier().ReadStaticRef(exportRoots[id].exportObj);
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return nullptr;
         }
-        return nullptr;
+        return Heap::GetBarrier().ReadStaticRef(exportRoots[index].exportObj);
     }
-    void RemoveExportRoot(U64 id)
+    void RemoveExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id < exportRoots.size()) {
-            StorePlain(exportRoots[id].exportObj, zaddress::null);
-            exportRoots[id].activeState = true;
-            accessableId.push_back(id);
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return;
         }
+        StorePlain(exportRoots[index].exportObj, zaddress::null);
+        exportRoots[index].occupied = false;
+        exportRoots[index].activeState = true;
+        accessableId.push_back(index);
     }
     void VisitGCRoots(const RootVisitor& visitor);
-    void SetActiveState(U64 id, bool state)
+    void SetActiveState(U64 handle, bool state)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        exportRoots[id].activeState = state;
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return;
+        }
+        exportRoots[index].activeState = state;
     }
-    bool CheckActiveState(U64 id, BaseObject* obj)
+    bool CheckActiveState(U64 handle, BaseObject* obj)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id >= exportRoots.size()) {
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
             return false;
         }
-        auto info = exportRoots[id];
+        auto info = exportRoots[index];
         // tableMutex excludes GC visitation, so this retained root is live here.
         if (to_object(safe(info.exportObj.LoadPlain())) != obj) {
             return false;
@@ -156,6 +187,27 @@ public:
         return info.activeState;
     }
 private:
+    bool ResolveLiveIndex(U64 handle, U64& index) const
+    {
+        U32 rawIndex = ExportHandleIndex(handle);
+        U32 generation = ExportHandleGeneration(handle);
+        if (rawIndex >= exportRoots.size()) {
+            return false;
+        }
+        const ExportObjectInfo& slot = exportRoots[rawIndex];
+        if (!slot.occupied) {
+            return false;
+        }
+        // Packed MCC handles carry a non-zero generation. ExportObject::GetId is a
+        // U32 slot index used by the OHOS cycle resolver; accept that raw index
+        // only while the slot is occupied (object identity is checked by caller).
+        if (generation != 0 && generation != slot.generation) {
+            return false;
+        }
+        index = rawIndex;
+        return true;
+    }
+
     std::mutex tableMutex;
     std::vector<ExportObjectInfo> exportRoots;
     std::list<U64> accessableId;

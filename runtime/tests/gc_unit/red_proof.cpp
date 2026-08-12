@@ -117,6 +117,24 @@ int main()
     uintptr_t place = coloured + 16;
     RED_EXPECT((broken_field_place(place) & ~mask48) == 0, "field place strips colour at ABI");
 
+    // hunt-coll completion: publish-before-account leaves waiter on stale counters
+    {
+        size_t count = 0;
+        bool published = true; // NotifyGCFinished first
+        RED_EXPECT(published && count == 1, "waiter sees this-cycle g_gcCount [pre late NotifyGCFinished]");
+    }
+
+    // hunt-coll export: double-remove recycles the same raw index twice
+    {
+        unsigned freeIds[2] = { 0, 0 };
+        unsigned nfree = 0;
+        freeIds[nfree++] = 0; // first remove
+        freeIds[nfree++] = 0; // double-remove
+        unsigned b = freeIds[--nfree];
+        unsigned c = freeIds[--nfree];
+        RED_EXPECT(b != c, "double-remove yields distinct handles [pre generation tag]");
+    }
+
     // bitCover red: near-end offset out of cover
     RED_EXPECT(broken_near_end_in_cover(65504, 65536), "bitCover includes near-end offsets");
 

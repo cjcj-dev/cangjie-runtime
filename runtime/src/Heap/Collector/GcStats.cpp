@@ -15,12 +15,12 @@
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
-size_t g_gcCount = 0;
-uint64_t g_gcTotalTimeUs = 0;
-size_t g_gcCollectedTotalBytes = 0;
+std::atomic<size_t> g_gcCount{ 0 };
+std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
+std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
 
-uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
-uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+std::atomic<uint64_t> GCStats::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
+std::atomic<uint64_t> GCStats::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 
 void GCStats::Init()
 {
@@ -52,15 +52,16 @@ void GCStats::Init()
     if (useJvmIhop) {
         // Modern G1 uses 45% only as its initial IHOP; UpdateGCStats remains the adaptive controller here.
         constexpr size_t initialHeapOccupancyPercent = 45;
-        heapThreshold = maxCapacity * initialHeapOccupancyPercent / 100;
+        heapThreshold.store(maxCapacity * initialHeapOccupancyPercent / 100, std::memory_order_relaxed);
     } else {
         // 20 MB:set 20 MB as intial value
-        heapThreshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
+        size_t threshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
         // 0.2:set 20% heap size as intial value
-        heapThreshold = std::min(static_cast<size_t>(maxCapacity * 0.2), heapThreshold);
+        threshold = std::min(static_cast<size_t>(maxCapacity * 0.2), threshold);
+        heapThreshold.store(threshold, std::memory_order_relaxed);
     }
     VLOG(REPORT, "[GCV2][jvm-ihop] enabled=%d initial-threshold=%zu max-capacity=%zu adaptive-update=1",
-         useJvmIhop, heapThreshold, maxCapacity);
+         useJvmIhop, heapThreshold.load(std::memory_order_relaxed), maxCapacity);
 }
 
 void GCStats::Dump() const

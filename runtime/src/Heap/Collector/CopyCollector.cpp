@@ -66,7 +66,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     GcLog::Cycle(GcLog::CompleteCycle(), reason == GC_REASON_YOUNG ? "minor" : "major",
                  g_gcRequests[reason].name, gcStats.gcStartTime, gcStats.gcEndTime - gcStats.gcStartTime,
                  gcStats.liveBytesBeforeGC, gcStats.liveBytesAfterGC, gcStats.collectedBytes,
-                 Heap::GetHeap().GetUsedPageSize(), gcStats.heapThreshold);
+                 Heap::GetHeap().GetUsedPageSize(), gcStats.GetThreshold());
     if (reason != GC_REASON_YOUNG) {
         UpdateGCStats();
     }
@@ -74,10 +74,14 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     ScheduleTraceEvent(TRACE_EV_GC_DONE, -1, nullptr, 0);
     double rate = (static_cast<double>(gcStats.collectedBytes) / gcTimeNs) * (static_cast<double>(NS_PER_S) / MB);
     VLOG(REPORT, "total gc time: %s us, collection rate %.3lf MB/s\n", Pretty(gcTimeNs / NS_PER_US).Str(), rate);
-    g_gcCount++;
-    g_gcTotalTimeUs += (gcTimeNs / NS_PER_US);
-    g_gcCollectedTotalBytes += gcStats.collectedBytes;
+    g_gcCount.fetch_add(1, std::memory_order_release);
+    g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
+    g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
     gcStats.collectionRate = rate;
+    if (reason != GC_REASON_YOUNG) {
+        GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+    }
+    collectorResources.NotifyGCFinished(gcIndex);
 }
 
 void CopyCollector::ForwardFromSpace()
