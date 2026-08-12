@@ -8,6 +8,7 @@
 #define MRT_GC_LOG_H
 
 #include <atomic>
+#include <cstdarg>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -15,8 +16,6 @@
 #if defined(__linux__) || defined(hongmeng)
 #include <unistd.h>
 #endif
-
-#include "Base/LogFile.h"
 
 namespace MapleRuntime {
 // A fixed-schema record per garbage collection, so a question that comes up after a run can be
@@ -31,7 +30,9 @@ namespace MapleRuntime {
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
 // relying on line adjacency. Enabled with MRT_GC_LOG=1; the cost when off is one relaxed load.
-// Crash records are independent of MRT_GC_LOG so a crash before GcLog init still emits.
+// Cycle/phase emit to stderr (always-on when enabled) so MRT_GC_LOG alone is sufficient;
+// they do not depend on MRT_REPORT / WriteLog(REPORT). Crash records are independent of
+// MRT_GC_LOG so a crash before GcLog init still emits.
 class GcLog {
 public:
     static constexpr uint32_t SCHEMA_VERSION = 2;
@@ -64,8 +65,11 @@ public:
         if (!Enabled()) {
             return;
         }
-        WriteLog(true, REPORT,
-                 "[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
+        // Always-on stderr (same shape as rec=crash): MRT_GC_LOG alone must emit rec=cycle.
+        // Do not route through WriteLog(REPORT) — Release gates REPORT on MRT_REPORT=<path>
+        // (DEFAULT_MRT_REPORT=0), which silently dropped cycle/phase and caused false
+        // "rec=cycle=0 ⇒ no GC" readings (walkcost/hostslow).
+        EmitLine("[GCLOG] v=%u rec=cycle seq=%llu kind=%s reason=%s start_ns=%llu dur_ns=%llu "
                  "live_before=%zu live_after=%zu collected=%zu heap_used=%zu threshold=%zu rss_kb=%zu",
                  SCHEMA_VERSION, static_cast<unsigned long long>(seq), kind, reason,
                  static_cast<unsigned long long>(startNs), static_cast<unsigned long long>(durNs), liveBefore,
@@ -89,7 +93,8 @@ public:
             safe[i] = keep ? c : '_';
         }
         safe[i] = '\0';
-        WriteLog(true, REPORT, "[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
+        // Same always-on channel as Cycle (see Cycle comment).
+        EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
                  static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
     }
 
@@ -167,6 +172,27 @@ public:
     }
 
 private:
+    // Fixed buffer + fprintf(stderr): independent of LogFile REPORT enablement and of any
+    // MRT_REPORT file path. Mirrors rec=crash intent (always visible when the feature is on)
+    // without requiring signal-handler AS-safety (cycle/phase run on the GC thread).
+    static void EmitLine(const char* format, ...)
+    {
+        char buf[1024];
+        va_list args;
+        va_start(args, format);
+        int n = vsnprintf(buf, sizeof(buf), format, args);
+        va_end(args);
+        if (n < 0) {
+            return;
+        }
+        if (static_cast<size_t>(n) >= sizeof(buf)) {
+            n = static_cast<int>(sizeof(buf) - 1);
+        }
+        buf[n] = '\0';
+        std::fprintf(stderr, "%s\n", buf);
+        std::fflush(stderr);
+    }
+
     static std::atomic<uint64_t>& CycleCounter()
     {
         static std::atomic<uint64_t> counter{ 0 };
