@@ -635,6 +635,9 @@ bool MCC_IsThreadObjectInited()
 void* MRT_GetCurrentCJThreadObject()
 {
     void* argStart = CJThreadGetArg();
+    if (argStart == nullptr) {
+        return nullptr;
+    }
     RootSlot& root = RootSlotAt(&reinterpret_cast<LWTData*>(argStart)->threadObject);
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanAcquire();
