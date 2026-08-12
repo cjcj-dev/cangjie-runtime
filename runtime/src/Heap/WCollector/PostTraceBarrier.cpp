@@ -248,7 +248,6 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
         return;
     }
 #endif
-    bool inHeap = Heap::IsHeapAddress(srcObj);
     RefFieldVisitor srcVisitor = [this](RefField<false>& field) {
         RefField<> oldField(field);
         RefField<> toBeUpdated(oldField);
@@ -259,9 +258,7 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);
-    if (!inHeap) {
-        srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
-    }
+    srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
