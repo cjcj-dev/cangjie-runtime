@@ -17,8 +17,8 @@ namespace MapleRuntime {
 //   H1  o->IsValidObject()
 //   H2  tip = o->GetTypeInfo() is not a heap address; preferably in TypeInfoManager
 //       mmap OR other non-heap; and tip->IsVaildType()
-//   H3  each ref field is null or points at an object that itself satisfies H1+H2
-//   H4  holder region is not free/garbage
+//   H3  each ref field is null or points at an object that itself satisfies H1+H2+H4
+//   H4  holder (and H3 target) region is not free/garbage
 //
 // Gate (default off):  MRT_GCV2_VERIFY_HEAP=1
 // Cost control:        MRT_GCV2_VERIFY_HEAP_START_AT=<N>   (1-based invoke count)

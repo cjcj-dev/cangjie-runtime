@@ -19,7 +19,8 @@ class RegionInfo;
 //
 // Gate (default off; product path early-return BEFORE any work):
 //   MRT_GCV2_VERIFY_SEALCHECK=1
-// Positive control (after seal, paint one synthetic bit once per process):
+// Positive control (after seal, trip NotePaint once per process; does not
+// mutate the product mark face):
 //   MRT_GCV2_VERIFY_SEALCHECK_INJECT=1
 // Optional abort on late paint:
 //   MRT_GCV2_VERIFY_SEALCHECK_FATAL=1

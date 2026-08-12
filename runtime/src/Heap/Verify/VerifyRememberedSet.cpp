@@ -226,6 +226,11 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     ClassifyRemsetOnlySlots(remsetSnapshot, fieldSlots, stats);
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
 
+    // MISSING = correctness-relevant subset. When the independent root closure was
+    // not supplied (POST_EVAC force path, or VERIFY_REMSET unset), that subset is
+    // the full inventory — do not print missingRootReachable (stays 0) as MISSING.
+    size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
+
     VLOG(REPORT,
          "[GCV2][verify][remset] point=%s invoke=%zu env=MRT_GCV2_VERIFY_REMSET=1 "
          "remsetSize=%zu holdersScanned=%zu oldToYoungEdges=%zu "
@@ -235,7 +240,7 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
          "totalMissingSamples=[%p,%p,%p,%p] rootReachableMissingSamples=[%p,%p,%p,%p] "
          "staleSamples=[%p,%p,%p,%p] danglingSamples=[%p,%p,%p,%p]",
          point == nullptr ? "?" : point, invoke, stats.remsetSize, stats.holdersScanned, stats.oldToYoungEdges,
-         stats.missingRootReachable, stats.missing, stats.missingRootReachable,
+         correctnessMissing, stats.missing, stats.missingRootReachable,
          rootReachableHolders == nullptr ? 0 : 1, stats.missingArrayHolder, stats.missingNonArray, stats.stale,
          stats.dangling, stats.remsetCovered, static_cast<unsigned long long>(stats.costNs),
          reinterpret_cast<void*>(stats.missingSamples[0]), reinterpret_cast<void*>(stats.missingSamples[1]),
@@ -252,7 +257,6 @@ void VerifyRememberedSetInvariant(const char* point, const std::unordered_set<MA
     RemsetPhaseProbe::DumpSummary(point == nullptr ? "?" : point);
 
     // Report-only by default. Separate stricter switch aborts (never default).
-    size_t correctnessMissing = rootReachableHolders == nullptr ? stats.missing : stats.missingRootReachable;
     if (EnvEnabled("MRT_GCV2_VERIFY_REMSET_FATAL") &&
         (correctnessMissing != 0 || stats.stale != 0 || stats.dangling != 0)) {
         CHECK_DETAIL(false,

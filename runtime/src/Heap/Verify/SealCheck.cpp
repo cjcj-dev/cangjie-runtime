@@ -14,7 +14,6 @@
 #include "Base/Log.h"
 #include "Base/Panic.h"
 #include "Heap/Allocator/RegionInfo.h"
-#include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -140,26 +139,18 @@ void MaybeInjectLatePaint(RegionInfo* region)
     if (prev != 0) {
         return;
     }
-    // Positive control: always trip NotePaint after seal (proves checker rings).
+    // Positive control: trip NotePaint after seal (proves checker rings).
+    // Do NOT paint the product mark face — that would shift GetRoute prefix-sum
+    // geometry for every later object in the region (the very contract this
+    // instrument is supposed to detect, not create).
     constexpr size_t kInjectOff = 8;
     constexpr size_t kInjectSz = 8;
     LOG(RTLOG_ERROR,
         "[GCV2][sealcheck][INJECT] painting after seal region=%p offset=%zu", region, kInjectOff);
     NotePaint(region, kInjectOff, kInjectSz, "SEALCHECK_INJECT");
-    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    if (ghost == nullptr || ghost->markBitmap == nullptr ||
-        reinterpret_cast<uintptr_t>(ghost->markBitmap) == LiveInfo::TEMPORARY_PTR) {
-        LOG(RTLOG_ERROR,
-            "[GCV2][sealcheck][INJECT] notePaint_done no ghost markBitmap region=%p", region);
-        return;
-    }
-    size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
-    if (regionSize < 16) {
-        LOG(RTLOG_ERROR, "[GCV2][sealcheck][INJECT] notePaint_done tiny region=%p size=%zu", region,
-            regionSize);
-        return;
-    }
-    (void)ghost->markBitmap->MarkBits(kInjectOff, kInjectSz, regionSize);
+    LOG(RTLOG_ERROR,
+        "[GCV2][sealcheck][INJECT] notePaint_done checker_only region=%p (no product MarkBits)",
+        region);
 }
 
 void DumpSummary()
