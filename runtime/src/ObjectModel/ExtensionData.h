@@ -36,7 +36,7 @@ public:
     FuncPtr* GetFuncTable() const { return funcTable; }
     void UpdateFuncTable(U16 ftSize, FuncPtr* newFt) { funcTableSize  = ftSize; funcTable = newFt; }
     U16 GetFuncTableSize() const { return funcTableSize; }
-    bool IsDirect() const { return flag & 0b10000000; }
+    bool IsDirect() const { return __atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b10000000; }
     bool IsFuncTableUpdated() const
     {
         return (__atomic_load_n(&flag, __ATOMIC_ACQUIRE) & 0b00000110) ==
@@ -59,7 +59,7 @@ public:
     }
 
     // "bit-0 is 1" means codegen has computed the outer ti.
-    bool HasOuterTiFastPath() const { return (flag & 0b1) != 0; }
+    bool HasOuterTiFastPath() const { return (__atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b1) != 0; }
     TypeInfo* GetOuterTi(TypeInfo* childTi, U64 index) const
     {
         CHECK(index < funcTableSize);
