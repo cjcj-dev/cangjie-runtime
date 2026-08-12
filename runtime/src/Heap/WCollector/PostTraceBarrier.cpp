@@ -17,22 +17,42 @@
 namespace MapleRuntime {
 BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
+    // Align ordinary Read with Idle/Enum/Trace/Preforward/Forward: colour test + self-heal.
+    // Template: IdleBarrier.cpp:19-51 / TraceBarrier.cpp:31-57; ZGC zBarrier.inline.hpp:294-344.
+    // Replaces E-class CHECK(!IsOldPointer)+direct return (tagdel E08) which trusted plain/stale colour.
+    for (int attempts = 0;;) {
+        RefField<> oldField(field);
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            return oldTarget;
+        }
+
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets (static constants under GNU_RELRO) are never
+        // evacuated. Colouring + CAS into those slots faults (si_code=2 ACCERR). Skip write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
+        // the CAS expected value. A concurrent GC update therefore wins rather than being
+        // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
+            return loadGood;
+        }
     }
-    return tmpField.GetTargetObject();
 }
 
-BaseObject* PostTraceBarrier::ReadStaticRef(RefField<false>& field) const { return ReadReference(nullptr, field); }
+BaseObject* PostTraceBarrier::ReadStaticRef(ReadOnlyRootSlot& field) const { return Barrier::ReadStaticRef(field); }
 
 BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
-    RefField<> tmpField(field);
-    if (tmpField.IsTagged()) {
-        CHECK(theCollector.IsCurrentPointer(tmpField));
-    }
-    BaseObject* referent = tmpField.GetTargetObject();
+    // tagdel E09: heal colour first (same ordinary Read as peers), then PostTrace weak clear.
+    BaseObject* referent = ReadReference(obj, field);
     if (referent == nullptr) {
         return nullptr;
     }
@@ -44,71 +64,61 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
         *referentAddr = nullptr; // set referent field as null
         return nullptr;
     }
-    return tmpField.GetTargetObject();
+    return referent;
 }
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    LocalRefFieldContainer refFields;
+    // Heap-src: E-class ReadReference (assertion-only). Non-heap dst: StorePlain, never coloured heal.
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
-            [this, obj, &refFields, dst, src, size](RefField<false>& field) {
-                if (reinterpret_cast<MAddress>(&field) < src || reinterpret_cast<MAddress>(&field) >= (src + size)) {
-                    return;
-                }
+            [this, obj](RefField<false>& field) {
                 (void)ReadReference(obj, field);
-                MAddress offset = reinterpret_cast<MAddress>(&field) - src;
-                refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
             },
             src, src + size);
     }
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        }
-    });
+    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(
         src,
-        [this, &refFields, dst, src](RefField<>& srcField) {
+        [this](RefField<>& srcField) {
             (void)ReadReference(nullptr, srcField);
-            MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
-            refFields.Push(reinterpret_cast<RefField<>*>(dst + offset));
         },
         src, src + size);
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    refFields.VisitRefField([this](RefField<>& dstRef) {
-        BaseObject* target = nullptr;
-        if (theCollector.IsCurrentPointer(dstRef)) {
-            theCollector.TryUntagRefField(nullptr, dstRef, target);
-        }
+    if (!Heap::IsHeapAddress(dst)) {
+        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        return;
+    }
+    // Heap dst residual path (should be rare for ReadStaticStruct): peel via ReadReference only.
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& dstRef) {
+        (void)ReadReference(nullptr, dstRef);
     });
 }
 
-void PostTraceBarrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
+void PostTraceBarrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    // tagdel E10: drop E-class CHECK(!IsOldPointer) — it was false safety (plain/stale colour
+    // passes). Store path still mints current colour; storecov owns generational write face.
     RefField<> tmpField(field);
-    CHECK(!theCollector.IsOldPointer(tmpField));
-    DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, tmpField.GetFieldValue(), ref);
+    DLOG(BARRIER, "write obj %p ref-field@%p: %#zx -> %p", obj, &field, raw(tmpField.GetFieldValue()), ref);
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    field.StoreColoured(newField.GetFieldValue());
 }
 
-void PostTraceBarrier::WriteStaticRef(RefField<false>& field, BaseObject* ref) const
+void PostTraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    RefField<> newField = theCollector.GetAndTryTagRefField(ref);
-    field.SetFieldValue(newField.GetFieldValue());
+    StorePlain(field, from_object(ref));
+    RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
 }
 
-void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
+void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
     CHECK(obj != nullptr);
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
@@ -117,11 +127,11 @@ void PostTraceBarrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen,
         obj->ForEachRefInStruct(
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
-                MAddress oldValue = oldField.GetFieldValue();
+                MAddress oldValue = raw(oldField.GetFieldValue());
                 BaseObject* latestVerison = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
-                if (oldValue != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldValue, newField.GetFieldValue());
+                if (oldValue != raw(newField.GetFieldValue())) {
+                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
                 }
             },
             dst, dst + dstLen);
@@ -138,15 +148,8 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
 {
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
-    gctib.ForEachBitmapWord(dst, [=](RefField<>& refField) {
-        RefField<> oldField(refField);
-        MAddress oldValue = oldField.GetFieldValue();
-        BaseObject* untagged = ReadReference(nullptr, oldField);
-        RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
-        if (oldValue != newField.GetFieldValue()) {
-            refField.CompareExchange(oldValue, newField.GetFieldValue());
-        }
-    });
+    ResolveStaticStructRoots(dst, gctib);
+    RecordStaticCrossGenEdges(dst, gctib);
     DLOG(TRACE, "write static struct@[%#zx, %#zx) with [%#zx, %#zx)", dst, dst + dstLen, src, src + srcLen);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
@@ -157,78 +160,82 @@ void PostTraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress s
 
 BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
-    BaseObject* target = nullptr;
-    RefField<false> oldField(field.GetFieldValue(order));
-    if (theCollector.IsCurrentPointer(oldField)) {
-        target = oldField.GetTargetObject();
-        DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
-    }
+    // Colour self-heal on the real slot (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
+    // Exact observed value is the CAS expected; concurrent updates win and force a reload.
+    // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
+    for (int attempts = 0;;) {
+        RefField<false> oldField(field.GetFieldValue(order));
+        BaseObject* oldTarget = to_object(oldField.GetTargetObject());
+        if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
+            DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), oldTarget);
+            return oldTarget;
+        }
 
-    BaseObject* toVersion = nullptr;
-    // note TryUpdateRefField and TryUntagRefField are all atomic operations.
-    if (theCollector.TryUpdateRefField(obj, reinterpret_cast<RefField<false>&>(field), toVersion)) {
-        DLOG(TBARRIER, "iatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), toVersion);
-        return toVersion;
+        BaseObject* loadGood = theCollector.make_load_good(oldField);
+        // relroroot / rostatic: non-heap targets under GNU_RELRO — skip colour CAS write-back.
+        if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
+            return loadGood;
+        }
+        RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
+        DCHECK(theCollector.is_load_good(goodField));
+        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+            DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
+            return loadGood;
+        }
+        if (++attempts >= kSelfHealAttempts) {
+            return loadGood;
+        }
     }
-
-    if (theCollector.TryUntagRefField(obj, reinterpret_cast<RefField<false>&>(field), target)) {
-        DLOG(TBARRIER, "jatomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-        return target;
-    }
-
-    target = ReadReference(nullptr, oldField);
-    DLOG(TBARRIER, "katomic read obj %p ref@%p: %#zx -> %p", obj, &field, oldField.GetFieldValue(), target);
-    return target;
 }
 
-void PostTraceBarrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+void PostTraceBarrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                             MemoryOrder order) const
 {
     RefField<> oldField(field.GetFieldValue(order));
-    MAddress oldValue = oldField.GetFieldValue();
+    MAddress oldValue = raw(oldField.GetFieldValue());
     (void)oldValue;
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    field.SetFieldValue(newField.GetFieldValue(), order);
+    field.StoreColoured(newField.GetFieldValue(), order);
     if (obj != nullptr) {
         DLOG(TBARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
-             &field, oldValue, newField.GetFieldValue());
+             &field, oldValue, raw(newField.GetFieldValue()));
     } else {
-        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, newField.GetFieldValue());
+        DLOG(TBARRIER, "atomic write static ref@%p: %#zx -> %#zx", &field, oldValue, raw(newField.GetFieldValue()));
     }
 }
 
-BaseObject* PostTraceBarrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
+BaseObject* PostTraceBarrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                                   MemoryOrder order) const
 {
     RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    MAddress oldValue = field.Exchange(newField.GetFieldValue(), order);
+    MAddress oldValue = raw(field.Exchange(newField.GetFieldValue(), order));
     RefField<> oldField(oldValue);
     BaseObject* oldRef = ReadReference(nullptr, oldField);
     DLOG(TRACE, "atomic swap obj %p<%p>(%zu) ref-field@%p: old %#zx(%p), new %#zx(%p)", obj, obj->GetTypeInfo(),
-         obj->GetSize(), &field, oldValue, oldRef, field.GetFieldValue(), newRef);
+         obj->GetSize(), &field, oldValue, oldRef, raw(field.GetFieldValue()), newRef);
     return oldRef;
 }
 
-bool PostTraceBarrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
+bool PostTraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                                BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
-    MAddress oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
+    MAddress oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
     RefField<false> oldField(oldFieldValue);
     BaseObject* oldVersion = ReadReference(nullptr, oldField);
-    RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-    while (oldVersion == oldRef) {
-        if (field.CompareExchange(oldFieldValue, newField.GetFieldValue(), succOrder, failOrder)) {
+    // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
+    for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
+        RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
+        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
             return true;
         }
-        oldFieldValue = field.GetFieldValue(std::memory_order_seq_cst);
-        RefField<false> oldField(oldFieldValue);
-        oldVersion = ReadReference(nullptr, oldField);
+        oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
+        RefField<false> tmp(oldFieldValue);
+        oldVersion = ReadReference(nullptr, tmp);
     }
     return false;
 }
 
-void PostTraceBarrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
+void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                        MAddress srcField, MIndex srcSize) const
 {
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
