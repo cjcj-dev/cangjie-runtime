@@ -146,7 +146,7 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
             [=](RefField<>& dstField) {
                 mutator->RememberObjectInSatbBuffer(ReadReference(obj, dstField));
                 MAddress offset = reinterpret_cast<MAddress>(&dstField) - dst;
-                HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+                HeapSlot<> srcField(HeapSlotAt<>(src + offset));
                 mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
             },
             dst, dst + srcLen);
