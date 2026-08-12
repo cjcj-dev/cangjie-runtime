@@ -2361,7 +2361,14 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
             size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
             if (objSize > 0 && offset + objSize <= regionSize) {
                 SealCheck::NotePaint(region, offset, objSize, "statresid.force_domain.ghost");
-                (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+                // uafclose: MarkBits on ghost alone does not touch region liveByteCount.
+                // RouteOrCompact freezes fromBytes=GetLiveByteCount(); a ghost-only paint
+                // without AddLive leaves root-named objects past the reserved prefix
+                // (admit_miss off>=liveBytes → leave-alone → reclaim UAF).
+                bool alreadyGhost = g0->markBitmap->MarkBits(offset, objSize, regionSize);
+                if (!alreadyGhost) {
+                    region->AddLiveByteCount(objSize);
+                }
             }
         }
     }
@@ -4698,7 +4705,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const size_t slotChunk = std::max<size_t>(64, (nSlot + static_cast<size_t>(heapWorkers) * 4 - 1) /
                                                          (static_cast<size_t>(heapWorkers) * 4 + 1));
 
+        // uafclose: root Fix must finish before any heap Forward/Route. Serial FixMinorRootSlots
+        // already does roots first; the old parallel path queued root tasks + heap workers then
+        // Start() once — heap ForwardObject → RouteRegion → CompactRegion could memset free-tail
+        // while a root still named that from (leave-alone → reclaim → GetSize UAF).
+        // Phase 1: root families only (grant-before-route + parallel root Fix).
         FixMinorRootSlotsParallel(pool);
+        pool->Start();
+        pool->WaitFinish();
+        // Phase 2: export/extern preforward + heap/remset Fix (same pool, after roots).
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
 
