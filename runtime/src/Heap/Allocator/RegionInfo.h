@@ -977,6 +977,9 @@ public:
     {
         UnitInfo::totalUnitCount = nUnit;
         UnitInfo::heapStartAddress = heapAddress;
+        // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
+        CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
+        UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
@@ -989,7 +992,7 @@ public:
     }
 
     // Safely query a heap address whose unit may no longer have a live owning region.
-    static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
+    ALWAYS_INLINE static RegionInfo* TryGetRegionInfoAt(uintptr_t allocAddr)
     {
         UnitInfo* unit = RegionInfo::UnitInfo::GetUnitInfoAt(allocAddr);
         if (LoadUnitRole(unit) == UnitRole::SUBORDINATE_UNIT) {
@@ -2150,52 +2153,47 @@ private:
         // propgated from RegionManager
         static uintptr_t heapStartAddress; // the address of the first region space to allocate objects
         static size_t totalUnitCount;
+        // gatehot: log2(UNIT_SIZE); UNIT_SIZE is always a power-of-two page size.
+        // Hot GetUnitIdxAt uses a shift instead of a runtime / on a non-constant divisor.
+        static size_t unitSizeShift;
 
         constexpr static uint32_t INVALID_IDX = std::numeric_limits<uint32_t>::max();
-        static size_t GetUnitIdxAt(uintptr_t allocAddr)
-        {
-            if (heapStartAddress <= allocAddr && allocAddr < (heapStartAddress + totalUnitCount * UNIT_SIZE)) {
-                return (allocAddr - heapStartAddress) / UNIT_SIZE;
-            }
 
-            // Named fatal before abort so OOB addresses leave a greppable trail
-            // (was bare std::abort; o2fail R3 = 7/17 UNMAPPED SIGABRT with zero text).
-            // unitzero: also emit 3 return addresses + dladdr so OOB maps to a site
-            // (cold path only; no hot-path counter).
-            void* ra0 = __builtin_return_address(0);
-            void* ra1 = nullptr;
-            void* ra2 = nullptr;
-#if defined(__GNUC__) || defined(__clang__)
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wframe-address"
-            ra1 = __builtin_return_address(1);
-            ra2 = __builtin_return_address(2);
-#pragma GCC diagnostic pop
+        // gatehot: OOB path used to live in the same function as the hot index math.
+        // That forced a full frame (dladdr + FormatLog + stack canary) on every call and
+        // blocked inlining into TryGetRegionInfoAt / PlausibleManagedObjectGate.
+        // Cold-only: same greppable FATAL text as before (unitzero trail).
+        ATTR_NO_INLINE ATTR_COLD static size_t GetUnitIdxAtOOB(uintptr_t allocAddr);
+
+        // Hot path: range check + shift. Must stay tiny enough to inline at every call site.
+        ALWAYS_INLINE static size_t GetUnitIdxAt(uintptr_t allocAddr)
+        {
+            uintptr_t start = heapStartAddress;
+            size_t units = totalUnitCount;
+            size_t shift = unitSizeShift;
+            // UNIT_SIZE == (1 << shift); keep arithmetic identical to
+            //   start <= addr < start + units * UNIT_SIZE
+            // without loading the UNIT_SIZE global or emitting a DIV.
+            if (LIKELY(start <= allocAddr &&
+                       ((allocAddr - start) >> shift) < units)) {
+                size_t idx = (allocAddr - start) >> shift;
+#if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
+                // Debug builds always cross-check shift vs div (GATEEQUIV math).
+                size_t divIdx = (allocAddr - start) / UNIT_SIZE;
+                if (UNLIKELY(idx != divIdx)) {
+                    LOG(RTLOG_FATAL, "GetUnitIdxAt GATEEQUIV mismatch addr=%#zx shift=%zu div=%zu",
+                        allocAddr, idx, divIdx);
+                }
 #endif
-            const char* s0 = "?";
-            const char* s1 = "?";
-            const char* s2 = "?";
-            Dl_info di0{};
-            Dl_info di1{};
-            Dl_info di2{};
-            if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
-                s0 = di0.dli_sname;
+                return idx;
             }
-            if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
-                s1 = di1.dli_sname;
-            }
-            if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
-                s2 = di2.dli_sname;
-            }
-            LOG(RTLOG_FATAL,
-                "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
-                "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
-                allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
-                ra0, s0, ra1, s1, ra2, s2);
-            return 0;
+            return GetUnitIdxAtOOB(allocAddr);
         }
 
-        static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr) { return GetUnitInfo(GetUnitIdxAt(allocAddr)); }
+        ALWAYS_INLINE static UnitInfo* GetUnitInfoAt(uintptr_t allocAddr)
+        {
+            return GetUnitInfo(GetUnitIdxAt(allocAddr));
+        }
 
         // get the unit address by index
         static MAddress GetUnitAddress(size_t idx)

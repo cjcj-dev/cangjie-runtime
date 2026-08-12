@@ -43,6 +43,47 @@
 namespace MapleRuntime {
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
+size_t RegionInfo::UnitInfo::unitSizeShift = 0;
+
+// gatehot: cold OOB for GetUnitIdxAt — kept out of the hot function so the common
+// path can inline (was ~128 insns with dladdr/FATAL in the same body).
+// Semantics unchanged: greppable FATAL + return 0 (unitzero trail).
+size_t RegionInfo::UnitInfo::GetUnitIdxAtOOB(uintptr_t allocAddr)
+{
+    void* ra0 = __builtin_return_address(0);
+    void* ra1 = nullptr;
+    void* ra2 = nullptr;
+#if defined(__GNUC__) || defined(__clang__)
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wframe-address"
+    ra1 = __builtin_return_address(1);
+    ra2 = __builtin_return_address(2);
+#pragma GCC diagnostic pop
+#endif
+    const char* s0 = "?";
+    const char* s1 = "?";
+    const char* s2 = "?";
+#if !defined(_WIN64)
+    Dl_info di0{};
+    Dl_info di1{};
+    Dl_info di2{};
+    if (ra0 != nullptr && dladdr(ra0, &di0) != 0 && di0.dli_sname != nullptr) {
+        s0 = di0.dli_sname;
+    }
+    if (ra1 != nullptr && dladdr(ra1, &di1) != 0 && di1.dli_sname != nullptr) {
+        s1 = di1.dli_sname;
+    }
+    if (ra2 != nullptr && dladdr(ra2, &di2) != 0 && di2.dli_sname != nullptr) {
+        s2 = di2.dli_sname;
+    }
+#endif
+    LOG(RTLOG_FATAL,
+        "GetUnitIdxAt OOB addr=%#zx heap=[%#zx, %#zx) "
+        "ra0=%p(%s) ra1=%p(%s) ra2=%p(%s)",
+        allocAddr, heapStartAddress, heapStartAddress + totalUnitCount * UNIT_SIZE,
+        ra0, s0, ra1, s1, ra2, s2);
+    return 0;
+}
 std::atomic<size_t> RegionInfo::youngRegionCount { 0 };
 std::atomic<size_t> RegionInfo::dispelGhostCount { 0 };
 std::atomic<size_t> RegionInfo::markEpochStaleReadCount { 0 };
