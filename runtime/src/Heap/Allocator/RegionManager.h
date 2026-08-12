@@ -37,6 +37,9 @@ class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
 class TagReuseProbe;
+class RegionInfo;
+// keepfrom: remark pregrant-noted root young in region (WCollector.cpp).
+void KeepfromRemarkRootNamedInRegion(RegionInfo* region);
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -592,6 +595,9 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
+    // keepfrom: defined in WCollector.cpp — remark pregrant root-named young in region
+    // before liveBytes freeze. Declared here for RouteOrCompactRegionImpl call site.
+
     // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
@@ -713,11 +719,7 @@ public:
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
-        SealRootNamedYoungForRoute();
     }
-
-    // keepfrom: one-shot seal root-named young into survivor face (FORWARDABLE only).
-    void SealRootNamedYoungForRoute();
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
     // Concurrent mark (TRACE+CLEAR_SATB) has finished; plain strong refs into quarantined

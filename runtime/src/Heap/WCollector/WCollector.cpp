@@ -20,6 +20,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -2214,6 +2215,98 @@ void WCollector::PostResolveCycleTask()
     }
     CJ_MRT_RolveCycleRef();
 #endif
+}
+
+// keepfrom cache: file-scope in MapleRuntime (shared by pregrant note + Route remark).
+namespace {
+std::mutex g_keepfromRootMu;
+std::vector<BaseObject*> g_keepfromRootTargets;
+void KeepfromClearRootTargets()
+{
+    std::lock_guard<std::mutex> lk(g_keepfromRootMu);
+    g_keepfromRootTargets.clear();
+}
+void KeepfromNoteRootTarget(BaseObject* obj)
+{
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lk(g_keepfromRootMu);
+    g_keepfromRootTargets.push_back(obj);
+}
+} // namespace
+
+void KeepfromRemarkRootNamedInRegion(RegionInfo* region)
+{
+    if (region == nullptr || !region->IsYoungRegion() || !region->IsGhostFromRegion()) {
+        return;
+    }
+    size_t painted = 0;
+    size_t already = 0;
+    size_t seen = 0;
+    std::vector<BaseObject*> snap;
+    {
+        std::lock_guard<std::mutex> lk(g_keepfromRootMu);
+        snap = g_keepfromRootTargets;
+    }
+    for (BaseObject* obj : snap) {
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            continue;
+        }
+        if (!Collector::PlausibleManagedObjectGate("keepfrom.route_remark", obj)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(obj);
+            if (host == nullptr || host == obj) {
+                continue;
+            }
+            obj = host;
+            if (!Collector::PlausibleManagedObjectGate("keepfrom.route_remark.host", obj)) {
+                continue;
+            }
+        }
+        RegionInfo* at = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (at == nullptr) {
+            at = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        }
+        if (at != region) {
+            continue;
+        }
+        ++seen;
+        size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        LiveInfo* g0 = region->GetLiveInfo0ForProbe();
+        if (g0 != nullptr && g0->IsSurvivedObject(offset)) {
+            ++already;
+            continue;
+        }
+        (void)region->MarkObject(obj);
+        region->BindLiveInfo0FromLiveIfNull();
+        LiveInfo* live = region->GetLiveInfo();
+        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
+        if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
+            reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+            size_t objSize = 0;
+            if (Collector::PlausibleManagedObjectGate("keepfrom.route_remark.size", obj)) {
+                objSize = obj->GetSize();
+            }
+            size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
+            if (objSize > 0 && offset + objSize <= regionSize) {
+                SealCheck::NotePaint(region, offset, objSize, "keepfrom.route_remark.ghost");
+                (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
+            }
+        }
+        ghost = region->GetLiveInfo0ForProbe();
+        if (ghost != nullptr && ghost->IsSurvivedObject(offset)) {
+            ++painted;
+        }
+    }
+    if (seen > 0) {
+        static std::atomic<size_t> g_keepfromRemarkN{ 0 };
+        size_t n = g_keepfromRemarkN.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][keepfrom] route_remark region=%p seen=%zu paint=%zu already=%zu liveBytes=%zu n=%zu",
+                region, seen, painted, already, region->GetLiveByteCount(), n);
+        }
+    }
 }
 
 // N2 (MINOR_CONCURRENCY_0805 §八 T-C): CAS-install resolved target under multi-worker fix.
@@ -4870,6 +4963,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             size_t ysRootEnsure = 0;
             size_t ysRootMissAfter = 0;
             size_t ysRootYoung = 0;
+            // keepfrom: rebuild root-target cache for RouteOrCompact remark (this minor only).
+            KeepfromClearRootTargets();
             RootVisitor rootEnsure = [this, &ensureObj, &ysRootEnsure, &ysRootMissAfter,
                                      &ysRootYoung](ObjectRef& root) {
                 zaddress_unsafe observed = root.LoadPlain();
@@ -4893,6 +4988,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 ++ysRootYoung;
                 ++ysRootEnsure;
+                KeepfromNoteRootTarget(obj);
                 // Second chance: Ensure may have skipped when !ghost&&!from earlier in process;
                 // ghost face is required for AdmitForRoute.
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
