@@ -16,6 +16,7 @@
 #include "Common/ColourTypes.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
+#include "Heap/Collector/TracingCollector.h"
 #include "ObjectModel/RefField.h"
 
 extern "C" size_t MCC_GetGCCount();
@@ -319,4 +320,42 @@ GC_TEST(DefectRegress, GcCountExportReadsAtomic)
     GC_EXPECT_EQ(MCC_GetGCCount(), before + 1);
     g_gcCount.fetch_sub(1, std::memory_order_release);
     GC_EXPECT_EQ(MCC_GetGCCount(), before);
+}
+
+// hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.
+// Product: ExportRootTable generation-tagged handles (TracingCollector.h).
+// Broken sibling is in red_proof.cpp (double-remove recycles the same index twice).
+GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
+{
+    ExportRootTable table;
+    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
+    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
+    BaseObject* objC = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x3000));
+    U64 pa = table.RegisterExportRoot(objA);
+    table.RemoveExportRoot(pa);
+    table.RemoveExportRoot(pa);
+    U64 pb = table.RegisterExportRoot(objB);
+    U64 pc = table.RegisterExportRoot(objC);
+    GC_EXPECT_NE(pb, pc);
+    GC_EXPECT_TRUE(table.CheckActiveState(pb, objB));
+    GC_EXPECT_TRUE(table.CheckActiveState(pc, objC));
+    GC_EXPECT_FALSE(table.CheckActiveState(pa, objA));
+    GC_EXPECT_FALSE(table.CheckActiveState(pa, objB));
+}
+
+GC_TEST(DefectRegress, ExportHandleStaleReuseDoesNotTouchNewOccupant)
+{
+    ExportRootTable table;
+    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x4000));
+    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x5000));
+    U64 ha = table.RegisterExportRoot(objA);
+    table.RemoveExportRoot(ha);
+    U64 hb = table.RegisterExportRoot(objB);
+    GC_EXPECT_NE(ha, hb);
+    GC_EXPECT_EQ(ExportRootTable::ExportHandleIndex(ha), ExportRootTable::ExportHandleIndex(hb));
+    GC_EXPECT_NE(ExportRootTable::ExportHandleGeneration(ha), ExportRootTable::ExportHandleGeneration(hb));
+    table.SetActiveState(ha, false);
+    GC_EXPECT_TRUE(table.CheckActiveState(hb, objB));
+    GC_EXPECT_FALSE(table.CheckActiveState(ha, objB));
+    GC_EXPECT_FALSE(table.CheckActiveState(ha, objA));
 }
