@@ -73,7 +73,11 @@ inline size_t GetNumber(T base62)
     long long decimal = 0;
     long long power = 1;
     for (size_t i = newBase62.Length() - 1; i != NPOS; i--) {
-        decimal += base62Chars.at(newBase62[i]) * power;
+        auto it = base62Chars.find(newBase62[i]);
+        if (it == base62Chars.end()) {
+            return static_cast<size_t>(-1);
+        }
+        decimal += it->second * power;
         power *= n;
     }
     return decimal + 1;
@@ -94,8 +98,11 @@ bool DeCompression<T>::IsGlobalEncode(T& mangled)
 template<typename T>
 bool DeCompression<T>::IsSamePrefix(T& first, T second, size_t idx)
 {
-    for (size_t i = idx; i < idx + PREFIX_LEN; i++) {
-        if (first[i] != second[i]) {
+    if (idx + PREFIX_LEN > first.Length() || PREFIX_LEN > second.Length()) {
+        return false;
+    }
+    for (size_t i = 0; i < PREFIX_LEN; i++) {
+        if (first[idx + i] != second[i]) {
             return false;
         }
     }
@@ -337,7 +344,7 @@ size_t DeCompression<T>::ForwardGenericTypes(T& mangled, size_t& cnt, size_t idx
 {
     size_t curCnt = cnt;
     size_t curIdx = ForwardTypes(mangled, cnt, idx + MANGLE_CHAR_LEN);
-    if (curIdx != idx && mangled[curIdx] == END) {
+    if (curIdx != idx && curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -372,12 +379,12 @@ size_t DeCompression<T>::ForwardClassType(T& mangled, size_t& cnt, size_t idx)
         bool isPush = TreeIdMapPushBack(mangled, pos);
         cnt = isPush ? cnt + 1 : cnt;
     }
-    if (mangled[curIdx] == MANGLE_GENERIC_PREFIX) {
+    if (curIdx < mangled.Length() && mangled[curIdx] == MANGLE_GENERIC_PREFIX) {
         size_t genericIdx = ForwardGenericTypes(mangled, cnt, curIdx);
         if (curIdx != genericIdx) {
             return genericIdx;
         }
-    } else if (mangled[curIdx] == END) {
+    } else if (curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -397,7 +404,7 @@ size_t DeCompression<T>::ForwardFunctionType(T& mangled, size_t& cnt, size_t idx
     size_t curCnt = cnt;
     size_t curIdx = ForwardType(mangled, cnt, idx + PREFIX_LEN);
     curIdx = ForwardTypes(mangled, cnt, curIdx);
-    if (curIdx != idx && mangled[curIdx] == END) {
+    if (curIdx != idx && curIdx < mangled.Length() && mangled[curIdx] == END) {
         return curIdx + MANGLE_CHAR_LEN;
     }
     if (this->isRecord) {
@@ -518,10 +525,13 @@ size_t DeCompression<T>::ForwardName(T& mangled, size_t idx)
     }
     if (mangled[idx] == MANGLE_ANONYMOUS_PREFIX) { return idx + MANGLE_CHAR_LEN; }
     size_t numberLen = 0;
-    while (idx < mangled.Length() && isdigit(mangled[idx + numberLen])) {
+    while (idx + numberLen < mangled.Length() && isdigit(mangled[idx + numberLen])) {
         numberLen++;
     }
     size_t number = atoi(mangled.SubStr(idx, numberLen).Str());
+    if (number > mangled.Length() - idx - numberLen) {
+        return idx;
+    }
     return idx + numberLen + number;
 }
 
@@ -574,6 +584,9 @@ void DeCompression<T>::TreeIdMapAssign(T& mangled, T& mangledCopy, size_t mapId,
 template<typename T>
 size_t DeCompression<T>::ForwardType(T& mangled, size_t& cnt, size_t idx)
 {
+    if (idx >= mangled.Length()) {
+        return idx;
+    }
     char ch = mangled[idx];
     size_t nextIdx = idx;
     size_t curCnt = cnt;
@@ -698,8 +711,12 @@ void DeCompression<T>::SpanningVarDeclTree()
 {
     this->isRecord = true;
     size_t idx = this->currentIndex;
+    if (idx >= this->decompressed.Length()) {
+        this->isRecord = false;
+        return;
+    }
     size_t change = std::get<0>(UpdateCompressedName(this->decompressed, idx));
-    if (this->decompressed.Length() > 0 && isdigit(this->decompressed[idx])) {
+    if (isdigit(this->decompressed[idx])) {
         idx = ForwardName(this->decompressed, idx);
         if (idx != this->currentIndex && change == 0) {
             std::tuple<size_t, size_t> pos(this->currentIndex, idx - this->currentIndex);
@@ -717,8 +734,7 @@ template<typename T>
 void DeCompression<T>::SpanningFuncDeclTree()
 {
     size_t idx = this->currentIndex;
-    if (this->decompressed.Length() == 0 || (this->decompressed.Length() > 0 &&
-        this->decompressed[idx] == MANGLE_LAMBDA_PREFIX)) {
+    if (idx >= this->decompressed.Length() || this->decompressed[idx] == MANGLE_LAMBDA_PREFIX) {
         return;
     }
     this->isRecord = true;

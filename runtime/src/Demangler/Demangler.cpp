@@ -1061,7 +1061,8 @@ DemangleInfo<T> Demangler<T>::DemangleNestedDecls(bool isClass, bool isParamInit
         }
         lastElement = curDi;
     }
-    result += GetArgTypesFullName(argsArr, i % (MAX_ARGS_SIZE + 1), delimiter);
+    uint32_t remainingLength = (i == 0) ? 0 : ((i - 1) % MAX_ARGS_SIZE) + 1;
+    result += GetArgTypesFullName(argsArr, remainingLength, delimiter);
     DemangleInfo<T> resDi = { result, typeKind, isValid };
     resDi.functionParameterTypes = lastElement.functionParameterTypes;
     return resDi;

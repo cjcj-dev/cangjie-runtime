@@ -26,19 +26,24 @@ CString::CString()
 
 CString::CString(const char* initStr)
 {
-    if (initStr != nullptr) {
-        size_t initLen = strlen(initStr);
-        while (capacity < initLen + 1) {
-            capacity <<= 1;
-        }
+    if (initStr == nullptr) {
         str = reinterpret_cast<char*>(malloc(capacity));
         PRINT_FATAL_IF(str == nullptr, "CString::Init failed");
-        if (*initStr != '\0') {
-            PRINT_FATAL_IF(memcpy_s(str, capacity, initStr, initLen) != EOK, "CString::CString memcpy_s failed");
-        }
-        length = initLen;
-        str[length] = '\0';
+        *str = '\0';
+        length = 0;
+        return;
     }
+    size_t initLen = strlen(initStr);
+    while (capacity < initLen + 1) {
+        capacity <<= 1;
+    }
+    str = reinterpret_cast<char*>(malloc(capacity));
+    PRINT_FATAL_IF(str == nullptr, "CString::Init failed");
+    if (*initStr != '\0') {
+        PRINT_FATAL_IF(memcpy_s(str, capacity, initStr, initLen) != EOK, "CString::CString memcpy_s failed");
+    }
+    length = initLen;
+    str[length] = '\0';
 }
 
 CString::CString(char c)

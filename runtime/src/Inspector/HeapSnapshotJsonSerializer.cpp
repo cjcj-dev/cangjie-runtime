@@ -164,10 +164,8 @@ void CjHeapDataForIDE::SerializeAllStructClassLoad()
 
 void CjHeapDataForIDE::SerializeStackFrame(FrameInfo& frame, uint32_t frameIdx)
 {
+    (void)frameIdx;
     writer->WriteChar('[');
-    if (frameIdx > 0 && frame.GetFrameType() == FrameType::NATIVE) {
-        return;
-    }
     if (frame.GetFrameType() == FrameType::MANAGED) {
         StackMetadataHelper stackMetadataHelper(frame);
         methodName = frame.GetFuncName();
