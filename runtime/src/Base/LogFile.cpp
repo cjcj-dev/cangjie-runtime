@@ -333,4 +333,6 @@ RTLogLevel InitLogLevel()
 }
 
 void EmitPhaseRecord(const char* name, uint64_t us) { GcLog::Phase(name, us); }
+
+bool GcLogRecordsEnabled() { return GcLog::Enabled(); }
 } // namespace MapleRuntime
