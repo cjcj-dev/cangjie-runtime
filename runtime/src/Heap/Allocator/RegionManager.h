@@ -24,6 +24,7 @@
 #include "FreeRegionManager.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
+#include "Heap/Verify/EmptyLiveDiag.h"
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
@@ -342,6 +343,8 @@ public:
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
         F3Why2Diag::NoteCollectEnter(region);
+        // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
+        EmptyLiveDiag::NoteCollectEnter(region);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
