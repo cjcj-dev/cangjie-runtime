@@ -2482,16 +2482,22 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
     // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
     // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
-    static const bool forceInPlace = []() {
+    // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
+    static const bool forceInPlaceEnv = []() {
         const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
+    const bool forceInPlace =
+        forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
     if (forceInPlace || !RouteRegion(region)) {
         if (youngRegion) {
             // In-place promote (compacted / unrouted): scan before clearing young flag.
             // promodomain §A.3: register durable domain (default off); old scan stays.
+            // Register only during young GC (discharge runs in young.evac_finish only).
             region->PreserveRetainedLiveInfo();
-            PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
+                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+            }
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
@@ -2707,8 +2713,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
         if (youngRegion) {
             // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
+            // Register only on young GC (domain discharge is minor-only).
             region->PreserveRetainedLiveInfo();
-            PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
+                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+            }
             (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
