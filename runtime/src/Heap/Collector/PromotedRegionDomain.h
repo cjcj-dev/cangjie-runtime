@@ -23,11 +23,12 @@ class WCollector;
 // restartable discharge task (ZGC zRelocationSet._flip_promoted_pages +
 // ZRelocateAddRemsetForFlipPromoted / remap_and_maybe_add_remset).
 //
-// Default OFF. Product still runs RecordPromotedCrossGenEdges until a later lane
-// deletes it. Dual-run reconcile proves edge-set equivalence first.
+// Default ON (domainon). Product still runs RecordPromotedCrossGenEdges as shadow
+// until a later lane deletes the broad old scan / sync walk. Dual-run reconcile
+// (env) proves edge-set equivalence. Set MRT_GCV2_PROMO_DOMAIN=0 to disable.
 //
 // Gates:
-//   MRT_GCV2_PROMO_DOMAIN=1              — register + discharge task
+//   MRT_GCV2_PROMO_DOMAIN=0              — disable register + discharge (default on)
 //   MRT_GCV2_PROMO_DOMAIN_RECONCILE=1    — dual-run bidirectional set diff
 //   MRT_GCV2_PROMO_DOMAIN_SKIP_ONE=1     — positive: skip first domain edge
 //   MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED=1 — positive: leave one undischarged
@@ -72,11 +73,17 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
 // Dual-run: old RecordPromotedCrossGenEdges product edge.
 void NoteOldProductRecord(MAddress slot);
 
+// Coverage buckets (domainon): count Record vs Register by GC reason.
+// reason < GC_REASON_MAX; site: 0=inplace 1=abandon 2=residual 3=other
+void NoteRecordCall(uint32_t reason, uint8_t site, size_t edges);
+void NoteRegisterGate(uint32_t reason, uint8_t site, bool registered);
+
 // Next minor start: CHECK all discharged (unless inject), then clear table.
 void ResetForNextMinor(size_t minorRunIndex);
 
 void DumpReconcile(size_t minorRunIndex, const char* tag);
 void DumpProcessTotals(const char* tag);
+void DumpCoverageByReason(const char* tag);
 
 size_t RegisteredCount();
 size_t DischargedCount();
