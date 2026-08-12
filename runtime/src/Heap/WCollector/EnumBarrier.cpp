@@ -181,7 +181,7 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     gctib.ForEachBitmapWord(dst, [=](RefField<>& dstField) {
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, dstField));
         uint32_t offset = reinterpret_cast<MAddress>(&dstField) - dst;
-        HeapSlot<>& srcField = HeapSlotAt<>(src + offset);
+        HeapSlot<> srcField(HeapSlotAt<>(src + offset));
         mutator->RememberObjectInSatbBuffer(ReadReference(nullptr, srcField));
     });
     std::atomic_thread_fence(std::memory_order_seq_cst);
