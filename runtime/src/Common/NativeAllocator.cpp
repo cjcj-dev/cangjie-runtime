@@ -23,6 +23,8 @@ void* NativeAllocator::NativeAlloc(size_t bytes)
     if (tlData->threadCache == nullptr) {
         tlData->threadCache = new (std::nothrow) ThreadCache();
         CHECK_DETAIL(tlData->threadCache != nullptr, "new alloc threadCache failed");
+        // Arm the TLS dtor so a raw pthread that only NativeAlloc's still flushes.
+        ThreadLocal::InitializeCleaner();
     }
     return reinterpret_cast<ThreadCache*>(tlData->threadCache)->Allocate(bytes);
 }
@@ -40,6 +42,7 @@ void NativeAllocator::NativeFree(void* ptr, size_t bytes)
     if (tlData->threadCache == nullptr) {
         tlData->threadCache = new (std::nothrow) ThreadCache();
         CHECK_DETAIL(tlData->threadCache != nullptr, "new alloc threadCache failed");
+        ThreadLocal::InitializeCleaner();
     }
     reinterpret_cast<ThreadCache*>(tlData->threadCache)->Deallocate(ptr, bytes);
 }

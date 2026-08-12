@@ -87,4 +87,21 @@ void ThreadCache::ReturnToCentralCache(FreeList& list, size_t bytes)
     // 2. Release the stripped memory block list to CentralCache
     CentralCache::GetInstance()->ReleaseListToSpans(start, SizeManager::Index(bytes));
 }
+
+void ThreadCache::Flush()
+{
+    for (size_t i = 0; i < NFREELIST; ++i) {
+        if (freeLists[i].Empty()) {
+            continue;
+        }
+        void* start = nullptr;
+        freeLists[i].PopAtFront(start, freeLists[i].GetSize());
+        CentralCache::GetInstance()->ReleaseListToSpans(start, i);
+    }
+}
+
+ThreadCache::~ThreadCache()
+{
+    Flush();
+}
 } // namespace MapleRuntime
