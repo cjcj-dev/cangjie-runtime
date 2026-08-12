@@ -265,6 +265,20 @@ CJ_MCC_N2CStub:
     .global unwindPCForN2CStub
 unwindPCForN2CStub:
 
+    // EH resume may leave landing-pad PC in x0 (inside this stub). Null it so
+    // C does not see a code address as the return value (see x86_64_linux).
+    adrp x16, CJ_MCC_N2CStub
+    add  x16, x16, :lo12:CJ_MCC_N2CStub
+    cmp  x0, x16
+    b.lo .L_ret_ok
+    adrp x16, ExecuteCangjieStub
+    add  x16, x16, :lo12:ExecuteCangjieStub
+    cmp  x0, x16
+    b.hs .L_ret_ok
+    mov  x0, xzr
+    mov  x1, xzr
+.L_ret_ok:
+
     // keep potential return value
     mov  x21, x0
     mov  x22, x1

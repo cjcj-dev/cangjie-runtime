@@ -202,6 +202,21 @@ CJ_MCC_N2CStub:
     .global unwindPCForN2CStub
 unwindPCForN2CStub:
 
+    // EH resume (RestoreContextForEH → landing pad = this label) leaves the
+    // landing-pad PC in rax.  That PC is inside this stub; if we save it as the
+    // C return value, callers (e.g. macro InvokeMacroFunc) treat a code address
+    // as a malloc buffer → SEGV_ACCERR on the ELF PROT_NONE gap.
+    // Sanitize: if rax points into [CJ_MCC_N2CStub, ExecuteCangjieStub), null it.
+    leaq    CJ_MCC_N2CStub(%rip), %r11
+    cmpq    %r11, %rax
+    jb      .L_ret_ok
+    leaq    ExecuteCangjieStub(%rip), %r11
+    cmpq    %r11, %rax
+    jae     .L_ret_ok
+    xorq    %rax, %rax
+    xorq    %rdx, %rdx
+.L_ret_ok:
+
     // keep potential return value
     // rax is 1st return register, rdx is 2nd return register
     // xmm0-xmm1 are used to return floating point arguments
