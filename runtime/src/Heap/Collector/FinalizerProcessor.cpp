@@ -90,8 +90,10 @@ void FinalizerProcessor::Run()
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
             while (running) {
                 hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
-                hasPendingReclaimHeapGarbage = shouldReclaimHeapGarbage.load(std::memory_order_relaxed);
-                hasPendingFeedHungryBuffers = shouldFeedHungryBuffers.load(std::memory_order_relaxed);
+                hasPendingReclaimHeapGarbage =
+                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
+                hasPendingFeedHungryBuffers =
+                    shouldFeedHungryBuffers.exchange(false, std::memory_order_acq_rel);
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
@@ -333,12 +335,10 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
-    shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::FeedHungryBuffers()
 {
     Heap::GetHeap().GetAllocator().FeedHungryBuffers();
-    shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
 } // namespace MapleRuntime

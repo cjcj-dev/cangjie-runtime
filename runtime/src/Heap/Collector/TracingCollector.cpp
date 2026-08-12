@@ -1113,8 +1113,13 @@ void TracingCollector::UpdateGCStats()
         newThreshold = (threshold1 * 1 + threshold2 * 4 + threshold3 * 2 + threshold4 * 1) / 8;
         // 2s: We set the max waiting time to 2s to avoid memory increasing too fast.
         auto maxAdaptiveInterval = static_cast<uint64_t>(2) * MapleRuntime::SECOND_TO_NANO_SECOND;
-        uint64_t gcAdaptiveInterval = static_cast<uint64_t>((newThreshold - liveBytes) / gcStats.collectionRate / MB);
-        gcAdaptiveInterval = std::min(gcAdaptiveInterval, maxAdaptiveInterval);
+        uint64_t gcAdaptiveInterval = maxAdaptiveInterval;
+        if (gcStats.collectionRate > 0.0) {
+            double estimatedInterval = static_cast<double>(newThreshold - liveBytes) / MB /
+                gcStats.collectionRate * MapleRuntime::SECOND_TO_NANO_SECOND;
+            gcAdaptiveInterval = static_cast<uint64_t>(
+                std::min(estimatedInterval, static_cast<double>(maxAdaptiveInterval)));
+        }
         gcInterval = std::max(gcInterval, gcAdaptiveInterval);
 #else
         // 4: Computing arithmetic mean
