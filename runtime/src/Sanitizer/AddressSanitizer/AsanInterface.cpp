@@ -8,6 +8,7 @@
 #include "AsanInterface.h"
 
 #include <cerrno>
+#include <pthread.h>
 #include <sys/mman.h>
 #include <tuple>
 #ifdef __APPLE__
@@ -237,10 +238,20 @@ void AsanExitCJThread(void* thread)
 {
     void* addr = nullptr;
     size_t size = 0;
+#if defined(__APPLE__)
+    pthread_t self = pthread_self();
+    size = pthread_get_stacksize_np(self);
+    addr = static_cast<char*>(pthread_get_stackaddr_np(self)) - size;
+#else
+    // pthread_attr_init + getstack reads the default attribute (null stack),
+    // not this thread. Same pattern as Mutator::InitProtectStackAddr.
     pthread_attr_t attr;
-    (void)pthread_attr_init(&attr);
-    (void)pthread_attr_getstack(&attr, &addr, &size);
-    (void)pthread_attr_destroy(&attr);
+    pthread_t self = pthread_self();
+    if (pthread_getattr_np(self, &attr) == 0) {
+        (void)pthread_attr_getstack(&attr, &addr, &size);
+        (void)pthread_attr_destroy(&attr);
+    }
+#endif
     // passing nullptr indicates the fiber will die, delete the fake stack
     REAL(__sanitizer_start_switch_fiber)(nullptr, addr, size);
     REAL(__sanitizer_finish_switch_fiber)(g_fakeStack, nullptr, nullptr);

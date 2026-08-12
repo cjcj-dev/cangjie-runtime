@@ -7,7 +7,7 @@
 
 SANITIZER_SYMBOL_DECL(void, __tsan_func_entry, 1, const void*, pc);
 SANITIZER_SYMBOL_DECL(void, __tsan_func_exit, 0, void, void);
-SANITIZER_SYMBOL_DECL(void, __tsan_func_restore_context, 0, const void*, pc);
+SANITIZER_SYMBOL_DECL(void, __tsan_func_restore_context, 1, const void*, pc);
 SANITIZER_SYMBOL_DECL(void*, __tsan_init, 0, void, void);
 SANITIZER_SYMBOL_DECL(void, __tsan_fini, 0, void, void);
 SANITIZER_SYMBOL_DECL(void*, __tsan_proc_create, 0, void, void);
