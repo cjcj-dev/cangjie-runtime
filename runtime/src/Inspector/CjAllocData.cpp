@@ -243,6 +243,19 @@ int32_t AllocStackInfo::ProcessTraceInfo(FrameInfo &frame)
     return functionInfoIndex;
 }
 
+AllocStackInfo::~AllocStackInfo()
+{
+    ClearFrames();
+}
+
+void AllocStackInfo::ClearFrames()
+{
+    while (!frames.empty()) {
+        delete frames.top();
+        frames.pop();
+    }
+}
+
 void AllocStackInfo::ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, MSize allocSize)
 {
     // Initialize nodes and fill nodes in head in sequence.
@@ -260,6 +273,7 @@ void AllocStackInfo::ProcessTraceNode(TraceNodeField* head, const TypeInfo* ti, 
         traceNode->type = ti->GetType();
         if (traceNode->functionInfoIndex == -1) {
             delete traceNode;
+            delete f;
             continue;
         }
         traceNode->selfSize = 0;
@@ -300,6 +314,7 @@ void AllocStackInfo::ProcessStackTrace(const TypeInfo* ti, MSize size)
 #else
         if (uwContext.UnwindToCallerContext(caller, uwCtxStatus) == false) {
 #endif
+            ClearFrames();
             return;
         }
         uwContext = caller;
