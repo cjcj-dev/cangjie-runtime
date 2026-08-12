@@ -72,11 +72,17 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
 // Dual-run: old RecordPromotedCrossGenEdges product edge.
 void NoteOldProductRecord(MAddress slot);
 
+// Coverage buckets (domainon): count Record vs Register by GC reason.
+// reason < GC_REASON_MAX; site: 0=inplace 1=abandon 2=residual 3=other
+void NoteRecordCall(uint32_t reason, uint8_t site, size_t edges);
+void NoteRegisterGate(uint32_t reason, uint8_t site, bool registered);
+
 // Next minor start: CHECK all discharged (unless inject), then clear table.
 void ResetForNextMinor(size_t minorRunIndex);
 
 void DumpReconcile(size_t minorRunIndex, const char* tag);
 void DumpProcessTotals(const char* tag);
+void DumpCoverageByReason(const char* tag);
 
 size_t RegisteredCount();
 size_t DischargedCount();

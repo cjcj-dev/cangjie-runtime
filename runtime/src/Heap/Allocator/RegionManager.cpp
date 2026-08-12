@@ -2504,10 +2504,17 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // promodomain §A.3: register durable domain (default off); old scan stays.
             // Register only during young GC (discharge runs in young.evac_finish only).
             region->PreserveRetainedLiveInfo();
-            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
-                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::InPlace);
+                }
+                // domainon COVERAGE: Register gate vs Record site (inplace=0).
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 0, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 0, recEdges);
             }
-            (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
@@ -2724,10 +2731,17 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
             // Register only on young GC (domain discharge is minor-only).
             region->PreserveRetainedLiveInfo();
-            if (Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG) {
-                PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+                }
+                // domainon COVERAGE: Register gate vs Record site (abandon=1).
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
             }
-            (void)RecordPromotedCrossGenEdges(region);
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }

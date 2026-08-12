@@ -4814,9 +4814,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
                 // still demote to old; must replay young→young edges that become old→young.
                 // promodomain §A.3 residual arm: register + old sync walk (domain default off).
+                // residual only runs inside young.evac_finish ⇒ reason is always YOUNG.
                 region->PreserveRetainedLiveInfo();
                 PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Residual);
-                residualPromoteRecords += RegionManager::RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(GC_REASON_YOUNG),
+                                                       /*site*/ 2, /*registered*/ true);
+                size_t recEdges = RegionManager::RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
+                                                     /*site*/ 2, recEdges);
+                residualPromoteRecords += recEdges;
                 region->SetYoungRegionFlag(0);
                 region->SetYoungAge(0);
             }
@@ -4855,6 +4861,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             PromotedRegionDomain::DumpProcessTotals("evac_finish");
             VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu promoteReplay=%zu residual=%zu",
                  domainEdges, promotedPathRecords, residualPromoteRecords);
+        } else {
+            // domain off: still dump reason×site coverage (always-on counters).
+            PromotedRegionDomain::DumpCoverageByReason("evac_finish_domain_off");
         }
 
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
@@ -6273,6 +6282,8 @@ void WCollector::DoGarbageCollection()
     }
 
     CollectSmallSpace();
+    // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
+    PromotedRegionDomain::DumpCoverageByReason("post-major");
     // retmid: do NOT StampCensusBoundaries / PromoteAllRegions here.
     // Ablation D (both major STWs disabled) restores mid_alloc 5/5; any of
     // Flush/Stamp/Promote in these STWs reintroduces 0/5 or residual 甲 under

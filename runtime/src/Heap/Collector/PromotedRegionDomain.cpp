@@ -17,6 +17,7 @@
 #include "Base/LogFile.h"
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/GcRequest.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -50,6 +51,14 @@ std::atomic<uint64_t> g_lastDomainOnly{ 0 };
 std::atomic<uint64_t> g_reconcileMismatchCycles{ 0 };
 std::atomic<uint64_t> g_skipOneFired{ 0 };
 std::atomic<uint64_t> g_injectUndischarged{ 0 };
+
+// domainon coverage: per-reason Record/Register (site 0..3).
+constexpr size_t kReasonN = static_cast<size_t>(GC_REASON_MAX);
+constexpr size_t kSiteN = 4;
+std::atomic<uint64_t> g_recCalls[kReasonN][kSiteN]{};
+std::atomic<uint64_t> g_recEdges[kReasonN][kSiteN]{};
+std::atomic<uint64_t> g_regYes[kReasonN][kSiteN]{};
+std::atomic<uint64_t> g_regNo[kReasonN][kSiteN]{};
 
 bool EnvIsOne(const char* name)
 {
@@ -263,6 +272,27 @@ void NoteOldProductRecord(MAddress slot)
     g_oldSlots.insert(slot);
 }
 
+void NoteRecordCall(uint32_t reason, uint8_t site, size_t edges)
+{
+    if (reason >= kReasonN || site >= kSiteN) {
+        return;
+    }
+    g_recCalls[reason][site].fetch_add(1, std::memory_order_relaxed);
+    g_recEdges[reason][site].fetch_add(static_cast<uint64_t>(edges), std::memory_order_relaxed);
+}
+
+void NoteRegisterGate(uint32_t reason, uint8_t site, bool registered)
+{
+    if (reason >= kReasonN || site >= kSiteN) {
+        return;
+    }
+    if (registered) {
+        g_regYes[reason][site].fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_regNo[reason][site].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                     const std::function<bool(RefField<>&)>& isStoreGood,
                     const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood,
@@ -418,6 +448,55 @@ void DumpProcessTotals(const char* tag)
          static_cast<unsigned long long>(g_reconcileMismatchCycles.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_skipOneFired.load(std::memory_order_relaxed)),
          static_cast<unsigned long long>(g_injectUndischarged.load(std::memory_order_relaxed)));
+    DumpCoverageByReason(tag);
+}
+
+void DumpCoverageByReason(const char* tag)
+{
+    // Always-on counters (cheap atomic); dump even when domain off so product path
+    // can prove Record site×reason without forcing PROMO_DOMAIN=1.
+    static const char* kSiteName[kSiteN] = { "inplace", "abandon", "residual", "other" };
+    uint64_t recNonYoung = 0;
+    uint64_t regYesNonYoung = 0;
+    uint64_t regNoAny = 0;
+    for (size_t r = 0; r < kReasonN; ++r) {
+        uint64_t recC = 0;
+        uint64_t recE = 0;
+        uint64_t yes = 0;
+        uint64_t no = 0;
+        for (size_t s = 0; s < kSiteN; ++s) {
+            uint64_t c = g_recCalls[r][s].load(std::memory_order_relaxed);
+            uint64_t e = g_recEdges[r][s].load(std::memory_order_relaxed);
+            uint64_t y = g_regYes[r][s].load(std::memory_order_relaxed);
+            uint64_t n = g_regNo[r][s].load(std::memory_order_relaxed);
+            if (c == 0 && e == 0 && y == 0 && n == 0) {
+                continue;
+            }
+            const char* rname = r < GC_REASON_MAX ? g_gcRequests[r].name : "invalid";
+            VLOG(REPORT,
+                 "[PROMODOMAIN][COVER] tag=%s reason=%s(%zu) site=%s recCalls=%llu recEdges=%llu "
+                 "regYes=%llu regNo=%llu",
+                 tag != nullptr ? tag : "?", rname, r, kSiteName[s],
+                 static_cast<unsigned long long>(c), static_cast<unsigned long long>(e),
+                 static_cast<unsigned long long>(y), static_cast<unsigned long long>(n));
+            recC += c;
+            recE += e;
+            yes += y;
+            no += n;
+        }
+        if (r != static_cast<size_t>(GC_REASON_YOUNG)) {
+            recNonYoung += recC;
+            regYesNonYoung += yes;
+        }
+        regNoAny += no;
+    }
+    VLOG(REPORT,
+         "[PROMODOMAIN][COVERSUM] tag=%s recCallsNonYoung=%llu regYesNonYoung=%llu regNoAny=%llu "
+         "gap=(rec without reg gate) see COVER lines",
+         tag != nullptr ? tag : "?",
+         static_cast<unsigned long long>(recNonYoung),
+         static_cast<unsigned long long>(regYesNonYoung),
+         static_cast<unsigned long long>(regNoAny));
 }
 
 size_t RegisteredCount()
