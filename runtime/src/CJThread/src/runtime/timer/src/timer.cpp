@@ -107,7 +107,7 @@ void TimerShiftDown(struct TimerHeap *heap, unsigned long long idx)
 }
 
 /* Insert a timer into the 4-fork heap */
-void TimerDoAdd(struct TimerHeap *heap, struct TimerNode *timer)
+int TimerDoAdd(struct TimerHeap *heap, struct TimerNode *timer)
 {
     // Check the length of the heap. If the length exceeds the range of the heap, expand the capacity.
     if (heap->numTimers == heap->capacity) {
@@ -116,7 +116,7 @@ void TimerDoAdd(struct TimerHeap *heap, struct TimerNode *timer)
                 sizeof(struct TimerNode *) * heap->numTimers * TIMER_HEAP_EXPAND_MULTIPLE));
         if (newBuf == nullptr) {
             LOG_ERROR(ERROR_TIMER_ALLOC, "timerheap->buf expand capacity failed ");
-            return;
+            return ERROR_TIMER_ALLOC;
         }
         heap->capacity = heap->numTimers * TIMER_HEAP_EXPAND_MULTIPLE;
         for (unsigned long long i = 0; i < heap->numTimers; i++) {
@@ -133,6 +133,7 @@ void TimerDoAdd(struct TimerHeap *heap, struct TimerNode *timer)
         heap->timer0Deadline = timer->deadline;
     }
     heap->numTimers++;
+    return 0;
 }
 
 /* Initializes the timer. It is registered with the processor and is invoked during processor initialization. */
@@ -266,12 +267,13 @@ void TimerHeapTopAdjust(struct TimerHeap *heap)
  * Add a timer to the timer.
  * Ensure that the cjthread is not switched out during the adding process.
  **/
-void TimerAdd(struct TimerHeap *heap, struct TimerNode *timer)
+int TimerAdd(struct TimerHeap *heap, struct TimerNode *timer)
 {
     pthread_mutex_lock(&heap->mutex);
     TimerHeapTopAdjust(heap);
-    TimerDoAdd(heap, timer);
+    int ret = TimerDoAdd(heap, timer);
     pthread_mutex_unlock(&heap->mutex);
+    return ret;
 }
 
 int TimerStopAheadStateAdjust(struct TimerHeap *heap, struct TimerNode *timer, TimerStatus curStatus)
@@ -865,18 +867,16 @@ int TimerHeapInitAndAdd(struct TimerNode *timer)
     timers = (struct TimerHeap *)ProcessorGetspecific(processor, KEY_TIMER);
     timer->pPtr = processor;
     if (timers != nullptr) {
-        TimerAdd(timers, timer);
-    } else {
-        timers = (struct TimerHeap *)TimerHeapInit();
-        if (timers == nullptr) {
-            LOG_ERROR(ERROR_TIMER_ALLOC, "timer heap alloc failed");
-            return ERROR_TIMER_ALLOC;
-        }
-        // Put the timer heap into the array of the processor.
-        ProcessorSetspecific(processor, KEY_TIMER, timers);
-        TimerAdd(timers, timer);
+        return TimerAdd(timers, timer);
     }
-    return 0;
+    timers = (struct TimerHeap *)TimerHeapInit();
+    if (timers == nullptr) {
+        LOG_ERROR(ERROR_TIMER_ALLOC, "timer heap alloc failed");
+        return ERROR_TIMER_ALLOC;
+    }
+    // Put the timer heap into the array of the processor.
+    ProcessorSetspecific(processor, KEY_TIMER, timers);
+    return TimerAdd(timers, timer);
 }
 
 struct TimerNode *TimerInit(unsigned long long dur, unsigned long long period, TimerFunc func, void *args)

@@ -1300,6 +1300,15 @@ int CJThreadParkInForeignThread(CJThread* cjthread, ParkCallbackFunc func, void 
     atomic_store_explicit(&cjthread->state, CJTHREAD_PENDING, std::memory_order_relaxed);
     int error = func(arg, (CJThreadHandle)cjthread);
     if (error != 0) {
+        // Same rollback as CJThreadMpark: the callback refused the park, so this
+        // cjthread is still running. Leaving PENDING would make CJThreadReady's
+        // PENDING→READY CAS fail and drop the later wake.
+        atomic_store_explicit(&cjthread->state, CJTHREAD_RUNNING, std::memory_order_relaxed);
+        cjthread->result = error;
+        thread->state = THREAD_RUNNING;
+        MapleRuntime::ThreadLocalData* tlData = MapleRuntime::ThreadLocal::GetThreadLocalData();
+        tlData->SetMutator(mutator);
+        mutator->PreparedToRun(tlData);
         return cjthread->result;
     }
 
