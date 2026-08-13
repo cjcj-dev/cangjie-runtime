@@ -145,6 +145,11 @@ bool GateEquivInjectOn()
     return on;
 }
 
+// c4unify MASKEQUIV counters (see Collector.h for the contract).
+std::atomic<size_t> g_maskEquivChecked{ 0 };
+std::atomic<size_t> g_maskEquivMismatch{ 0 };
+std::atomic<size_t> g_maskEquivInjected{ 0 };
+
 // Pure predicate copy: same reject set as PlausibleManagedObjectGate, no counters.
 // Used only for GATEEQUIV dual-run. Must track the product gate branch-for-branch.
 bool PlausibleManagedObjectGatePure(BaseObject* obj)
@@ -315,6 +320,74 @@ unsigned SiteBucket(const char* site)
     return 14;
 }
 } // namespace
+
+void MaskEquivAtexitReport()
+{
+    LOG(RTLOG_ERROR, "[GCV2][maskequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_MASKEQUIV=1",
+        g_maskEquivChecked.load(std::memory_order_relaxed), g_maskEquivMismatch.load(std::memory_order_relaxed),
+        g_maskEquivInjected.load(std::memory_order_relaxed));
+}
+
+bool MaskEquivOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MASKEQUIV");
+        bool enabled = v != nullptr && std::strcmp(v, "1") == 0;
+        if (enabled) {
+            std::atexit(MaskEquivAtexitReport);
+        }
+        return enabled;
+    }();
+    return on;
+}
+
+bool MaskEquivInjectOn()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MASKEQUIV_INJECT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+// The witness below is a TEXT COPY of WCollector::set_good_masks as it stood at 6adf9dd0.
+// ⛔ It must never become a call to ComputeBadMasks: that would compare one implementation with
+// itself, report mismatch=0 for ever, and look exactly like success. This is the same trap the
+// GATEEQUIV inject arm exists to expose.
+void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
+{
+    if (!MaskEquivOn()) {
+        return;
+    }
+    uintptr_t wRemap = e.remappedYoungMask & e.remappedOldMask;
+    uintptr_t wLoad = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ wRemap);
+    uintptr_t wMark = wLoad | (MARKED_YOUNG_MASK & ~e.markedYoung) | (MARKED_OLD_MASK & ~e.markedOld);
+    uintptr_t wStore = wMark | (REMEMBERED_MASK & ~e.remembered);
+
+    bool injected = false;
+    if (MaskEquivInjectOn() && g_maskEquivInjected.fetch_add(1, std::memory_order_relaxed) == 0) {
+        // Synthetic divergence, exactly once: flips a bit no colour family owns, so the arm
+        // proves the comparison runs without teaching the comparison anything real.
+        wLoad ^= (uintptr_t(1) << 63);
+        injected = true;
+    }
+
+    g_maskEquivChecked.fetch_add(1, std::memory_order_relaxed);
+    const bool mismatch =
+        (wRemap != m.remapColour) || (wLoad != m.loadBad) || (wMark != m.markBad) || (wStore != m.storeBad);
+    if (mismatch) {
+        size_t n = g_maskEquivMismatch.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 16) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][maskequiv] %s n=%zu remap=%#zx/%#zx load=%#zx/%#zx mark=%#zx/%#zx store=%#zx/%#zx "
+                "(product/witness)",
+                injected ? "INJECT mismatch" : "mismatch", n, static_cast<size_t>(m.remapColour),
+                static_cast<size_t>(wRemap), static_cast<size_t>(m.loadBad), static_cast<size_t>(wLoad),
+                static_cast<size_t>(m.markBad), static_cast<size_t>(wMark), static_cast<size_t>(m.storeBad),
+                static_cast<size_t>(wStore));
+        }
+    }
+}
 
 bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
 {

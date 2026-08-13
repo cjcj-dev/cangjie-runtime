@@ -23,6 +23,9 @@
 # <file>                                  <status>   <what it needs / why it is here>
 
 slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
+colour_state_machine_probe.cpp            configure  compile-time colour state machine table: 32-epoch formula equivalence against a literal copy, DROP_BIT collision counts (None/Ghost must be 0, each family > 0), and three inject arms
+
+run_colour_table_witness.sh               manual     host g++/clang++ with C++14 only; prints the readable collision witness and per-family counts. Judgement is the configure arm above
 
 run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
 run_stack_exposure_probe.sh               manual     built runtime SO + cpuset; 6 cases

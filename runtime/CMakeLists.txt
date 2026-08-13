@@ -995,6 +995,101 @@ else()
         "three-slot discipline; remove this block deliberately if that is the intent.")
 endif()
 
+# ── colour state machine table (C4 knife 1) ──────────────────────────────────
+# Compile-time only, same try_compile shape as SLOT_TYPE_PROBE and for the same reason: some of
+# the five platforms are cross targets where try_run cannot execute anything, so the table has to
+# be a set of static_asserts if it is to run on all of them.
+#
+# What it holds down:
+#   control  -- ComputeBadMasks equals the literal pre-C4 expression on all 32 epochs; the three
+#               barriers form a lattice; a mid-evacuation reference is bad at all three; the
+#               model's predicates agree with the masks the product actually publishes; and
+#               dropping any one metadata family leaves at least one (epoch, event, colour-pair)
+#               the remaining families cannot decide.
+#   inject   -- three deliberate breakages, each of which must fail to compile AND say so on the
+#               expected token. Without them a probe that stopped being compiled at all would
+#               look exactly like a probe that passes.
+set(C4_TABLE_PROBE_SRC ${CMAKE_CURRENT_SOURCE_DIR}/tests/colour_state_machine_probe.cpp)
+if (EXISTS ${C4_TABLE_PROBE_SRC})
+    get_property(C4_TABLE_INCS DIRECTORY PROPERTY INCLUDE_DIRECTORIES)
+    list(APPEND C4_TABLE_INCS ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    set(C4_TABLE_INC_ARG "${C4_TABLE_INCS}")
+
+    # The product is built as C++14 on every platform (build/cmake/toolchain/*.cmake), so the
+    # table must be evaluated as C++14 too -- a table proved under C++17 constant evaluation
+    # would be proving something about a language mode we do not ship. The slot probe next door
+    # uses 17 for its own reasons; this is not that.
+    #
+    # Clang's default constexpr budget is one million steps and the enumeration needs more than
+    # that; gcc's default ops-limit is already large enough. An unrecognised flag is an error, so
+    # this is per-compiler rather than "pass both and hope".
+    set(C4_TABLE_CXX_FLAGS "")
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        set(C4_TABLE_CXX_FLAGS "-fconstexpr-steps=100000000")
+    endif()
+
+    set(C4_TABLE_SAVED_TARGET_TYPE "${CMAKE_TRY_COMPILE_TARGET_TYPE}")
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE STATIC_LIBRARY)
+
+    try_compile(C4_TABLE_CONTROL_OK ${CMAKE_CURRENT_BINARY_DIR}/c4table/control
+        SOURCES ${C4_TABLE_PROBE_SRC}
+        CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${C4_TABLE_INC_ARG}"
+                    "-DCMAKE_CXX_FLAGS=${C4_TABLE_CXX_FLAGS}"
+        CXX_STANDARD 14 CXX_STANDARD_REQUIRED ON
+        OUTPUT_VARIABLE C4_TABLE_CONTROL_OUT)
+    if (NOT C4_TABLE_CONTROL_OK)
+        message(FATAL_ERROR
+            "C4_COLOUR_TABLE control arm FAILED to compile. Either a judgement in the table is now "
+            "false -- read the static_assert text, it names which -- or the probe apparatus is "
+            "broken, in which case the negative arms below prove nothing. "
+            "Output:\n${C4_TABLE_CONTROL_OUT}")
+    endif()
+
+    # "<macro>|<token the diagnostic must contain>"
+    set(C4_TABLE_NEGATIVES
+        "MRT_C4TABLE_INJECT_ACTION|C4TABLE_DROP_NONE"
+        "MRT_C4TABLE_INJECT_FORMULA|C4TABLE_MASK_EQUIV"
+        "MRT_C4TABLE_INJECT_GHOST|C4TABLE_DROP_GHOST")
+    set(C4_TABLE_NEG_COUNT 0)
+    foreach(entry IN LISTS C4_TABLE_NEGATIVES)
+        string(REPLACE "|" ";" parts "${entry}")
+        list(GET parts 0 macro)
+        list(GET parts 1 token)
+        try_compile(one_ok ${CMAKE_CURRENT_BINARY_DIR}/c4table/${macro}
+            SOURCES ${C4_TABLE_PROBE_SRC}
+            CMAKE_FLAGS "-DINCLUDE_DIRECTORIES=${C4_TABLE_INC_ARG}"
+                        "-DCMAKE_CXX_FLAGS=${C4_TABLE_CXX_FLAGS}"
+            COMPILE_DEFINITIONS -D${macro}
+            CXX_STANDARD 14 CXX_STANDARD_REQUIRED ON
+            OUTPUT_VARIABLE one_out)
+        if (one_ok)
+            message(FATAL_ERROR
+                "C4_COLOUR_TABLE ${macro}: the deliberate breakage COMPILED. The table is no longer "
+                "sensitive to it, so its green result means nothing.")
+        endif()
+        string(FIND "${one_out}" "${token}" tok_at)
+        if (tok_at EQUAL -1)
+            message(FATAL_ERROR
+                "C4_COLOUR_TABLE ${macro}: failed to compile, but the diagnostic never mentions "
+                "'${token}' -- so it probably failed for an unrelated reason (a missing header gives "
+                "a non-zero exit too). Output:\n${one_out}")
+        endif()
+        math(EXPR C4_TABLE_NEG_COUNT "${C4_TABLE_NEG_COUNT}+1")
+    endforeach()
+
+    set(CMAKE_TRY_COMPILE_TARGET_TYPE "${C4_TABLE_SAVED_TARGET_TYPE}")
+
+    message(STATUS
+        "C4_COLOUR_TABLE=PASS control=1 negatives=${C4_TABLE_NEG_COUNT} std=14 "
+        "(32-epoch mask equivalence + DROP_BIT collisions; each negative rejected AND diagnosed)")
+else()
+    message(FATAL_ERROR
+        "C4_COLOUR_TABLE: ${C4_TABLE_PROBE_SRC} is missing. That file is the only mechanical check "
+        "that the four live metadata families are minimal and that the lifted mask formula is the "
+        "one that shipped; it was already lost once with the 08-12 rewrite. Remove this block "
+        "deliberately if that is the intent.")
+endif()
+
 endif() # BUILD_RUNTIME
 
 # GC unit tests — independent of BUILD_RUNTIME product link; default OFF.

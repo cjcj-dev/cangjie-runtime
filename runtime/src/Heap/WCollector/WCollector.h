@@ -123,20 +123,39 @@ public:
     size_t youngMarkFlipCount = 0;
     size_t oldMarkFlipCount = 0;
 
+    // The five epoch words this collector currently hands out, as the POD the shared formula
+    // takes. Order matches EpochColours (ColourMask.h) and the member declarations above.
+    EpochColours current_epoch_colours() const
+    {
+        return EpochColours{ static_cast<uintptr_t>(ZPointerRemappedYoungMask),
+                             static_cast<uintptr_t>(ZPointerRemappedOldMask),
+                             static_cast<uintptr_t>(currentMarkedYoung),
+                             static_cast<uintptr_t>(currentMarkedOld),
+                             static_cast<uintptr_t>(currentRemembered) };
+    }
+
     // Mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94):
     //   :81 LoadGood  = remap_bits(Remapped)
     //   :82 MarkGood  = LoadGood | MarkedYoung | MarkedOld
     //   :83 StoreGood = MarkGood | Remembered
-    // Bad masks are Good ^ Metadata (+ tagged for our ABI). Finalizable not introduced.
+    // Bad masks are Good ^ Metadata (+ tagged for our ABI). Finalizable not introduced
+    // (ColourMask.h kFinalizableWired).
+    //
+    // c4unify: the arithmetic moved to ColourMask.h ComputeBadMasks so that this function and
+    // the three static initialisers in BaseObject.cpp stop being two independent copies of the
+    // same formula. Publication order and the set of published words are unchanged; the four
+    // flip_* functions below and their six call sites are untouched on purpose -- a table
+    // cannot see "a flip forgot to call set_good_masks", so that stays a separate change.
     void set_good_masks()
     {
-        currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
-        ::g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ currentRemapColour);
-        ::g_cjMarkBadMask = ::g_cjLoadBadMask | (MARKED_YOUNG_MASK & ~currentMarkedYoung) |
-            (MARKED_OLD_MASK & ~currentMarkedOld);
-        // StoreBad = MarkBad | (RememberedMask & ~currentRemembered)
-        // equivalent to StoreGood ^ STORE_METADATA_MASK with tagged folded in via MarkBad.
-        ::g_cjStoreBadMask = ::g_cjMarkBadMask | (REMEMBERED_MASK & ~currentRemembered);
+        const EpochColours e = current_epoch_colours();
+        const BadMasks m = ComputeBadMasks(e);
+        currentRemapColour = m.remapColour;
+        ::g_cjLoadBadMask = m.loadBad;
+        ::g_cjMarkBadMask = m.markBad;
+        ::g_cjStoreBadMask = m.storeBad;
+        // Default off; first line of the callee is `if (!MaskEquivOn()) return;`.
+        MaskEquivCheck(e, m);
     }
 
     // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start

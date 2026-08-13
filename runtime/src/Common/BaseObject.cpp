@@ -237,22 +237,47 @@ bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> old
 extern "C" __attribute__((used, visibility("default")))
 const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
 
-extern "C" unsigned long g_cjLoadBadMask =
-    MapleRuntime::TAGGED_BITS_MASK |
-    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00);
+// c4unify: these three used to be hand-written literal expressions -- a second copy of
+// WCollector::set_good_masks, whose own comment said it was written to "match live
+// set_good_masks shape". They are now the same function evaluated at the initial epoch, and the
+// old literals survive only as witnesses in the static_asserts below: if the shared formula ever
+// drifts from what shipped, the build stops here rather than at the first flip.
+//
+// ⭐ The named constexpr constants are load-bearing, not style. These three globals are
+// constant-initialised today (they land in .data), and both the compiler-emitted barriers and
+// BaseObject.cpp itself read them before main. Routing through a `constexpr unsigned long`
+// makes a platform on which the expression is not a constant expression a compile error instead
+// of a silent demotion to dynamic initialisation -- which would leave the masks reading 0 during
+// static init, i.e. every reference load-good, i.e. no barrier at all.
+namespace {
+constexpr MapleRuntime::BadMasks kInitialBadMasks =
+    MapleRuntime::ComputeBadMasks(MapleRuntime::kInitialEpochColours);
 
+constexpr unsigned long kLoadBad0 = static_cast<unsigned long>(kInitialBadMasks.loadBad);
+constexpr unsigned long kMarkBad0 = static_cast<unsigned long>(kInitialBadMasks.markBad);
+constexpr unsigned long kStoreBad0 = static_cast<unsigned long>(kInitialBadMasks.storeBad);
+
+// Witnesses: the literal expressions this file carried before c4unify, verbatim.
+static_assert(kLoadBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                            (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00)),
+              "g_cjLoadBadMask initial value changed");
 // Mark-good includes load-good plus the current young and old mark epochs. The initial current
 // epochs are *_0, so their *_1 bits are bad (OpenJDK zAddress.cpp:78-87,120-127).
-extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = MapleRuntime::TAGGED_BITS_MASK |
-    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
-    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1;
-
+static_assert(kMarkBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                            (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+                            MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1),
+              "g_cjMarkBadMask initial value changed");
 // Store-good = mark-good | current Remembered (initial REMEMBERED_0). Store-bad rejects the
 // other rem bit and all mark-bad bits (OpenJDK zAddress.cpp:83-87).
-// storeGood0 = Remapped00 | MY0 | MO0 | REM0
-// storeBad0  = storeGood0 ^ (REMAP|MY|MO|REM) | TAGGED  — match live set_good_masks shape:
-//              markBad | (REM_MASK & ~currentRem)  with tagged already in markBad.
-extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = MapleRuntime::TAGGED_BITS_MASK |
-    (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
-    MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
-    MapleRuntime::REMEMBERED_1;
+static_assert(kStoreBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                             (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+                             MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
+                             MapleRuntime::REMEMBERED_1),
+              "g_cjStoreBadMask initial value changed");
+} // namespace
+
+extern "C" unsigned long g_cjLoadBadMask = kLoadBad0;
+
+extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = kMarkBad0;
+
+extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = kStoreBad0;
