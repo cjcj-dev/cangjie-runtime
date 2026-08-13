@@ -30,6 +30,7 @@ set(SRC_LIST
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
     "EmptyLiveDiag.cpp"
+    "GarbRegionDiag.cpp"
     "PermWhoAdmit.cpp"
     "FlipPromoDiag.cpp"
     "O2ORemsetDiag.cpp"

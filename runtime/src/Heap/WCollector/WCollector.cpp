@@ -47,6 +47,7 @@
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/FysDesignDiag.h"
 #include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/FysAuditDiag.h"
 #include "Heap/Verify/FlipPromoDiag.h"
 #include "Heap/Verify/O2ORemsetDiag.h"
@@ -1472,10 +1473,12 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
         } else if (latestRegion->IsFreeRegion()) {
             reason = "region_free";
             rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+            GarbRegionDiag::NoteF3Join(latestRegion, latest, reason);
         } else if (latestRegion->IsGarbageRegion()) {
             reason = "region_garbage";
             rtype = static_cast<unsigned>(latestRegion->GetRegionType());
             F3Why2Diag::NoteF3RegionGarbage(latestRegion, latest);
+            GarbRegionDiag::NoteF3Join(latestRegion, latest, reason);
         } else {
             latestValid = latestValidObj ? 1 : 0;
             reason = latestValid ? "valid_but_not_live" : "invalid_object";
@@ -2018,6 +2021,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // Always-on F3 dead-arm class totals (soft-null + bad-tip). Greppable every F3 walk.
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
+    GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
     if (account) {
         VLOG(REPORT,
              "[GCV2][preflip-account] phase=%s regions=%zu knownEmptyRegions=%zu objects=%zu "
