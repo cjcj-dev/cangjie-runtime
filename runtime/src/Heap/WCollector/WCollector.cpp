@@ -62,6 +62,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "TypeInfoManager.h"
 #include "Verify/VerifyRegions.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
@@ -3633,9 +3634,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     static std::atomic<size_t> g_remsetLifeClearLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
-    size_t scrubbedNoOrigin = 0;
     size_t scrubbedNoTargetOrigin = 0;
     size_t recoveredTargetInterior = 0;
+    size_t targetOriginSlowLookups = 0;
+    size_t targetOriginIndexedRegions = 0;
+    size_t targetOriginVisitedObjects = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
     static const bool retainedProbe = []() {
@@ -3703,11 +3706,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t deadHolderTargetBad = 0;
     size_t liveHolderTargetOk = 0;
     size_t liveHolderTargetBad = 0;
-    // The precise bitmap intentionally stores only field-slot identity. Recover the
-    // owning object for every heap region represented in this drain: a retained
-    // snapshot is optional liveness information, not proof that an arbitrary address
-    // is a RefField. Keep this adapter local to the minor collection rather than
-    // adding a second persistent remset index.
+    // The precise bitmap intentionally stores only field-slot identity. Recover an
+    // object origin only for regions whose retained snapshot is consumable (or when
+    // the default-off probe requests visibility), and keep that adapter local to this
+    // minor collection rather than adding a second persistent remset index.
     std::unordered_map<MAddress, BaseObject*> rememberedOrigins;
     std::unordered_set<RegionInfo*> originRegions;
     for (MAddress slot : rememberedSlots) {
@@ -3718,7 +3720,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
             continue;
         }
-        originRegions.insert(region);
+        RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
+        if (retainedProbe || (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
+                             region->IsRetainedSnapshotValid())) {
+            originRegions.insert(region);
+        }
     }
     for (RegionInfo* region : originRegions) {
         region->VisitAllObjects([&rememberedSlots, &rememberedOrigins](BaseObject* holder) {
@@ -3734,38 +3740,93 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             });
         });
     }
-    struct ObjectRange {
-        MAddress begin;
-        MAddress end;
-        BaseObject* object;
-    };
     std::unordered_set<RegionInfo*> indexedTargetRegions;
-    std::unordered_map<MAddress, BaseObject*> targetStarts;
-    std::unordered_map<RegionInfo*, std::vector<ObjectRange>> targetRanges;
-    auto recoverYoungTargetBase = [&indexedTargetRegions, &targetStarts, &targetRanges](BaseObject* target) {
+    std::unordered_map<RegionInfo*, std::vector<MAddress>> targetStarts;
+    std::unordered_map<TypeInfo*, bool> knownTypeInfos;
+    auto isKnownTypeInfo = [&knownTypeInfos](TypeInfo* tip) {
+        auto cached = knownTypeInfos.find(tip);
+        if (cached != knownTypeInfos.end()) {
+            return cached->second;
+        }
+        bool known = TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(tip);
+        knownTypeInfos.emplace(tip, known);
+        return known;
+    };
+    auto hasKnownTypeInfo = [&isKnownTypeInfo](const char* site, BaseObject* object) {
+        return Collector::PlausibleManagedObjectGate(site, object) && isKnownTypeInfo(object->GetTypeInfo());
+    };
+    auto recoverYoungTargetBase = [&indexedTargetRegions, &targetStarts, &targetOriginSlowLookups,
+                                   &targetOriginIndexedRegions, &targetOriginVisitedObjects,
+                                   &hasKnownTypeInfo](BaseObject* target) {
         MAddress address = reinterpret_cast<MAddress>(target);
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
         if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() || !region->IsYoungRegion()) {
             return target;
         }
-        if (indexedTargetRegions.insert(region).second) {
-            region->VisitAllObjects([region, &targetStarts, &targetRanges](BaseObject* object) {
-                MAddress begin = reinterpret_cast<MAddress>(object);
-                MAddress end = begin + RegionSpace::GetAllocSize(*object);
-                targetStarts[begin] = object;
-                targetRanges[region].push_back({ begin, end, object });
-            });
-        }
-        auto exact = targetStarts.find(address);
-        if (exact != targetStarts.end()) {
-            return exact->second;
-        }
-        for (const ObjectRange& range : targetRanges[region]) {
-            if (address > range.begin && address < range.end) {
-                return range.object;
+        bool targetKnown = hasKnownTypeInfo("RescanRememberedSet.target", target);
+        unsigned interiorCandidateCount = 0;
+        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+            if (address < offset) {
+                continue;
+            }
+            MAddress candidateAddress = address - offset;
+            if (!Heap::IsHeapAddress(candidateAddress)) {
+                continue;
+            }
+            RegionInfo* candidateRegion = RegionInfo::TryGetRegionInfoAt(candidateAddress);
+            if (candidateRegion != region) {
+                continue;
+            }
+            auto* candidate = reinterpret_cast<BaseObject*>(candidateAddress);
+            if (hasKnownTypeInfo("RescanRememberedSet.targetCandidate", candidate) &&
+                offset < RegionSpace::GetAllocSize(*candidate)) {
+                ++interiorCandidateCount;
             }
         }
-        return static_cast<BaseObject*>(nullptr);
+        // With no preceding header candidate, only an exact registered TypeInfo can
+        // preserve the normal target path. Any candidate count (including ambiguity)
+        // must be decided by the exact-start table below; plausibility alone is not
+        // an object-start proof.
+        if (interiorCandidateCount == 0) {
+            return targetKnown ? target : static_cast<BaseObject*>(nullptr);
+        }
+
+        ++targetOriginSlowLookups;
+        if (indexedTargetRegions.insert(region).second) {
+            ++targetOriginIndexedRegions;
+            region->VisitAllObjects([region, &targetStarts, &targetOriginVisitedObjects](BaseObject* object) {
+                targetStarts[region].push_back(reinterpret_cast<MAddress>(object));
+                ++targetOriginVisitedObjects;
+            });
+        }
+        const auto& starts = targetStarts[region];
+        if (std::binary_search(starts.begin(), starts.end(), address)) {
+            return target;
+        }
+
+        BaseObject* recovered = nullptr;
+        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+            if (address < offset) {
+                continue;
+            }
+            MAddress candidateAddress = address - offset;
+            if (!Heap::IsHeapAddress(candidateAddress)) {
+                continue;
+            }
+            RegionInfo* candidateRegion = RegionInfo::TryGetRegionInfoAt(candidateAddress);
+            if (candidateRegion != region) {
+                continue;
+            }
+            auto* candidate = reinterpret_cast<BaseObject*>(candidateAddress);
+            if (!std::binary_search(starts.begin(), starts.end(), candidateAddress)) {
+                continue;
+            }
+            if (offset >= RegionSpace::GetAllocSize(*candidate) || recovered != nullptr) {
+                return static_cast<BaseObject*>(nullptr);
+            }
+            recovered = candidate;
+        }
+        return recovered;
     };
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
@@ -3796,20 +3857,6 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
 
         bool keepByRetainedSnapshot = true;
         auto originIt = rememberedOrigins.find(slot);
-        // A heap remset entry is consumable only when the current object walk proves
-        // that its address is an actual reference field. Otherwise HeapSlotAt(slot)
-        // would turn a stale bitmap address into an object-producing input. Dropping
-        // is safe here: every live heap reference field is enumerated above, so a miss
-        // is not an edge that the young closure can legally depend on.
-        if (originIt == rememberedOrigins.end()) {
-            ++scrubbedNoOrigin;
-            size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
-            if (n < 16) {
-                VLOG(REPORT, "[GCV2][remset-filter] drop slot=%#zx reason=no_object_origin region=%p",
-                     static_cast<size_t>(slot), holderRegion);
-            }
-            continue;
-        }
         if (originIt != rememberedOrigins.end() && originIt->second != nullptr &&
             Heap::IsHeapAddress(originIt->second)) {
             BaseObject* holder = originIt->second;
@@ -4147,14 +4194,20 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
         }
     }
-    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedNoOrigin != 0 || scrubbedNoTargetOrigin != 0 ||
-        recoveredTargetInterior != 0 || scrubbedBadTarget != 0 || scrubbedStaleOldTag != 0) {
+    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedNoTargetOrigin != 0 ||
+        recoveredTargetInterior != 0 || targetOriginSlowLookups != 0 || scrubbedBadTarget != 0 ||
+        scrubbedStaleOldTag != 0) {
+        auto typeInfoIndexShape = TypeInfoManager::GetTypeInfoManager().GetTypeInfoIndexShape();
         VLOG(REPORT,
-             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu noObjectOrigin=%zu "
-             "noTargetOrigin=%zu targetInteriorRecovered=%zu badTarget=%zu staleOldTag=%zu recorded=%zu "
+             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu noTargetOrigin=%zu "
+             "targetInteriorRecovered=%zu targetOriginSlowLookups=%zu targetOriginIndexedRegions=%zu "
+             "targetOriginVisitedObjects=%zu typeInfoIndexEntries=%zu typeInfoIndexBuckets=%zu "
+             "badTarget=%zu staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
-             scrubbedStale, scrubbedDeadHolder, scrubbedNoOrigin, scrubbedNoTargetOrigin, recoveredTargetInterior,
-             scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+             scrubbedStale, scrubbedDeadHolder, scrubbedNoTargetOrigin, recoveredTargetInterior,
+             targetOriginSlowLookups, targetOriginIndexedRegions, targetOriginVisitedObjects,
+             typeInfoIndexShape.first, typeInfoIndexShape.second, scrubbedBadTarget, scrubbedStaleOldTag,
+             rememberedSlots.size());
     }
     if (remsetReRemember) {
         VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu remembered=%zu env=MRT_GCV2_REMSET_REREMEMBER=1",
@@ -4230,6 +4283,20 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
     // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
     // into it; CasInstallInteriorPlain names the (host,offset) provenance (derivedtype).
     // ScopedPlainWriter tags DerivedLegal column, not K1 HeapSlot plain.
+    if (knownBase != nullptr) {
+        MAddress targetAddress = reinterpret_cast<MAddress>(target);
+        MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
+        size_t offset = targetAddress > baseAddress ? targetAddress - baseAddress : 0;
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
+        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
+        bool allowedOffset = offset == 8u || offset == 16u || offset == 24u || offset == 32u;
+        bool verifiedBase = allowedOffset && targetRegion == baseRegion &&
+            Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.knownBase", knownBase) &&
+            offset < RegionSpace::GetAllocSize(*knownBase);
+        if (!verifiedBase) {
+            return false;
+        }
+    }
     if (knownBase != nullptr || !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
         BaseObject* host = knownBase != nullptr ? knownBase : Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
