@@ -433,12 +433,12 @@ extern "C" void MCC_WriteRefField(const ObjectPtr ref, const ObjectPtr obj, RefF
     ObjectPtr plainRef = PlainObjectPtr(ref);
     if (IsGlobalStruct(plainObj, reinterpret_cast<MAddress>(plainField))) {
         VLOG(REPORT, "found and writing a global struct ref field");
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(plainField), plainRef);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Global field is root storage.
         return;
     }
     if (!Heap::IsHeapAddress(plainObj)) {
         // Non-heap holder (static/global): same remset duty as WriteStaticRef.
-        Heap::GetBarrier().WriteStaticRef(RootSlotAt(plainField), plainRef);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(static_cast<void*>(plainField)), plainRef); // Static field is root storage.
         return;
     }
     // Heap holder + stack value: PEA stack-promoted RawArray/NewObject stored
@@ -2009,7 +2009,8 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     }
     ObjectPtr result = nullptr;
     if (isGlobal) {
-        result = Heap::GetBarrier().ReadStaticRef(RootSlotAt(field));
+        result = Heap::GetBarrier().ReadStaticRef(
+            RootSlotAt(static_cast<void*>(field))); // isGlobal classifies this ABI field as root storage.
     } else {
         result = Heap::GetBarrier().ReadReference(obj, *field);
     }
