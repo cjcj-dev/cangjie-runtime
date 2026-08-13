@@ -68,7 +68,8 @@ private:
     {
         RegRoot regRoot(regTable.GetActiveRegBits(regIdx));
         RootVisitor rootVisitor = [&visitor, basePtr](RootSlot& derivedRoot) {
-            visitor(basePtr, DerivedSlotAt(&derivedRoot));
+            visitor(basePtr, DerivedSlotAt(
+                static_cast<void*>(&derivedRoot))); // Stack-map metadata classifies this root word as derived.
         };
         RegDebugVisitor regDebug = nullptr;
         (void)debugVisitor;
@@ -86,7 +87,8 @@ private:
     {
         SlotRoot slotRoot(slotTable.GetBaseOffset(slotIdx), slotTable.GetSlotBitMap(slotIdx), slotTable.slotFormat);
         RootVisitor rootVisitor = [&visitor, basePtr](RootSlot& derivedRoot) {
-            visitor(basePtr, DerivedSlotAt(&derivedRoot));
+            visitor(basePtr, DerivedSlotAt(
+                static_cast<void*>(&derivedRoot))); // Stack-map metadata classifies this root word as derived.
         };
         SlotDebugVisitor slotDebug = nullptr;
         (void)debugVisitor;
