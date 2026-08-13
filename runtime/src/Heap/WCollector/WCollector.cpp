@@ -57,6 +57,7 @@
 #include "Heap/Verify/ToverFailDiag.h"
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
+#include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -795,6 +796,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
         return true;
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    StartWhoDiag::ScopedCaller caller("WCollector::MarkObject", obj);
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked = region->MarkObject(obj, objectSize);

@@ -37,6 +37,7 @@ set(SRC_LIST
     "ToverFailDiag.cpp"
     "OffpastDiag.cpp"
     "TlRawDiag.cpp"
+    "StartWhoDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
