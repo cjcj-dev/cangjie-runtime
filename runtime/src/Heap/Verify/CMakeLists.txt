@@ -36,6 +36,7 @@ set(SRC_LIST
     "O2ORemsetDiag.cpp"
     "ToverFailDiag.cpp"
     "OffpastDiag.cpp"
+    "TlRawDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

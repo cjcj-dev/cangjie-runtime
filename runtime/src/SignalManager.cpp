@@ -33,6 +33,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Signal/SignalUtils.h"
 #include "Inspector/CjHeapData.h"
 #include "Heap/Collector/TaskQueue.h"
+#include "Heap/Verify/TlRawDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -218,6 +219,10 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         uintptr_t rbx = 0;
 #endif
         EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
+#if defined(__x86_64__) && !defined(__APPLE__)
+        uintptr_t rdi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDI]);
+        TlRawDiag::NoteCrashRdi(rdi);
+#endif
     }
 }
 } // namespace

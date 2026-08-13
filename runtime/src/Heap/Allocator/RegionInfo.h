@@ -45,6 +45,7 @@
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDom.h"
 #include "Heap/Verify/SealCheck.h"
+#include "Heap/Verify/TlRawDiag.h"
 #include "securec.h"
 #ifdef CANGJIE_ASAN_SUPPORT
 #include "Sanitizer/SanitizerInterface.h"
@@ -2507,6 +2508,7 @@ private:
     void InitRegion(size_t nUnit, UnitRole uClass)
     {
         InitRegionInfo(nUnit, uClass);
+        TlRawDiag::NoteInitRegion(this);
 
         // initialize region's subordinate units.
 

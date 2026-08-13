@@ -56,6 +56,7 @@
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/ToverFailDiag.h"
 #include "Heap/Verify/OffpastDiag.h"
+#include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -5873,6 +5874,7 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.flush_alloc");
         FlushAllocationRegions();
     }
+    TlRawDiag::NoteMinorEnter(minorTotalRuns + 1);
     if (minorTotalRuns != 0) {
         ValidateMinorReferences("round2-start", nullptr);
     }
