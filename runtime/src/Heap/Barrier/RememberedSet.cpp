@@ -124,14 +124,6 @@ void RememberedSet::Record(MAddress fieldAddress, bool fromMutatorBarrier)
 #endif
 }
 
-void RememberedSet::RecordExternal(MAddress fieldAddress)
-{
-    CheckInitialized();
-    std::lock_guard<std::mutex> guard(externalLock);
-    size_t buffer = activeBuffer.load(std::memory_order_acquire);
-    externalRecords[buffer].insert(fieldAddress);
-}
-
 size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, size_t size)
 {
     CheckInitialized();
@@ -186,14 +178,7 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     size_t nextBuffer = scanBuffer ^ 1U;
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
                  "remembered-set next buffer is not empty at minor swap");
-    std::unordered_set<MAddress> drainedExternal;
-    {
-        std::lock_guard<std::mutex> guard(externalLock);
-        CHECK_DETAIL(externalRecords[nextBuffer].empty(),
-                     "remembered-set next external buffer is not empty at minor swap");
-        activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
-        drainedExternal.swap(externalRecords[scanBuffer]);
-    }
+    activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
 
     for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
         uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
@@ -246,12 +231,6 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     oracleRecords[scanBuffer].clear();
     ++bitmapCrossCheckCount;
 #endif
-    records.insert(drainedExternal.cbegin(), drainedExternal.cend());
-    const char* stats = std::getenv("MRT_GCV2_REMSET_STATS");
-    if (stats != nullptr && std::strcmp(stats, "1") == 0) {
-        VLOG(REPORT, "[GCV2][external-remset] drained=%zu heap=%zu total=%zu", drainedExternal.size(), recorded,
-             records.size());
-    }
     return records.size();
 }
 
@@ -280,10 +259,6 @@ std::unordered_set<MAddress> RememberedSet::Snapshot() const
             dirty &= dirty - 1;
         }
     }
-    {
-        std::lock_guard<std::mutex> guard(externalLock);
-        records.insert(externalRecords[buffer].cbegin(), externalRecords[buffer].cend());
-    }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     size_t heapRecordCount = 0;
@@ -309,9 +284,7 @@ bool RememberedSet::Contains(MAddress fieldAddress) const
 {
     CheckInitialized();
     if (fieldAddress < heapStart || fieldAddress >= heapStart + heapSize) {
-        std::lock_guard<std::mutex> guard(externalLock);
-        size_t buffer = activeBuffer.load(std::memory_order_acquire);
-        return externalRecords[buffer].count(fieldAddress) != 0;
+        return false;
     }
     size_t bit = AddressToBit(fieldAddress);
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
@@ -323,9 +296,7 @@ size_t RememberedSet::Size() const
 {
     CheckInitialized();
     size_t buffer = activeBuffer.load(std::memory_order_acquire);
-    size_t heapRecords = recordCounts[buffer].load(std::memory_order_relaxed);
-    std::lock_guard<std::mutex> guard(externalLock);
-    return heapRecords + externalRecords[buffer].size();
+    return recordCounts[buffer].load(std::memory_order_relaxed);
 }
 
 size_t RememberedSet::ClearRangeInBuffer(size_t buffer, size_t firstBit, size_t endBit, size_t* outWords)
@@ -420,12 +391,8 @@ uint8_t RememberedSet::BeginFullClear()
     size_t scanBuffer = activeBuffer.load(std::memory_order_acquire);
     size_t nextBuffer = scanBuffer ^ 1U;
     CHECK_DETAIL(ClearBuffer(nextBuffer) == 0, "remembered-set next full buffer is not empty");
-    {
-        std::lock_guard<std::mutex> guard(externalLock);
-        externalRecords[nextBuffer].clear();
-        size_t previous = activeBuffer.exchange(static_cast<uint8_t>(nextBuffer), std::memory_order_acq_rel);
-        CHECK_DETAIL(previous == scanBuffer, "concurrent remembered-set full rotation");
-    }
+    size_t previous = activeBuffer.exchange(static_cast<uint8_t>(nextBuffer), std::memory_order_acq_rel);
+    CHECK_DETAIL(previous == scanBuffer, "concurrent remembered-set full rotation");
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     {
         std::lock_guard<std::mutex> guard(oracleLock);
@@ -442,12 +409,6 @@ size_t RememberedSet::FinishFullClear(uint8_t scanBuffer)
     CHECK_DETAIL(scanBuffer != activeBuffer.load(std::memory_order_acquire),
                  "cannot clear active remembered-set buffer");
     size_t heapRemoved = ClearBuffer(scanBuffer);
-    size_t externalRemoved = 0;
-    {
-        std::lock_guard<std::mutex> guard(externalLock);
-        externalRemoved = externalRecords[scanBuffer].size();
-        externalRecords[scanBuffer].clear();
-    }
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     CHECK_DETAIL(heapRemoved == oracleRecords[scanBuffer].size(),
@@ -456,7 +417,7 @@ size_t RememberedSet::FinishFullClear(uint8_t scanBuffer)
     oracleRecords[scanBuffer].clear();
     ++bitmapCrossCheckCount;
 #endif
-    return heapRemoved + externalRemoved;
+    return heapRemoved;
 }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)

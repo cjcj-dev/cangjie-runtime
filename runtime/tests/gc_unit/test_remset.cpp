@@ -71,8 +71,7 @@ GC_TEST(Remset, OldToYoungRecordedByBarrier)
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
 
-    auto* field = new (reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE))
-        RefField<false>(nullptr);
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
     TestCollector collector;
     RememberedSet rs;
@@ -95,8 +94,7 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
 
-    auto* field = new (reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE))
-        RefField<false>(nullptr);
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
     TestCollector collector;
     RememberedSet rs;
@@ -108,6 +106,26 @@ GC_TEST(Remset, IdleBarrierOldToYoungRecorded)
     GC_EXPECT_TRUE(ExpectRecorded(rs, reinterpret_cast<MAddress>(field)));
 }
 
+// Static roots are enumerated directly by every minor and must not enter the
+// heap-only remembered set. Restoring the external record path makes this red.
+GC_TEST(Remset, StaticRootNotRecorded)
+{
+    GcHeapFixture fx;
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    Barrier barrier(collector, rs);
+    RootSlot root;
+
+    barrier.WriteStaticRef(root, fx.obj1);
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_EQ(records.size(), 0u);
+}
+
 // U7: young→young must NOT enter remset (only old→young).
 GC_TEST(Remset, YoungToYoungNotRecorded)
 {
@@ -117,8 +135,7 @@ GC_TEST(Remset, YoungToYoungNotRecorded)
     fx.region1->SetYoungRegionFlag(1);
     fx.region1->SetYoungAge(1);
 
-    auto* field = new (reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE))
-        RefField<false>(nullptr);
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
     TestCollector collector;
     RememberedSet rs;
@@ -139,8 +156,7 @@ GC_TEST(Remset, OldToOldNotRecorded)
     fx.region0->SetYoungRegionFlag(0);
     fx.region1->SetYoungRegionFlag(0);
 
-    auto* field = new (reinterpret_cast<void*>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE))
-        RefField<false>(nullptr);
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
 
     TestCollector collector;
     RememberedSet rs;

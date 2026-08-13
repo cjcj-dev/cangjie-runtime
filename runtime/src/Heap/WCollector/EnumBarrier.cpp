@@ -134,7 +134,9 @@ void EnumBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
     DLOG(BARRIER, "write static ref@%p: %p -|> %p", &field, rememberedObject, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     StorePlain(field, from_object(ref));
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
+#endif
 }
 
 void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -189,7 +191,11 @@ void EnumBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
                  "memcpy_s failed");
 
     ResolveStaticStructRoots(dst, gctib);
-    RecordStaticCrossGenEdges(dst, gctib);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    });
+#endif
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);

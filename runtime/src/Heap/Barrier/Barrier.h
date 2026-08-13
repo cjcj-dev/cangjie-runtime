@@ -133,7 +133,6 @@ protected:
                                      const StoreGoodPrevSnapshot* prevSnap = nullptr) const;
     void RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, size_t size,
                                        const StoreGoodPrevSnapshot* prevSnap = nullptr) const;
-    void RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const;
 
 private:
     RememberedSet& theRememberedSet;

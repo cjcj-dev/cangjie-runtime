@@ -144,7 +144,9 @@ void TraceBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
     RememberNewReference(mutator, ref);
     std::atomic_thread_fence(std::memory_order_seq_cst);
     StorePlain(field, from_object(ref));
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
+#endif
 }
 
 void TraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
@@ -207,7 +209,11 @@ void TraceBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
 
     ResolveStaticStructRoots(dst, gctib);
-    RecordStaticCrossGenEdges(dst, gctib);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    });
+#endif
     DLOG(TRACE, "write static struct@[%#zx, %#zx) with [%#zx, %#zx)", dst, dst + dstLen, src, src + srcLen);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
