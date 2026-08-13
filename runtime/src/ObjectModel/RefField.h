@@ -14,6 +14,7 @@
 #include <cstring>
 #include <functional>
 #include <limits>
+#include <type_traits>
 
 #include <execinfo.h>
 
@@ -368,6 +369,18 @@ static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one 
 static_assert(sizeof(RootSlot) == sizeof(MAddress), "RootSlot must remain one machine word");
 static_assert(sizeof(DerivedSlot) == sizeof(MAddress), "DerivedSlot must remain one machine word");
 
+template<typename T>
+struct IsSlotStorageType : std::false_type {};
+
+template<bool isAtomic>
+struct IsSlotStorageType<HeapSlot<isAtomic>> : std::true_type {};
+
+template<>
+struct IsSlotStorageType<RootSlot> : std::true_type {};
+
+template<>
+struct IsSlotStorageType<DerivedSlot> : std::true_type {};
+
 // The compiler/stack-map/object-layout ABIs expose raw word addresses. Typed
 // pointers are rejected at this boundary, but this does not make a category
 // escape impossible: a caller that independently knows the ABI category can
@@ -378,7 +391,11 @@ inline HeapSlot<isAtomic>& HeapSlotAt(void* address)
     return *reinterpret_cast<HeapSlot<isAtomic>*>(address);
 }
 
-template<bool isAtomic = false, typename T>
+template<bool isAtomic = false, typename T,
+         typename std::enable_if<
+             IsSlotStorageType<typename std::remove_cv<T>::type>::value ||
+             std::is_convertible<T*, const BaseObject*>::value,
+             int>::type = 0>
 HeapSlot<isAtomic>& HeapSlotAt(T*) = delete;
 
 template<bool isAtomic = false>
@@ -392,7 +409,11 @@ inline RootSlot& RootSlotAt(void* address)
     return *reinterpret_cast<RootSlot*>(address);
 }
 
-template<typename T>
+template<typename T,
+         typename std::enable_if<
+             IsSlotStorageType<typename std::remove_cv<T>::type>::value ||
+             std::is_convertible<T*, const BaseObject*>::value,
+             int>::type = 0>
 RootSlot& RootSlotAt(T*) = delete;
 
 inline RootSlot& RootSlotAt(MAddress address)
@@ -405,7 +426,11 @@ inline DerivedSlot& DerivedSlotAt(void* address)
     return *reinterpret_cast<DerivedSlot*>(address);
 }
 
-template<typename T>
+template<typename T,
+         typename std::enable_if<
+             IsSlotStorageType<typename std::remove_cv<T>::type>::value ||
+             std::is_convertible<T*, const BaseObject*>::value,
+             int>::type = 0>
 DerivedSlot& DerivedSlotAt(T*) = delete;
 
 inline DerivedSlot& DerivedSlotAt(MAddress address)
