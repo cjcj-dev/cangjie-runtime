@@ -451,7 +451,8 @@ public:
 
     void SetManagedContext(bool isManagedContext);
 
-    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* obj) { RememberObjectImpl(obj); }
+    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target);
+    ATTR_NO_INLINE void RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase);
 
     inline uintptr_t GetStackTopAddr() { return stackTopAddr; }
     inline void SetStackTopAddr(uintptr_t sta) { stackTopAddr = sta; }
@@ -567,7 +568,7 @@ protected:
     void CreateCurrentGCInfo();
 
 private:
-    void RememberObjectImpl(const BaseObject* obj)
+    void RememberObjectImpl(const BaseObject* target, const BaseObject* knownBase)
     {
         GCPhase phase = GetMutatorPhase();
         // Marking is still consuming satb records in GC_PHASE_CLEAR_SATB_BUFFER: MarkSatbBuffer keeps
@@ -585,11 +586,14 @@ private:
             UNLIKELY(Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_ENUM)) {
             return;
         }
-        if (LIKELY(satbNode != nullptr && satbNode->Push(obj))) {
+        if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
+            SatbBuffer::NoteInteriorEnqueued(target, knownBase);
             return;
         }
         SatbBuffer::Instance().EnsureGoodNode(satbNode);
-        satbNode->Push(obj);
+        if (satbNode->Push(target, knownBase)) {
+            SatbBuffer::NoteInteriorEnqueued(target, knownBase);
+        }
     }
     ManagedList<RootSlot>& GetLocalFinalizers() { return localFinalizers; }
     // Indicate the current mutator phase and use which barrier in concurrent gc

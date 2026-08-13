@@ -20,6 +20,11 @@ public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
     static SatbBuffer& Instance() noexcept;
+    static void MaybeInjectCarryProbe(BaseObject*& target, BaseObject*& knownBase);
+    static void NoteInteriorEnqueued(const BaseObject* target, const BaseObject* knownBase);
+    static void NoteInteriorRetained(const BaseObject* knownBase);
+    static void NoteHostDequeued(const BaseObject* knownBase);
+    static void ReportCarryProbe();
     class Node {
         friend class SatbBuffer;
 
@@ -31,29 +36,42 @@ public:
         void Clear()
         {
             if (!IsEmpty()) {
-                size_t size = (CONTAINER_CAPACITY - index) * sizeof(BaseObject*);
-                CHECK_DETAIL((memset_s(&objectContainer[index], size, 0, size) == EOK), "memset fail\n");
+                size_t size = (CONTAINER_CAPACITY - index) * sizeof(Entry);
+                CHECK_DETAIL((memset_s(&entryContainer[index], size, 0, size) == EOK), "memset fail\n");
             }
             index = CONTAINER_CAPACITY;
         }
-        bool Push(const BaseObject* obj)
+        bool Push(const BaseObject* target, const BaseObject* knownBase)
         {
             if (UNLIKELY(IsFull())) {
                 return false;
             }
-            objectContainer[--index] = const_cast<BaseObject*>(obj);
+            entryContainer[--index] = {
+                const_cast<BaseObject*>(target), const_cast<BaseObject*>(knownBase)
+            };
             return true;
         }
         template<typename T>
         void GetObjects(T& stack)
         {
             while (index != CONTAINER_CAPACITY) {
-                stack.push_back(objectContainer[index]);
-                objectContainer[index++] = nullptr;
+                Entry& entry = entryContainer[index++];
+                BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
+                if (entry.knownBase != nullptr) {
+                    SatbBuffer::NoteHostDequeued(entry.knownBase);
+                }
+                stack.push_back(objectToMark);
+                entry = { nullptr, nullptr };
             }
         }
 
     private:
+        // SATB deletion barriers may observe a HeapSlot containing host+offset. Preserve the
+        // producer's validated host until remark; consumers mark knownBase, never the interior.
+        struct Entry {
+            BaseObject* target;
+            BaseObject* knownBase;
+        };
 #if defined(_WIN64)
         static constexpr size_t CONTAINER_CAPACITY = 69;
 #elif defined(__aarch64__) || defined(__arm__)
@@ -63,7 +81,7 @@ public:
 #endif
         size_t index;
         Node* next;
-        BaseObject* objectContainer[CONTAINER_CAPACITY] = { nullptr };
+        Entry entryContainer[CONTAINER_CAPACITY] = {};
     };
 
     static constexpr size_t NODE_SIZE = sizeof(Node);
