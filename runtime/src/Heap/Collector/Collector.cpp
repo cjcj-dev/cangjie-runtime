@@ -96,6 +96,16 @@ bool PlausibleObjGateAccountOn()
 // re-host them — does NOT relax the gate (stricter reject set only).
 constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
 
+// fysfloor3: TypeInfo never lives at N*4GiB. TIM mmap(nullptr) 1MB arenas and
+// PIE/static modules always have a non-zero page offset. Windows ImageBase
+// 0x140000000 has low32=0x40000000 ≠ 0. Observed FYS=0 GetSize MAPERR family
+// (compile+24GB N=20): tip=0x{3,5,6,7,8,9,b,d,19}00000000 = 15/20.
+// Rejecting low32==0 is stricter-only — does not relax the gate.
+inline bool TipLow32IsZero(uintptr_t tipAddr)
+{
+    return (tipAddr & 0xffffffffULL) == 0;
+}
+
 // gatehot GATEEQUIV: dual-run the pure reject/admit decision under a second independent
 // implementation and count mismatches. Default off. Positive control:
 //   MRT_GCV2_GATEEQUIV_INJECT=1 forces one synthetic mismatch so a silent harness is visible.
@@ -161,6 +171,9 @@ bool PlausibleManagedObjectGatePure(BaseObject* obj)
     if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
         return false;
     }
+    if (TipLow32IsZero(tipAddr)) {
+        return false;
+    }
     if (Heap::IsHeapAddress(tipAddr)) {
         return false;
     }
@@ -174,6 +187,9 @@ bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)
         return false;
     }
     if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
+        return false;
+    }
+    if (TipLow32IsZero(tipAddr)) {
         return false;
     }
     if (Heap::IsHeapAddress(tipAddr)) {
@@ -402,6 +418,8 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                 reason = "tip-small-int";
             } else if ((tipAddr & StateWord::ADDRESS_ALIGN_MASK) != 0) {
                 reason = "tip-misaligned";
+            } else if (TipLow32IsZero(tipAddr)) {
+                reason = "tip-4g-aligned";
             } else if (Heap::IsHeapAddress(tipAddr)) {
                 // TypeInfo lives in binary / TypeInfoManager mmap, never in managed heap.
                 // Heap tip ⇒ interior into another object (classic B-4 shape).
