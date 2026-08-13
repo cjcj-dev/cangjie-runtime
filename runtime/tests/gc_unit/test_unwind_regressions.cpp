@@ -8,11 +8,17 @@
 // function. Before the matching commit the case either OOB-reads, overlaps
 // sprintf_s dest/%s, or leaves fallback pc/line uninitialized.
 
+#include <cstdarg>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <vector>
+
+#if defined(__linux__)
+#include <dlfcn.h>
+#endif
 
 #include "CangjieRuntime.h"
 #include "Common/StackType.h"
@@ -27,6 +33,32 @@ using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
 namespace {
+
+#if defined(__linux__)
+size_t overlappingSprintfCallCount = 0;
+size_t signalFrameSprintfCallCount = 0;
+
+bool FirstStringArgumentOverlapsDestination(char* dest, size_t destMax, const char* format, va_list args)
+{
+    if (dest == nullptr || format == nullptr || format[0] != '%' || format[1] != 's') {
+        return false;
+    }
+    va_list inspect;
+    va_copy(inspect, args);
+    const char* firstString = va_arg(inspect, const char*);
+    va_end(inspect);
+    uintptr_t destAddress = reinterpret_cast<uintptr_t>(dest);
+    uintptr_t sourceAddress = reinterpret_cast<uintptr_t>(firstString);
+    return sourceAddress >= destAddress && sourceAddress - destAddress < destMax;
+}
+
+bool CalledDirectlyBySignalFramePrint(void* returnAddress)
+{
+    Dl_info callerInfo {};
+    return dladdr(returnAddress, &callerInfo) != 0 && callerInfo.dli_sname != nullptr &&
+        std::strcmp(callerInfo.dli_sname, "_ZNK12MapleRuntime19SigHandlerFrameinfo14PrintFrameInfoEj") == 0;
+}
+#endif
 
 struct FakeFuncDescLayout {
     int32_t stackMapOff;
@@ -53,6 +85,28 @@ void InitEmptyFuncDesc(FakeFuncDescLayout* blob)
 
 } // namespace
 
+// Interpose the product's dynamically linked sprintf_s without changing its
+// result.  The counter makes the former overlapping dest/first-%s call shape a
+// direct, implementation-independent assertion instead of relying on a
+// particular securec version to reject it.
+#if defined(__linux__)
+extern "C" int sprintf_s(char* dest, size_t destMax, const char* format, ...)
+{
+    va_list args;
+    va_start(args, format);
+    void* returnAddress = __builtin_extract_return_addr(__builtin_return_address(0));
+    if (CalledDirectlyBySignalFramePrint(returnAddress)) {
+        ++signalFrameSprintfCallCount;
+        if (FirstStringArgumentOverlapsDestination(dest, destMax, format, args)) {
+            ++overlappingSprintfCallCount;
+        }
+    }
+    int rc = vsprintf_s(dest, destMax, format, args);
+    va_end(args);
+    return rc;
+}
+#endif
+
 // BUG 1: 3n+1 SOF flag must not be decoded as a frame (StackInfo.cpp).
 // Pre-fix walked i=3 and read liteFrameInfos[4], [5].
 GC_TEST(UnwindRegress, SofFoldFlagIsNotAFrame)
@@ -72,14 +126,25 @@ GC_TEST(UnwindRegress, SofFoldFlagIsNotAFrame)
     GC_EXPECT_EQ(trace.size(), 1u);
 }
 
-// BUG 3: overlapping sprintf_s dest/%s is rejected by this securec.
-// Pre-fix PrintFrameInfo used that shape on fileName and outputStr.
-GC_TEST(UnwindRegress, OverlappingSprintfIsRejected)
+// BUG 3: pre-fix PrintFrameInfo passed its destination as the first %s source.
+// Count that product call shape directly; securec versions differ on whether
+// they reject it, so a securec return value is not a product regression test.
+GC_TEST(UnwindRegress, SignalFrameAppendDoesNotOverlap)
 {
-    char buf[64];
-    GC_EXPECT_TRUE(sprintf_s(buf, sizeof(buf), "%s", "dir") != -1);
-    int rc = sprintf_s(buf, sizeof(buf), "%s%s", buf, "/file.cj");
-    GC_EXPECT_EQ(rc, -1);
+#if defined(__linux__)
+    overlappingSprintfCallCount = 0;
+    signalFrameSprintfCallCount = 0;
+#endif
+    SigHandlerFrameinfo frame;
+    frame.mFrame.SetIP(reinterpret_cast<const uint32_t*>(&sprintf_s));
+    frame.SetFrameType(FrameType::NATIVE);
+    frame.PrintFrameInfo(0);
+#if defined(__linux__)
+    std::printf("SIGNAL_FRAME_DIRECT_SPRINTF_CALLS=%zu SIGNAL_FRAME_OVERLAPPING_SPRINTF_CALLS=%zu\n",
+                signalFrameSprintfCallCount, overlappingSprintfCallCount);
+    GC_EXPECT_NE(signalFrameSprintfCallCount, 0u);
+    GC_EXPECT_EQ(overlappingSprintfCallCount, 0u);
+#endif
 }
 
 // BUG 3 after-fix: native signal-frame print appends without overlap and does not abort.
