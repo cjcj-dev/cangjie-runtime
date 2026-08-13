@@ -1161,6 +1161,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject(targetObj)) {
+            if (UNLIKELY(StartWhoDiag::Enabled())) {
+                StartWhoDiag::NoteProduced(targetObj, StartWhoDiag::Source::HEAP_FIELD,
+                                           "TraceRefField.mark_good", &field, obj);
+            }
             workStack.push_back(targetObj);
         }
         return;
@@ -1186,6 +1190,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     }
 
     if (!IsMarkedObject(latest)) {
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            StartWhoDiag::NoteProduced(latest, StartWhoDiag::Source::HEAP_FIELD,
+                                       "TraceRefField.slow", &field, obj);
+        }
         workStack.push_back(latest);
     }
 }
@@ -2827,7 +2835,27 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
     }
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            if (origin != nullptr &&
+                (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0)) {
+                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
+            } else if (origin != nullptr && std::strcmp(origin, "remset") == 0) {
+                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::REMSET, origin);
+            } else if (origin != nullptr &&
+                       (std::strcmp(origin, "minor_root") == 0 ||
+                        std::strcmp(origin, "minor_root_final") == 0)) {
+                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::ROOT_DERIVED, origin);
+            } else if (origin != nullptr &&
+                       (std::strcmp(origin, "alloc_buffer") == 0 ||
+                        std::strcmp(origin, "alloc_buffer_final") == 0)) {
+                StartWhoDiag::NoteProducedRootIfPending(object);
+            }
+        }
         workStack.push_back(object);
+    } else if (UNLIKELY(StartWhoDiag::Enabled()) && origin != nullptr &&
+               (std::strcmp(origin, "alloc_buffer") == 0 ||
+                std::strcmp(origin, "alloc_buffer_final") == 0)) {
+        StartWhoDiag::DiscardRootCandidate(object);
     }
 }
 
@@ -2948,7 +2976,7 @@ public:
                         // ghostroute: residual unmarked young only (no FYS re-push of marked).
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
-                            object->ForEachRefField([collector, this](RefField<>& field) {
+                            object->ForEachRefField([collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
                                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                                     return;
@@ -2965,6 +2993,10 @@ public:
                                     RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
                                 if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
                                     return;
+                                }
+                                if (UNLIKELY(StartWhoDiag::Enabled())) {
+                                    StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                               "ghostroute.parallel.bitmap", &field, object);
                                 }
                                 workStack.push_back(target);
                             });
@@ -2993,7 +3025,7 @@ public:
                     if (wasMarked) {
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
-                            object->ForEachRefField([collector, this](RefField<>& field) {
+                            object->ForEachRefField([collector, this, object](RefField<>& field) {
                                 BaseObject* target = collector->ResolveMinorReference(field);
                                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                                     return;
@@ -3010,6 +3042,10 @@ public:
                                     RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
                                 if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
                                     return;
+                                }
+                                if (UNLIKELY(StartWhoDiag::Enabled())) {
+                                    StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                               "ghostroute.parallel.legacy", &field, object);
                                 }
                                 workStack.push_back(target);
                             });
@@ -3208,7 +3244,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                     if (!object->HasRefField() || object->IsWeakRef()) {
                         continue;
                     }
-                    object->ForEachRefField([this, &workStack](RefField<>& field) {
+                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
@@ -3223,6 +3259,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                         RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
                         if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
                             return;
+                        }
+                        if (UNLIKELY(StartWhoDiag::Enabled())) {
+                            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                       "ghostroute.serial.bitmap", &field, object);
                         }
                         workStack.push_back(target);
                     });
@@ -3253,7 +3293,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 // Dedup hit: residual unmarked young only (paint-without-scan / Ensure).
                 EatArmDiag::NoteWasMarkedSkipFields(object);
                 if (isYoung && object->HasRefField() && !object->IsWeakRef()) {
-                    object->ForEachRefField([this, &workStack](RefField<>& field) {
+                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
@@ -3268,6 +3308,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                         RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
                         if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
                             return;
+                        }
+                        if (UNLIKELY(StartWhoDiag::Enabled())) {
+                            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                       "ghostroute.serial.legacy", &field, object);
                         }
                         workStack.push_back(target);
                     });
@@ -6318,7 +6362,8 @@ void WCollector::DoYoungGarbageCollection()
                         if (!object->HasRefField()) {
                             continue;
                         }
-                        object->ForEachRefField([this, &fieldExtra, &reachableSlots, fullYoungScan](RefField<>& field) {
+                        object->ForEachRefField([this, &fieldExtra, &reachableSlots, fullYoungScan,
+                                                object](RefField<>& field) {
                             MAddress slot = reinterpret_cast<MAddress>(&field);
                             if (fullYoungScan && Heap::IsHeapAddress(slot)) {
                                 (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN,
@@ -6342,6 +6387,10 @@ void WCollector::DoYoungGarbageCollection()
                             }
                             if (region->IsMarkedObject(target)) {
                                 return;
+                            }
+                            if (UNLIKELY(StartWhoDiag::Enabled())) {
+                                StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                           "youngconc.field_rescan", &field, object);
                             }
                             fieldExtra.push_back(target);
                         });
@@ -6432,6 +6481,10 @@ void WCollector::DoYoungGarbageCollection()
                     return;
                 }
                 // Direct paint (do not rely solely on workStack drain under concurrent residue).
+                if (UNLIKELY(StartWhoDiag::Enabled())) {
+                    StartWhoDiag::NoteProduced(obj, StartWhoDiag::Source::ROOT_DERIVED,
+                                               "youngstatic.seal", &root);
+                }
                 (void)MarkObject(obj);
                 workStack.push_back(obj);
                 ++sealed;
@@ -6502,6 +6555,10 @@ void WCollector::DoYoungGarbageCollection()
                         return;
                     }
                     EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ADMIT);
+                    if (UNLIKELY(StartWhoDiag::Enabled())) {
+                        StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
+                                                   "iorfix.fixpoint", &field, object);
+                    }
                     blackmarkExtra.push_back(target);
                 });
             }
