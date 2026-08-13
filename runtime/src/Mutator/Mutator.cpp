@@ -584,7 +584,8 @@ void Mutator::RecordStackPtrs(std::set<RootSlot*>& rootSlots,
     // Ref trace on non-escaped heap pointers.
     HeapSlotVisitor refVisitor = [&rootList, this](HeapSlot<>& oldRefFieldAddr) {
         // A reference field in a stack-allocated object is a root slot, not a heap slot.
-        RootSlot& oldRootField = RootSlotAt(&oldRefFieldAddr);
+        RootSlot& oldRootField = RootSlotAt(
+            static_cast<void*>(&oldRefFieldAddr)); // Stack-object field storage is root storage.
         // Check whether the address is on the stack.
         if (IsStackAddr(raw(oldRootField.LoadPlain()))) {
             rootList.push(&oldRootField);
@@ -884,7 +885,8 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
     std::stack<BaseObject*> rootStack;
     HeapSlotVisitor refVisitor = [&rootSet, &rootStack, this](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so metadata exposes this word as a root slot.
-        RootSlot& rootField = RootSlotAt(&refFieldAddr);
+        RootSlot& rootField = RootSlotAt(
+            static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* obj = PlainRootObject(rootField.LoadPlain());
         if (PushHeapRootIfPlausible(obj, "GcPhaseEnum.ref")) {
             if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -979,7 +981,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
     Collector& collector = reinterpret_cast<Collector&>(Heap::GetHeap().GetCollector());
     HeapSlotVisitor refVisitor = [&rootSet, &rootFieldSet, &rootStack, &collector, this](HeapSlot<>& refFieldAddr) {
         // The containing object is stack allocated, so this metadata field is a RootSlot.
-        RootSlot& rootField = RootSlotAt(&refFieldAddr);
+        RootSlot& rootField = RootSlotAt(
+            static_cast<void*>(&refFieldAddr)); // Stack-object field metadata denotes a root word.
         BaseObject* oldObj = PlainRootObject(rootField.LoadPlain());
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
