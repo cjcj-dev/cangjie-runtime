@@ -2839,8 +2839,6 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             if (origin != nullptr &&
                 (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0)) {
                 StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
-            } else if (origin != nullptr && std::strcmp(origin, "remset") == 0) {
-                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::REMSET, origin);
             } else if (origin != nullptr &&
                        (std::strcmp(origin, "minor_root") == 0 ||
                         std::strcmp(origin, "minor_root_final") == 0)) {
@@ -4060,12 +4058,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             noteRemsetHandoff = targetRegion != nullptr && targetRegion->IsYoungRegion() &&
                 !targetRegion->IsMarkedObject(target);
         }
-        PushYoungObject(target, workStack, "remset");
         if (noteRemsetHandoff) {
             BaseObject* holder = originIt != rememberedOrigins.end() ? originIt->second : nullptr;
             StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::REMSET,
                                        "RescanRememberedSet.PushYoungObject", field, holder);
         }
+        PushYoungObject(target, workStack, "remset");
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
