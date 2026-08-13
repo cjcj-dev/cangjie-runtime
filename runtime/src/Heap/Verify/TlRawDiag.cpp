@@ -19,6 +19,7 @@
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionList.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
@@ -139,8 +140,7 @@ bool RegionHasOldToYoung(RegionInfo* region, size_t& walkAbort)
         return false;
     }
     bool hit = false;
-    size_t beforeAbort = walkAbort;
-    region->VisitAllObjects([&hit, &walkAbort, beforeAbort](BaseObject* object) {
+    region->VisitAllObjects([&hit, &walkAbort](BaseObject* object) {
         if (object == nullptr) {
             return;
         }
@@ -165,7 +165,6 @@ bool RegionHasOldToYoung(RegionInfo* region, size_t& walkAbort)
             }
         });
     });
-    (void)beforeAbort;
     return hit;
 }
 
