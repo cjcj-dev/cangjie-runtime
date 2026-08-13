@@ -4054,7 +4054,18 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+        bool noteRemsetHandoff = false;
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            noteRemsetHandoff = targetRegion != nullptr && targetRegion->IsYoungRegion() &&
+                !targetRegion->IsMarkedObject(target);
+        }
         PushYoungObject(target, workStack, "remset");
+        if (noteRemsetHandoff) {
+            BaseObject* holder = originIt != rememberedOrigins.end() ? originIt->second : nullptr;
+            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::REMSET,
+                                       "RescanRememberedSet.PushYoungObject", field, holder);
+        }
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
         }
