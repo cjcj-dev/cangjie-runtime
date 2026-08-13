@@ -539,6 +539,7 @@ private:
     using MinorObjectSet = std::unordered_set<BaseObject*>;
     using MinorRegionSet = std::unordered_set<RegionInfo*>;
     using MinorSlotSet = std::unordered_set<MAddress>;
+    using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target) const;
     BaseObject* ResolveMinorReference(RefField<>& field) const;
@@ -567,8 +568,9 @@ private:
     friend class YoungMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
-                             MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr);
-    bool FixMinorEvacuatedSlot(RefField<>& field) const;
+                             MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr,
+                             MinorInteriorBaseMap* interiorBasesOut = nullptr);
+    bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr) const;
     bool FixMinorEvacuatedSlot(RootSlot& root) const;
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
@@ -576,6 +578,7 @@ private:
     // stw: optional STW handle for MRT_GCV2_MINOR_CONC_REF_FIX=1 (release after root fix,
     // re-STW before copy/finish). nullptr keeps product STW-centralized ref_fix.
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
+                              const MinorInteriorBaseMap& interiorBases,
                               std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
     void ValidateYoungMarking(const std::vector<BaseObject*>& reachableVec, const MinorObjectSet& allocationRoots);
     // Report-only: find young objs full-reachable but unmarked; attribute via remset MISSING.
