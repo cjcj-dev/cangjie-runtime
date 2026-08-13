@@ -9,6 +9,7 @@
 
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
+#include "Heap/Verify/GarbRegionDiag.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -93,6 +94,7 @@ void CopyCollector::ForwardFromSpace()
     GCStats& stats = GetGCStats();
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
+    GarbRegionDiag::CensusBeforeForward("pre-forward");
     space.ForwardFromSpace(GetThreadPool());
 }
 

@@ -26,6 +26,7 @@
 #include "RegionList.h"
 #include "Heap/Verify/EmptyLiveDiag.h"
 #include "Heap/Verify/F3Why2Diag.h"
+#include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
 #include "securec.h"
@@ -349,6 +350,7 @@ public:
         F3Why2Diag::NoteCollectEnter(region);
         // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
         EmptyLiveDiag::NoteCollectEnter(region);
+        GarbRegionDiag::NoteCollectEnter(region);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
