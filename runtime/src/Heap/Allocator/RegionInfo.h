@@ -1173,6 +1173,7 @@ public:
                 constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
                 if (tipAddr != 0 && tipAddr >= kMinPlausibleTypeInfoAddr &&
                     (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 &&
+                    (tipAddr & 0xffffffffULL) != 0 &&
                     !Heap::IsHeapAddress(tipAddr)) {
                     startOk = true;
                 }
