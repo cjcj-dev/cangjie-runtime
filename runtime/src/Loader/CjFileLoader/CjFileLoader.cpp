@@ -308,6 +308,8 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
 {
     extensionDatas.erase(baseFile);
     loadedFiles.remove(baseFile);
+    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
     baseFile->UnregisterFile();
     delete baseFile;
 }
@@ -384,6 +386,8 @@ void CJFileLoader::ClearLoadedFiles()
 {
     extensionDatas.clear();
     VisitBaseFile([](BaseFile* baseFile) {
+        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+            baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
         baseFile->UnregisterFile();
         delete baseFile;
         return false;

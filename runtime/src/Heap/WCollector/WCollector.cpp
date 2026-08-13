@@ -62,6 +62,7 @@
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/RefField.inline.h"
+#include "TypeInfoManager.h"
 #include "Verify/VerifyRegions.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
 #include "securec.h"
@@ -2839,8 +2840,6 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             if (origin != nullptr &&
                 (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0)) {
                 StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
-            } else if (origin != nullptr && std::strcmp(origin, "remset") == 0) {
-                StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::REMSET, origin);
             } else if (origin != nullptr &&
                        (std::strcmp(origin, "minor_root") == 0 ||
                         std::strcmp(origin, "minor_root_final") == 0)) {
@@ -3621,7 +3620,8 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
 
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
-                                     bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut)
+                                     bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut,
+                                     MinorInteriorBaseMap* interiorBasesOut)
 {
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
     //   1) region-level holder_dead (free/garbage region only — not object liveness)
@@ -3634,6 +3634,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     static std::atomic<size_t> g_remsetLifeClearLogged{ 0 };
     size_t scrubbedStale = 0;
     size_t scrubbedDeadHolder = 0;
+    size_t scrubbedNoTargetOrigin = 0;
+    size_t recoveredTargetInterior = 0;
+    size_t targetOriginSlowLookups = 0;
+    size_t targetOriginIndexedRegions = 0;
+    size_t targetOriginVisitedObjects = 0;
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
     static const bool retainedProbe = []() {
@@ -3735,6 +3740,94 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             });
         });
     }
+    std::unordered_set<RegionInfo*> indexedTargetRegions;
+    std::unordered_map<RegionInfo*, std::vector<MAddress>> targetStarts;
+    std::unordered_map<TypeInfo*, bool> knownTypeInfos;
+    auto isKnownTypeInfo = [&knownTypeInfos](TypeInfo* tip) {
+        auto cached = knownTypeInfos.find(tip);
+        if (cached != knownTypeInfos.end()) {
+            return cached->second;
+        }
+        bool known = TypeInfoManager::GetTypeInfoManager().ContainsTypeInfo(tip);
+        knownTypeInfos.emplace(tip, known);
+        return known;
+    };
+    auto hasKnownTypeInfo = [&isKnownTypeInfo](const char* site, BaseObject* object) {
+        return Collector::PlausibleManagedObjectGate(site, object) && isKnownTypeInfo(object->GetTypeInfo());
+    };
+    auto recoverYoungTargetBase = [&indexedTargetRegions, &targetStarts, &targetOriginSlowLookups,
+                                   &targetOriginIndexedRegions, &targetOriginVisitedObjects,
+                                   &hasKnownTypeInfo](BaseObject* target) {
+        MAddress address = reinterpret_cast<MAddress>(target);
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(address);
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() || !region->IsYoungRegion()) {
+            return target;
+        }
+        bool targetKnown = hasKnownTypeInfo("RescanRememberedSet.target", target);
+        unsigned interiorCandidateCount = 0;
+        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+            if (address < offset) {
+                continue;
+            }
+            MAddress candidateAddress = address - offset;
+            if (!Heap::IsHeapAddress(candidateAddress)) {
+                continue;
+            }
+            RegionInfo* candidateRegion = RegionInfo::TryGetRegionInfoAt(candidateAddress);
+            if (candidateRegion != region) {
+                continue;
+            }
+            auto* candidate = reinterpret_cast<BaseObject*>(candidateAddress);
+            if (hasKnownTypeInfo("RescanRememberedSet.targetCandidate", candidate) &&
+                offset < RegionSpace::GetAllocSize(*candidate)) {
+                ++interiorCandidateCount;
+            }
+        }
+        // With no preceding header candidate, only an exact registered TypeInfo can
+        // preserve the normal target path. Any candidate count (including ambiguity)
+        // must be decided by the exact-start table below; plausibility alone is not
+        // an object-start proof.
+        if (interiorCandidateCount == 0) {
+            return targetKnown ? target : static_cast<BaseObject*>(nullptr);
+        }
+
+        ++targetOriginSlowLookups;
+        if (indexedTargetRegions.insert(region).second) {
+            ++targetOriginIndexedRegions;
+            region->VisitAllObjects([region, &targetStarts, &targetOriginVisitedObjects](BaseObject* object) {
+                targetStarts[region].push_back(reinterpret_cast<MAddress>(object));
+                ++targetOriginVisitedObjects;
+            });
+        }
+        const auto& starts = targetStarts[region];
+        if (std::binary_search(starts.begin(), starts.end(), address)) {
+            return target;
+        }
+
+        BaseObject* recovered = nullptr;
+        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+            if (address < offset) {
+                continue;
+            }
+            MAddress candidateAddress = address - offset;
+            if (!Heap::IsHeapAddress(candidateAddress)) {
+                continue;
+            }
+            RegionInfo* candidateRegion = RegionInfo::TryGetRegionInfoAt(candidateAddress);
+            if (candidateRegion != region) {
+                continue;
+            }
+            auto* candidate = reinterpret_cast<BaseObject*>(candidateAddress);
+            if (!std::binary_search(starts.begin(), starts.end(), candidateAddress)) {
+                continue;
+            }
+            if (offset >= RegionSpace::GetAllocSize(*candidate) || recovered != nullptr) {
+                return static_cast<BaseObject*>(nullptr);
+            }
+            recovered = candidate;
+        }
+        return recovered;
+    };
     for (MAddress slot : rememberedSlots) {
         if (!Heap::IsHeapAddress(slot)) {
             if (statsOut != nullptr) {
@@ -3969,6 +4062,18 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             ++scrubbedStale;
             continue;
         }
+        BaseObject* targetBase = recoverYoungTargetBase(target);
+        if (targetBase == nullptr) {
+            ++scrubbedNoTargetOrigin;
+            continue;
+        }
+        if (targetBase != target) {
+            if (interiorBasesOut != nullptr) {
+                (*interiorBasesOut)[slot] = targetBase;
+            }
+            target = targetBase;
+            ++recoveredTargetInterior;
+        }
         if (!target->IsValidObject()) {
             ++scrubbedBadTarget;
             if (remsetLifeProbe) {
@@ -4054,6 +4159,17 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             continue;
         }
 
+        bool noteRemsetHandoff = false;
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            noteRemsetHandoff = targetRegion != nullptr && targetRegion->IsYoungRegion() &&
+                !targetRegion->IsMarkedObject(target);
+        }
+        if (noteRemsetHandoff) {
+            BaseObject* holder = originIt != rememberedOrigins.end() ? originIt->second : nullptr;
+            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::REMSET,
+                                       "RescanRememberedSet.PushYoungObject", field, holder);
+        }
         PushYoungObject(target, workStack, "remset");
         if (consumedOut != nullptr) {
             consumedOut->insert(slot);
@@ -4078,12 +4194,20 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             }
         }
     }
-    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedBadTarget != 0 || scrubbedStaleOldTag != 0) {
+    if (scrubbedStale != 0 || scrubbedDeadHolder != 0 || scrubbedNoTargetOrigin != 0 ||
+        recoveredTargetInterior != 0 || targetOriginSlowLookups != 0 || scrubbedBadTarget != 0 ||
+        scrubbedStaleOldTag != 0) {
+        auto typeInfoIndexShape = TypeInfoManager::GetTypeInfoManager().GetTypeInfoIndexShape();
         VLOG(REPORT,
-             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu badTarget=%zu "
-             "staleOldTag=%zu recorded=%zu "
+             "[GCV2][remset-filter] summary staleTarget=%zu deadHolderRegion=%zu noTargetOrigin=%zu "
+             "targetInteriorRecovered=%zu targetOriginSlowLookups=%zu targetOriginIndexedRegions=%zu "
+             "targetOriginVisitedObjects=%zu typeInfoIndexEntries=%zu typeInfoIndexBuckets=%zu "
+             "badTarget=%zu staleOldTag=%zu recorded=%zu "
              "(DEAD_HOLDER_DROPPED≈deadHolderRegion+staleOldTag; region-level holder_dead ≠ object-dead)",
-             scrubbedStale, scrubbedDeadHolder, scrubbedBadTarget, scrubbedStaleOldTag, rememberedSlots.size());
+             scrubbedStale, scrubbedDeadHolder, scrubbedNoTargetOrigin, recoveredTargetInterior,
+             targetOriginSlowLookups, targetOriginIndexedRegions, targetOriginVisitedObjects,
+             typeInfoIndexShape.first, typeInfoIndexShape.second, scrubbedBadTarget, scrubbedStaleOldTag,
+             rememberedSlots.size());
     }
     if (remsetReRemember) {
         VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu remembered=%zu env=MRT_GCV2_REMSET_REREMEMBER=1",
@@ -4143,7 +4267,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     }
 }
 
-bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
+bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase) const
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
@@ -4159,8 +4283,22 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field) const
     // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
     // into it; CasInstallInteriorPlain names the (host,offset) provenance (derivedtype).
     // ScopedPlainWriter tags DerivedLegal column, not K1 HeapSlot plain.
-    if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
-        BaseObject* host = Collector::TryRecoverInteriorBase(target);
+    if (knownBase != nullptr) {
+        MAddress targetAddress = reinterpret_cast<MAddress>(target);
+        MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
+        size_t offset = targetAddress > baseAddress ? targetAddress - baseAddress : 0;
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
+        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
+        bool allowedOffset = offset == 8u || offset == 16u || offset == 24u || offset == 32u;
+        bool verifiedBase = allowedOffset && targetRegion == baseRegion &&
+            Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.knownBase", knownBase) &&
+            offset < RegionSpace::GetAllocSize(*knownBase);
+        if (!verifiedBase) {
+            return false;
+        }
+    }
+    if (knownBase != nullptr || !Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot", target)) {
+        BaseObject* host = knownBase != nullptr ? knownBase : Collector::TryRecoverInteriorBase(target);
         if (host != nullptr && IsGhostFromObject(host) && !IsUnmovableFromObject(host)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), host);
             BaseObject* toHost = const_cast<WCollector*>(this)->ForwardObject(host);
@@ -4633,6 +4771,7 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 
 void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec,
                                        const MinorSlotSet& rememberedSlots,
+                                       const MinorInteriorBaseMap& interiorBases,
                                        std::unique_ptr<ScopedStopTheWorld>* stw)
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
@@ -4663,9 +4802,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // no unordered_set → vector copy. remset still from set (slot identity).
     std::vector<MAddress> remsetVec(rememberedSlots.begin(), rememberedSlots.end());
 
-    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &currentObject](size_t beginObj, size_t endObj,
-                                                                           size_t beginSlot, size_t endSlot,
-                                                                           size_t& objectsTaken) {
+    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject](
+                            size_t beginObj, size_t endObj, size_t beginSlot, size_t endSlot,
+                            size_t& objectsTaken) {
         for (size_t i = beginObj; i < endObj; ++i) {
             FixMinorObjectSlots(currentObject(reachableVec[i]));
             ++objectsTaken;
@@ -4675,12 +4814,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             if (Heap::IsHeapAddress(slot)) {
                 NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
+                auto known = interiorBases.find(slot);
+                BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
             }
         }
     };
 
-    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &currentObject]() {
+    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject]() {
         FixMinorRootSlots();
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
@@ -4691,7 +4832,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             if (Heap::IsHeapAddress(slot)) {
                 NullRouteCaller::ScopedEdge _edge("remset", nullptr, static_cast<uintptr_t>(slot));
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot));
+                auto known = interiorBases.find(slot);
+                BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
+                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
             }
         }
     };
@@ -6140,11 +6283,12 @@ void WCollector::DoYoungGarbageCollection()
     remsetStats.recorded = rememberedSlots.size();
     remsetStats.live = liveRememberedSlots.size();
     MinorSlotSet consumedSlots;
+    MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
         MRT_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
-                            &remsetStats);
+                            &remsetStats, &remsetInteriorBases);
     }
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
     if (FysAuditDiag::Enabled()) {
@@ -6199,7 +6343,8 @@ void WCollector::DoYoungGarbageCollection()
                     // Do NOT pass product fullYoungScan: that path drops slots missing from
                     // reachableSlots. Concurrent edges are the authority for new greys.
                     RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
-                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats);
+                                        /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
+                                        &remsetInteriorBases);
                     for (MAddress slot : concurrentRemset) {
                         if (!Heap::IsHeapAddress(slot)) {
                             continue;
@@ -6608,7 +6753,8 @@ void WCollector::DoYoungGarbageCollection()
             MinorSlotSet dualWeaks;
             TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
                               /*useBitmapLedger=*/false);
-            RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr);
+            RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr,
+                                nullptr);
             TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
                               /*useBitmapLedger=*/false);
         } else {
@@ -6748,7 +6894,7 @@ void WCollector::DoYoungGarbageCollection()
              remsetStats.live, consumedSlots.size(),
              remsetStats.live > consumedSlots.size() ? remsetStats.live - consumedSlots.size() : 0);
     }
-    EvacuateYoungRegions(reachableVec, consumedSlots, &stw);
+    EvacuateYoungRegions(reachableVec, consumedSlots, remsetInteriorBases, &stw);
     size_t allocatedAfter = space.AllocatedBytes();
     stats.reclaimedBytes = allocatedBefore > allocatedAfter ? allocatedBefore - allocatedAfter : 0;
     GetGCStats().collectedBytes = stats.reclaimedBytes;

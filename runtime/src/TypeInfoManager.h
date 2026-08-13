@@ -48,6 +48,9 @@ public:
     TypeInfo* GetOrCreateTypeInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[]);
     void InvalidateGenericTypeInfoFastMap();
     void AddTypeInfo(TypeInfo* ti);
+    void RemoveTypeInfosInRange(uintptr_t begin, size_t size);
+    bool ContainsTypeInfo(TypeInfo* ti);
+    std::pair<size_t, size_t> GetTypeInfoIndexShape();
     static U32 GetTypeSize(TypeInfo* ti);
     void ParseEnumInfo(TypeTemplate* tt, U32 argSize, TypeInfo* args[], TypeInfo* ti);
     void RecordMTableDesc(U32 uuid, MTableDesc* mTableDesc) { mTableList.emplace(uuid, mTableDesc); }
@@ -210,6 +213,9 @@ private:
     std::atomic<uintptr_t> position;
     std::mutex ttMutex; //  guaranteed typeTemplates insert and find atomic
     std::recursive_mutex tiMutex; //  guaranteed nonGenericTypeInfo insert and find atomic
+    // Exact, current TypeInfo identities. Unlike an address-range heuristic, membership
+    // cannot turn arbitrary module payload into an object header; image unload erases its range.
+    std::unordered_set<TypeInfo*> registeredTypeInfos;
     std::unordered_map<const char*, TypeInfo*, HashString, EqualString> nonGenericTypeInfos;
     std::unordered_map<const char*, TypeInfo*, HashString, EqualString> genericTypeInfos;
     std::unordered_map<const char*, TypeTemplate*, HashString, EqualString> typeTemplates;

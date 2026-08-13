@@ -208,6 +208,12 @@ bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)
 unsigned ClassifyInteriorOffset(BaseObject* obj)
 {
     auto base = reinterpret_cast<uintptr_t>(obj);
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(base);
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+        region->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+        return 0;
+    }
+    unsigned offset = 0;
     for (unsigned k : { 8u, 16u, 24u, 32u }) {
         if (base < k) {
             continue;
@@ -216,13 +222,22 @@ unsigned ClassifyInteriorOffset(BaseObject* obj)
         if (!Heap::IsHeapAddress(cand)) {
             continue;
         }
+        RegionInfo* candidateRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(cand));
+        if (candidateRegion == nullptr || candidateRegion != region || candidateRegion->IsFreeRegion() ||
+            candidateRegion->IsGarbageRegion() ||
+            candidateRegion->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+            continue;
+        }
         // Safe: tip is first word; heap address already checked.
         uintptr_t tipAddr = reinterpret_cast<uintptr_t>(cand->GetTypeInfo());
         if (TipWordLooksLikeTypeInfo(tipAddr)) {
-            return k;
+            if (offset != 0) {
+                return 0;
+            }
+            offset = k;
         }
     }
-    return 0;
+    return offset;
 }
 
 // introot: host object for a heap interior (RawArray+8/...). nullptr if not interior.

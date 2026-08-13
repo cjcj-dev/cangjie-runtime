@@ -148,6 +148,7 @@ void TypeInfoManager::Init()
 void TypeInfoManager::Fini()
 {
     // release resources
+    registeredTypeInfos.clear();
     for (const auto& mTable : mTableList) {
         delete mTable.second;
     }
@@ -197,6 +198,8 @@ void TypeInfoManager::FreeMMap(uintptr_t address, size_t size)
 void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
 {
     if (!ti->IsInitialUUID()) {
+        std::lock_guard<std::recursive_mutex> lock(tiMutex);
+        registeredTypeInfos.insert(ti);
         return;
     }
     // Let tiDesc/typeInfoName before lock to reduce tiMutex hold time.
@@ -214,6 +217,7 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
         typeInfoName = ti->GetName();
     }
     std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    registeredTypeInfos.insert(ti);
     if (!ti->IsInitialUUID()) {
         return;
     }
@@ -272,6 +276,34 @@ void TypeInfoManager::AddTypeInfo(TypeInfo* ti)
         nonGenericTypeInfos[typeInfoName] = ti;
         ti->SetUUID(tiMaxUUID.fetch_add(1));
     }
+}
+
+bool TypeInfoManager::ContainsTypeInfo(TypeInfo* ti)
+{
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    return registeredTypeInfos.count(ti) != 0;
+}
+
+void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
+{
+    if (size == 0) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    for (auto it = registeredTypeInfos.begin(); it != registeredTypeInfos.end();) {
+        uintptr_t address = reinterpret_cast<uintptr_t>(*it);
+        if (address >= begin && address - begin < size) {
+            it = registeredTypeInfos.erase(it);
+        } else {
+            ++it;
+        }
+    }
+}
+
+std::pair<size_t, size_t> TypeInfoManager::GetTypeInfoIndexShape()
+{
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    return { registeredTypeInfos.size(), registeredTypeInfos.bucket_count() };
 }
 
 U16 TypeInfoManager::GetTypeTemplateUUID(TypeTemplate* tt)
