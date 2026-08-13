@@ -212,7 +212,11 @@ void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, s
     // R9：静态槽 barrier 可见，不能只走 WriteStructImpl(nullptr)（那边 obj==null 跳过补色）。
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK);
     ResolveStaticStructRoots(dst, gctib);
-    RecordStaticCrossGenEdges(dst, gctib);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    });
+#endif
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), dstLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), srcLen);

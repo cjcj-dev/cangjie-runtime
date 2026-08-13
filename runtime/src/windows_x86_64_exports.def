@@ -1471,7 +1471,6 @@ EXPORTS
     _ZN12MapleRuntime13RememberedSet13MarkWordDirtyEyy @1465
     _ZN12MapleRuntime13RememberedSet14BeginFullClearEv @1466
     _ZN12MapleRuntime13RememberedSet14ClearWordDirtyEyy @1467
-    _ZN12MapleRuntime13RememberedSet14RecordExternalEy @1468
     _ZN12MapleRuntime13RememberedSet15FinishFullClearEh @1469
     _ZN12MapleRuntime13RememberedSet18ClearRangeInBufferEyyyPy @1470
     _ZN12MapleRuntime13RememberedSet6RecordEy @1471
@@ -2698,7 +2697,6 @@ EXPORTS
     _ZNK12MapleRuntime7Barrier23AtomicSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2693
     _ZNK12MapleRuntime7Barrier23CompareAndSwapReferenceEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2694
     _ZNK12MapleRuntime7Barrier24AtomicWriteReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_NSt3__112memory_orderE @2695
-    _ZNK12MapleRuntime7Barrier25RecordStaticCrossGenEdgesEyNS_5GCTibE @2696
     _ZNK12MapleRuntime7Barrier27CompareAndSwapReferenceImplEPNS_10BaseObjectERNS_8HeapSlotILb1EEES2_S2_NSt3__112memory_orderES7_ @2697
     _ZNK12MapleRuntime7Barrier27RecordCrossGenEdgesInStructEPNS_10BaseObjectEyy @2698
     _ZNK12MapleRuntime7Barrier28FixupNonHeapStaticStructRefsEyyyNS_5GCTibE @2699

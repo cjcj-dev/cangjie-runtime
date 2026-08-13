@@ -228,9 +228,9 @@ void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     StorePlain(field, from_object(ref));
-    // Static/global slots are visited and fixed as roots in every minor collection.
-    // RecordCrossGenEdge retains a validation-only coverage oracle for this path.
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), ref);
+#endif
 }
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
@@ -244,7 +244,11 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
     Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
     Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), copyLen);
 #endif
-    RecordStaticCrossGenEdges(dst, gctib);
+#if defined(MRT_REMSET_BITMAP_CROSSCHECK)
+    gctib.ForEachBitmapWord(dst, [this](RefField<>& field) {
+        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
+    });
+#endif
 }
 
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -770,11 +774,10 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return;
     }
-    // Non-heap field (static/global/value temporary): it cannot consume a
-    // heap-region bitmap bit. Retain exact slot identity in the separately locked
-    // external double buffer.
+    // Non-heap fields cannot contribute heap-region remset bits. Static/global
+    // slots are visited as roots in every minor collection, so recording them in
+    // the remset only makes RescanRememberedSet discard them as non-heap slots.
     (void)obj;
-    theRememberedSet.RecordExternal(fieldAddress);
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     theRememberedSet.RecordStaticForCrossCheck(
         fieldAddress, reinterpret_cast<MAddress>(__builtin_return_address(0)));
@@ -838,16 +841,6 @@ void Barrier::RecordCrossGenEdgesInRefArray(BaseObject* obj, MAddress start, siz
         }
         RecordCrossGenEdge(obj, current, ref);
     }
-}
-
-void Barrier::RecordStaticCrossGenEdges(MAddress start, const GCTib gctib) const
-{
-    if (!HasYoungRegionsForRecording()) {
-        return;
-    }
-    gctib.ForEachBitmapWord(start, [this](RefField<>& field) {
-        RecordCrossGenEdge(nullptr, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
-    });
 }
 
 } // namespace MapleRuntime

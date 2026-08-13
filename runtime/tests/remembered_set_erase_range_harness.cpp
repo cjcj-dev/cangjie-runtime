@@ -14,11 +14,6 @@ namespace MapleRuntime {
 class RememberedSetTest {
 public:
     static void Record(RememberedSet& rememberedSet, MAddress address) { rememberedSet.Record(address); }
-    static void RecordExternal(RememberedSet& rememberedSet, MAddress address)
-    {
-        rememberedSet.RecordExternal(address);
-    }
-
     static size_t ClearRegion(RememberedSet& rememberedSet, MAddress start, MAddress end, size_t* words)
     {
         return rememberedSet.ClearRegion(start, end, words);
@@ -55,14 +50,12 @@ int main()
     RememberedSetTest::Record(rememberedSet, start + 63 * fieldSize);
     RememberedSetTest::Record(rememberedSet, start + 64 * fieldSize);
     RememberedSetTest::Record(rememberedSet, start + 64 * fieldSize);
-    constexpr MAddress externalSlot = 0x80000;
-    RememberedSetTest::RecordExternal(rememberedSet, externalSlot);
-    passed = rememberedSet.Size() == 4 && rememberedSet.Contains(start) &&
+    passed = rememberedSet.Size() == 3 && rememberedSet.Contains(start) &&
              rememberedSet.Contains(start + 63 * fieldSize) &&
-             rememberedSet.Contains(start + 64 * fieldSize) && rememberedSet.Contains(externalSlot) && passed;
+             rememberedSet.Contains(start + 64 * fieldSize) && passed;
 
     std::unordered_set<MAddress> drained;
-    passed = rememberedSet.DrainForMinor(drained) == 4 && drained.size() == 4 && rememberedSet.Size() == 0 && passed;
+    passed = rememberedSet.DrainForMinor(drained) == 3 && drained.size() == 3 && rememberedSet.Size() == 0 && passed;
 
     // Region cleanup is half-open and touches both owned bitmap slices.
     RememberedSetTest::Record(rememberedSet, start + 127 * fieldSize);
@@ -76,16 +69,12 @@ int main()
     // A full-GC rotation drops the captured old buffer and preserves writes made
     // after the clean buffer has been published.
     RememberedSetTest::Record(rememberedSet, start + 192 * fieldSize);
-    RememberedSetTest::RecordExternal(rememberedSet, externalSlot);
     uint8_t oldBuffer = RememberedSetTest::BeginFullClear(rememberedSet);
     RememberedSetTest::Record(rememberedSet, start + 256 * fieldSize);
-    RememberedSetTest::RecordExternal(rememberedSet, externalSlot + fieldSize);
-    passed = RememberedSetTest::FinishFullClear(rememberedSet, oldBuffer) == 3 &&
-             rememberedSet.Size() == 2 && rememberedSet.Contains(start + 256 * fieldSize) &&
-             rememberedSet.Contains(externalSlot + fieldSize) && passed;
+    passed = RememberedSetTest::FinishFullClear(rememberedSet, oldBuffer) == 2 &&
+             rememberedSet.Size() == 1 && rememberedSet.Contains(start + 256 * fieldSize) && passed;
 
-    // Validation correlates non-heap records with roots visited in the same round;
-    // the product retains these records in an independent exact buffer.
+    // Validation correlates static writes with roots visited in the same round.
     constexpr MAddress staticSlot = 0x70000;
     rememberedSet.RecordStaticForCrossCheck(staticSlot, 0);
     rememberedSet.VisitStaticForCrossCheck(staticSlot);
