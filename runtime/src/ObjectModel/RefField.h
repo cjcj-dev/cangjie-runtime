@@ -368,14 +368,18 @@ static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one 
 static_assert(sizeof(RootSlot) == sizeof(MAddress), "RootSlot must remain one machine word");
 static_assert(sizeof(DerivedSlot) == sizeof(MAddress), "DerivedSlot must remain one machine word");
 
-// The compiler/stack-map/object-layout ABIs expose raw word addresses. Keep the
-// unavoidable representation escape in this single named layer; callers must
-// already know the slot category from metadata or the ABI being decoded.
+// The compiler/stack-map/object-layout ABIs expose raw word addresses. Typed
+// pointers are rejected at this boundary, but this does not make a category
+// escape impossible: a caller that independently knows the ABI category can
+// still spell static_cast<void*> explicitly, leaving a visible review token.
 template<bool isAtomic = false>
 inline HeapSlot<isAtomic>& HeapSlotAt(void* address)
 {
     return *reinterpret_cast<HeapSlot<isAtomic>*>(address);
 }
+
+template<bool isAtomic = false, typename T>
+HeapSlot<isAtomic>& HeapSlotAt(T*) = delete;
 
 template<bool isAtomic = false>
 inline HeapSlot<isAtomic>& HeapSlotAt(MAddress address)
@@ -388,6 +392,9 @@ inline RootSlot& RootSlotAt(void* address)
     return *reinterpret_cast<RootSlot*>(address);
 }
 
+template<typename T>
+RootSlot& RootSlotAt(T*) = delete;
+
 inline RootSlot& RootSlotAt(MAddress address)
 {
     return RootSlotAt(reinterpret_cast<void*>(address));
@@ -397,6 +404,9 @@ inline DerivedSlot& DerivedSlotAt(void* address)
 {
     return *reinterpret_cast<DerivedSlot*>(address);
 }
+
+template<typename T>
+DerivedSlot& DerivedSlotAt(T*) = delete;
 
 inline DerivedSlot& DerivedSlotAt(MAddress address)
 {
