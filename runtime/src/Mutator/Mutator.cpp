@@ -35,6 +35,40 @@
 #include "Interpreter/InterpreterSpecific.h"
 
 namespace MapleRuntime {
+void Mutator::RememberObjectInSatbBuffer(const BaseObject* target)
+{
+    // Recover provenance while the deletion-barrier value is still at the producer. The SATB
+    // record carries it across the asynchronous filter/remark boundary instead of asking the
+    // consumer to reinterpret an interior address as an object start.
+    BaseObject* mutableTarget = const_cast<BaseObject*>(target);
+    BaseObject* knownBase = Collector::TryRecoverInteriorBase(mutableTarget);
+    SatbBuffer::MaybeInjectCarryProbe(mutableTarget, knownBase);
+    RememberObjectInSatbBuffer(mutableTarget, knownBase);
+}
+
+void Mutator::RememberObjectInSatbBuffer(const BaseObject* target, const BaseObject* knownBase)
+{
+    if (knownBase != nullptr) {
+        // Keep this pairing check congruent with FixMinorEvacuatedSlot(field, knownBase): the
+        // supported derived offsets, region identity, managed-object gate, and allocation bound
+        // must all agree before a base is allowed to replace the target in the marking stream.
+        MAddress targetAddress = reinterpret_cast<MAddress>(target);
+        MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
+        size_t offset = targetAddress > baseAddress ? targetAddress - baseAddress : 0;
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(targetAddress);
+        RegionInfo* baseRegion = RegionInfo::TryGetRegionInfoAt(baseAddress);
+        bool allowedOffset = offset == 8u || offset == 16u || offset == 24u || offset == 32u;
+        bool verifiedBase = allowedOffset && targetRegion == baseRegion &&
+            Collector::PlausibleManagedObjectGate("RememberObjectInSatbBuffer.knownBase",
+                                                  const_cast<BaseObject*>(knownBase)) &&
+            offset < RegionSpace::GetAllocSize(*knownBase);
+        if (!verifiedBase) {
+            return;
+        }
+    }
+    RememberObjectImpl(target, knownBase);
+}
+
 extern "C" uintptr_t MRT_GetThreadLocalData()
 {
     uintptr_t tlDataAddr = reinterpret_cast<uintptr_t>(ThreadLocal::GetThreadLocalData());

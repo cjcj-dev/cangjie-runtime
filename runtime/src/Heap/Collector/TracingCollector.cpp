@@ -744,6 +744,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             GCThreadPool* threadPool = GetThreadPool();
             WorkStack tmp;
             TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
+            SatbBuffer::ReportCarryProbe();
             return workStack.empty();
         }
         if (LIKELY(!workStack.empty())) {
@@ -757,6 +758,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             visitSatbObj();
         }
     } while (!workStack.empty());
+    SatbBuffer::ReportCarryProbe();
     return true;
 }
 
