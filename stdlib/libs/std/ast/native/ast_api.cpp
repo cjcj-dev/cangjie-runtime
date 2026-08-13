@@ -21,6 +21,7 @@
 #include "cangjie/Parse/Parser.h"
 
 using namespace Cangjie;
+using StdAst::ParseRes;
 
 extern "C" {
 // A host compiler that is not the reference C++ implementation cannot pass a real MacroCall*
@@ -71,6 +72,9 @@ namespace {
 enum class ParseKind : uint8_t { EXPR, DECL, PROGRAM, PATTERN };
 
 const std::string INVALID_POSITION_MSG = "There is a token with invalid position in the input.\n";
+const uint8_t DIAG_REPORT_RANGE_ERROR = 1;
+const uint8_t DIAG_REPORT_FILEID_ERROR = 2;
+const int FLOAT64_PRECISION = 16;
 
 void InitParseDiagnostic(DiagnosticEngine& diag, SourceManager& sm)
 {
@@ -558,9 +562,6 @@ void CJ_GetMacroPosition(void* fptr, unsigned int* fileID, int* line, int* colum
     return;
 }
 
-const uint8_t DIAG_REPORT_RANGE_ERROR = 1;
-const uint8_t DIAG_REPORT_FILEID_ERROR = 2;
-
 uint8_t CJ_AST_DiagReport(
     void* fptr, const int* level, const uint8_t* tokensBytes, const char* message, const char* hint)
 {
@@ -594,8 +595,6 @@ uint8_t CJ_AST_DiagReport(
     macCall->DiagReport(*level, range, message, hint);
     return 0;
 }
-
-const int FLOAT64_PRECISION = 16;
 
 extern char* CJ_AST_Float64ToCPointer(const double num)
 {
