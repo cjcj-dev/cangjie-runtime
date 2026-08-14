@@ -15,6 +15,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
 #include "securec.h"
@@ -333,6 +334,9 @@ void DumpHolder(const char* tag, uintptr_t addr)
     uintptr_t words[64];
     std::memset(words, 0, sizeof(words));
 
+    unsigned ghost = 0;
+    unsigned route = 0;
+    uint64_t liveBytes = 0;
     if (Runtime::CurrentRef() != nullptr && addr != 0 && Heap::IsHeapAddress(addr)) {
         inHeap = 1;
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
@@ -345,6 +349,9 @@ void DumpHolder(const char* tag, uintptr_t addr)
             rend = region->GetRegionEnd();
             alloc = region->GetRegionAllocPtr();
             inAlloc = (addr >= rstart && addr < alloc) ? 1 : 0;
+            ghost = region->IsGhostFromRegion() ? 1 : 0;
+            route = static_cast<unsigned>(region->GetRouteState());
+            liveBytes = region->GetLiveByteCount();
         }
         uintptr_t limit = rend != 0 ? rend : (addr + sizeof(words));
         nWords = static_cast<unsigned>((limit > addr) ? ((limit - addr) / sizeof(uintptr_t)) : 0);
@@ -435,11 +442,12 @@ void DumpHolder(const char* tag, uintptr_t addr)
                        "nZero=%u nWords=%u tip=%#zx tipInHeap=%u tipAlign=%u name=%s type=%d "
                        "flag=%u fieldNum=%u instSz=%u header0=%#zx header1=%#zx "
                        "regionType=%u young=%u garbage=%u free=%u inAlloc=%u "
-                       "rstart=%#zx rend=%#zx alloc=%#zx collect=%u\n",
+                        "rstart=%#zx rend=%#zx alloc=%#zx collect=%u ghost=%u route=%u live=%llu\n",
                        tag, addr, inHeap, valid, allZero, nZero, nWords, tip, tipInHeap, tipAlign,
                        nameBuf[0] != '\0' ? nameBuf : "?", typeByte, static_cast<unsigned>(flag),
                        static_cast<unsigned>(fieldNum), instSz, header0, header1, rtype, young,
-                       garbage, freeReg, inAlloc, rstart, rend, alloc, collectHits);
+                       garbage, freeReg, inAlloc, rstart, rend, alloc, collectHits, ghost, route,
+                       static_cast<unsigned long long>(liveBytes));
     if (wn > 0) {
         WriteLine(line, static_cast<size_t>(wn));
     }
@@ -470,6 +478,53 @@ void DumpHolder(const char* tag, uintptr_t addr)
         CollectRow& crow = g_collects[lastCollectIdx];
         CountInRegion(crow.start, crow.end, crow.nOld, crow.nNew);
         DumpCollect(tag, crow);
+    }
+
+    if (inHeap == 1 && addr != 0) {
+        char clearBuf[320];
+        bool hit = TraceClear::Lookup(static_cast<MAddress>(addr), clearBuf, sizeof(clearBuf));
+        char clearLine[400];
+        int cn = sprintf_s(clearLine, sizeof(clearLine),
+                           "[GCV2][threadzero] clear tag=%s hit=%u detail=%s\n",
+                           tag, hit ? 1U : 0U, clearBuf[0] != '\0' ? clearBuf : "empty");
+        if (cn > 0) {
+            WriteLine(clearLine, static_cast<size_t>(cn));
+        }
+        if (rstart != 0 && rend > rstart) {
+            uintptr_t headW[8];
+            uintptr_t midW[8];
+            uintptr_t tailW[8];
+            std::memset(headW, 0, sizeof(headW));
+            std::memset(midW, 0, sizeof(midW));
+            std::memset(tailW, 0, sizeof(tailW));
+            (void)CopyWords(rstart, headW, 8);
+            uintptr_t mid = rstart + ((rend - rstart) / 2);
+            (void)CopyWords(mid, midW, 8);
+            uintptr_t tail = (alloc > rstart + 64) ? (alloc - 64) : rstart;
+            if (tail + 64 > rend) {
+                tail = rend > 64 ? (rend - 64) : rstart;
+            }
+            (void)CopyWords(tail, tailW, 8);
+            unsigned headZ = 0;
+            unsigned midZ = 0;
+            unsigned tailZ = 0;
+            for (unsigned i = 0; i < 8; ++i) {
+                headZ += (headW[i] == 0) ? 1U : 0U;
+                midZ += (midW[i] == 0) ? 1U : 0U;
+                tailZ += (tailW[i] == 0) ? 1U : 0U;
+            }
+            char samp[640];
+            int sn = sprintf_s(samp, sizeof(samp),
+                               "[GCV2][threadzero] region tag=%s off=%#zx rsz=%#zx "
+                               "headZ=%u/%u midZ=%u/%u tailZ=%u/%u "
+                               "head0=%#zx mid0=%#zx tail0=%#zx\n",
+                               tag, addr - rstart, rend - rstart,
+                               headZ, 8U, midZ, 8U, tailZ, 8U,
+                               headW[0], midW[0], tailW[0]);
+            if (sn > 0) {
+                WriteLine(samp, static_cast<size_t>(sn));
+            }
+        }
     }
 }
 
@@ -935,6 +990,23 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
     DumpHolder("rax", rax);
     DumpHolder("r12", r12);
     DumpHolder("r14", r14);
+
+    uintptr_t threadObject = 0;
+    void* arg = CJ_CJThreadGetArg();
+    if (arg != nullptr) {
+        threadObject = reinterpret_cast<uintptr_t>(static_cast<LWTData*>(arg)->threadObject);
+    }
+    char thrLine[256];
+    int tn = sprintf_s(thrLine, sizeof(thrLine),
+                       "[GCV2][threadzero] currentThr=%#zx rdi=%#zx equals=%u\n",
+                       threadObject, rdi, (rdi != 0 && rdi == threadObject) ? 1U : 0U);
+    if (tn > 0) {
+        WriteLine(thrLine, static_cast<size_t>(tn));
+    }
+    if (threadObject != 0 && threadObject != rdi) {
+        DumpHolder("curThr", threadObject);
+    }
+
     JoinCopyAndZero(r14);
 }
 
