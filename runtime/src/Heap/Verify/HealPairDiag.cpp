@@ -230,7 +230,6 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
     EnsureAtexit();
     uint32_t nOld = 0;
     uint32_t nNew = 0;
-    CountInRegion(start, end, nOld, nNew);
     uint32_t seq = static_cast<uint32_t>(g_collectTotal.fetch_add(1, std::memory_order_relaxed) + 1);
     uint32_t slotIdx = g_collectNext.fetch_add(1, std::memory_order_relaxed);
     if (slotIdx >= kCollectCap) {
@@ -354,7 +353,9 @@ void NoteCrashRdi(uintptr_t rdi)
         DumpMatch("oldHit", g_pairs[lastOldIdx[i]]);
     }
     if (haveCollect) {
-        DumpCollect("rdiRegion", g_collects[lastCollectIdx]);
+        CollectRow& crow = g_collects[lastCollectIdx];
+        CountInRegion(crow.start, crow.end, crow.nOld, crow.nNew);
+        DumpCollect("rdiRegion", crow);
     }
 }
 
