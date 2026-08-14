@@ -223,9 +223,13 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
 #if defined(__x86_64__) && !defined(__APPLE__)
         uintptr_t rdi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDI]);
+        uintptr_t rax = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RAX]);
+        uintptr_t r12 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R12]);
+        uintptr_t r14 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R14]);
         TlRawDiag::NoteCrashRdi(rdi);
         StartWhoDiag::NoteCrash();
         HealPairDiag::NoteCrashRdi(rdi);
+        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14);
 #endif
     }
 }
