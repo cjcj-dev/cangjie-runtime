@@ -830,7 +830,7 @@ static void StripRootObjectColour(ObjectRef& root)
     zaddress_unsafe oldValue = root.LoadPlain();
     BaseObject* plain = PlainRootObject(oldValue);
     if (reinterpret_cast<MAddress>(plain) != raw(oldValue)) {
-        HealRoot(root, from_object(plain));
+        HealRoot(root, from_object(plain), HealSite::MutatorStripRootColour);
     }
 }
 
@@ -1022,7 +1022,9 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (oldObj != toObj) { HealRoot(rootField, from_object(toObj)); }
+            if (toObj != nullptr && oldObj != toObj) {
+                HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
+            }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
         }
@@ -1043,7 +1045,8 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
                     BaseObject* toHost = collector.ForwardObject(host);
                     if (toHost != nullptr && toHost != host) {
                         HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
-                            (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))));
+                            (reinterpret_cast<MAddress>(oldObj) - reinterpret_cast<MAddress>(host))),
+                            HealSite::MutatorPreForwardInterior);
                     }
                 }
             }
@@ -1053,7 +1056,9 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
             BaseObject* toObj = collector.ForwardObject(oldObj);
-            if (oldObj != toObj) { HealRoot(root, from_object(toObj)); }
+            if (toObj != nullptr && oldObj != toObj) {
+                HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
+            }
         } else if (IsStackAddr(reinterpret_cast<uintptr_t>(oldObj))) {
             CheckAndPush(oldObj, rootSet, rootStack);
         }

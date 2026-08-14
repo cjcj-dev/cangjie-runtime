@@ -41,7 +41,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::IdleReadReference)) {
             DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -78,7 +78,8 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
             return loadGood;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                     HealSite::IdleAtomicReadReference)) {
             DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()),
                  loadGood);
             return loadGood;
@@ -160,7 +161,8 @@ bool IdleBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
     // can keep the raw expected bits moving while identity stays oldRef (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), sOrder, fOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::IdleCompareAndSwapReference, HealNull::Allow, sOrder, fOrder)) {
             return true;
         }
         oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
@@ -190,7 +192,8 @@ void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
                 BaseObject* latest = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
                 if (oldValue != raw(newField.GetFieldValue())) {
-                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                             HealSite::IdleWriteStructRecolour);
                 }
             },
             dst, dst + dstLen);
@@ -310,7 +313,8 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                field.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
+                         HealSite::IdleCopyStructArrayRecolour);
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);

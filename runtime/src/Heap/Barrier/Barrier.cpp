@@ -212,7 +212,8 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
                 BaseObject* latest = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
                 if (oldValue != raw(newField.GetFieldValue())) {
-                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                             HealSite::BarrierWriteStructRecolour);
                 }
             },
             dst, dst + dstLen);
@@ -405,7 +406,8 @@ bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field
         // Recolour per attempt: a phase may flip mid-retry, and writing last epoch's colour
         // would hand the next reader a value its mask calls bad.
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::BarrierCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             DLOG(BARRIER, "cas 1 for obj %p reffield@%p: old %#zx->%p, expect %p, new %p", obj, &field,
                  oldFieldValue, oldVersion, oldRef, newRef);
             return true;
@@ -456,7 +458,8 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                         HealSite::BarrierCopyRefArrayRecolour);
             }
         }
     }
@@ -501,7 +504,8 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                field.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
+                         HealSite::BarrierCopyStructArrayRecolour);
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);

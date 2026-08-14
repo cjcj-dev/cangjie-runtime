@@ -778,7 +778,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
             workStack.push_back(finalizerObj);
         }
         if (raw(ref.LoadPlain()) != reinterpret_cast<MAddress>(finalizerObj)) {
-            HealRoot(ref, from_object(finalizerObj));
+            HealRoot(ref, from_object(finalizerObj), HealSite::TracingCollectorResurrectFinalizer);
             DLOG(FIX, "heal finalizer %p@%p", finalizerObj, &ref);
         }
     };
@@ -998,7 +998,8 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
             if (oldField.GetFieldValue() == newField.GetFieldValue()) {
                 DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(),
                      latest->GetSize());
-            } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+            } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                                HealSite::TracingCollectorTraceRefField)) {
                 DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
                      raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
             }

@@ -49,7 +49,8 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                     HealSite::PreforwardReadReference)) {
             return loadGood;
         }
         if (++attempts >= kSelfHealAttempts) {
@@ -130,7 +131,8 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         CHECK(theCollector.is_load_good(goodField));
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                     HealSite::PreforwardAtomicReadReference)) {
             DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -174,7 +176,8 @@ bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tr
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::PreforwardCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             return true;
         }
         oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
@@ -218,7 +221,8 @@ void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstFiel
             BaseObject* latest = ReadReference(nullptr, oldField);
             RefField<> newField = theCollector.GetAndTryTagRefField(latest);
             if (oldValue != raw(newField.GetFieldValue())) {
-                field.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                HealSlot(field, to_zpointer(oldValue), newField.GetFieldValue(),
+                         HealSite::PreforwardCopyStructArrayRecolour);
             }
         };
         static_cast<MArray*>(dstObj)->ForEachRefFieldInRange(recolour, dstField, dstField + srcSize);
