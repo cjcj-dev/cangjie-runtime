@@ -7,6 +7,7 @@
 #include <unistd.h>
 
 #include "Base/Log.h"
+#include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
 #include "Common/Runtime.h"
 #include "Concurrency/ConcurrencyModel.h"
@@ -111,6 +112,20 @@ std::atomic<size_t> g_zeroTotal{ 0 };
 std::atomic<size_t> g_copyWrap{ 0 };
 std::atomic<size_t> g_zeroWrap{ 0 };
 thread_local InflightCopy g_inflight{};
+
+// slotwindow inflight=0: g_inflight is TLS. Crash dump runs on the mutator,
+// so it never sees the GC thread's mid-copy. This table is the cross-thread view.
+constexpr size_t kGlobalInflightCap = 64;
+struct GlobalInflight {
+    std::atomic<uintptr_t> from{ 0 };
+    std::atomic<uintptr_t> to{ 0 };
+    std::atomic<uint32_t> size{ 0 };
+    std::atomic<uint16_t> phase{ 0 };
+    std::atomic<uint16_t> live{ 0 };
+};
+GlobalInflight g_globalInflight[kGlobalInflightCap];
+thread_local int g_globalSlot = -1;
+
 std::atomic<size_t> g_bySite[4]{ {} };
 std::atomic<bool> g_healthOnce{ false };
 std::atomic<bool> g_atexitOnce{ false };
@@ -531,11 +546,33 @@ void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t do
         g_inflight.to = to;
         g_inflight.size = static_cast<uint32_t>(size);
         g_inflight.phase = phase;
+        if (g_globalSlot < 0) {
+            for (size_t i = 0; i < kGlobalInflightCap; ++i) {
+                uint16_t expected = 0;
+                if (g_globalInflight[i].live.compare_exchange_strong(expected, 1, std::memory_order_acq_rel)) {
+                    g_globalInflight[i].from.store(from, std::memory_order_relaxed);
+                    g_globalInflight[i].to.store(to, std::memory_order_relaxed);
+                    g_globalInflight[i].size.store(static_cast<uint32_t>(size), std::memory_order_relaxed);
+                    g_globalInflight[i].phase.store(phase, std::memory_order_relaxed);
+                    g_globalSlot = static_cast<int>(i);
+                    break;
+                }
+            }
+        }
     } else {
         g_inflight.from = 0;
         g_inflight.to = 0;
         g_inflight.size = 0;
         g_inflight.phase = 0;
+        if (g_globalSlot >= 0) {
+            GlobalInflight& slot = g_globalInflight[static_cast<size_t>(g_globalSlot)];
+            slot.from.store(0, std::memory_order_relaxed);
+            slot.to.store(0, std::memory_order_relaxed);
+            slot.size.store(0, std::memory_order_relaxed);
+            slot.phase.store(0, std::memory_order_relaxed);
+            slot.live.store(0, std::memory_order_release);
+            g_globalSlot = -1;
+        }
     }
     uint32_t seq = static_cast<uint32_t>(g_copyTotal.fetch_add(1, std::memory_order_relaxed) + 1);
     uint32_t slotIdx = g_copyNext.fetch_add(1, std::memory_order_relaxed);
@@ -549,6 +586,63 @@ void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t do
     row.phase = phase;
     row.done = static_cast<uint16_t>(done);
     row.seq = seq;
+}
+
+uint64_t MidCopyStallNs()
+{
+    static const uint64_t ns = []() -> uint64_t {
+        const char* v = std::getenv("MRT_GCV2_COPYSTALL_NS");
+        if (v == nullptr || v[0] == '\0' || v[0] == '0') {
+            return 0;
+        }
+        char* end = nullptr;
+        unsigned long long parsed = std::strtoull(v, &end, 10);
+        if (end == v || parsed == 0) {
+            return 0;
+        }
+        return static_cast<uint64_t>(parsed);
+    }();
+    return ns;
+}
+
+void MaybeMidCopyStall(size_t size)
+{
+    uint64_t ns = MidCopyStallNs();
+    if (ns == 0) {
+        return;
+    }
+    static const size_t minSize = []() -> size_t {
+        const char* v = std::getenv("MRT_GCV2_COPYSTALL_MIN");
+        if (v == nullptr || v[0] == '\0') {
+            return 224; // crash slots start at +0xe0
+        }
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(v, &end, 10);
+        if (end == v) {
+            return 224;
+        }
+        return static_cast<size_t>(parsed);
+    }();
+    static const uint32_t maxStalls = []() -> uint32_t {
+        const char* v = std::getenv("MRT_GCV2_COPYSTALL_MAX");
+        if (v == nullptr || v[0] == '\0') {
+            return 32;
+        }
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(v, &end, 10);
+        if (end == v) {
+            return 32;
+        }
+        return static_cast<uint32_t>(parsed);
+    }();
+    static std::atomic<uint32_t> stalled{ 0 };
+    if (size < minSize) {
+        return;
+    }
+    if (stalled.fetch_add(1, std::memory_order_relaxed) >= maxStalls) {
+        return;
+    }
+    TimeUtil::SleepForNano(ns);
 }
 
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
@@ -756,16 +850,35 @@ void JoinCopyAndZero(uintptr_t holder)
         }
     }
 
-    char line[512];
+    uint32_t globalLive = 0;
+    uint32_t holderGlobal = 0;
+    uint32_t lastGlobalIdx = 0;
+    bool haveGlobal = false;
+    for (size_t i = 0; i < kGlobalInflightCap; ++i) {
+        if (g_globalInflight[i].live.load(std::memory_order_acquire) == 0) {
+            continue;
+        }
+        uintptr_t gTo = g_globalInflight[i].to.load(std::memory_order_relaxed);
+        uint32_t gSize = g_globalInflight[i].size.load(std::memory_order_relaxed);
+        ++globalLive;
+        if (holder != 0 && gTo != 0 && holder >= gTo && holder < gTo + gSize) {
+            ++holderGlobal;
+            lastGlobalIdx = static_cast<uint32_t>(i);
+            haveGlobal = true;
+        }
+    }
+
+    char line[640];
     int wn = sprintf_s(line, sizeof(line),
                        "[GCV2][slotwindow] join holder=%#zx copyTotal=%zu copyWrap=%zu "
                        "zeroTotal=%zu zeroWrap=%zu holderAsTo=%u holderAsFrom=%u slotZeroHits=%u "
-                       "inflightFrom=%#zx inflightTo=%#zx inflightSize=%u inflightPhase=%u\n",
+                       "inflightFrom=%#zx inflightTo=%#zx inflightSize=%u inflightPhase=%u "
+                       "inflightGlobal=%u inflightHolder=%u\n",
                        holder, copyTotal, g_copyWrap.load(std::memory_order_relaxed),
                        zeroTotal, g_zeroWrap.load(std::memory_order_relaxed),
                        holderAsTo, holderAsFrom, slotHits,
                        g_inflight.from, g_inflight.to, g_inflight.size,
-                       static_cast<unsigned>(g_inflight.phase));
+                       static_cast<unsigned>(g_inflight.phase), globalLive, holderGlobal);
     if (wn > 0) {
         WriteLine(line, static_cast<size_t>(wn));
     }
@@ -778,6 +891,16 @@ void JoinCopyAndZero(uintptr_t holder)
         inflight.done = 0;
         inflight.seq = 0;
         DumpCopy("inflight", inflight);
+    }
+    if (haveGlobal) {
+        CopyRow grow{};
+        grow.from = g_globalInflight[lastGlobalIdx].from.load(std::memory_order_relaxed);
+        grow.to = g_globalInflight[lastGlobalIdx].to.load(std::memory_order_relaxed);
+        grow.size = g_globalInflight[lastGlobalIdx].size.load(std::memory_order_relaxed);
+        grow.phase = g_globalInflight[lastGlobalIdx].phase.load(std::memory_order_relaxed);
+        grow.done = 0;
+        grow.seq = 0;
+        DumpCopy("globalInflight", grow);
     }
     if (haveTo) {
         DumpCopy("holderTo", g_copies[lastToIdx]);

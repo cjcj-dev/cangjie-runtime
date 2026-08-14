@@ -19,6 +19,10 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14);
 
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done);
 
+// Default off. When MRT_GCV2_COPYSTALL_NS>0 and size>=min, pause after the tip word.
+uint64_t MidCopyStallNs();
+void MaybeMidCopyStall(size_t size);
+
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
 
 void Report(const char* point);
