@@ -623,7 +623,23 @@ void MaybeMidCopyStall(size_t size)
         }
         return static_cast<size_t>(parsed);
     }();
+    static const uint32_t maxStalls = []() -> uint32_t {
+        const char* v = std::getenv("MRT_GCV2_COPYSTALL_MAX");
+        if (v == nullptr || v[0] == '\0') {
+            return 32;
+        }
+        char* end = nullptr;
+        unsigned long parsed = std::strtoul(v, &end, 10);
+        if (end == v) {
+            return 32;
+        }
+        return static_cast<uint32_t>(parsed);
+    }();
+    static std::atomic<uint32_t> stalled{ 0 };
     if (size < minSize) {
+        return;
+    }
+    if (stalled.fetch_add(1, std::memory_order_relaxed) >= maxStalls) {
         return;
     }
     TimeUtil::SleepForNano(ns);
