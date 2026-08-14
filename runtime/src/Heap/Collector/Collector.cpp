@@ -634,21 +634,29 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
     return obj;
 }
 
+// The positional table this replaced still carried names from an older phase
+// enum, so indices 12, 13 and 14 printed "forward phase", "enum fix phase" and
+// "trace fix phase" for POST_TRACE, PREFORWARD and FORWARD. Every crash report
+// naming a phase past CLEAR_SATB_BUFFER therefore named the wrong one, and a
+// reader comparing two reports could not tell. Switching on the enum keeps the
+// name attached to the value, so adding a phase is a compile error here rather
+// than a silent relabelling of the phases after it.
 const char* Collector::GetGCPhaseName(GCPhase phase)
 {
-    static const char* phaseNames[] = {
-        "undefined phase", // 0
-        "idle phase",      // 1
-        "finish phase",    "reclaim satb phase",
-        "stub phase",      "stub phase",
-        "stub phase",      "stub phase",
-        "init phase",      "enum phase",
-        "trace phase",     "clear satb phase",
-        "forward phase",   "enum fix phase",
-        "trace fix phase", "clear trace fix phase",
-        "fix stack phase", "preforward phase",
-    };
-    return phaseNames[phase];
+    switch (phase) {
+        case GC_PHASE_UNDEF: return "undefined phase";
+        case GC_PHASE_IDLE: return "idle phase";
+        case GC_PHASE_FINISH: return "finish phase";
+        case GC_PHASE_RECLAIM_SATB_NODE: return "reclaim satb phase";
+        case GC_PHASE_INIT: return "init phase";
+        case GC_PHASE_ENUM: return "enum phase";
+        case GC_PHASE_TRACE: return "trace phase";
+        case GC_PHASE_CLEAR_SATB_BUFFER: return "clear satb phase";
+        case GC_PHASE_POST_TRACE: return "post trace phase";
+        case GC_PHASE_PREFORWARD: return "preforward phase";
+        case GC_PHASE_FORWARD: return "forward phase";
+    }
+    return "unknown phase";
 }
 
 // Positive-control inject for assertbody Phase 2 (MRT_ASSERTBODY_PROBE=1|2|3).
