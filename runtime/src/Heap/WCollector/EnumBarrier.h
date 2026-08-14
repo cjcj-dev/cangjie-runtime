@@ -13,32 +13,34 @@
 namespace MapleRuntime {
 // EnumBarrier is the barrier for concurrent enum phase
 class EnumBarrier : public IdleBarrier {
+    friend class Barrier;
 public:
-    EnumBarrier(Collector& collector, RememberedSet& rememberedSet) : IdleBarrier(collector, rememberedSet) {}
+    EnumBarrier(Collector& collector, RememberedSet& rememberedSet)
+        : IdleBarrier(collector, rememberedSet, BarrierPhase::ENUM) {}
 
-    BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
-    BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const override;
-    BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;
-    void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
-    void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
+    BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
+    BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const;
+    BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
+    void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
+    void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
 
-    void WriteStaticRef(RootSlot& field, BaseObject* ref) const override;
-    void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const override;
+    void WriteStaticRef(RootSlot& field, BaseObject* ref) const;
+    void WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const;
 
-    BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;
+    BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const;
 protected:
-    void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const override;
-    void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const override;
+    void WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const;
+    void WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const;
     void AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                  MemoryOrder order) const override;
+                                  MemoryOrder order) const;
     BaseObject* AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                        MemoryOrder order) const override;
+                                        MemoryOrder order) const;
     bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                     MemoryOrder succOrder, MemoryOrder failOrder) const override;
+                                     MemoryOrder succOrder, MemoryOrder failOrder) const;
     void CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                             MAddress srcField, MIndex srcSize) const override;
-    void WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const override;
-    void ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const override;
+                             MAddress srcField, MIndex srcSize) const;
+    void WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const;
+    void ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_ENUM_BARRIER_H

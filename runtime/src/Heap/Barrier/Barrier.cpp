@@ -12,6 +12,12 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/WCollector/EnumBarrier.h"
+#include "Heap/WCollector/ForwardBarrier.h"
+#include "Heap/WCollector/IdleBarrier.h"
+#include "Heap/WCollector/PostTraceBarrier.h"
+#include "Heap/WCollector/PreforwardBarrier.h"
+#include "Heap/WCollector/TraceBarrier.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -19,10 +25,36 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include <atomic>
+#include <cstdlib>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
 namespace MapleRuntime {
+static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain virtual dispatch");
+
+template<typename Function>
+decltype(auto) Barrier::DispatchPhase(BarrierPhase barrierPhase, const Barrier& barrier, Function&& function)
+{
+    switch (barrierPhase) {
+        case BarrierPhase::IDLE:
+            return std::forward<Function>(function)(static_cast<const IdleBarrier&>(barrier));
+        case BarrierPhase::ENUM:
+            return std::forward<Function>(function)(static_cast<const EnumBarrier&>(barrier));
+        case BarrierPhase::TRACE:
+            return std::forward<Function>(function)(static_cast<const TraceBarrier&>(barrier));
+        case BarrierPhase::POST_TRACE:
+            return std::forward<Function>(function)(static_cast<const PostTraceBarrier&>(barrier));
+        case BarrierPhase::PREFORWARD:
+            return std::forward<Function>(function)(static_cast<const PreforwardBarrier&>(barrier));
+        case BarrierPhase::FORWARD:
+            return std::forward<Function>(function)(static_cast<const ForwardBarrier&>(barrier));
+        case BarrierPhase::STW:
+            break;
+    }
+    std::abort();
+}
+
 namespace {
 #if defined(MRT_GENERATIONAL_BARRIER_PROBE)
 std::atomic<uint64_t> generationalBarrierFastPathHits { 0 };
@@ -172,6 +204,11 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
 
 void Barrier::WriteReferenceImpl(BaseObject* obj, RefField<false>& field, BaseObject* ref) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.WriteReferenceImpl(obj, field, ref);
+        });
+    }
     DLOG(BARRIER, "write obj %p ref-field@%p: %p => %p", obj, &field, to_object(field.GetTargetObject()), ref);
     // COLOUR_WRITEBACK_AUDIT R3/批 A：规范色写回，禁 plain 灌堆。
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
@@ -201,6 +238,11 @@ void Barrier::WriteStruct(BaseObject* obj, MAddress dst, size_t dstLen, MAddress
 
 void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAddress src, size_t srcLen) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.WriteStructImpl(obj, dst, dstLen, src, srcLen);
+        });
+    }
     // R9 bulk：memcpy 会把栈上 plain 整块灌进堆；post-copy 补色环模板 = PostTraceBarrier.cpp:117-128。
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
@@ -226,6 +268,16 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 
 void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.WriteStaticRef(field, ref);
+        });
+    }
+    WriteStaticRefPlain(field, ref);
+}
+
+void Barrier::WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const
+{
     DLOG(BARRIER, "write (barrier) static ref@%p: %p", &field, ref);
     StorePlain(field, from_object(ref));
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
@@ -235,6 +287,11 @@ void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 
 void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.WriteStaticStruct(dst, dstLen, src, srcLen, gctib);
+        });
+    }
     // R9 bulk：静态槽 barrier 可见；post-copy 解析转发（STACK_ROOTS_STAY_PLAIN：写回 plain）。
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstLen, reinterpret_cast<void*>(src), srcLen) == EOK,
                  "memcpy_s failed");
@@ -253,6 +310,11 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
 
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.ReadReference(obj, field);
+        });
+    }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
         return toVersion;
@@ -264,6 +326,11 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
 
 BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.ReadWeakRef(obj, field);
+        });
+    }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
         return toVersion;
@@ -305,6 +372,11 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
 
 void Barrier::AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.AtomicWriteReferenceImpl(obj, field, ref, order);
+        });
+    }
     RefField<> newField = theCollector.GetAndTryTagRefField(ref);
     if (obj != nullptr) {
         DLOG(BARRIER, "atomic write obj %p<%p>(%zu) ref@%p: %#zx -> %p", obj, obj->GetTypeInfo(), obj->GetSize(),
@@ -337,6 +409,11 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
 BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* newRef,
                                              MemoryOrder order) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.AtomicSwapReferenceImpl(obj, field, newRef, order);
+        });
+    }
     RefField<> coloured = theCollector.GetAndTryTagRefField(newRef);
     MAddress oldValue = raw(field.Exchange(coloured.GetFieldValue(), order));
     RefField<> oldField(oldValue);
@@ -348,6 +425,11 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
 
 BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.AtomicReadReference(obj, field, order);
+        });
+    }
     RefField<false> tmpField(field.GetFieldValue(order));
     if (theCollector.IsOldPointer(tmpField)) {
         BaseObject* toVersion = ReadReference(nullptr, tmpField);
@@ -388,6 +470,11 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
 bool Barrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef,
                                           BaseObject* newRef, MemoryOrder succOrder, MemoryOrder failOrder) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
+        });
+    }
     // Compare on decoded object identity; CAS on observed raw bits (colour-aware).
     // Shape matches EnumBarrier.cpp:259-280 / IdleBarrier.cpp:121-138. Plain expected vs
     // coloured slot bits always fail (COLOUR_WRITEBACK_AUDIT R1).
@@ -441,6 +528,11 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
 void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                MAddress srcField, MIndex srcSize) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+        });
+    }
     (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -489,6 +581,11 @@ void Barrier::CopyStructArray(BaseObject* dstObj, MAddress dstField, MIndex dstS
 void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+        });
+    }
     (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -578,6 +675,11 @@ void Barrier::ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const
 
 void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.ReadStruct(dst, obj, src, size);
+        });
+    }
     size_t dstSize = size;
     size_t srcSize = size;
     if (obj != nullptr) {
@@ -601,6 +703,11 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
 
 void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
+    if (phase != BarrierPhase::STW) {
+        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+            return barrier.ReadStaticStruct(dst, src, size, gctib);
+        });
+    }
     size_t dstSize = size;
     size_t srcSize = size;
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstSize, reinterpret_cast<void*>(src), srcSize) == EOK,
@@ -626,6 +733,12 @@ void Barrier::WriteGeneric(const ObjectPtr obj, void* fieldPtr, const ObjectPtr 
 
 void Barrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
+    if (phase == BarrierPhase::ENUM) {
+        return static_cast<const EnumBarrier&>(*this).WriteGenericImpl(obj, fieldPtr, src, size);
+    }
+    if (phase == BarrierPhase::TRACE) {
+        return static_cast<const TraceBarrier&>(*this).WriteGenericImpl(obj, fieldPtr, src, size);
+    }
     if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
         CHECK_DETAIL(memcpy_s(fieldPtr, size,
                               reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
@@ -661,6 +774,12 @@ void Barrier::ReadGeneric(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr,
 
 void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* fieldPtr, size_t size) const
 {
+    if (phase == BarrierPhase::ENUM) {
+        return static_cast<const EnumBarrier&>(*this).ReadGenericImpl(dstObj, obj, fieldPtr, size);
+    }
+    if (phase == BarrierPhase::TRACE) {
+        return static_cast<const TraceBarrier&>(*this).ReadGenericImpl(dstObj, obj, fieldPtr, size);
+    }
     if (!Heap::IsHeapAddress(dstObj) && !Heap::IsHeapAddress(obj)) {
         CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(dstObj) + TYPEINFO_PTR_SIZE),
                               size, fieldPtr, size) == EOK,

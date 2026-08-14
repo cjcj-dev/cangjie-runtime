@@ -13,25 +13,27 @@
 namespace MapleRuntime {
 // ForwardBarrier is the barrier for concurrent forwarding.
 class ForwardBarrier : public IdleBarrier {
+    friend class Barrier;
 public:
-    ForwardBarrier(Collector& collector, RememberedSet& rememberedSet) : IdleBarrier(collector, rememberedSet) {}
+    ForwardBarrier(Collector& collector, RememberedSet& rememberedSet)
+        : IdleBarrier(collector, rememberedSet, BarrierPhase::FORWARD) {}
 
-    BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const override;
-    BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const override;
-    BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const override;
-    void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const override;
-    void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const override;
+    BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
+    BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const;
+    BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
+    void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
+    void ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
 
-    BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const override;
+    BaseObject* AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const;
 protected:
     void AtomicWriteReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                  MemoryOrder order) const override;
+                                  MemoryOrder order) const;
     BaseObject* AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* ref,
-                                        MemoryOrder order) const override;
+                                        MemoryOrder order) const;
     bool CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& field, BaseObject* oldRef, BaseObject* newRef,
-                                     MemoryOrder succOrder, MemoryOrder failOrder) const override;
+                                     MemoryOrder succOrder, MemoryOrder failOrder) const;
     void CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
-                             MAddress srcField, MIndex srcSize) const override;
+                             MAddress srcField, MIndex srcSize) const;
 };
 } // namespace MapleRuntime
 #endif // MRT_COPY_BARRIER_H
