@@ -32,6 +32,10 @@ namespace MapleRuntime {
 class BaseObject;
 class WCollector;
 
+namespace HealPairDiag {
+void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
+}
+
 // Every heap/root healing write names its owning algorithm.  This is deliberately
 // exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
 enum class HealSite : uint16_t {
@@ -317,7 +321,11 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
     if (allowNull == HealNull::Disallow && !is_null(expected) && is_null(desired)) {
         return false;
     }
-    return slot.CompareExchange(expected, desired, succOrder, failOrder);
+    bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder);
+    if (ok && is_null(desired)) {
+        HealPairDiag::NoteZeroWrite(&slot, raw(expected), raw(desired), static_cast<uint16_t>(site));
+    }
+    return ok;
 }
 
 template<bool isAtomic = false>
