@@ -58,6 +58,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/StartWhoDiag.h"
+#include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -1296,10 +1297,14 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
+                HealPairDiag::NoteRaw(oldObj, toInterior, &root,
+                                      static_cast<uint16_t>(HealSite::WCollectorForwardRawInterior));
                 HealRoot(root, from_object(toInterior), HealSite::WCollectorForwardRawInterior);
                 return toInterior;
             }
         }
+        HealPairDiag::NoteRaw(oldObj, oldObj, &root,
+                              static_cast<uint16_t>(HealSite::WCollectorPreserveRawInterior));
         HealRoot(root, from_object(oldObj), HealSite::WCollectorPreserveRawInterior);
         return oldObj;
     }
@@ -1308,10 +1313,14 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
         if (toVersion == nullptr) {
             return oldObj;
         }
+        HealPairDiag::NoteRaw(oldObj, toVersion, &root,
+                              static_cast<uint16_t>(HealSite::WCollectorForwardRawGhost));
         HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
+        HealPairDiag::NoteRaw(oldObj, oldObj, &root,
+                              static_cast<uint16_t>(HealSite::WCollectorNormalizeRawRoot));
         HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
     }
 
