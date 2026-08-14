@@ -214,7 +214,8 @@ bool BaseObject::IsInTraceRegion() const
 
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
-    if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
+    if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
+                 HealSite::BaseObjectCompareExchangeRefField, HealNull::Allow)) {
         DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }

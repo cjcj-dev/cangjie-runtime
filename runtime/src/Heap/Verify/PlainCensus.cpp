@@ -276,7 +276,7 @@ bool InjectPlainHeapWriteOnce()
                     injected = true;
                     return;
                 }
-                if (field.CompareExchange(oldZ, to_zpointer(plainRaw))) {
+                if (HealSlot(field, oldZ, to_zpointer(plainRaw), HealSite::PlainCensusInject)) {
                     // When PLAIN_WRITE_COUNT=1, AssertColouredWrite already Note'd via TLS.
                     // When off, bump inject counter so DumpPlainWriteCounters still shows >0.
                     if (!EnvIsOne("MRT_GCV2_PLAIN_WRITE_COUNT")) {
@@ -310,7 +310,8 @@ void RestoreInjectedPlainIfAny()
     }
     MAddress cur = raw(g_injectState.slot->GetFieldValue());
     MAddress plainExpect = cur & kAddressBitsMask; // what we wrote
-    (void)g_injectState.slot->CompareExchange(to_zpointer(plainExpect), g_injectState.saved);
+    (void)HealSlot(*g_injectState.slot, to_zpointer(plainExpect), g_injectState.saved,
+                   HealSite::PlainCensusRestore);
     std::fprintf(stderr, "[GCV2][plain][inject] restored slot=%p to=%#zx\n", g_injectState.slot,
                  static_cast<size_t>(raw(g_injectState.saved)));
     g_injectState.active = false;

@@ -230,6 +230,12 @@ elseif (WINDOWS_FLAG MATCHES 1)
 endif()
     add_library(runtime STATIC ${SRC_LIST})
     add_library(cangjie-runtime SHARED ${SRC_LIST})
+    add_custom_target(check_heal_slot_writes ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_heal_slot_writes.py"
+        COMMENT "Checking that HeapSlot compare-exchange writes stay inside HealSlot"
+        VERBATIM)
+    add_dependencies(runtime check_heal_slot_writes)
+    add_dependencies(cangjie-runtime check_heal_slot_writes)
     if (WINDOWS_FLAG MATCHES 1)
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check

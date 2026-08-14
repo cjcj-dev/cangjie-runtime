@@ -541,7 +541,8 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
 
-    bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target) const;
+    bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
+                                  HealSite site, HealNull allowNull = HealNull::Disallow) const;
     BaseObject* ResolveMinorReference(RefField<>& field) const;
     BaseObject* ResolveMinorReference(RootSlot& root) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);

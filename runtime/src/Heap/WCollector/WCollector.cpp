@@ -842,7 +842,8 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
         // R7：写回必须经规范色单产地，禁 plain RefField<>(toObj)。
         // expected 仍是 observed-raw（oldRef.GetFieldValue()）；模板 = GetAndTryTagRefField。
         RefField<> tmpField = GetAndTryTagRefField(toObj);
-        if (field.CompareExchange(oldRef.GetFieldValue(), tmpField.GetFieldValue())) {
+        if (HealSlot(field, oldRef.GetFieldValue(), tmpField.GetFieldValue(),
+                     HealSite::WCollectorTryUpdateRefField)) {
             if (obj != nullptr) {
                 DLOG(TRACE, "update obj %p<%p>(%zu)+%zu ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(),
                      obj->GetSize(), BaseObject::FieldOffset(obj, &field), &field, raw(oldRef.GetFieldValue()),
@@ -1032,7 +1033,8 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
         // TRUST_STATE_KILL_PLAN Phase 1: API retained, but HeapSlot write-back is current colour
         // (not plain). Read path no longer calls this; residual callers must not re-install trust.
         RefField<> newRef = GetAndTryTagRefField(target);
-        if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
+        if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
+                     HealSite::WCollectorTryUntagRefField)) {
             if (obj != nullptr) {
                 DLOG(FIX, "untag obj %p<%p>(%zu) ref-field@%p: %#zx -> %#zx", obj, obj->GetTypeInfo(), obj->GetSize(),
                      &field, raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
@@ -1090,7 +1092,8 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
              latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                        HealSite::WCollectorEnumRefFieldRoot)) {
         DLOG(ENUM, "enum static ref@%p: %#zx=>%#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()),
              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     } else {
@@ -1126,7 +1129,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         // The paired derived path cannot reach this branch because it is a DerivedSlot.
         BaseObject* host = Collector::TryRecoverInteriorBase(root);
         if (host != nullptr && host->IsValidObject()) {
-            HealRoot(ref, from_object(root));
+            HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawInteriorRoot);
             rootSet.push_back(host);
         }
         return;
@@ -1138,7 +1141,7 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
         VerifyRoots::VerifyRootPayload(vctx, &ref, root);
     }
     CHECK_DETAIL(root->IsValidObject(), "Enum and tag runtime root %p(%p) encounters invalid object", root, &ref);
-    HealRoot(ref, from_object(root));
+    HealRoot(ref, from_object(root), HealSite::WCollectorEnumRawRoot);
     rootSet.push_back(root);
 }
 
@@ -1185,7 +1188,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                        HealSite::WCollectorTraceRefField)) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -1261,7 +1265,8 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                        HealSite::WCollectorGetAndTryTagObj)) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
             raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -1291,24 +1296,23 @@ BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(oldObj) - reinterpret_cast<uintptr_t>(host)));
-                HealRoot(root, from_object(toInterior));
+                HealRoot(root, from_object(toInterior), HealSite::WCollectorForwardRawInterior);
                 return toInterior;
             }
         }
-        HealRoot(root, from_object(oldObj));
+        HealRoot(root, from_object(oldObj), HealSite::WCollectorPreserveRawInterior);
         return oldObj;
     }
     if (IsGhostFromObject(oldObj)) {
         BaseObject* toVersion = TryForwardObject(oldObj);
         if (toVersion == nullptr) {
-            HealRoot(root, from_object(oldObj));
             return oldObj;
         }
-        HealRoot(root, from_object(toVersion));
+        HealRoot(root, from_object(toVersion), HealSite::WCollectorForwardRawGhost);
         DLOG(FIX, "fix raw-ref @%p: %p -> %p", &root, oldObj, toVersion);
         return toVersion;
     } else {
-        HealRoot(root, from_object(oldObj));
+        HealRoot(root, from_object(oldObj), HealSite::WCollectorNormalizeRawRoot);
     }
 
     return oldObj;
@@ -1441,7 +1445,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (latest != nullptr && !Heap::IsHeapAddress(latest)) {
         RefField<> newField = RootSlotWriteback(latest, field);
         if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-            (void)field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            (void)HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                           HealSite::WCollectorFixOldTaggedNonHeap);
         }
         return;
     }
@@ -1556,7 +1561,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
             }
             NoteNullslotWrite("f3_fix_oldtag", holder, &field, fromObj, latest, &g_nullslotF3);
             RefField<> nullField(nullptr);
-            (void)field.CompareExchange(oldField.GetFieldValue(), nullField.GetFieldValue());
+            (void)HealSlot(field, oldField.GetFieldValue(), nullField.GetFieldValue(),
+                           HealSite::WCollectorFixOldTaggedDead, HealNull::Allow);
             return;
         }
     }
@@ -1574,7 +1580,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         return;
     }
-    if (field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue())) {
+    if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                 HealSite::WCollectorFixOldTaggedLive)) {
         DLOG(FIX, "F3 fix old-tag holder %p field@%p: %#zx => %#zx -> %p", holder, &field,
              raw(oldField.GetFieldValue()), raw(newField.GetFieldValue()), latest);
     }
@@ -2394,13 +2401,14 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
 // Install a logical resolved target into a heap field. Callers cannot supply a
 // pre-encoded RefField: this controlled entry applies the current heap colour here.
 // On CAS fail, accept the peer's update (major TryUpdateRefFieldImpl shape).
-bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target) const
+bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
+                                          HealSite site, HealNull allowNull) const
 {
     zpointer desired = RootSlotWriteback(target, field).GetFieldValue();
     if (expected == raw(desired)) {
         return true;
     }
-    if (field.CompareExchange(to_zpointer(expected), desired)) {
+    if (HealSlot(field, to_zpointer(expected), desired, site, allowNull)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -2429,7 +2437,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
                 if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
                     to->IsValidObject()) {
                     MAddress expected = raw(value.GetFieldValue());
-                    (void)CasInstallResolvedTarget(field, expected, to);
+                    (void)CasInstallResolvedTarget(field, expected, to,
+                                                   HealSite::WCollectorMinorResolveLoadGoodForward);
                     return to;
                 }
             }
@@ -2452,7 +2461,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion()) {
             if (to->IsValidObject()) {
-                (void)CasInstallResolvedTarget(field, expected, to);
+                (void)CasInstallResolvedTarget(field, expected, to,
+                                               HealSite::WCollectorMinorResolveOldForward);
                 return to;
             }
             // Active region, tip invalid — same family as F3 invalid_object (rtype=2).
@@ -2465,7 +2475,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             object->IsValidObject()) {
             // installdomain: identity arm is the A-only fork (IsValidObject without liveInfo0).
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            (void)CasInstallResolvedTarget(field, expected, object);
+            (void)CasInstallResolvedTarget(field, expected, object,
+                                           HealSite::WCollectorMinorResolveOldIdentity);
             return object;
         }
     }
@@ -2496,7 +2507,8 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
     NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
-    (void)CasInstallResolvedTarget(field, expected, nullptr);
+    (void)CasInstallResolvedTarget(field, expected, nullptr, HealSite::WCollectorMinorResolveDead,
+                                   HealNull::Allow);
     return nullptr;
 }
 
@@ -2529,7 +2541,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
             if (to != nullptr && Heap::IsHeapAddress(to)) {
-                HealRoot(root, from_object(to));
+                HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
                 return to;
             }
         }
@@ -2541,7 +2553,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
             to->IsValidObject()) {
-            HealRoot(root, from_object(to));
+            HealRoot(root, from_object(to), HealSite::WCollectorResolveRootOldForward);
             return to;
         }
     }
@@ -2550,7 +2562,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
         if (fromRegion != nullptr && !fromRegion->IsFreeRegion() && !fromRegion->IsGarbageRegion() &&
             object->IsValidObject()) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            HealRoot(root, from_object(object));
+            HealRoot(root, from_object(object), HealSite::WCollectorNormalizeOldRoot);
             return object;
         }
     }
@@ -2588,7 +2600,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
              &root, static_cast<size_t>(raw(observed)), object, to);
     }
     g_resolveRootHealNull.fetch_add(1, std::memory_order_relaxed);
-    HealRoot(root, zaddress::null);
+    HealRoot(root, zaddress::null, HealSite::WCollectorResolveDeadRoot, HealNull::Allow);
     return nullptr;
 }
 
@@ -4045,7 +4057,8 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
-                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), nullptr);
+                (void)CasInstallResolvedTarget(*field, raw(peek.GetFieldValue()), nullptr,
+                                               HealSite::WCollectorRemsetResolveDead, HealNull::Allow);
                 size_t n = g_remsetScrubLogged.fetch_add(1, std::memory_order_relaxed);
                 if (n < 16) {
                     VLOG(REPORT,
@@ -4309,7 +4322,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
                 MAddress plainVal = reinterpret_cast<MAddress>(toHost) + offset;
                 if (oldVal != plainVal) {
                     ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-                    (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset);
+                    (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), toHost, offset,
+                                                  HealSite::WCollectorMinorFixInteriorForward);
                 }
                 return true;
             }
@@ -4319,7 +4333,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
         MAddress plainVal = reinterpret_cast<MAddress>(target);
         if (oldVal != plainVal) {
             ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target);
+            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target,
+                                          HealSite::WCollectorMinorFixInteriorPreserve);
         }
         return false;
     }
@@ -4393,7 +4408,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
             }
         }
         MAddress oldVal = raw(field.GetFieldValue());
-        (void)field.CompareExchange(to_zpointer(oldVal), to_zpointer(0));
+        (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
+                       HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
         return false;
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
@@ -4402,7 +4418,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
         MAddress plainVal = reinterpret_cast<MAddress>(current);
         if (oldVal != plainVal) {
             ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current);
+            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current,
+                                          HealSite::WCollectorMinorFixInteriorPostForward);
         }
         return false;
     }
@@ -4419,7 +4436,8 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
     if (oldVal == newVal) {
         return false;
     }
-    if (field.CompareExchange(to_zpointer(oldVal), to_zpointer(newVal))) {
+    if (HealSlot(field, to_zpointer(oldVal), to_zpointer(newVal),
+                 HealSite::WCollectorMinorFixForwarded)) {
         g_minorRefCasOk.fetch_add(1, std::memory_order_relaxed);
         return true;
     }
@@ -4451,11 +4469,11 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
                 BaseObject* toInterior = reinterpret_cast<BaseObject*>(
                     reinterpret_cast<uintptr_t>(toHost) +
                     (reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(host)));
-                HealRoot(root, from_object(toInterior));
+                HealRoot(root, from_object(toInterior), HealSite::WCollectorFixRootInteriorForward);
                 return true;
             }
         }
-        HealRoot(root, from_object(target));
+        HealRoot(root, from_object(target), HealSite::WCollectorPreserveRootInterior);
         return false;
     }
     HeapSlot<> oldBits(to_zpointer(oldValue));
@@ -4565,14 +4583,14 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
         return false;
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        HealRoot(root, from_object(current));
+        HealRoot(root, from_object(current), HealSite::WCollectorFixRootPostForwardInterior);
         return false;
     }
     MAddress newValue = reinterpret_cast<MAddress>(current);
     if (oldValue == newValue && raw(root.LoadPlain()) == newValue) {
         return false;
     }
-    HealRoot(root, from_object(current));
+    HealRoot(root, from_object(current), HealSite::WCollectorFixRootForwarded);
     return true;
 }
 

@@ -37,7 +37,7 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::PostTraceReadReference)) {
             DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -133,7 +133,8 @@ void PostTraceBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dst
                 BaseObject* latestVerison = ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latestVerison);
                 if (oldValue != raw(newField.GetFieldValue())) {
-                    refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
+                    HealSlot(refField, to_zpointer(oldValue), newField.GetFieldValue(),
+                             HealSite::PostTraceWriteStructRecolour);
                 }
             },
             dst, dst + dstLen);
@@ -184,7 +185,8 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         DCHECK(theCollector.is_load_good(goodField));
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                     HealSite::PostTraceAtomicReadReference)) {
             DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
         }
@@ -231,7 +233,8 @@ bool PostTraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tru
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), succOrder, failOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::PostTraceCompareAndSwapReference, HealNull::Allow, succOrder, failOrder)) {
             return true;
         }
         oldFieldValue = raw(field.GetFieldValue(std::memory_order_seq_cst));
@@ -260,7 +263,8 @@ void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField
         BaseObject* target = ReadReference(nullptr, toBeUpdated);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
-            field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                     HealSite::PostTraceCopyStructArrayRecolour);
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);

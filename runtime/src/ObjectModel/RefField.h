@@ -32,6 +32,93 @@ namespace MapleRuntime {
 class BaseObject;
 class WCollector;
 
+// Every heap/root healing write names its owning algorithm.  This is deliberately
+// exhaustive: a catch-all value would recreate the attribution gap HealSlot closes.
+enum class HealSite : uint16_t {
+    BaseObjectCompareExchangeRefField,
+    BarrierCompareAndSwapReference,
+    BarrierCopyRefArrayRecolour,
+    BarrierCopyStructArrayRecolour,
+    BarrierWriteStructRecolour,
+    EnumCompareAndSwapReference,
+    EnumCopyStructArrayRecolour,
+    EnumReadReference,
+    EnumWriteStructRecolour,
+    ForwardAtomicReadReference,
+    ForwardCompareAndSwapReference,
+    ForwardCopyStructArrayRecolour,
+    ForwardReadReference,
+    IdleAtomicReadReference,
+    IdleCompareAndSwapReference,
+    IdleCopyStructArrayRecolour,
+    IdleReadReference,
+    IdleWriteStructRecolour,
+    MutatorPreForwardInterior,
+    MutatorPreForwardRoot,
+    MutatorPreForwardStackField,
+    MutatorStripRootColour,
+    PlainCensusInject,
+    PlainCensusRestore,
+    PostTraceAtomicReadReference,
+    PostTraceCompareAndSwapReference,
+    PostTraceCopyStructArrayRecolour,
+    PostTraceReadReference,
+    PostTraceWriteStructRecolour,
+    PreforwardAtomicReadReference,
+    PreforwardCompareAndSwapReference,
+    PreforwardCopyStructArrayRecolour,
+    PreforwardReadReference,
+    TraceCompareAndSwapReference,
+    TraceCopyStructArrayRecolour,
+    TraceReadReference,
+    TraceWriteStructRecolour,
+    TracingCollectorResurrectFinalizer,
+    TracingCollectorTraceRefField,
+    WCollectorEnumRawInteriorRoot,
+    WCollectorEnumRawRoot,
+    WCollectorEnumRefFieldRoot,
+    WCollectorFixOldTaggedDead,
+    WCollectorFixOldTaggedLive,
+    WCollectorFixOldTaggedNonHeap,
+    WCollectorFixRootForwarded,
+    WCollectorFixRootInteriorForward,
+    WCollectorFixRootPostForwardInterior,
+    WCollectorForwardRawGhost,
+    WCollectorForwardRawInterior,
+    WCollectorGetAndTryTagObj,
+    WCollectorMinorFixForwarded,
+    WCollectorMinorFixForwardNull,
+    WCollectorMinorFixInteriorForward,
+    WCollectorMinorFixInteriorPostForward,
+    WCollectorMinorFixInteriorPreserve,
+    WCollectorMinorResolveDead,
+    WCollectorMinorResolveLoadGoodForward,
+    WCollectorMinorResolveOldForward,
+    WCollectorMinorResolveOldIdentity,
+    WCollectorNormalizeOldRoot,
+    WCollectorNormalizeRawRoot,
+    WCollectorPreserveRawInterior,
+    WCollectorPreserveRootInterior,
+    WCollectorRemsetResolveDead,
+    WCollectorResolveDeadRoot,
+    WCollectorResolveRootLoadGoodForward,
+    WCollectorResolveRootOldForward,
+    WCollectorTraceRefField,
+    WCollectorTryUntagRefField,
+    WCollectorTryUpdateRefField,
+};
+
+enum class HealNull : uint8_t { Disallow, Allow };
+
+template<bool isAtomic>
+class HeapSlot;
+
+template<bool isAtomic>
+inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
+                     HealNull allowNull = HealNull::Disallow,
+                     std::memory_order succOrder = std::memory_order_relaxed,
+                     std::memory_order failOrder = std::memory_order_relaxed);
+
 // COLOUR_WRITEBACK_AUDIT §六 判据 1：堆内非 null 写必须带色。定义在 RefField.inline.h /
 // BaseObject.cpp；默认关（MRT_GCV2_ASSERT_COLOURED_WRITES=1 打开）。
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal);
@@ -76,6 +163,11 @@ public:
 
     void StoreColoured(zpointer value, std::memory_order order = std::memory_order_relaxed);
 
+private:
+    template<bool atomic>
+    friend bool HealSlot(HeapSlot<atomic>&, zpointer, zpointer, HealSite, HealNull,
+                         std::memory_order, std::memory_order);
+
     bool CompareExchange(zpointer expectedValue, zpointer newValue,
                          std::memory_order succOrder = std::memory_order_relaxed,
                          std::memory_order failOrder = std::memory_order_relaxed)
@@ -93,6 +185,7 @@ public:
 #endif
     }
 
+public:
     zpointer Exchange(zpointer newRef, std::memory_order order = std::memory_order_relaxed)
     {
         MAddress newRaw = raw(newRef);
@@ -213,6 +306,20 @@ private:
 #endif
 };
 
+// The sole HeapSlot compare-exchange write.  Match ZBarrier::self_heal: a
+// non-null observed reference must not be healed to null unless its owner makes
+// that destructive transition explicit.
+template<bool isAtomic>
+inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
+                     HealNull allowNull, std::memory_order succOrder, std::memory_order failOrder)
+{
+    (void)site;
+    if (allowNull == HealNull::Disallow && !is_null(expected) && is_null(desired)) {
+        return false;
+    }
+    return slot.CompareExchange(expected, desired, succOrder, failOrder);
+}
+
 template<bool isAtomic = false>
 inline void StoreColoured(HeapSlot<isAtomic>& slot, zaddress value, MAddress colour,
                           std::memory_order order = std::memory_order_relaxed)
@@ -293,7 +400,7 @@ private:
     zaddress_unsafe rootValue;
 
     friend void StorePlain(RootSlot&, zaddress, std::memory_order);
-    friend void HealRoot(RootSlot&, zaddress, std::memory_order);
+    friend bool HealRoot(RootSlot&, zaddress, HealSite, HealNull, std::memory_order);
 };
 
 // Read-only root capability. This is intentionally const-qualified rather than a
@@ -307,10 +414,17 @@ inline void StorePlain(RootSlot& slot, zaddress value,
     slot.StorePlain(value, order);
 }
 
-inline void HealRoot(RootSlot& slot, zaddress good,
+inline bool HealRoot(RootSlot& slot, zaddress good, HealSite site,
+                     HealNull allowNull = HealNull::Disallow,
                      std::memory_order order = std::memory_order_relaxed)
 {
+    (void)site;
+    zaddress_unsafe observed = slot.LoadPlain(order);
+    if (allowNull == HealNull::Disallow && !is_null(observed) && is_null(good)) {
+        return false;
+    }
     slot.StorePlain(good, order);
+    return true;
 }
 
 // OpenJDK ProcessDerivedOop preserves the offset, processes the base, then
@@ -349,20 +463,20 @@ inline void RebaseDerived(DerivedSlot& slot, const RootSlot& base, size_t offset
 // (host, offset) in the call. Do not colour the installed value.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
-                                    BaseObject* host, size_t offset)
+                                    BaseObject* host, size_t offset, HealSite site)
 {
     MAddress plainVal = reinterpret_cast<MAddress>(host) + offset;
-    return field.CompareExchange(expected, to_zpointer(plainVal));
+    return HealSlot(field, expected, to_zpointer(plainVal), site);
 }
 
 // When the host is unknown, still install a plain interior address (same 03fc21ed rule).
 // Prefer the (host, offset) overload when TryRecoverInteriorBase succeeds.
 template<bool isAtomic = false>
 inline bool CasInstallInteriorPlain(HeapSlot<isAtomic>& field, zpointer expected,
-                                    BaseObject* interior)
+                                    BaseObject* interior, HealSite site)
 {
     MAddress plainVal = reinterpret_cast<MAddress>(interior);
-    return field.CompareExchange(expected, to_zpointer(plainVal));
+    return HealSlot(field, expected, to_zpointer(plainVal), site);
 }
 
 static_assert(sizeof(HeapSlot<>) == sizeof(MAddress), "HeapSlot must remain one machine word");

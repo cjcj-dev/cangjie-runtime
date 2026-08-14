@@ -36,7 +36,7 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (field.CompareExchange(oldField.GetFieldValue(), goodField.GetFieldValue())) {
+        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::EnumReadReference)) {
             return loadGood;
         }
         if (++attempts >= kSelfHealAttempts) {
@@ -165,7 +165,8 @@ void EnumBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
                 BaseObject* untagged = ReadReference(nullptr, toBeUpdated);
                 RefField<> newField = theCollector.GetAndTryTagRefField(untagged);
                 if (oldField.GetFieldValue() != newField.GetFieldValue()) {
-                    refField.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+                    HealSlot(refField, oldField.GetFieldValue(), newField.GetFieldValue(),
+                             HealSite::EnumWriteStructRecolour);
                 }
             },
             dst, dst + dstLen);
@@ -263,7 +264,8 @@ bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
     // Bound kCasAttempts: colour self-heal can keep raw expected bits moving (c3179214).
     for (int attempt = 0; attempt < kCasAttempts && oldVersion == oldRef; ++attempt) {
         RefField<> newField = theCollector.GetAndTryTagRefField(newRef);
-        if (field.CompareExchange(to_zpointer(oldFieldValue), newField.GetFieldValue(), sOrder, fOrder)) {
+        if (HealSlot(field, to_zpointer(oldFieldValue), newField.GetFieldValue(),
+                     HealSite::EnumCompareAndSwapReference, HealNull::Allow, sOrder, fOrder)) {
             Mutator* mutator = Mutator::GetMutator();
             mutator->RememberObjectInSatbBuffer(oldRef);
             mutator->RememberObjectInSatbBuffer(newRef);
@@ -305,7 +307,8 @@ void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
         mutator->RememberObjectInSatbBuffer(target);
         RefField<> newField = theCollector.GetAndTryTagRefField(target);
         if (newField.GetFieldValue() != oldField.GetFieldValue()) {
-            field.CompareExchange(oldField.GetFieldValue(), newField.GetFieldValue());
+            HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                     HealSite::EnumCopyStructArrayRecolour);
         }
     };
     MArray* srcArray = static_cast<MArray*>(srcObj);
