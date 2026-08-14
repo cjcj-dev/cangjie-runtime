@@ -15,6 +15,8 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
 
 void NoteCrashRdi(uintptr_t rdi);
 
+void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14);
+
 void Report(const char* point);
 
 } // namespace HealPairDiag
