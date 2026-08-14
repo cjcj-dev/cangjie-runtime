@@ -36,6 +36,7 @@ run_varray_write_barrier_probe.sh         manual     built runtime SO + cpuset; 
 run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
+run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
 stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
@@ -46,6 +47,9 @@ varray_write_barrier_harness.cpp          manual     harness for run_varray_writ
 mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
 epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_handshake_protocol_probe.sh
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
+typeinfo_reuse_harness.cpp                manual     harness for run_typeinfo_reuse_probe.sh
+typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose images for TypeInfo virtual-address reuse
+typeinfo_remove_negative.patch            manual     fault injection: remove both unload-path RemoveTypeInfosInRange calls for the negative runtime
 
 epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake
 epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress

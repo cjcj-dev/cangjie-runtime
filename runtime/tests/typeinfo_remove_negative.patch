@@ -1,0 +1,21 @@
+diff --git a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+--- a/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
++++ b/runtime/src/Loader/CjFileLoader/CjFileLoader.cpp
+@@ -308,8 +308,6 @@ void CJFileLoader::RemoveLoadedFiles(BaseFile* baseFile)
+ {
+     extensionDatas.erase(baseFile);
+     loadedFiles.remove(baseFile);
+-    TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+-        baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
+     baseFile->UnregisterFile();
+     delete baseFile;
+ }
+@@ -386,8 +384,6 @@ void CJFileLoader::ClearLoadedFiles()
+ {
+     extensionDatas.clear();
+     VisitBaseFile([](BaseFile* baseFile) {
+-        TypeInfoManager::GetTypeInfoManager().RemoveTypeInfosInRange(
+-            baseFile->GetTypeInfoBase(), baseFile->GetTypeInfoTotalSize());
+         baseFile->UnregisterFile();
+         delete baseFile;
+         return false;
