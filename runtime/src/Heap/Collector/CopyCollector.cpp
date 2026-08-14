@@ -10,6 +10,7 @@
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Heap/Verify/GarbRegionDiag.h"
+#include "Heap/Verify/HealPairDiag.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -31,10 +32,16 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 {
     uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
+    if (HealPairDiag::Enabled()) {
+        HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 0);
+    }
     CHECK_E(memmove_s(reinterpret_cast<void*>(to), size, reinterpret_cast<void*>(from), size) != EOK, "memmove_s fail");
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
+    if (HealPairDiag::Enabled()) {
+        HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
+    }
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

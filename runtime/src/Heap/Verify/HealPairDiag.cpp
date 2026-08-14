@@ -74,6 +74,43 @@ std::atomic<size_t> g_pairTotal{ 0 };
 std::atomic<size_t> g_collectTotal{ 0 };
 std::atomic<size_t> g_pairWrap{ 0 };
 std::atomic<size_t> g_collectWrap{ 0 };
+
+constexpr size_t kCopyCap = 1u << 16;
+constexpr size_t kZeroCap = 1u << 14;
+
+struct CopyRow {
+    uintptr_t from;
+    uintptr_t to;
+    uint32_t size;
+    uint16_t phase;
+    uint16_t done;
+    uint32_t seq;
+};
+
+struct ZeroRow {
+    uintptr_t slot;
+    uintptr_t oldRaw;
+    uint16_t site;
+    uint16_t phase;
+    uint32_t seq;
+};
+
+struct InflightCopy {
+    uintptr_t from;
+    uintptr_t to;
+    uint32_t size;
+    uint16_t phase;
+};
+
+CopyRow g_copies[kCopyCap];
+ZeroRow g_zeros[kZeroCap];
+std::atomic<uint32_t> g_copyNext{ 0 };
+std::atomic<uint32_t> g_zeroNext{ 0 };
+std::atomic<size_t> g_copyTotal{ 0 };
+std::atomic<size_t> g_zeroTotal{ 0 };
+std::atomic<size_t> g_copyWrap{ 0 };
+std::atomic<size_t> g_zeroWrap{ 0 };
+thread_local InflightCopy g_inflight{};
 std::atomic<size_t> g_bySite[4]{ {} };
 std::atomic<bool> g_healthOnce{ false };
 std::atomic<bool> g_atexitOnce{ false };
@@ -187,6 +224,30 @@ void DumpCollect(const char* tag, const CollectRow& row)
                       "phase=%u nOld=%u nNew=%u seq=%u\n",
                       tag, row.start, row.end, static_cast<unsigned long long>(row.liveBytes),
                       row.rtype, row.knownEmpty, row.phase, row.nOld, row.nNew, row.seq);
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
+}
+
+void DumpCopy(const char* tag, const CopyRow& row)
+{
+    char line[384];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][slotwindow] %s from=%#zx to=%#zx size=%u phase=%u done=%u seq=%u\n",
+                      tag, row.from, row.to, row.size, static_cast<unsigned>(row.phase),
+                      static_cast<unsigned>(row.done), row.seq);
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
+}
+
+void DumpZero(const char* tag, const ZeroRow& row)
+{
+    char line[384];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][slotwindow] %s slot=%#zx old=%#zx site=%u phase=%u seq=%u\n",
+                      tag, row.slot, row.oldRaw, static_cast<unsigned>(row.site),
+                      static_cast<unsigned>(row.phase), row.seq);
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
@@ -455,6 +516,62 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
     row.seq = seq;
 }
 
+void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
+{
+    if (!GateOn()) {
+        return;
+    }
+    HealthOnce();
+    EnsureAtexit();
+    uintptr_t from = reinterpret_cast<uintptr_t>(fromAddr);
+    uintptr_t to = reinterpret_cast<uintptr_t>(toAddr);
+    uint16_t phase = CurrentPhase();
+    if (done == 0) {
+        g_inflight.from = from;
+        g_inflight.to = to;
+        g_inflight.size = static_cast<uint32_t>(size);
+        g_inflight.phase = phase;
+    } else {
+        g_inflight.from = 0;
+        g_inflight.to = 0;
+        g_inflight.size = 0;
+        g_inflight.phase = 0;
+    }
+    uint32_t seq = static_cast<uint32_t>(g_copyTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_copyNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kCopyCap) {
+        g_copyWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    CopyRow& row = g_copies[slotIdx % kCopyCap];
+    row.from = from;
+    row.to = to;
+    row.size = static_cast<uint32_t>(size);
+    row.phase = phase;
+    row.done = static_cast<uint16_t>(done);
+    row.seq = seq;
+}
+
+void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
+{
+    (void)newRaw;
+    if (!GateOn()) {
+        return;
+    }
+    HealthOnce();
+    EnsureAtexit();
+    uint32_t seq = static_cast<uint32_t>(g_zeroTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_zeroNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kZeroCap) {
+        g_zeroWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    ZeroRow& row = g_zeros[slotIdx % kZeroCap];
+    row.slot = reinterpret_cast<uintptr_t>(slot);
+    row.oldRaw = oldRaw;
+    row.site = site;
+    row.phase = CurrentPhase();
+    row.seq = seq;
+}
+
 void NoteCrashRdi(uintptr_t rdi)
 {
     if (!GateOn()) {
@@ -590,6 +707,95 @@ void NoteCrashRdi(uintptr_t rdi)
     }
 }
 
+void JoinCopyAndZero(uintptr_t holder)
+{
+    uint32_t copyN = static_cast<uint32_t>(
+        g_copyTotal.load(std::memory_order_acquire) < kCopyCap ?
+            g_copyTotal.load(std::memory_order_relaxed) : kCopyCap);
+    uint32_t copyNext = g_copyNext.load(std::memory_order_acquire);
+    size_t copyTotal = g_copyTotal.load(std::memory_order_acquire);
+    uint32_t copyBase = (copyTotal < kCopyCap) ? 0 : (copyNext % kCopyCap);
+    uint32_t holderAsTo = 0;
+    uint32_t holderAsFrom = 0;
+    uint32_t lastToIdx = 0;
+    uint32_t lastFromIdx = 0;
+    bool haveTo = false;
+    bool haveFrom = false;
+    for (uint32_t i = 0; i < copyN; ++i) {
+        uint32_t idx = (copyBase + i) % kCopyCap;
+        const CopyRow& row = g_copies[idx];
+        if (holder != 0 && holder >= row.to && holder < row.to + row.size) {
+            ++holderAsTo;
+            lastToIdx = idx;
+            haveTo = true;
+        }
+        if (holder != 0 && holder >= row.from && holder < row.from + row.size) {
+            ++holderAsFrom;
+            lastFromIdx = idx;
+            haveFrom = true;
+        }
+    }
+
+    uint32_t zeroN = static_cast<uint32_t>(
+        g_zeroTotal.load(std::memory_order_acquire) < kZeroCap ?
+            g_zeroTotal.load(std::memory_order_relaxed) : kZeroCap);
+    uint32_t zeroNext = g_zeroNext.load(std::memory_order_acquire);
+    size_t zeroTotal = g_zeroTotal.load(std::memory_order_acquire);
+    uint32_t zeroBase = (zeroTotal < kZeroCap) ? 0 : (zeroNext % kZeroCap);
+    uint32_t slotHits = 0;
+    uint32_t lastZeroIdx = 0;
+    bool haveZero = false;
+    uintptr_t holderEnd = holder != 0 ? (holder + 512U) : 0;
+    for (uint32_t i = 0; i < zeroN; ++i) {
+        uint32_t idx = (zeroBase + i) % kZeroCap;
+        const ZeroRow& row = g_zeros[idx];
+        if (holder != 0 && row.slot >= holder && row.slot < holderEnd) {
+            ++slotHits;
+            lastZeroIdx = idx;
+            haveZero = true;
+        }
+    }
+
+    char line[512];
+    int wn = sprintf_s(line, sizeof(line),
+                       "[GCV2][slotwindow] join holder=%#zx copyTotal=%zu copyWrap=%zu "
+                       "zeroTotal=%zu zeroWrap=%zu holderAsTo=%u holderAsFrom=%u slotZeroHits=%u "
+                       "inflightFrom=%#zx inflightTo=%#zx inflightSize=%u inflightPhase=%u\n",
+                       holder, copyTotal, g_copyWrap.load(std::memory_order_relaxed),
+                       zeroTotal, g_zeroWrap.load(std::memory_order_relaxed),
+                       holderAsTo, holderAsFrom, slotHits,
+                       g_inflight.from, g_inflight.to, g_inflight.size,
+                       static_cast<unsigned>(g_inflight.phase));
+    if (wn > 0) {
+        WriteLine(line, static_cast<size_t>(wn));
+    }
+    if (g_inflight.to != 0) {
+        CopyRow inflight{};
+        inflight.from = g_inflight.from;
+        inflight.to = g_inflight.to;
+        inflight.size = g_inflight.size;
+        inflight.phase = g_inflight.phase;
+        inflight.done = 0;
+        inflight.seq = 0;
+        DumpCopy("inflight", inflight);
+    }
+    if (haveTo) {
+        DumpCopy("holderTo", g_copies[lastToIdx]);
+        DumpHolder("fromCopy", g_copies[lastToIdx].from);
+    }
+    if (haveFrom) {
+        DumpCopy("holderFrom", g_copies[lastFromIdx]);
+    }
+    if (haveZero) {
+        DumpZero("slotZero", g_zeros[lastZeroIdx]);
+    }
+    uint32_t tail = copyN < 4 ? copyN : 4;
+    for (uint32_t i = 0; i < tail; ++i) {
+        uint32_t idx = (copyBase + copyN - tail + i) % kCopyCap;
+        DumpCopy("copyTail", g_copies[idx]);
+    }
+}
+
 void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
 {
     if (!GateOn()) {
@@ -606,6 +812,7 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
     DumpHolder("rax", rax);
     DumpHolder("r12", r12);
     DumpHolder("r14", r14);
+    JoinCopyAndZero(r14);
 }
 
 void Report(const char* point)
@@ -616,12 +823,14 @@ void Report(const char* point)
     LOG(RTLOG_ERROR,
         "[GCV2][healpair] report point=%s pairTotal=%zu pairWrap=%zu collectTotal=%zu "
         "collectWrap=%zu siteFwdInt=%zu sitePresInt=%zu siteFwdGhost=%zu siteNorm=%zu "
-        "env=MRT_GCV2_HEALPAIR=1",
+        "copyTotal=%zu zeroTotal=%zu env=MRT_GCV2_HEALPAIR=1",
         point != nullptr ? point : "none", g_pairTotal.load(std::memory_order_relaxed),
         g_pairWrap.load(std::memory_order_relaxed), g_collectTotal.load(std::memory_order_relaxed),
         g_collectWrap.load(std::memory_order_relaxed), g_bySite[0].load(std::memory_order_relaxed),
         g_bySite[1].load(std::memory_order_relaxed), g_bySite[2].load(std::memory_order_relaxed),
-        g_bySite[3].load(std::memory_order_relaxed));
+        g_bySite[3].load(std::memory_order_relaxed),
+        g_copyTotal.load(std::memory_order_relaxed),
+        g_zeroTotal.load(std::memory_order_relaxed));
 }
 
 } // namespace HealPairDiag
