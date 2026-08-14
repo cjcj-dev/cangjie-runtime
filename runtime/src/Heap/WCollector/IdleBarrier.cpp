@@ -187,7 +187,7 @@ void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
             [=](RefField<>& refField) {
                 RefField<> oldField(refField);
                 MAddress oldValue = raw(oldField.GetFieldValue());
-                BaseObject* latest = ReadReference(nullptr, oldField);
+                BaseObject* latest = Barrier::ReadReference(nullptr, oldField);
                 RefField<> newField = theCollector.GetAndTryTagRefField(latest);
                 if (oldValue != raw(newField.GetFieldValue())) {
                     refField.CompareExchange(to_zpointer(oldValue), newField.GetFieldValue());
@@ -204,7 +204,7 @@ void IdleBarrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, 
 
 void IdleBarrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
-    Barrier::WriteStaticRef(field, ref);
+    WriteStaticRefPlain(field, ref);
 }
 
 void IdleBarrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_t srcLen, const GCTib gctib) const
@@ -249,7 +249,7 @@ void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstS
         while (currentDst < fieldBound) {
             HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            BaseObject* newRef = Barrier::ReadReference(srcObj, currentSrcField);
             if (inHeap) {
                 WriteReference(dstObj, currentDstField, newRef);
             } else {
@@ -265,7 +265,7 @@ void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstS
         while (currentDst >= fieldBound) {
             HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
-            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            BaseObject* newRef = Barrier::ReadReference(srcObj, currentSrcField);
             if (inHeap) {
                 WriteReference(dstObj, currentDstField, newRef);
             } else {
