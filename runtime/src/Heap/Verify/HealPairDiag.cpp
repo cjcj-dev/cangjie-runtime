@@ -991,20 +991,24 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
     DumpHolder("r12", r12);
     DumpHolder("r14", r14);
 
-    uintptr_t threadObject = 0;
+    uintptr_t threadRaw = 0;
     void* arg = CJ_CJThreadGetArg();
     if (arg != nullptr) {
-        threadObject = reinterpret_cast<uintptr_t>(static_cast<LWTData*>(arg)->threadObject);
+        threadRaw = reinterpret_cast<uintptr_t>(static_cast<LWTData*>(arg)->threadObject);
     }
-    char thrLine[256];
+    uintptr_t threadPeeled = threadRaw & 0xffffffffffffULL;
+    unsigned eqRaw = (rdi != 0 && rdi == threadRaw) ? 1U : 0U;
+    unsigned eqPeeled = (rdi != 0 && rdi == threadPeeled) ? 1U : 0U;
+    char thrLine[320];
     int tn = sprintf_s(thrLine, sizeof(thrLine),
-                       "[GCV2][threadzero] currentThr=%#zx rdi=%#zx equals=%u\n",
-                       threadObject, rdi, (rdi != 0 && rdi == threadObject) ? 1U : 0U);
+                       "[GCV2][threadzero] currentThrRaw=%#zx peeled=%#zx rdi=%#zx "
+                       "eqRaw=%u eqPeeled=%u\n",
+                       threadRaw, threadPeeled, rdi, eqRaw, eqPeeled);
     if (tn > 0) {
         WriteLine(thrLine, static_cast<size_t>(tn));
     }
-    if (threadObject != 0 && threadObject != rdi) {
-        DumpHolder("curThr", threadObject);
+    if (threadPeeled != 0 && threadPeeled != rdi) {
+        DumpHolder("curThr", threadPeeled);
     }
 
     JoinCopyAndZero(r14);
