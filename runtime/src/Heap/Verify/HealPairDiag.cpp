@@ -260,6 +260,10 @@ void NoteCrashRdi(uintptr_t rdi)
         threadObject = reinterpret_cast<uintptr_t>(static_cast<LWTData*>(arg)->threadObject);
     }
     uint32_t phase = CurrentPhase();
+    unsigned inHeap = 0;
+    if (Runtime::CurrentRef() != nullptr && rdi != 0 && Heap::IsHeapAddress(rdi)) {
+        inHeap = 1;
+    }
     uint32_t n = OccupiedPairs();
     uint32_t next = g_pairNext.load(std::memory_order_acquire);
     size_t total = g_pairTotal.load(std::memory_order_acquire);
@@ -273,6 +277,10 @@ void NoteCrashRdi(uintptr_t rdi)
     uint32_t lastOldN = 0;
     uint32_t firstOldIdx = 0;
     bool haveFirstOld = false;
+    uint32_t lastThrNewIdx = 0;
+    bool haveThrNew = false;
+    uint32_t lastRdiNewIdx = 0;
+    bool haveRdiNew = false;
     for (uint32_t i = 0; i < n; ++i) {
         uint32_t idx = (base + i) % kPairCap;
         const PairRow& row = g_pairs[idx];
@@ -293,12 +301,16 @@ void NoteCrashRdi(uintptr_t rdi)
         }
         if (rdi != 0 && row.newAddr == rdi) {
             ++rdiNew;
+            lastRdiNewIdx = idx;
+            haveRdiNew = true;
         }
         if (threadObject != 0 && row.oldAddr == threadObject) {
             ++thrOld;
         }
         if (threadObject != 0 && row.newAddr == threadObject) {
             ++thrNew;
+            lastThrNewIdx = idx;
+            haveThrNew = true;
         }
     }
 
@@ -330,12 +342,12 @@ void NoteCrashRdi(uintptr_t rdi)
 
     char line[768];
     int wn = sprintf_s(line, sizeof(line),
-                       "[GCV2][healpair] crash rdi=%#zx threadObject=%#zx equals=%u lwt=%#zx "
+                       "[GCV2][healpair] crash rdi=%#zx inHeap=%u threadObject=%#zx equals=%u lwt=%#zx "
                        "phase=%u pairTotal=%zu pairWrap=%zu collectTotal=%zu collectWrap=%zu "
                        "rdiAsOld=%u rdiAsNew=%u thrAsOld=%u thrAsNew=%u rdiCollect=%u "
                        "siteFwdInt=%zu sitePresInt=%zu siteFwdGhost=%zu siteNorm=%zu "
                        "verdict=%s env=MRT_GCV2_HEALPAIR=1\n",
-                       rdi, threadObject, (rdi != 0 && rdi == threadObject) ? 1U : 0U, lwt, phase,
+                       rdi, inHeap, threadObject, (rdi != 0 && rdi == threadObject) ? 1U : 0U, lwt, phase,
                        total, g_pairWrap.load(std::memory_order_relaxed),
                        collectTotal, g_collectWrap.load(std::memory_order_relaxed),
                        rdiOld, rdiNew, thrOld, thrNew, rdiCollect,
@@ -346,11 +358,22 @@ void NoteCrashRdi(uintptr_t rdi)
     if (wn > 0) {
         WriteLine(line, static_cast<size_t>(wn));
     }
+    if (haveRdiNew) {
+        DumpMatch("rdiNew", g_pairs[lastRdiNewIdx]);
+    }
+    if (haveThrNew) {
+        DumpMatch("thrNew", g_pairs[lastThrNewIdx]);
+    }
     if (haveFirstOld) {
         DumpMatch("firstOld", g_pairs[firstOldIdx]);
     }
     for (uint32_t i = 0; i < lastOldN; ++i) {
         DumpMatch("oldHit", g_pairs[lastOldIdx[i]]);
+    }
+    uint32_t tail = n < 8 ? n : 8;
+    for (uint32_t i = 0; i < tail; ++i) {
+        uint32_t idx = (base + n - tail + i) % kPairCap;
+        DumpMatch("tail", g_pairs[idx]);
     }
     if (haveCollect) {
         CollectRow& crow = g_collects[lastCollectIdx];
