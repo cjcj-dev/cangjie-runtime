@@ -745,14 +745,11 @@ void JoinCopyAndZero(uintptr_t holder)
     uint32_t slotHits = 0;
     uint32_t lastZeroIdx = 0;
     bool haveZero = false;
-    uintptr_t slot130 = holder != 0 ? (holder + 0x130U) : 0;
-    uintptr_t slot110 = holder != 0 ? (holder + 0x110U) : 0;
-    uintptr_t slot118 = holder != 0 ? (holder + 0x118U) : 0;
-    uintptr_t slot188 = holder != 0 ? (holder + 0x188U) : 0;
+    uintptr_t holderEnd = holder != 0 ? (holder + 512U) : 0;
     for (uint32_t i = 0; i < zeroN; ++i) {
         uint32_t idx = (zeroBase + i) % kZeroCap;
         const ZeroRow& row = g_zeros[idx];
-        if (row.slot == slot130 || row.slot == slot110 || row.slot == slot118 || row.slot == slot188) {
+        if (holder != 0 && row.slot >= holder && row.slot < holderEnd) {
             ++slotHits;
             lastZeroIdx = idx;
             haveZero = true;
@@ -784,6 +781,7 @@ void JoinCopyAndZero(uintptr_t holder)
     }
     if (haveTo) {
         DumpCopy("holderTo", g_copies[lastToIdx]);
+        DumpHolder("fromCopy", g_copies[lastToIdx].from);
     }
     if (haveFrom) {
         DumpCopy("holderFrom", g_copies[lastFromIdx]);
