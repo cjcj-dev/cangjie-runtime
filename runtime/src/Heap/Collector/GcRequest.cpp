@@ -33,9 +33,13 @@ inline bool GCRequest::IsFrequentAsyncGC() const
     return (now - GCStats::GetPrevGCFinishTime() < minIntervelNs.load(std::memory_order_acquire));
 }
 
-// heuristic gc is triggered by object allocation,
-// the heap stats should take into consideration.
-inline bool GCRequest::IsFrequentHeuristicGC() const { return IsFrequentAsyncGC(); }
+// Heuristic GC has its own completion clock: a bounded young completion may
+// participate in this controller without suppressing native-pressure GC.
+inline bool GCRequest::IsFrequentHeuristicGC() const
+{
+    int64_t now = static_cast<int64_t>(TimeUtil::NanoSeconds());
+    return (now - GCStats::GetPrevHeuFinishTime() < minIntervelNs.load(std::memory_order_acquire));
+}
 
 bool GCRequest::ShouldBeIgnored() const
 {
