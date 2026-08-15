@@ -27,6 +27,7 @@
 #include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/YyEdgeDiag.h"
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"
 #include "TypeInfoManager.h"
@@ -372,6 +373,8 @@ void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* p
 
     TypeInfo* holderTip = holder == nullptr ? nullptr : holder->GetTypeInfo();
     const char* holderType = holderTip == nullptr || holderTip->GetName() == nullptr ? "?" : holderTip->GetName();
+    const unsigned inThisVec = YyEdgeDiag::Enabled() && YyEdgeDiag::HolderInThisProductVec(holder) ? 1u : 0u;
+    const unsigned inPrevVec = YyEdgeDiag::Enabled() && YyEdgeDiag::HolderInPrevProductVec(holder) ? 1u : 0u;
 
     VLOG(REPORT,
          "[GCV2][verify][heap] BAD_OBJ reason=h3-target-bad-region point=%s "
@@ -379,6 +382,7 @@ void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* p
          "region=%s regionBase=%p tip=%p header0=%#zx header1=%#zx "
          "holderRegion=%s holderRegionBase=%p holderTip=%p holderType=%s "
          "holderReachabilityKnown=%u holderReachable=%u "
+         "inThisProductVec=%u inPrevProductVec=%u "
          "failure=%zu max=%zu env=MRT_GCV2_VERIFY_HEAP=1",
          point == nullptr ? "?" : point, target, holder, &field, BaseObject::FieldOffset(holder, &field),
          SampleTypeByte(target), RegionKindName(targetRegion),
@@ -386,7 +390,7 @@ void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* p
          static_cast<size_t>(targetHeader0), static_cast<size_t>(targetHeader1), RegionKindName(holderRegion),
          holderRegion == nullptr ? nullptr : reinterpret_cast<void*>(holderRegion->GetRegionStart()), holderTip,
          holderType, static_cast<unsigned>(reachabilityKnown), static_cast<unsigned>(holderReachable),
-         stats.failures, maxFailures);
+         inThisVec, inPrevVec, stats.failures, maxFailures);
 }
 } // namespace
 
@@ -498,6 +502,10 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
          stats.h3ReachableHolder, stats.h3UnreachableHolder, stats.h3ReachabilityUnknown, stats.h4BadRegion,
          static_cast<unsigned long long>(stats.costNs), maxFailures, stats.samples[0],
          stats.samples[1], stats.samples[2], stats.samples[3]);
+
+    if (UNLIKELY(YyEdgeDiag::Enabled())) {
+        YyEdgeDiag::Report(point == nullptr ? "?" : point);
+    }
 
     if (EnvEnabled("MRT_GCV2_VERIFY_HEAP_FATAL") && stats.failures != 0) {
         CHECK_DETAIL(false,

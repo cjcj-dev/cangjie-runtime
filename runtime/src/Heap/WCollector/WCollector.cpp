@@ -63,6 +63,7 @@
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
+#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -7622,6 +7623,9 @@ void WCollector::DoYoungGarbageCollection()
                                  &minorCandidateRegions, remsetStats, nullptr);
             VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
         }
+    }
+    if (UNLIKELY(YyEdgeDiag::Enabled())) {
+        YyEdgeDiag::PublishProductVec(reachableVec);
     }
     // Full-heap object invariant H (HotSpot G1HeapVerifier::verify inventory #10).
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
