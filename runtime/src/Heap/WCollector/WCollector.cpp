@@ -8099,6 +8099,8 @@ void WCollector::DoYoungGarbageCollection()
     for (RegionInfo* region : minorCandidateRegions) {
         liveBytes += region->GetLiveByteCount();
     }
+    GetGCStats().youngCandidateBytes = stats.candidateBytes;
+    GetGCStats().youngPromotedBytes = liveBytes;
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
