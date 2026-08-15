@@ -7,6 +7,7 @@
 
 #include "Barrier.inline.h"
 #include "Base/Macros.h"
+#include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
@@ -888,6 +889,14 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             }
             if (UNLIKELY(YyEdgeDiag::Enabled())) {
                 YyEdgeDiag::NoteYoungToYoung(obj, fieldAddress, ref);
+            }
+            // h3seed2 甲: seed the young holder object into the next minor work stack.
+            // Object-level dirty list (AllocBuffer), not field remset — avoids y2yN remset bloat.
+            if (obj != nullptr) {
+                AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+                if (buffer != nullptr) {
+                    buffer->PushY2yDirtyHolder(obj);
+                }
             }
             if (UNLIKELY(YyEdgeDiag::RecordEnabled())) {
                 theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);

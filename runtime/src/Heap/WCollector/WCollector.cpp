@@ -7190,6 +7190,15 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.root_enum");
         WorkStack enumRoots = NewWorkStack();
         theAllocator.VisitAllocBuffers([&enumRoots](AllocBuffer& buffer) { buffer.MergeRoots(enumRoots); });
+        // h3seed2 甲: merge y2y dirty holders (object seeds) before VisitMinorRoots.
+        size_t y2yDirtyN = 0;
+        theAllocator.VisitAllocBuffers([&enumRoots, &y2yDirtyN](AllocBuffer& buffer) {
+            y2yDirtyN += buffer.Y2yDirtyHolderCount();
+            buffer.MergeY2yDirtyHolders(enumRoots);
+        });
+        if (y2yDirtyN != 0) {
+            VLOG(REPORT, "[GCV2Minor] y2yDirtyHolders=%zu (h3seed2 object seeds, not field remset)", y2yDirtyN);
+        }
         if (stackScanEpoch != 0) {
             SatbBuffer::Instance().GetRetiredObjects(enumRoots);
         }
