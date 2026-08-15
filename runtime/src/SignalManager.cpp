@@ -35,6 +35,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Heap/Collector/TaskQueue.h"
 #include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/WhoPushDiag.h"
+#include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/HdrWhoDiag.h"
@@ -235,6 +236,10 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         HealPairDiag::NoteCrashRdi(rdi);
         HdrWhoDiag::NoteCrashRdi(rdi);
         HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
+        uintptr_t rcx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RCX]);
+        uintptr_t rdx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDX]);
+        uintptr_t rsi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RSI]);
+        HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
 #endif
     }
 }
