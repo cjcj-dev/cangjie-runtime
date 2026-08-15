@@ -20,7 +20,9 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -2882,7 +2884,7 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 // R3 markpar: STW-parallel young.mark_closure — sibling of ConcurrentMarkingWork
 // (TracingCollector.cpp ConcurrentMarkingWork). Claim = MarkObject atomic bit;
 // per-worker reachableVec/slots/weaks merged after pool barrier. Env:
-// MRT_GCV2_MARKPAR_WORKERS / FORCE_SERIAL / INJECT_DISPEL.
+// MRT_GCV2_MARKPAR_WORKERS / FORCE_SERIAL / INJECT_DISPEL / STRIPED.
 // Port of fix/markpar@3f869baa onto setbitmap ledger (reachableVec + useBitmapLedger).
 namespace {
 // MarkStack::size() counts buffers (64 objs each), not objects. Major uses 16/8 for
@@ -2890,6 +2892,20 @@ namespace {
 // Buffer-level 2/1 so steal engages on ~64–128 greys (markpar 3f869baa).
 constexpr size_t kMarkparMaxWorkSize = 2;
 constexpr size_t kMarkparMinWorkSize = 1;
+constexpr size_t kMarkStripeShift = 20; // 1 MiB address chunks, from zstripe phase-A locality data.
+constexpr size_t kMarkStripeMultiplier = 4;
+constexpr size_t kMarkStripeLocalCapacity = 64;
+constexpr size_t kMarkStripeMax = 64;
+
+size_t MarkStripeCount(size_t workers)
+{
+    size_t target = std::max<size_t>(workers * kMarkStripeMultiplier, kMarkStripeMultiplier);
+    size_t count = 1;
+    while (count < target && count < kMarkStripeMax) {
+        count <<= 1;
+    }
+    return count;
+}
 } // namespace
 
 struct YoungMarkingShared {
@@ -3134,6 +3150,390 @@ private:
     YoungMarkingShared& shared;
     TracingCollector::WorkStack workStack;
     size_t workerSlot;
+};
+
+struct alignas(64) YoungMarkStripe {
+    std::mutex lock;
+    std::vector<BaseObject*> published;
+    std::unordered_set<BaseObject*> seen;
+    size_t owner = std::numeric_limits<size_t>::max();
+};
+
+struct alignas(64) YoungStripedWorkerOutput {
+    std::vector<BaseObject*> objects;
+    std::vector<MAddress> slots;
+    std::vector<MAddress> weaks;
+    size_t objectsMarked = 0;
+    bool touched = false;
+};
+
+struct YoungStripedShared {
+    WCollector* collector = nullptr;
+    bool fullYoungScan = false;
+    bool useBitmapLedger = true;
+    bool recordSlots = false;
+    size_t stripeMask = 0;
+    size_t workerCount = 0;
+    std::vector<std::unique_ptr<YoungMarkStripe>> stripes;
+    std::vector<std::unique_ptr<YoungStripedWorkerOutput>> outputs;
+    std::atomic<size_t> idleWorkers{ 0 };
+    std::atomic<bool> done{ false };
+
+    size_t StripeFor(BaseObject* object) const
+    {
+        return (reinterpret_cast<uintptr_t>(object) >> kMarkStripeShift) & stripeMask;
+    }
+};
+
+class YoungStripedMarkingWork : public HeapWork {
+public:
+    YoungStripedMarkingWork(YoungStripedShared& shared, size_t workerSlot)
+        : shared(shared), workerSlot(workerSlot), localStacks(shared.stripes.size())
+    {
+        for (auto& stack : localStacks) {
+            stack.reserve(kMarkStripeLocalCapacity);
+        }
+    }
+
+    void Execute(size_t) override
+    {
+        size_t nMarked = 0;
+        for (;;) {
+            if (currentStripe == kNoStripe && !AcquireLocalStripe() && !AcquirePublishedStripe()) {
+                FlushAllLocal();
+                if (!AcquirePublishedStripe() && WaitForWorkOrDone()) {
+                    break;
+                }
+                continue;
+            }
+            auto& stack = localStacks[currentStripe];
+            if (stack.empty() && !RefillOrReleaseCurrent()) {
+                continue;
+            }
+            BaseObject* object = localStacks[currentStripe].back();
+            localStacks[currentStripe].pop_back();
+            shared.outputs[workerSlot]->touched = true;
+            ProcessObject(object, nMarked);
+        }
+        ReleaseCurrent();
+        shared.outputs[workerSlot]->objectsMarked += nMarked;
+    }
+
+private:
+    static constexpr size_t kNoStripe = std::numeric_limits<size_t>::max();
+
+    void MovePublishedToLocal(YoungMarkStripe& stripe, size_t stripeIndex)
+    {
+        auto& local = localStacks[stripeIndex];
+        size_t count = std::min(kMarkStripeLocalCapacity, stripe.published.size());
+        while (count-- > 0) {
+            local.push_back(stripe.published.back());
+            stripe.published.pop_back();
+        }
+    }
+
+    void PublishLocalLocked(YoungMarkStripe& stripe, size_t stripeIndex)
+    {
+        auto& local = localStacks[stripeIndex];
+        stripe.published.insert(stripe.published.end(), local.begin(), local.end());
+        local.clear();
+    }
+
+    void PublishLocal(size_t stripeIndex)
+    {
+        auto& local = localStacks[stripeIndex];
+        if (local.empty()) {
+            return;
+        }
+        YoungMarkStripe& stripe = *shared.stripes[stripeIndex];
+        std::lock_guard<std::mutex> guard(stripe.lock);
+        PublishLocalLocked(stripe, stripeIndex);
+    }
+
+    void FlushAllLocal()
+    {
+        for (size_t stripeIndex = 0; stripeIndex < localStacks.size(); ++stripeIndex) {
+            PublishLocal(stripeIndex);
+        }
+    }
+
+    bool HasPublishedWork()
+    {
+        for (const auto& stripePtr : shared.stripes) {
+            YoungMarkStripe& stripe = *stripePtr;
+            std::lock_guard<std::mutex> guard(stripe.lock);
+            if (!stripe.published.empty()) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    bool WaitForWorkOrDone()
+    {
+        size_t idle = shared.idleWorkers.fetch_add(1, std::memory_order_acq_rel) + 1;
+        if (idle == shared.workerCount && !HasPublishedWork()) {
+            shared.done.store(true, std::memory_order_release);
+            return true;
+        }
+        while (!shared.done.load(std::memory_order_acquire)) {
+            if (HasPublishedWork()) {
+                shared.idleWorkers.fetch_sub(1, std::memory_order_acq_rel);
+                return false;
+            }
+            std::this_thread::yield();
+        }
+        return true;
+    }
+
+    bool AcquireLocalStripe()
+    {
+        const size_t stripeCount = localStacks.size();
+        for (size_t offset = 0; offset < stripeCount; ++offset) {
+            const size_t stripeIndex = (nextStripe + offset) & shared.stripeMask;
+            if (localStacks[stripeIndex].empty()) {
+                continue;
+            }
+            YoungMarkStripe& stripe = *shared.stripes[stripeIndex];
+            std::lock_guard<std::mutex> guard(stripe.lock);
+            if (stripe.owner == kNoStripe) {
+                stripe.owner = workerSlot;
+                currentStripe = stripeIndex;
+                nextStripe = (stripeIndex + 1) & shared.stripeMask;
+                return true;
+            }
+            if (stripe.owner != workerSlot) {
+                PublishLocalLocked(stripe, stripeIndex);
+            }
+        }
+        return false;
+    }
+
+    bool AcquirePublishedStripe()
+    {
+        const size_t stripeCount = shared.stripes.size();
+        for (size_t offset = 0; offset < stripeCount; ++offset) {
+            const size_t stripeIndex = (nextStripe + offset) & shared.stripeMask;
+            YoungMarkStripe& stripe = *shared.stripes[stripeIndex];
+            std::lock_guard<std::mutex> guard(stripe.lock);
+            if (stripe.owner != kNoStripe || stripe.published.empty()) {
+                continue;
+            }
+            stripe.owner = workerSlot;
+            MovePublishedToLocal(stripe, stripeIndex);
+            currentStripe = stripeIndex;
+            nextStripe = (stripeIndex + 1) & shared.stripeMask;
+            return true;
+        }
+        return false;
+    }
+
+    bool RefillOrReleaseCurrent()
+    {
+        YoungMarkStripe& stripe = *shared.stripes[currentStripe];
+        std::lock_guard<std::mutex> guard(stripe.lock);
+        if (!stripe.published.empty()) {
+            MovePublishedToLocal(stripe, currentStripe);
+            return true;
+        }
+        CHECK_DETAIL(stripe.owner == workerSlot, "striped mark owner mismatch stripe=%zu owner=%zu worker=%zu",
+                     currentStripe, stripe.owner, workerSlot);
+        stripe.owner = kNoStripe;
+        currentStripe = kNoStripe;
+        return false;
+    }
+
+    void ReleaseCurrent()
+    {
+        if (currentStripe == kNoStripe) {
+            return;
+        }
+        YoungMarkStripe& stripe = *shared.stripes[currentStripe];
+        std::lock_guard<std::mutex> guard(stripe.lock);
+        if (stripe.owner == workerSlot) {
+            stripe.owner = kNoStripe;
+        }
+        currentStripe = kNoStripe;
+    }
+
+    void PushObject(BaseObject* object)
+    {
+        const size_t stripeIndex = shared.StripeFor(object);
+        auto& local = localStacks[stripeIndex];
+        local.push_back(object);
+        if (stripeIndex != currentStripe && local.size() >= kMarkStripeLocalCapacity) {
+            PublishLocal(stripeIndex);
+        }
+    }
+
+    bool ClaimSeen(BaseObject* object)
+    {
+        return shared.stripes[currentStripe]->seen.insert(object).second;
+    }
+
+    void PushResidualYoungChild(RefField<>& field, BaseObject* holder, const char* origin)
+    {
+        WCollector* collector = shared.collector;
+        BaseObject* target = collector->ResolveMinorReference(field);
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("ghostroute.wasMarked.child", target)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(target);
+            if (host == nullptr || host == target) {
+                return;
+            }
+            target = host;
+        }
+        RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (targetRegion == nullptr || !targetRegion->IsYoungRegion() || targetRegion->IsMarkedObject(target)) {
+            return;
+        }
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD, origin, &field, holder);
+        }
+        PushObject(target);
+    }
+
+    void PushFilteredYoung(BaseObject* object, const char* origin)
+    {
+        if (!Heap::IsHeapAddress(object)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("PushYoungObject", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object) {
+                PushFilteredYoung(host, origin);
+            }
+            return;
+        }
+        if (!object->IsValidObject()) {
+            TracingCollector::WorkStack failClosed;
+            shared.collector->PushYoungObject(object, failClosed, origin);
+            return;
+        }
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (!region->IsYoungRegion() || region->IsMarkedObject(object)) {
+            return;
+        }
+        if (UNLIKELY(StartWhoDiag::Enabled())) {
+            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
+        }
+        PushObject(object);
+    }
+
+    void ProcessObject(BaseObject* object, size_t& nMarked)
+    {
+        if (!Heap::IsHeapAddress(object)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
+            BaseObject* host = Collector::TryRecoverInteriorBase(object);
+            if (host != nullptr && host != object) {
+                PushObject(host);
+            }
+            return;
+        }
+
+        YoungStripedWorkerOutput& output = *shared.outputs[workerSlot];
+        auto& localObjects = output.objects;
+        auto& localSlots = output.slots;
+        auto& localWeaks = output.weaks;
+        WCollector* collector = shared.collector;
+        RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        const bool isYoung = region->IsYoungRegion();
+
+        if (shared.useBitmapLedger) {
+            if (isYoung) {
+                bool wasMarked = collector->MarkObject(object);
+                if (wasMarked) {
+                    EatArmDiag::NoteWasMarkedSkipFields(object);
+                    if (object->HasRefField() && !object->IsWeakRef()) {
+                        object->ForEachRefField([this, object](RefField<>& field) {
+                            PushResidualYoungChild(field, object, "ghostroute.striped.bitmap");
+                        });
+                    }
+                    return;
+                }
+                ++nMarked;
+                CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+                localObjects.push_back(object);
+            } else if (!shared.fullYoungScan) {
+                return;
+            } else {
+                if (!ClaimSeen(object)) {
+                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
+                    return;
+                }
+                CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+                localObjects.push_back(object);
+            }
+        } else {
+            if (isYoung) {
+                bool wasMarked = collector->MarkObject(object);
+                if (wasMarked) {
+                    EatArmDiag::NoteWasMarkedSkipFields(object);
+                    if (object->HasRefField() && !object->IsWeakRef()) {
+                        object->ForEachRefField([this, object](RefField<>& field) {
+                            PushResidualYoungChild(field, object, "ghostroute.striped.legacy");
+                        });
+                    }
+                    return;
+                }
+                ++nMarked;
+                if (!ClaimSeen(object)) {
+                    return;
+                }
+            } else if (!shared.fullYoungScan) {
+                return;
+            } else if (!ClaimSeen(object)) {
+                EatArmDiag::NoteNonYoungDedupSkipFields(object);
+                return;
+            }
+            CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
+            localObjects.push_back(object);
+        }
+
+        if (!object->HasRefField()) {
+            return;
+        }
+        auto pushTarget = [this, collector](RefField<>& field) {
+            BaseObject* target = collector->ResolveMinorReference(field);
+            if (shared.fullYoungScan) {
+                if (Heap::IsHeapAddress(target)) {
+                    PushObject(target);
+                }
+            } else {
+                PushFilteredYoung(target, "closure_edge");
+            }
+        };
+        if (UNLIKELY(object->IsWeakRef())) {
+            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
+            localWeaks.push_back(reinterpret_cast<MAddress>(&referentField));
+            BaseObject* referent = collector->ResolveMinorReference(referentField);
+            if (!Heap::IsHeapAddress(referent)) {
+                return;
+            }
+            RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
+            if (referentRegion->IsYoungRegion()) {
+                WeakRefBuffer::Instance().Insert(object);
+            }
+            referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
+            return;
+        }
+        object->ForEachRefField([this, &localSlots, &pushTarget](RefField<>& field) {
+            if (shared.recordSlots) {
+                localSlots.push_back(reinterpret_cast<MAddress>(&field));
+            }
+            pushTarget(field);
+        });
+    }
+
+    YoungStripedShared& shared;
+    size_t workerSlot;
+    std::vector<std::vector<BaseObject*>> localStacks;
+    size_t currentStripe = kNoStripe;
+    size_t nextStripe = 0;
 };
 
 void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
@@ -3559,6 +3959,121 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
          active, workers, markedStr.c_str(), reachableVec.size());
 }
 
+void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
+                                          std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
+                                          MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool)
+{
+    const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
+    {
+        const char* inject = std::getenv("MRT_GCV2_MARKPAR_INJECT_DISPEL");
+        if (inject != nullptr && std::strcmp(inject, "1") == 0) {
+            RegionInfo::InjectDispelCountForTest();
+            VLOG(REPORT, "[GCV2][markpar][striped] inject_dispel=1 (positive control)");
+        }
+    }
+
+    int32_t workers = threadPool->GetMaxThreadNum() + 1;
+    {
+        const char* wEnv = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (wEnv != nullptr && wEnv[0] != '\0') {
+            int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
+            if (want >= 1 && want < workers) {
+                workers = want;
+            }
+        }
+    }
+    workers = std::max(workers, 1);
+    if (workers == 1) {
+        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                useBitmapLedger);
+        VLOG(REPORT,
+             "[GCV2][markpar][striped] workers_active=1 workers_scheduled=1 stripes=1 stripe_shift=%zu "
+             "objects_marked=[%zu] reachable_n=%zu parallel=0",
+             kMarkStripeShift, reachableVec.size(), reachableVec.size());
+        return;
+    }
+
+    const size_t stripeCount = MarkStripeCount(static_cast<size_t>(workers));
+    YoungStripedShared shared;
+    shared.collector = this;
+    shared.fullYoungScan = fullYoungScan;
+    shared.useBitmapLedger = useBitmapLedger;
+    shared.recordSlots = fullYoungScan;
+    shared.stripeMask = stripeCount - 1;
+    shared.workerCount = static_cast<size_t>(workers);
+    shared.outputs.reserve(shared.workerCount);
+    for (size_t i = 0; i < shared.workerCount; ++i) {
+        shared.outputs.emplace_back(std::make_unique<YoungStripedWorkerOutput>());
+    }
+    shared.stripes.reserve(stripeCount);
+    for (size_t i = 0; i < stripeCount; ++i) {
+        shared.stripes.emplace_back(std::make_unique<YoungMarkStripe>());
+    }
+
+    size_t rootCount = 0;
+    while (!workStack.empty()) {
+        BaseObject* object = workStack.back();
+        workStack.pop_back();
+        shared.stripes[shared.StripeFor(object)]->published.push_back(object);
+        ++rootCount;
+    }
+    CHECK_DETAIL(rootCount != 0, "striped mark requires a non-empty root stack");
+
+    const int32_t prevActive = threadPool->GetMaxActiveThreadNum();
+    const int32_t wantActive = workers - 1;
+    if (wantActive != prevActive) {
+        threadPool->SetMaxActiveThreadNum(wantActive);
+    }
+    for (int32_t worker = 1; worker < workers; ++worker) {
+        threadPool->AddWork(new YoungStripedMarkingWork(shared, static_cast<size_t>(worker)));
+    }
+    threadPool->Start();
+    YoungStripedMarkingWork mainTask(shared, 0);
+    mainTask.Execute(0);
+    threadPool->WaitFinish();
+    if (wantActive != prevActive) {
+        threadPool->SetMaxActiveThreadNum(prevActive);
+    }
+
+    const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
+    CHECK_DETAIL(dispelAtExit == dispelAtEntry,
+                 "T-D ghost dispel during striped mark_closure window entry=%zu exit=%zu", dispelAtEntry,
+                 dispelAtExit);
+
+    size_t active = 0;
+    std::string markedStr;
+    for (size_t i = 0; i < shared.outputs.size(); ++i) {
+        YoungStripedWorkerOutput& output = *shared.outputs[i];
+        active += output.touched ? 1 : 0;
+        if (!markedStr.empty()) {
+            markedStr += ',';
+        }
+        markedStr += std::to_string(output.objectsMarked);
+        for (BaseObject* object : output.objects) {
+            if (!useBitmapLedger) {
+                reachableObjects.insert(object);
+            } else {
+                RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+                if (region != nullptr && !region->IsYoungRegion() && fullYoungScan) {
+                    reachableObjects.insert(object);
+                }
+            }
+            reachableVec.push_back(object);
+        }
+        for (MAddress slot : output.slots) {
+            reachableSlots.insert(slot);
+        }
+        for (MAddress slot : output.weaks) {
+            weakSlots.insert(slot);
+        }
+    }
+
+    VLOG(REPORT,
+         "[GCV2][markpar][striped] workers_active=%zu workers_scheduled=%d stripes=%zu stripe_shift=%zu "
+         "objects_marked=[%s] reachable_n=%zu parallel=1",
+         active, workers, stripeCount, kMarkStripeShift, markedStr.c_str(), reachableVec.size());
+}
+
 void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                    MinorSlotSet& weakSlots, bool useBitmapLedger)
@@ -3569,6 +4084,10 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     GCThreadPool* threadPool = GetThreadPool();
     static const bool forceSerialEnv = []() {
         const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool stripedEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_STRIPED");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
@@ -3583,6 +4102,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
              "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
              "reachable_n=%zu parallel=0",
              reachableVec.size(), reachableVec.size());
+        return;
+    }
+    if (stripedEnv) {
+        TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                 useBitmapLedger, threadPool);
         return;
     }
     TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
