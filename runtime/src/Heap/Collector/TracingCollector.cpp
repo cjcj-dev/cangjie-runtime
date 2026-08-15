@@ -13,6 +13,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -508,6 +509,39 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     DerivedPtrDebugVisitor derivedPtrDebugFunc = nullptr;
 #endif
     DLOG(ENUM, "visit heap-ref 0x%zx-@0x%zx, fp 0x%zx", startIP, frameIP, frameAddress);
+    if (UNLIKELY(EnumPushDiag::Enabled())) {
+        static thread_local char enumpushNameBuf[256];
+        enumpushNameBuf[0] = '\0';
+        CString fname = frame.GetFuncName();
+        if (fname.Str() != nullptr) {
+            std::strncpy(enumpushNameBuf, fname.Str(), sizeof(enumpushNameBuf) - 1);
+            enumpushNameBuf[sizeof(enumpushNameBuf) - 1] = '\0';
+        }
+        EnumPushDiag::NoteFrame(startIP, frameIP, frameAddress, 1, heapMap.IsValid() ? 1 : 0, 0, 0, enumpushNameBuf);
+#if defined(GCINFO_DEBUG) && GCINFO_DEBUG
+        auto prevSlot = slotDebugFunc;
+        slotDebugFunc = [prevSlot, frameAddress](SlotBias off, const BaseObject* root) {
+            EnumPushDiag::NoteMapSlot(frameAddress, off, const_cast<BaseObject*>(root));
+            if (prevSlot) {
+                prevSlot(off, root);
+            }
+        };
+        auto prevReg = regDebugFunc;
+        regDebugFunc = [prevReg, frameAddress](RegisterNum i, const BaseObject* root) {
+            EnumPushDiag::NoteMapReg(frameAddress, static_cast<int>(i), const_cast<BaseObject*>(root));
+            if (prevReg) {
+                prevReg(i, root);
+            }
+        };
+#else
+        slotDebugFunc = [frameAddress](SlotBias off, zaddress_unsafe root) {
+            EnumPushDiag::NoteMapSlot(frameAddress, off, reinterpret_cast<BaseObject*>(raw(root)));
+        };
+        regDebugFunc = [frameAddress](RegisterNum i, zaddress_unsafe root) {
+            EnumPushDiag::NoteMapReg(frameAddress, static_cast<int>(i), reinterpret_cast<BaseObject*>(raw(root)));
+        };
+#endif
+    }
     if (heapMap.IsValid()) {
         if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
