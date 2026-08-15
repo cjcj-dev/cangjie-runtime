@@ -47,8 +47,10 @@ const char* const kListNames[kListNameCount] = {
     "largeTraceRegions",
 };
 
-// PrepareYoungGarbageCandidates walks these after draining from→unmovable (RegionManager.cpp:505-553).
-// Young on these lists must be in minorCandidateRegions after prepare.
+// PrepareYoungGarbageCandidates walks these after draining the old from-list
+// (RegionManager.cpp, PrepareYoungGarbageCandidates). Young on these lists is in the
+// structural input to candidate selection. Route-destination-held regions are deliberately
+// outside the collection domain and must be accounted separately below.
 bool IsMustCoverList(const char* name)
 {
     return std::strcmp(name, "fromRegionList") == 0 || std::strcmp(name, "unmovableFromRegionList") == 0 ||
@@ -327,14 +329,26 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
     size_t youngCounter = RegionInfo::GetYoungRegionCount();
     size_t youngCounterMismatch = (youngCounter == youngOnLists) ? 0 : 1;
 
-    // R2: must-cover young ⊆ candidates; TL young is whitelist exempt; other young is reported.
-    // Ghost young is an alias of from-list young — skip to avoid double-counting mustCover.
+    // R2: compare inside PrepareYoungGarbageCandidates' admission domain. The old predicate
+    // required every young region on the three walked lists to be a candidate. That silently
+    // assumed there were no legitimate admission exclusions. Route-destination hold added one:
+    // a held young region stays on recentFull/unmovable and must remain outside the CSet while
+    // a published route names its address. Keep those regions out of mustCoverYoung, account
+    // every one, and continue treating any other absence (or a held candidate) as a defect.
+    // Ghost young is an alias of from-list young — skip to avoid double-counting.
+    size_t mustCoverYoungAll = 0;
     size_t mustCoverYoung = 0;
     size_t missingFromCandidates = 0;
     size_t missingRegionsByList[kListNameCount]{};
+    size_t routeHeldExcluded = 0;
+    size_t routeHeldExcludedByList[kListNameCount]{};
     size_t activeYoungExempt = 0;
     size_t otherYoung = 0;
     size_t unexpectedNonYoungCandidates = 0;
+    size_t unexpectedRouteHeldCandidates = 0;
+    constexpr size_t diffSampleLimitPerClass = 8;
+    size_t routeHeldSamples = 0;
+    size_t otherMissingSamples = 0;
     std::unordered_set<RegionInfo*> mustCoverSeen;
 
     for (size_t i = 0; i < kListNameCount; ++i) {
@@ -346,10 +360,40 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
                 if (!mustCoverSeen.insert(region).second) {
                     continue;
                 }
+                ++mustCoverYoungAll;
+                const bool inCandidate = candidates.count(region) != 0;
+                const bool routeDestHeld = region->IsRouteDestHeld();
+                if (routeDestHeld) {
+                    if (!inCandidate) {
+                        ++routeHeldExcluded;
+                        ++routeHeldExcludedByList[i];
+                    }
+                    if (routeHeldSamples < diffSampleLimitPerClass) {
+                        VLOG(REPORT,
+                             "[GCV2][verify][regions-domain-diff-sample] run=%zu region=%p "
+                             "regionStart=%#zx list=%s regionType=%u young=1 candidate=%u "
+                             "routeDestHeld=1 rawPointerObjects=%zu classification=%s",
+                             youngRunIndex, region, region->GetRegionStart(), kListNames[i],
+                             static_cast<unsigned>(region->GetRegionType()), static_cast<unsigned>(inCandidate),
+                             region->GetRawPointerObjectCount(),
+                             inCandidate ? "route-held-candidate" : "route-held-excluded");
+                        ++routeHeldSamples;
+                    }
+                    continue;
+                }
                 ++mustCoverYoung;
-                if (candidates.count(region) == 0) {
+                if (!inCandidate) {
                     ++missingFromCandidates;
                     ++missingRegionsByList[i];
+                    if (otherMissingSamples < diffSampleLimitPerClass) {
+                        VLOG(REPORT,
+                             "[GCV2][verify][regions-domain-diff-sample] run=%zu region=%p "
+                             "regionStart=%#zx list=%s regionType=%u young=1 candidate=0 "
+                             "routeDestHeld=0 rawPointerObjects=%zu classification=unexplained-missing",
+                             youngRunIndex, region, region->GetRegionStart(), kListNames[i],
+                             static_cast<unsigned>(region->GetRegionType()), region->GetRawPointerObjectCount());
+                        ++otherMissingSamples;
+                    }
                 }
             } else if (IsActiveYoungExemptList(kListNames[i])) {
                 ++activeYoungExempt;
@@ -359,8 +403,13 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
         }
     }
     for (RegionInfo* region : candidates) {
-        if (region != nullptr && !region->IsYoungRegion()) {
-            ++unexpectedNonYoungCandidates;
+        if (region != nullptr) {
+            if (!region->IsYoungRegion()) {
+                ++unexpectedNonYoungCandidates;
+            }
+            if (region->IsRouteDestHeld()) {
+                ++unexpectedRouteHeldCandidates;
+            }
         }
     }
 
@@ -382,27 +431,28 @@ void VerifyRegions::VerifyAfterPrepareYoung(RegionManager& manager, const Candid
     uint64_t t1 = TimeUtil::NanoSeconds();
     VLOG(REPORT,
          "[GCV2][verify][regions] point=%s run=%zu phase=after-prepare-young "
-         "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu mustCoverYoung=%zu missing=%zu unexpectedCand=%zu "
+         "env=MRT_GCV2_VERIFY_REGIONS=1 candidates=%zu mustCoverYoung=%zu mustCoverYoungAll=%zu "
+         "routeHeldExcluded=%zu missing=%zu unexpectedCand=%zu unexpectedRouteHeldCand=%zu "
          "activeYoungExempt=%zu otherYoung=%zu youngOnLists=%zu youngCounter=%zu youngCounterMismatch=%zu "
          "multiList=%zu linkBroken=%zu typeMismatch=%zu freeOnList=%zu routeAnom=%zu costNs=%llu",
-         point, youngRunIndex, candidates.size(), mustCoverYoung, missingFromCandidates,
-         unexpectedNonYoungCandidates, activeYoungExempt, otherYoung, youngOnLists, youngCounter,
-         youngCounterMismatch, multiList, linkBrokenTotal, typeMismatchTotal, freeOnListTotal, routeStateAnomalies,
-         static_cast<unsigned long long>(t1 - t0));
+         point, youngRunIndex, candidates.size(), mustCoverYoung, mustCoverYoungAll, routeHeldExcluded,
+         missingFromCandidates, unexpectedNonYoungCandidates, unexpectedRouteHeldCandidates, activeYoungExempt,
+         otherYoung, youngOnLists, youngCounter, youngCounterMismatch, multiList, linkBrokenTotal,
+         typeMismatchTotal, freeOnListTotal, routeStateAnomalies, static_cast<unsigned long long>(t1 - t0));
 
     for (size_t i = 0; i < kListNameCount; ++i) {
-        if (listStats[i].youngCount == 0 && missingRegionsByList[i] == 0) {
+        if (listStats[i].youngCount == 0 && missingRegionsByList[i] == 0 && routeHeldExcludedByList[i] == 0) {
             continue;
         }
         VLOG(REPORT,
-             "[GCV2][verify][regions] LIST_%s regions=%zu young=%zu missingYoungRegions=%zu "
-             "linkBroken=%zu typeMismatch=%zu",
-             kListNames[i], listStats[i].regionCount, listStats[i].youngCount, missingRegionsByList[i],
-             listStats[i].linkBroken, listStats[i].typeMismatch);
+             "[GCV2][verify][regions] LIST_%s regions=%zu young=%zu routeHeldExcludedYoung=%zu "
+             "missingYoungRegions=%zu linkBroken=%zu typeMismatch=%zu",
+             kListNames[i], listStats[i].regionCount, listStats[i].youngCount, routeHeldExcludedByList[i],
+             missingRegionsByList[i], listStats[i].linkBroken, listStats[i].typeMismatch);
     }
 
-    bool failed = missingFromCandidates != 0 || unexpectedNonYoungCandidates != 0 || multiList != 0 ||
-        linkBrokenTotal != 0;
+    bool failed = missingFromCandidates != 0 || unexpectedNonYoungCandidates != 0 ||
+        unexpectedRouteHeldCandidates != 0 || multiList != 0 || linkBrokenTotal != 0;
     if (failed) {
         ReportAndMaybeAbort(true, "region-set invariants violated after prepare-young");
     }
