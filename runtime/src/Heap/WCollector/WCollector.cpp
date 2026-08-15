@@ -6464,10 +6464,10 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
 
     MinorObjectSet reachable;
     MinorObjectSet expectedYoung;
-    MinorObjectSet reachableSet;
-    if (requireMinorClosure) {
+    MinorObjectSet minorClosureSet;
+    if (requireMinorClosure || (useIndependent && useBitmap)) {
         for (BaseObject* object : reachableVec) {
-            reachableSet.insert(object);
+            minorClosureSet.insert(object);
         }
     }
     if (useIndependent) {
@@ -6526,7 +6526,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
                 if (useIndependent && expectedYoung.count(object) == 0) {
                     bad = true;
                 }
-                if (requireMinorClosure && reachableSet.count(object) == 0) {
+                if (requireMinorClosure && minorClosureSet.count(object) == 0) {
                     bad = true;
                 }
                 if (bad) {
@@ -6537,14 +6537,54 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
     }
 
     size_t missingYoung = 0;
+    size_t expectedCandidateYoung = 0;
+    size_t expectedOffCandidateYoung = 0;
+    size_t offCandidateMarked = 0;
+    size_t offCandidateMinorClosure = 0;
+    size_t offCandidateAllocationRoot = 0;
+    size_t offCandidateRouteDestHeld = 0;
+    constexpr size_t diffSampleLimitPerClass = 4;
+    size_t diffSamples = 0;
+    size_t diffRouteHeldSamples = 0;
+    size_t diffOtherSamples = 0;
     if (useIndependent) {
         for (BaseObject* object : expectedYoung) {
             RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            const bool inCandidate = minorCandidateRegions.count(region) != 0;
+            if (inCandidate) {
+                ++expectedCandidateYoung;
+            } else {
+                ++expectedOffCandidateYoung;
+                const bool marked = region->IsMarkedObject(object);
+                const bool inMinorClosure = minorClosureSet.count(object) != 0;
+                const bool allocationRoot = allocationRoots.count(object) != 0;
+                const bool routeDestHeld = region->IsRouteDestHeld();
+                offCandidateMarked += static_cast<size_t>(marked);
+                offCandidateMinorClosure += static_cast<size_t>(inMinorClosure);
+                offCandidateAllocationRoot += static_cast<size_t>(allocationRoot);
+                offCandidateRouteDestHeld += static_cast<size_t>(routeDestHeld);
+                size_t& classSamples = routeDestHeld ? diffRouteHeldSamples : diffOtherSamples;
+                if (classSamples < diffSampleLimitPerClass) {
+                    TypeInfo* ti = object->GetTypeInfo();
+                    VLOG(REPORT,
+                         "[GCV2][verify][young-marking-diff-sample] run=%zu obj=%p typeInfo=%p typeName=%s "
+                         "region=%p regionStart=%#zx regionType=%u reachable=1 young=%u marked=%u candidate=0 "
+                         "inMinorClosure=%u allocationRoot=%u routeDestHeld=%u markOrigin=%s",
+                         minorTotalRuns + 1, object, ti, ti == nullptr ? "<null>" : ti->GetName(), region,
+                         region->GetRegionStart(), static_cast<unsigned>(region->GetRegionType()),
+                         static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(marked),
+                         static_cast<unsigned>(inMinorClosure), static_cast<unsigned>(allocationRoot),
+                         static_cast<unsigned>(routeDestHeld),
+                         inMinorClosure ? "minor-closure" : (marked ? "bitmap-preexisting-or-nonclosure" : "none"));
+                    ++diffSamples;
+                    ++classSamples;
+                }
+            }
             bool missing = false;
             if (useBitmap && !region->IsMarkedObject(object)) {
                 missing = true;
             }
-            if (requireMinorClosure && reachableSet.count(object) == 0) {
+            if (requireMinorClosure && minorClosureSet.count(object) == 0) {
                 missing = true;
             }
             if (missing) {
@@ -6553,24 +6593,35 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
         }
     }
 
+    if (useIndependent && useBitmap) {
+        VLOG(REPORT,
+             "[GCV2][verify][young-marking-domain] run=%zu expectedAll=%zu expectedCandidate=%zu "
+             "expectedOffCandidate=%zu offCandidateMarked=%zu offCandidateMinorClosure=%zu "
+             "offCandidateAllocationRoot=%zu offCandidateRouteDestHeld=%zu samples=%zu",
+             minorTotalRuns + 1, expectedYoung.size(), expectedCandidateYoung, expectedOffCandidateYoung,
+             offCandidateMarked, offCandidateMinorClosure, offCandidateAllocationRoot,
+             offCandidateRouteDestHeld, diffSamples);
+    }
+
     size_t matchCount = (actualYoung >= unexpectedYoung) ? (actualYoung - unexpectedYoung) : 0;
-    size_t expectedSize = useIndependent ? expectedYoung.size() : actualYoung;
+    size_t expectedSize = useIndependent ? (useBitmap ? expectedCandidateYoung : expectedYoung.size()) : actualYoung;
     VLOG(REPORT,
          "[GCV2][verify][young-marking] run=%zu phase=post-trace env=MRT_GCV2_VERIFY_YOUNG_MARKING=1 "
          "markSource=%s mark-equivalence=%zu/%zu missing=%zu unexpected=%zu "
-         "requireMinorClosure=%u",
+         "expectedAll=%zu expectedOffCandidate=%zu requireMinorClosure=%u",
          minorTotalRuns + 1, VerifyMarkSourceName(markSource), matchCount, expectedSize, missingYoung,
-         unexpectedYoung, static_cast<unsigned>(requireMinorClosure));
+         unexpectedYoung, expectedYoung.size(), expectedOffCandidateYoung,
+         static_cast<unsigned>(requireMinorClosure));
     if (markSource == VerifyMarkSource::IndependentRetrace || markSource == VerifyMarkSource::RegionMarkBitmap) {
         // Single-source modes only report; cross-check needs two sides.
         return;
     }
     CHECK_DETAIL(missingYoung == 0 && unexpectedYoung == 0 &&
-                     (!useIndependent || !useBitmap || actualYoung == expectedYoung.size()),
-                 "minor marking differs from full marking: actual=%zu expected=%zu missing=%zu unexpected=%zu "
-                 "markSource=%s",
-                 actualYoung, expectedYoung.size(), missingYoung, unexpectedYoung,
-                 VerifyMarkSourceName(markSource));
+                     (!useIndependent || !useBitmap || actualYoung == expectedCandidateYoung),
+                 "minor marking differs from full marking: actualCandidate=%zu expectedCandidate=%zu "
+                 "expectedAll=%zu expectedOffCandidate=%zu missing=%zu unexpected=%zu markSource=%s",
+                 actualYoung, expectedCandidateYoung, expectedYoung.size(), expectedOffCandidateYoung,
+                 missingYoung, unexpectedYoung, VerifyMarkSourceName(markSource));
 }
 
 void WCollector::FlushAllocationRegions()
