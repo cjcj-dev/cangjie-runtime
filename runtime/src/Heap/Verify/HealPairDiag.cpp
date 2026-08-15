@@ -1011,6 +1011,10 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
         DumpHolder("curThr", threadPeeled);
     }
 
+    if (rdi >= 64 && Heap::IsHeapAddress(rdi - 64)) {
+        DumpHolder("rdiM64", rdi - 64);
+    }
+
     JoinCopyAndZero(r14);
 }
 
