@@ -1601,11 +1601,16 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
 
 void RegionManager::ForwardFromRegions()
 {
-    RegionInfo* fromRegion = fromRegionList.GetHeadRegion();
-    while (fromRegion != nullptr) {
-        MRT_ASSERT(fromRegion->IsValidRegion(), "the head region of fromRegionList is invalid");
-        RegionInfo* region = fromRegion;
-        fromRegion = fromRegion->GetNextRegion();
+    // Use the same ownership transition as ForwardTask.  Walking the linked
+    // list in place leaves a forwarded region attached as FROM_REGION, so the
+    // next young cycle can revisit stale list state.  A zero-helper execution
+    // is serial, but it must still detach and mark each unit LONE_FROM_REGION.
+    while (true) {
+        RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
+        if (region == nullptr) {
+            break;
+        }
+        MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
         ForwardRegion(region);
     }
 

@@ -112,6 +112,11 @@ void CollectorResources::StopGCThreads()
         delete gcThreadPool;
         gcThreadPool = nullptr;
     }
+    if (evacuationThreadPool != nullptr) {
+        evacuationThreadPool->Exit();
+        delete evacuationThreadPool;
+        evacuationThreadPool = nullptr;
+    }
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
@@ -269,6 +274,31 @@ void CollectorResources::StartGCThreads()
              useJvmThreads);
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
+
+        // evacpar: copy already owns work by region, but the shared product pool
+        // is normally fixed at two total workers.  A dedicated opt-in pool lets
+        // the copy phase scale without also widening ref-fix/mark work.  Unset,
+        // malformed, one, and out-of-affinity values preserve the old pool.
+        const char* evacWorkersEnv = std::getenv("MRT_GCV2_EVACPAR_WORKERS");
+        if (evacWorkersEnv != nullptr && evacWorkersEnv[0] != '\0') {
+            char* end = nullptr;
+            long requested = std::strtol(evacWorkersEnv, &end, 10);
+            bool valid = end != evacWorkersEnv && *end == '\0' && requested >= 2 &&
+                static_cast<unsigned long>(requested) <= activeProcessorCount;
+            if (valid) {
+                int32_t evacHelpers = static_cast<int32_t>(requested) - 1;
+                evacuationThreadPool =
+                    new (std::nothrow) GCThreadPool("evac", evacHelpers, GCPoolThread::GC_THREAD_STW_PRIORITY);
+                CHECK_DETAIL(evacuationThreadPool != nullptr, "new evacuation GCThreadPool failed");
+                VLOG(REPORT,
+                     "[GCV2][evacpar][config] workers=%ld activeProcessorCount=%u dedicated=1",
+                     requested, activeProcessorCount);
+            } else {
+                VLOG(REPORT,
+                     "[GCV2][evacpar][config] invalid workers=%s activeProcessorCount=%u dedicated=0",
+                     evacWorkersEnv, activeProcessorCount);
+            }
+        }
     }
 
     // create the collector thread.
