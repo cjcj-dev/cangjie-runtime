@@ -30,6 +30,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
+#include "Heap/Verify/PinFireDiag.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -433,6 +434,7 @@ public:
         CHECK(rawAddr == 0 || (rawAddr >> 48) == 0);
         RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->IncRawPointerObjectCount();
+        PinFireDiag::NoteAddRawPointer();
         if (region->IsFromRegion() && fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                            RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
             GCPhase phase = Heap::GetHeap().GetGCPhase();

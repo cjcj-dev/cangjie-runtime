@@ -1627,6 +1627,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     // pinroot: raw-pointer pin is a liveness hold — do not free any slot while count > 0.
     // AddRawPointerObject only bumps this counter (no mark bit / root set); reclaim must honour it.
     if (region->GetRawPointerObjectCount() > 0) {
+        PinFireDiag::NoteSkipFreeSlots(region);
         return 0;
     }
     // traverse pinned region to reclaim free pinned objects.
@@ -1651,6 +1652,7 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
 
 size_t RegionManager::CollectPinnedGarbage()
 {
+    PinFireDiag::NoteCollectPinnedGarbage();
     {
         std::lock_guard<std::mutex> lock(freePinnedSlotListMutex);
         freePinnedSlotLists.Clear();
@@ -1660,6 +1662,7 @@ size_t RegionManager::CollectPinnedGarbage()
     while (region != nullptr) {
         // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
         if (region->GetRawPointerObjectCount() > 0) {
+            PinFireDiag::NoteSkipRegion(region);
             region = region->GetNextRegion();
             continue;
         }
@@ -1678,6 +1681,7 @@ size_t RegionManager::CollectPinnedGarbage()
             region = region->GetNextRegion();
         }
     }
+    PinFireDiag::Report("post-CollectPinnedGarbage");
     return garbageSize;
 }
 
