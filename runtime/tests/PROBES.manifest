@@ -67,4 +67,5 @@ rtown_mtable_publish_unit.cpp             orphan     no runner; BUG-18 MTable pu
 rtown_functable_cache_unit.cpp            orphan     no runner; BUG-19 functable cache UAF unit
 
 gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
+gcparity                                  manual     built runtime SO + official control SO + cpuset; REPORT-gcparity release matrix (run_matrix.sh)
 interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)
