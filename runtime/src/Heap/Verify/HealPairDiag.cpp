@@ -1,6 +1,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 
 #include <atomic>
+#include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -974,7 +975,7 @@ void JoinCopyAndZero(uintptr_t holder)
     }
 }
 
-void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
+void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14, uintptr_t rbp)
 {
     if (!GateOn()) {
         return;
@@ -992,8 +993,10 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
     DumpHolder("r14", r14);
 
     uintptr_t threadRaw = 0;
+    uintptr_t lwt = 0;
     void* arg = CJ_CJThreadGetArg();
     if (arg != nullptr) {
+        lwt = reinterpret_cast<uintptr_t>(arg);
         threadRaw = reinterpret_cast<uintptr_t>(static_cast<LWTData*>(arg)->threadObject);
     }
     uintptr_t threadPeeled = threadRaw & 0xffffffffffffULL;
@@ -1009,6 +1012,76 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14)
     }
     if (threadPeeled != 0 && threadPeeled != rdi) {
         DumpHolder("curThr", threadPeeled);
+    }
+
+    uintptr_t slotAddr = (lwt != 0) ? (lwt + offsetof(LWTData, threadObject)) : 0;
+    uintptr_t slotRaw = threadRaw;
+    unsigned slotGhost = 0;
+    unsigned slotInHeap = 0;
+    unsigned fromGhost = 0;
+    unsigned fromRoute = 255;
+    unsigned fromLive0 = 0;
+    uintptr_t fromStart = 0;
+    uintptr_t fromEnd = 0;
+    uintptr_t planTo1 = 0;
+    uint32_t planTo1Used = 0;
+    uint32_t planTo2Idx = 0;
+    uintptr_t routed = 0;
+    unsigned routedEqRdi = 0;
+    unsigned latestEqRdi = 0;
+    unsigned keepFrom = 0;
+    uintptr_t retAddr = 0;
+    if (rbp > 8) {
+        uintptr_t words[1] = { 0 };
+        if (CopyWords(rbp + 8, words, 1)) {
+            retAddr = words[0];
+        }
+    }
+    if (threadPeeled != 0 && Heap::IsHeapAddress(threadPeeled)) {
+        slotInHeap = 1;
+        BaseObject* fromObj = reinterpret_cast<BaseObject*>(threadPeeled);
+        slotGhost = RegionInfo::InGhostFromRegion(fromObj) ? 1U : 0U;
+        RegionInfo* ghostReg = RegionInfo::GetGhostFromRegionAt(threadPeeled);
+        if (ghostReg != nullptr) {
+            fromGhost = 1;
+            fromRoute = static_cast<unsigned>(ghostReg->GetRouteState());
+            fromStart = ghostReg->GetRegionStart();
+            fromEnd = ghostReg->GetRegionEnd();
+            fromLive0 = ghostReg->GetLiveInfo0ForProbe() != nullptr ? 1U : 0U;
+            RouteInfo plan = ghostReg->GetRouteInfoForProbe();
+            planTo1 = plan.toRegion1StartAddress;
+            planTo1Used = plan.GetToRegion1UsedBytes();
+            planTo2Idx = plan.GetToRegion2Idx();
+            BaseObject* to = ghostReg->GetRouteForProbe(fromObj);
+            if (to != nullptr) {
+                routed = reinterpret_cast<uintptr_t>(to);
+                routedEqRdi = (routed == rdi) ? 1U : 0U;
+            }
+        }
+        if (Runtime::CurrentRef() != nullptr) {
+            BaseObject* latest = Heap::GetHeap().GetCollector().FindLatestVersion(fromObj);
+            if (latest != nullptr) {
+                uintptr_t latestAddr = reinterpret_cast<uintptr_t>(latest);
+                latestEqRdi = (latestAddr == rdi) ? 1U : 0U;
+                keepFrom = (latestAddr == threadPeeled) ? 1U : 0U;
+            }
+        }
+    }
+    char srcLine[640];
+    int sn = sprintf_s(srcLine, sizeof(srcLine),
+                       "[GCV2][staleref] rdi=%#zx slot=%#zx slotRaw=%#zx slotInHeap=%u slotGhost=%u "
+                       "fromGhost=%u fromRoute=%u fromLive0=%u from=[%#zx,%#zx) "
+                       "planTo1=%#zx planTo1Used=%u planTo2Idx=%u routed=%#zx routedEqRdi=%u "
+                       "latestEqRdi=%u keepFrom=%u ret=%#zx rbp=%#zx\n",
+                       rdi, slotAddr, slotRaw, slotInHeap, slotGhost,
+                       fromGhost, fromRoute, fromLive0, fromStart, fromEnd,
+                       planTo1, planTo1Used, planTo2Idx, routed, routedEqRdi,
+                       latestEqRdi, keepFrom, retAddr, rbp);
+    if (sn > 0) {
+        WriteLine(srcLine, static_cast<size_t>(sn));
+    }
+    if (routed != 0 && routed != rdi && routed != threadPeeled) {
+        DumpHolder("routed", routed);
     }
 
     if (rdi >= 64 && Heap::IsHeapAddress(rdi - 64)) {
