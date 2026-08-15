@@ -36,6 +36,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/HdrWhoDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
 extern "C" void __gcov_dump(void);
@@ -230,6 +231,7 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         TlRawDiag::NoteCrashRdi(rdi);
         StartWhoDiag::NoteCrash();
         HealPairDiag::NoteCrashRdi(rdi);
+        HdrWhoDiag::NoteCrashRdi(rdi);
         HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
 #endif
     }

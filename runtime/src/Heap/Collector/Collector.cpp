@@ -20,6 +20,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace {
@@ -182,6 +183,9 @@ bool PlausibleManagedObjectGatePure(BaseObject* obj)
     if (Heap::IsHeapAddress(tipAddr)) {
         return false;
     }
+    if (!TypeInfoManager::GetTypeInfoManager().IsResidentTypeInfoAddress(tipAddr)) {
+        return false;
+    }
     return true;
 }
 
@@ -200,11 +204,14 @@ bool TipWordLooksLikeTypeInfo(uintptr_t tipAddr)
     if (Heap::IsHeapAddress(tipAddr)) {
         return false;
     }
+    if (!TypeInfoManager::GetTypeInfoManager().IsResidentTypeInfoAddress(tipAddr)) {
+        return false;
+    }
     return true;
 }
 
-// If obj is interior into a managed object, return offset (8/16/24/32) else 0.
-// Only peeks tip at obj-k; never walks payload.
+// If obj is interior into a managed object, return offset (8..64) else 0.
+// Only peeks tip at obj-k; never walks payload. n7 GetSize crash was +40.
 unsigned ClassifyInteriorOffset(BaseObject* obj)
 {
     auto base = reinterpret_cast<uintptr_t>(obj);
@@ -214,7 +221,7 @@ unsigned ClassifyInteriorOffset(BaseObject* obj)
         return 0;
     }
     unsigned offset = 0;
-    for (unsigned k : { 8u, 16u, 24u, 32u }) {
+    for (unsigned k : { 8u, 16u, 24u, 32u, 40u, 48u, 56u, 64u }) {
         if (base < k) {
             continue;
         }
@@ -512,6 +519,11 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
                 // TypeInfo lives in binary / TypeInfoManager mmap, never in managed heap.
                 // Heap tip ⇒ interior into another object (classic B-4 shape).
                 reason = "tip-in-heap";
+            } else if (!TypeInfoManager::GetTypeInfoManager().IsResidentTypeInfoAddress(tipAddr)) {
+                // ASCII / leftover payload can look like a 48-bit pointer
+                // (aligned, ≥4GiB, low32≠0, not in heap). Residence is the
+                // positive contract that rejects those without relaxing the gate.
+                reason = "tip-not-resident";
             }
             if (reason != nullptr) {
                 product = false;

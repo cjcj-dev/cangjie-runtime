@@ -1625,6 +1625,9 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     region->VisitAllObjects([this, region, start, &garbageSize](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
         if (!region->IsSurvivedObject(offset)) {
+            if (!Collector::PlausibleManagedObjectGate("CollectFreePinnedSlots", object)) {
+                return;
+            }
             size_t objSize = object->GetSize();
             DLOG(ALLOC, "reclaim pinned obj %p<%p>(%zu)", object, object->GetTypeInfo(), objSize);
             garbageSize += objSize;

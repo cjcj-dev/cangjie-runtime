@@ -40,6 +40,7 @@ set(SRC_LIST
     "TlRawDiag.cpp"
     "StartWhoDiag.cpp"
     "HealPairDiag.cpp"
+    "HdrWhoDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
