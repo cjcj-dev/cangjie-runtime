@@ -760,6 +760,9 @@ public:
 
     bool EnqueueObject(const BaseObject* obj, size_t offset)
     {
+        if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
+            return true;
+        }
         if (IsLargeRegion()) {
             if (metadata.isEnqueued != 1) {
                 SetEnqueuedRegionFlag(1);
@@ -2214,10 +2217,10 @@ private:
         GCPhase phase = Heap::GetHeap().GetGCPhase();
         LOG(RTLOG_FATAL,
             "[GCV2][sizeguard][INVALID_OBJECT_SIZE] obj=%p objSize=%zu region=%p regionStart=%#zx "
-            "regionEnd=%#zx allocPtr=%#zx regionType=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
+            "regionEnd=%#zx allocPtr=%#zx regionType=%u unitRole=%u young=%u phase=%u bitCap=%zu bitIdx=%zu align=%zu",
             obj, objSize, this, regionStart, regionEnd, GetRegionAllocPtr(), static_cast<unsigned>(GetRegionType()),
-            static_cast<unsigned>(IsYoungRegion()), static_cast<unsigned>(phase), bitCapacity, bitIndex,
-            kMarkedBytesPerBit);
+            static_cast<unsigned>(GetUnitRole()), static_cast<unsigned>(IsYoungRegion()),
+            static_cast<unsigned>(phase), bitCapacity, bitIndex, kMarkedBytesPerBit);
         std::abort();
     }
 
