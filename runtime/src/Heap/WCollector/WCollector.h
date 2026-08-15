@@ -597,6 +597,7 @@ private:
                              MinorInteriorBaseMap* interiorBasesOut = nullptr);
     bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr) const;
     bool FixMinorEvacuatedSlot(RootSlot& root) const;
+    bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase) const;
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
