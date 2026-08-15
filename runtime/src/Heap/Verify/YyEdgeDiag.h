@@ -16,6 +16,10 @@ namespace YyEdgeDiag {
 // so H3 can say whether a live holder was in this / previous minor fix set.
 bool Enabled();
 
+// Default off.  MRT_GCV2_RECORD_Y2Y=1 records young→young into remset.
+// Must stay off unless a measurement closes the cost question.
+bool RecordEnabled();
+
 // RecordCrossGenEdge: heap holder in a young region, target young.
 void NoteYoungToYoung(BaseObject* holder, MAddress fieldAddress, BaseObject* ref);
 

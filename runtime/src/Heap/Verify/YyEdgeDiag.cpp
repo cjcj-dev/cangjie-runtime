@@ -70,6 +70,12 @@ bool Enabled()
     return GateOn();
 }
 
+bool RecordEnabled()
+{
+    static const bool on = EnvIsOne("MRT_GCV2_RECORD_Y2Y");
+    return on;
+}
+
 void NoteYoungToYoung(BaseObject* holder, MAddress fieldAddress, BaseObject* ref)
 {
     if (!GateOn()) {

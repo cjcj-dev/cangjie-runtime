@@ -889,6 +889,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (UNLIKELY(YyEdgeDiag::Enabled())) {
                 YyEdgeDiag::NoteYoungToYoung(obj, fieldAddress, ref);
             }
+            if (UNLIKELY(YyEdgeDiag::RecordEnabled())) {
+                theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
+            }
             return;
         }
         theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
