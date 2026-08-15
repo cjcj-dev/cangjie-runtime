@@ -1371,6 +1371,10 @@ bool ScheduleAnyCJThread(ScheduleHandle scheduleHandle)
         if (QueueLength(&processor->runq) != 0) {
             return true;
         }
+        if (atomic_load_explicit(&processor->cjthreadNext, std::memory_order_relaxed) !=
+            static_cast<struct CJThread *>(nullptr)) {
+            return true;
+        }
     }
 
     if (atomic_load(&schedule->lastCJThread) != static_cast<struct CJThread *>(nullptr)) {
