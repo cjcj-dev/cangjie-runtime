@@ -3772,7 +3772,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         RefField<> oldField(field);
         MAddress oldVal = raw(oldField.GetFieldValue());
         if (oldVal != 0) {
-            (void)field.CompareExchange(oldField.GetFieldValue(), 0);
+            (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
         }
         return true;
     };
@@ -5084,7 +5084,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
             (freeOrGarbage->IsFreeRegion() || freeOrGarbage->IsGarbageRegion())) {
             MAddress oldVal = raw(oldField.GetFieldValue());
             if (oldVal != 0) {
-                (void)field.CompareExchange(oldField.GetFieldValue(), 0);
+                (void)field.CompareExchange(oldField.GetFieldValue(), zpointer::null);
             }
             return true;
         }
