@@ -68,6 +68,10 @@ std::atomic<size_t> g_pushN{ 0 };
 std::atomic<size_t> g_markN{ 0 };
 std::atomic<size_t> g_fixN{ 0 };
 std::atomic<size_t> g_fixWroteN{ 0 };
+std::atomic<size_t> g_clearN{ 0 };
+std::atomic<size_t> g_clearHeldN{ 0 };
+std::atomic<size_t> g_clearJiaN{ 0 };
+std::atomic<size_t> g_clearYiN{ 0 };
 std::atomic<bool> g_healthOnce{ false };
 std::atomic<bool> g_atexitOnce{ false };
 
@@ -474,6 +478,88 @@ void NoteFixSlot(const void* slot, BaseObject* target, int wrote, const char* si
     }
 }
 
+void NoteClearRange(uintptr_t start, size_t size)
+{
+    if (!GateOn() || size == 0 || start == 0) {
+        return;
+    }
+    HealthOnce();
+    EnsureAtexit();
+    uintptr_t end = start + size;
+    uint32_t seq = g_seq.load(std::memory_order_relaxed);
+    uint32_t n = g_ringNext.load(std::memory_order_relaxed);
+    uint32_t scan = n < kRingCap ? n : kRingCap;
+    uint32_t printed = 0;
+    uint32_t held = 0;
+    uint32_t jia = 0;
+    uint32_t yi = 0;
+    uint32_t markedHeld = 0;
+    uint32_t enumHeld = 0;
+    uint32_t fixHeld = 0;
+    for (uint32_t i = 0; i < scan; ++i) {
+        const Rec& rec = g_ring[(n - 1 - i) & (kRingCap - 1)];
+        if (rec.target < start || rec.target >= end) {
+            continue;
+        }
+        if (rec.kind != KIND_ENUM && rec.kind != KIND_FIX && rec.kind != KIND_PUSH && rec.kind != KIND_MARK) {
+            continue;
+        }
+        ++held;
+        bool marked = WasMarked(rec.target);
+        Rec slotEnum{};
+        Rec slotFix{};
+        bool haveSlot = rec.slot != 0 && FindSlot(rec.slot, &slotEnum, &slotFix);
+        if (rec.kind == KIND_ENUM || haveSlot) {
+            ++enumHeld;
+        }
+        if (rec.kind == KIND_FIX || slotFix.slot != 0) {
+            ++fixHeld;
+        }
+        if (marked) {
+            ++markedHeld;
+        }
+        const char* verdict = "yi_held_not_enum";
+        if ((rec.kind == KIND_ENUM || haveSlot) && !marked) {
+            verdict = "jia_enum_nomark";
+            ++jia;
+        } else if (rec.kind == KIND_ENUM && marked && rec.kind != KIND_FIX && slotFix.slot == 0) {
+            verdict = "yi_prime_enum_nofix";
+            ++yi;
+        } else if (rec.kind != KIND_ENUM && !haveSlot) {
+            verdict = "yi_held_not_enum";
+            ++yi;
+        } else if (marked) {
+            verdict = "enum_and_mark";
+        }
+        if (printed < 8) {
+            char line[512];
+            int wn = sprintf_s(line, sizeof(line),
+                               "[GCV2][heldfree] clearJoin start=%#zx end=%#zx slot=%#zx target=%#zx kind=%u "
+                               "wrote=%u seq=%u site=%s marked=%u verdict=%s\n",
+                               start, end, rec.slot, rec.target, rec.kind, rec.wrote, rec.seq,
+                               rec.site != nullptr ? rec.site : "none", marked ? 1U : 0U, verdict);
+            if (wn > 0) {
+                WriteLine(line, static_cast<size_t>(wn));
+            }
+            ++printed;
+        }
+    }
+    g_clearN.fetch_add(1, std::memory_order_relaxed);
+    g_clearHeldN.fetch_add(held, std::memory_order_relaxed);
+    g_clearJiaN.fetch_add(jia, std::memory_order_relaxed);
+    g_clearYiN.fetch_add(yi, std::memory_order_relaxed);
+    if (held > 0 || (g_clearN.load(std::memory_order_relaxed) <= 4)) {
+        char sum[384];
+        int sn = sprintf_s(sum, sizeof(sum),
+                           "[GCV2][heldfree] clearSummary start=%#zx size=%zx seq=%u printed=%u held=%u "
+                           "enumHeld=%u fixHeld=%u markedHeld=%u jia=%u yi=%u\n",
+                           start, size, seq, printed, held, enumHeld, fixHeld, markedHeld, jia, yi);
+        if (sn > 0) {
+            WriteLine(sum, static_cast<size_t>(sn));
+        }
+    }
+}
+
 void NoteCrashRegs(uintptr_t rax, uintptr_t rbx, uintptr_t rcx, uintptr_t rdx, uintptr_t rsi, uintptr_t rdi,
                    uintptr_t r12, uintptr_t r14, uintptr_t rbp)
 {
@@ -484,10 +570,13 @@ void NoteCrashRegs(uintptr_t rax, uintptr_t rbx, uintptr_t rcx, uintptr_t rdx, u
     char line[384];
     int n = sprintf_s(line, sizeof(line),
                       "[GCV2][heldfree] crash seq=%u enumN=%zu pushN=%zu markN=%zu fixN=%zu fixWrote=%zu "
+                      "clearN=%zu clearHeld=%zu clearJia=%zu clearYi=%zu "
                       "rax=%#zx rbx=%#zx rcx=%#zx rdx=%#zx rsi=%#zx rdi=%#zx r12=%#zx r14=%#zx rbp=%#zx\n",
                       g_seq.load(std::memory_order_relaxed), g_enumN.load(std::memory_order_relaxed),
                       g_pushN.load(std::memory_order_relaxed), g_markN.load(std::memory_order_relaxed),
-                      g_fixN.load(std::memory_order_relaxed), g_fixWroteN.load(std::memory_order_relaxed), rax, rbx,
+                      g_fixN.load(std::memory_order_relaxed), g_fixWroteN.load(std::memory_order_relaxed),
+                      g_clearN.load(std::memory_order_relaxed), g_clearHeldN.load(std::memory_order_relaxed),
+                      g_clearJiaN.load(std::memory_order_relaxed), g_clearYiN.load(std::memory_order_relaxed), rax, rbx,
                       rcx, rdx, rsi, rdi, r12, r14, rbp);
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
@@ -510,11 +599,13 @@ void Report(const char* point)
     }
     LOG(RTLOG_ERROR,
         "[GCV2][heldfree] report point=%s seq=%u enumN=%zu pushN=%zu markN=%zu fixN=%zu "
-        "fixWrote=%zu env=MRT_GCV2_HELDFREE=1",
+        "fixWrote=%zu clearN=%zu clearHeld=%zu clearJia=%zu clearYi=%zu env=MRT_GCV2_HELDFREE=1",
         point != nullptr ? point : "none", g_seq.load(std::memory_order_relaxed),
         g_enumN.load(std::memory_order_relaxed), g_pushN.load(std::memory_order_relaxed),
         g_markN.load(std::memory_order_relaxed), g_fixN.load(std::memory_order_relaxed),
-        g_fixWroteN.load(std::memory_order_relaxed));
+        g_fixWroteN.load(std::memory_order_relaxed), g_clearN.load(std::memory_order_relaxed),
+        g_clearHeldN.load(std::memory_order_relaxed), g_clearJiaN.load(std::memory_order_relaxed),
+        g_clearYiN.load(std::memory_order_relaxed));
 }
 
 } // namespace HeldFreeDiag

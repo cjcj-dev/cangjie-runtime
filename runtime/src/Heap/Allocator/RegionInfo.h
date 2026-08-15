@@ -41,6 +41,7 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
@@ -1099,6 +1100,7 @@ public:
              RegionInfo::GetUnitAddress(idx + cnt));
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
         TraceClear::NoteRange(static_cast<MAddress>(unitAddress), size, "clear_units", nullptr, 0);
+        HeldFreeDiag::NoteClearRange(unitAddress, size);
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
