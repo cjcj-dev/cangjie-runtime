@@ -7,6 +7,7 @@
 
 #include "CopyCollector.h"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 
@@ -119,10 +120,14 @@ void CopyCollector::ForwardFromSpace()
     GarbRegionDiag::CensusBeforeForward("pre-forward");
     GCThreadPool* copyPool = GetThreadPool();
     const char* poolKind = "shared";
+    int32_t previousActiveHelpers = 0;
+    bool restoreActiveHelpers = false;
     if (gcReason == GC_REASON_YOUNG) {
         const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
         const bool forceSerial =
             forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
+        const char* workGateEnv = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
+        const bool workGate = workGateEnv != nullptr && std::strcmp(workGateEnv, "1") == 0;
         GCThreadPool* evacuationPool = collectorResources.GetEvacuationThreadPool();
         if (forceSerial) {
             copyPool = nullptr;
@@ -131,13 +136,35 @@ void CopyCollector::ForwardFromSpace()
             copyPool = evacuationPool;
             poolKind = "dedicated";
         }
+
+        const int32_t maxWorkers = copyPool == nullptr ? 1 : copyPool->GetMaxThreadNum() + 1;
+        int32_t workers = maxWorkers;
+        constexpr size_t bytesPerWorker = 1 * MB;
+        if (!forceSerial && workGate) {
+            const size_t workersForBytes = std::max<size_t>(stats.fromSpaceSize / bytesPerWorker, 1);
+            workers = static_cast<int32_t>(std::min<size_t>(workersForBytes, static_cast<size_t>(maxWorkers)));
+            if (workers == 1) {
+                copyPool = nullptr;
+                poolKind = "serial";
+            } else {
+                previousActiveHelpers = copyPool->GetMaxActiveThreadNum();
+                const int32_t activeHelpers = workers - 1;
+                if (activeHelpers != previousActiveHelpers) {
+                    copyPool->SetMaxActiveThreadNum(activeHelpers);
+                    restoreActiveHelpers = true;
+                }
+            }
+        }
         VLOG(REPORT,
-             "[GCV2][evacpar][copy] parallel=%u workers=%d pool=%s forceSerial=%u",
-             static_cast<unsigned>(copyPool != nullptr),
-             copyPool == nullptr ? 1 : copyPool->GetMaxThreadNum() + 1, poolKind,
-             static_cast<unsigned>(forceSerial));
+             "[GCV2][evacpar][copy] parallel=%u workers=%d bytes=%zu bytesPerWorker=%zu maxWorkers=%d "
+             "pool=%s forceSerial=%u workGate=%u",
+             static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
+             poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
     }
     space.ForwardFromSpace(copyPool);
+    if (restoreActiveHelpers) {
+        copyPool->SetMaxActiveThreadNum(previousActiveHelpers);
+    }
 }
 
 void CopyCollector::RefineFromSpace()
