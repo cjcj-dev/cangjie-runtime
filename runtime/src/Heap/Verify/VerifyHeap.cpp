@@ -28,6 +28,24 @@ namespace {
 constexpr size_t kSampleLimit = 8;
 constexpr size_t kDefaultMaxFailures = 20;
 
+// Same floor as Collector.cpp:97 TipWordLooksLikeTypeInfo / RegionInfo.h:1211.
+// TypeInfo lives in PIE / TIM mmap, well above 4GiB. A small integer here is
+// payload / interior / leftover, not a TypeInfo. IsVaildType / GetType read
+// type@+8 (TYPE_KIND_MAX=0x18). Observed POST_EVAC crash: tip=0x10 →
+// si_addr=0x18 SEGV_MAPERR (zstripe baseline_serial_post, si_code=1).
+constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
+
+bool TipAddrSafeToDereference(uintptr_t tipAddr)
+{
+    if (tipAddr < kMinPlausibleTypeInfoAddr) {
+        return false;
+    }
+    if ((tipAddr & 0xffffffffULL) == 0) {
+        return false;
+    }
+    return true;
+}
+
 // Defect channel (BAD_OBJ): real invariant-H breaks — invalid-kind / tip-in-heap /
 // null tip / invalid object / bad region / bad ref. INFO channel: typeinfo-misaligned
 // is a true phenomenon but not defect D (gcvtag CORE_PC); keep counting, never filter it out.
@@ -84,9 +102,12 @@ void PushSample(HeapVerifyStats& stats, void* addr)
 //   1) null → DEFECT
 //   2) misaligned → INFO (true phenomenon; not defect D — gcvtag CORE_PC)
 //   3) tip ∈ heap address range → DEFECT (defect D: tip in heap anonymous)
-//   4) !IsVaildType() → DEFECT (type byte ≥ TYPE_KIND_MAX)
-//   5) TypeInfoManager::ContainsAddress(tip) → strongest online positive
-//   6) else non-heap + valid type → accept (static TypeInfo in load module)
+//   4) tip below the product-path floor (Collector.cpp TipWordLooksLikeTypeInfo)
+//      → DEFECT without dereference. Old code called IsVaildType here and SEGV'd
+//      on small-integer tips (postevac: tip=0x10, si_addr=0x18).
+//   5) !IsVaildType() → DEFECT (type byte ≥ TYPE_KIND_MAX)
+//   6) TypeInfoManager::ContainsAddress(tip) → strongest online positive
+//   7) else non-heap + valid type → accept (static TypeInfo in load module)
 // Anchor intent: HotSpot oop verify + our gcvroot tipRegion==HEAP reject.
 // Channel split: VERIFY_HEAP reason reclass (gcvheap2) — misaligned no longer floods BAD_OBJ.
 HeapVerifyChannel CheckTypeInfoRegion(TypeInfo* tip, HeapVerifyStats& stats, const char*& reason)
@@ -105,6 +126,13 @@ HeapVerifyChannel CheckTypeInfoRegion(TypeInfo* tip, HeapVerifyStats& stats, con
     if (Heap::IsHeapAddress(tipAddr)) {
         ++stats.h2TipInHeap;
         reason = "typeinfo-in-heap";
+        return HeapVerifyChannel::Defect;
+    }
+    // Product PlausibleManagedObjectGate rejects this set before any TypeInfo
+    // field load. The verifier must report it, not crash on type@+8.
+    if (!TipAddrSafeToDereference(tipAddr)) {
+        ++stats.h2InvalidTypeKind;
+        reason = "typeinfo-implausible-addr";
         return HeapVerifyChannel::Defect;
     }
     if (!tip->IsVaildType()) {
@@ -221,9 +249,11 @@ int SampleTypeByte(BaseObject* obj)
     }
     TypeInfo* tip = obj->GetTypeInfo();
     uintptr_t tipAddr = reinterpret_cast<uintptr_t>(tip);
-    // Only sample typeByte when tip is aligned — misaligned tip is not a TypeInfo
-    // (typeByte=-128 was a garbage load, not a flag bit; see REPORT-gcvtag).
-    if (tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0) {
+    // Only sample typeByte when tip is a mapped TypeInfo. Misaligned / small-int
+    // / 4GiB-aligned tips are not TypeInfo (typeByte=-128 was a garbage load;
+    // tip=0x10 SEGV'd at type@+8 — see REPORT-gcvtag / postevac).
+    if (tip != nullptr && (tipAddr & StateWord::ADDRESS_ALIGN_MASK) == 0 &&
+        TipAddrSafeToDereference(tipAddr) && !Heap::IsHeapAddress(tipAddr)) {
         return static_cast<int>(tip->GetType());
     }
     return -1;
