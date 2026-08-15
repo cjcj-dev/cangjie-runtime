@@ -69,7 +69,8 @@ void GCStats::Init()
 
 GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
                                                                size_t promotedBytes, size_t candidateBytes,
-                                                               size_t maxCapacity)
+                                                               size_t maxCapacity, uint64_t durationNs,
+                                                               uint64_t heuMinIntervalNs)
 {
     if (candidateBytes == 0) {
         return YoungHeuThrottleDecision::NO_COLLECTION_SET;
@@ -82,6 +83,12 @@ GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestam
         promotedBytes >= majorSafetyLimit - allocatedAfter;
     if (oldPressureHigh) {
         return YoungHeuThrottleDecision::OLD_PRESSURE_HIGH;
+    }
+    // A short minor completed inside the suppression budget that was already
+    // established by the preceding major. Restarting the full window here
+    // would add latency without closing the slow-minor hole.
+    if (durationNs < heuMinIntervalNs) {
+        return YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW;
     }
     if (youngHeuDeferralUsed) {
         return YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED;
@@ -103,6 +110,8 @@ const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decis
             return "deferral-already-used";
         case YoungHeuThrottleDecision::OLD_PRESSURE_HIGH:
             return "old-pressure-high";
+        case YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW:
+            return "within-existing-window";
         default:
             return "invalid";
     }

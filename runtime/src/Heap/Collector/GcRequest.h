@@ -59,6 +59,10 @@ struct GCRequest {
     {
         minIntervelNs.store(intervalNs, std::memory_order_release);
     }
+    uint64_t GetMinInterval() const
+    {
+        return minIntervelNs.load(std::memory_order_acquire);
+    }
     void SetPrevRequestTime(uint64_t timestamp)
     {
         prevRequestTime.store(timestamp, std::memory_order_release);

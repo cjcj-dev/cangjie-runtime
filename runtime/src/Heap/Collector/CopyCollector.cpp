@@ -105,13 +105,16 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     if (reason == GC_REASON_YOUNG) {
         size_t allocatedAfter = Heap::GetHeap().GetAllocatedSize();
         size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
+        uint64_t heuMinInterval = g_gcRequests[GC_REASON_HEU].GetMinInterval();
         GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
-            finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity);
+            finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity,
+            gcTimeNs, heuMinInterval);
         VLOG(REPORT,
              "[GCV2][heu-loop] minor-finish action=%s allocated-after=%zu promoted=%zu "
-             "candidate=%zu major-safety-limit=%zu",
+             "candidate=%zu duration-ns=%llu HEU-min-interval-ns=%llu major-safety-limit=%zu",
              GCStats::YoungHeuThrottleDecisionName(decision), allocatedAfter, gcStats.youngPromotedBytes,
-             gcStats.youngCandidateBytes, maxCapacity / 2);
+             gcStats.youngCandidateBytes, static_cast<unsigned long long>(gcTimeNs),
+             static_cast<unsigned long long>(heuMinInterval), maxCapacity / 2);
     } else {
         gcStats.RecordMajorGCFinish(finishTime);
     }
