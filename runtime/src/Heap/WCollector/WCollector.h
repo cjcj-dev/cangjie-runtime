@@ -583,10 +583,12 @@ private:
                                  const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool);
+                                   MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                   const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                   std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                  MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool);
+                                  MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                  const MinorSlotSet* reachableSlotDomain = nullptr);
     // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
     bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
