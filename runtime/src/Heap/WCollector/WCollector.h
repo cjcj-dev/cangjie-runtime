@@ -575,10 +575,12 @@ private:
     // R3 markpar: STW-parallel claim+steal (sibling of ConcurrentMarkingWork); env MARKPAR_*.
     void TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                           MinorSlotSet& weakSlots, bool useBitmapLedger);
+                           MinorSlotSet& weakSlots, bool useBitmapLedger,
+                           const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                  std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                 MinorSlotSet& weakSlots, bool useBitmapLedger);
+                                 MinorSlotSet& weakSlots, bool useBitmapLedger,
+                                 const MinorSlotSet* reachableSlotDomain = nullptr);
     void TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                    MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool);
