@@ -7379,15 +7379,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
 
     const bool tv = ToverFailDiag::Enabled();
     for (int spins = 0; spins < kMaxSpins; ++spins) {
-        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
-            if (diagOn) {
-                tipReadyCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapWaitTip();
-            }
-            return to; // receipt
-        }
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
             BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
@@ -7419,6 +7410,15 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             return permanentHole(
                 rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
                 spins, again != nullptr ? again : to);
+        }
+        if (!from->GetObjectState().IsLockedState()) {
+            if (diagOn) {
+                giveUpCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapWaitGiveUp();
+            }
+            return from;
         }
         sched_yield();
         to = space.GetRegionManager().RouteObject(from, forwarding);

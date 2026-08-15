@@ -250,8 +250,9 @@ public:
     // route installed by the other generation.
     //
     // permhole receiptization: RouteObject is geometric (ROUTED before Copy fills tip).
-    // Only a tip-valid to is a receipt; null-tip geometric to must not reach self-heal.
-    // WaitRoutedTipReady returns receipt, or from while mid-route, or CHECKs permanent hole.
+    // Receipt is from-FORWARDED (copy + release already happened), not tip-valid.
+    // IsValidObject is only a hole check after FORWARDED. Mid-copy returns to Wait.
+    // WaitRoutedTipReady returns receipt, or from if copy has not started, or CHECKs hole.
     // permhit: WaitRoutedTipReady is reachable from here and nowhere else (Collector.h:169
     // make_load_good is its only caller), so "enter=0" alone cannot say whether the wait was
     // never needed or whether the read barrier never reached this funnel at all. Count each
@@ -330,14 +331,33 @@ public:
             }
             return obj;
         }
-        if (LIKELY(!Heap::IsHeapAddress(to) || to->IsValidObject())) {
+        if (LIKELY(!Heap::IsHeapAddress(to))) {
             if (funnel) {
                 receiptCount.fetch_add(1, std::memory_order_relaxed);
             }
             if (tv) {
                 ToverFailDiag::NoteRemapReceipt();
             }
-            return to; // receipt (or non-heap)
+            return to;
+        }
+        if (obj->IsForwarded() || forwarding->IsCompacted()) {
+            if (to->IsValidObject()) {
+                if (funnel) {
+                    receiptCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (tv) {
+                    ToverFailDiag::NoteRemapReceipt();
+                }
+                return to;
+            }
+        } else if (!obj->GetObjectState().IsLockedState()) {
+            if (funnel) {
+                routeNullCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapRouteNull();
+            }
+            return obj;
         }
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
@@ -417,7 +437,7 @@ protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;
 
-    // waitfwd: spin until geometric to has a tip or from is FORWARDED (see relocate_or_remap).
+    // waitfwd: spin until from is FORWARDED (or region COMPACTED); else return from.
     BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
