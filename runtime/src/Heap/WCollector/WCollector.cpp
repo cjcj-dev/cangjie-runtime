@@ -3621,7 +3621,8 @@ private:
 
 void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                          std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                         MinorSlotSet& weakSlots, bool useBitmapLedger)
+                                         MinorSlotSet& weakSlots, bool useBitmapLedger,
+                                         const MinorSlotSet* reachableSlotDomain)
 {
     // setbitmap O1③: useBitmapLedger=true → claim young via MarkObject (region mark bitmap)
     // + collect into reachableVec; non-young under FYS still uses reachableObjects set.
@@ -3629,6 +3630,14 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
     const bool recordSlots = fullYoungScan; // only FYS path looks up reachableSlots
     const int markCostMode = MarkInternalCost::Mode();
     const uint64_t tSerial0 = (markCostMode == 1) ? TimeUtil::NanoSeconds() : 0;
+    auto recordReachableSlot = [&reachableSlots, reachableSlotDomain](RefField<>& field) {
+        MAddress slot = reinterpret_cast<MAddress>(&field);
+        if (reachableSlotDomain != nullptr && reachableSlotDomain->count(slot) == 0) {
+            return;
+        }
+        (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN, g_minorLedgerCost.slotInsNew,
+                           g_minorLedgerCost.slotInsNs);
+    };
     auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
@@ -3893,10 +3902,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         }
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
-            object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
+            object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
                 if (recordSlots) {
-                    (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
-                                       g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                    recordReachableSlot(field);
                 }
                 pushTarget(field);
             });
@@ -3907,10 +3915,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 g_markInternalCost.scanObjNs += dt;
             }
         } else {
-            object->ForEachRefField([&reachableSlots, &pushTarget, recordSlots](RefField<>& field) {
+            object->ForEachRefField([&recordReachableSlot, &pushTarget, recordSlots](RefField<>& field) {
                 if (recordSlots) {
-                    (void)LedgerInsert(reachableSlots, reinterpret_cast<MAddress>(&field), g_minorLedgerCost.slotInsN,
-                                       g_minorLedgerCost.slotInsNew, g_minorLedgerCost.slotInsNs);
+                    recordReachableSlot(field);
                 }
                 pushTarget(field);
             });
@@ -4165,7 +4172,8 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
 void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                    std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                   MinorSlotSet& weakSlots, bool useBitmapLedger)
+                                   MinorSlotSet& weakSlots, bool useBitmapLedger,
+                                   const MinorSlotSet* reachableSlotDomain)
 {
     if (workStack.empty()) {
         return;
@@ -4181,12 +4189,16 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
+    // markstw: the remset-intersection ledger currently belongs to the serial path.
+    // Parallel paths keep per-worker slot sets and merge them later; forcing serial here
+    // preserves the exact domain filter rather than silently widening its semantics.
+    const bool forceSerialForSlotDomain = reachableSlotDomain != nullptr;
     const bool useParallel = threadPool != nullptr && std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr &&
-                             !forceSerialEnv && !forceSerialForCost;
+                             !forceSerialEnv && !forceSerialForCost && !forceSerialForSlotDomain;
     if (!useParallel) {
         VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                useBitmapLedger);
+                                useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
              "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
              "reachable_n=%zu parallel=0",
@@ -7101,6 +7113,23 @@ void WCollector::DoYoungGarbageCollection()
         const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
+    // markstw: reachableSlots is queried only with members of rememberedSlots in the
+    // non-concurrent FYS path.  Keep the exact intersection instead of materialising
+    // every reachable heap field.  Concurrent young marking is deliberately excluded:
+    // its STW2 admits slots recorded after this initial remset snapshot.
+    static const bool markRemsetIntersectRequested = []() {
+        const char* value = std::getenv("MRT_GCV2_MARK_REMSET_INTERSECT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool markRemsetIntersectActive =
+        markRemsetIntersectRequested && fullYoungScan && !youngConcMark;
+    const MinorSlotSet* reachableSlotDomain = markRemsetIntersectActive ? &rememberedSlots : nullptr;
+    if (markRemsetIntersectRequested) {
+        VLOG(REPORT,
+             "[GCV2][markstw][remset-intersect] requested=1 active=%u remembered=%zu fys=%u youngConc=%u",
+             static_cast<unsigned>(markRemsetIntersectActive), rememberedSlots.size(),
+             static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark));
+    }
     g_minorLedgerCost.Reset();
     g_markInternalCost.Reset();
     {
@@ -7111,7 +7140,7 @@ void WCollector::DoYoungGarbageCollection()
         // ZGC shape: pause_mark_start marks the snapshot; concurrent_mark follows SATB.
         MRT_PHASE_TIMER("young.mark_closure");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                          useBitmapLedger);
+                          useBitmapLedger, reachableSlotDomain);
     }
     g_markInternalCost.Report("mark_closure");
     g_markInternalCost.Reset();
@@ -7197,7 +7226,7 @@ void WCollector::DoYoungGarbageCollection()
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                          useBitmapLedger);
+                          useBitmapLedger, reachableSlotDomain);
     }
     g_markInternalCost.Report("mark_from_remset");
     if (ReffixConcProbeOn()) {
