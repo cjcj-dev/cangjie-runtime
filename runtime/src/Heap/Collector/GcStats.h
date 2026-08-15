@@ -53,13 +53,6 @@ public:
         prevGcFinishTime.store(timestamp, std::memory_order_release);
     }
 
-    static uint64_t GetPrevHeuFinishTime() { return prevHeuFinishTime.load(std::memory_order_acquire); }
-
-    static void SetPrevHeuFinishTime(uint64_t timestamp)
-    {
-        prevHeuFinishTime.store(timestamp, std::memory_order_release);
-    }
-
     YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
                                                  size_t promotedBytes, size_t candidateBytes,
                                                  size_t maxCapacity, uint64_t durationNs,
@@ -69,14 +62,12 @@ public:
     {
         youngHeuDeferralUsed = false;
         SetPrevGCFinishTime(timestamp);
-        SetPrevHeuFinishTime(timestamp);
     }
 
     static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
     static std::atomic<uint64_t> prevGcStartTime;
     static std::atomic<uint64_t> prevGcFinishTime;
-    static std::atomic<uint64_t> prevHeuFinishTime;
 
     GCReason reason;
     bool isConcurrentMark;
