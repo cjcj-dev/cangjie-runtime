@@ -5206,6 +5206,41 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     return true;
 }
 
+bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase) const
+{
+    zaddress_unsafe observed = derived.LoadDerived();
+    if (knownBase == nullptr || is_null(observed)) {
+        return false;
+    }
+    BaseObject* derivedObject = to_object(safe(uncolor_bits(to_zpointer(raw(observed)))));
+    MAddress baseAddress = reinterpret_cast<MAddress>(knownBase);
+    MAddress derivedAddress = reinterpret_cast<MAddress>(derivedObject);
+    if (derivedObject == nullptr || derivedAddress < baseAddress) {
+        return false;
+    }
+    size_t offset = derivedAddress - baseAddress;
+
+    // fixenum: the mark visitor turns a derived pair into a temporary base root. The
+    // fix visitor must instead preserve the pair's offset and rewrite its real slot,
+    // exactly as GCPhasePreForward does after forwarding the host.
+    BaseObject* currentBase = knownBase;
+    if (Heap::IsHeapAddress(knownBase) &&
+        Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.derivedBase", knownBase) &&
+        IsGhostFromObject(knownBase) && !IsUnmovableFromObject(knownBase)) {
+        (void)ForceRootRouteDomainWhileForwardable(const_cast<WCollector*>(this), knownBase);
+        currentBase = const_cast<WCollector*>(this)->ForwardObject(knownBase);
+        if (currentBase == nullptr) {
+            OffpastDiag::NoteFixMissSlot(static_cast<void*>(&derived), knownBase);
+            return false;
+        }
+    }
+
+    RootSlot fixedBase;
+    StorePlain(fixedBase, from_object(currentBase));
+    RebaseDerived(derived, fixedBase, offset);
+    return raw(observed) != raw(derived.LoadDerived());
+}
+
 void WCollector::FixMinorRootSlots()
 {
     size_t callN = g_fixMinorRootSlotsCalls.fetch_add(1, std::memory_order_relaxed);
@@ -5262,11 +5297,24 @@ void WCollector::FixMinorRootSlots()
             HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root");
         }
     };
-    // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
-    // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
-    // stack slots still holding from-copies become the next full's F5 input.
+    DerivedPtrVisitor derivedVisitor = [this](BasePtrType basePtr, DerivedSlot& derived) {
+        BaseObject* knownBase = is_null(basePtr) ? nullptr :
+            to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
+        bool wrote = FixMinorEvacuatedSlot(derived, knownBase);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            zaddress_unsafe value = derived.LoadDerived();
+            BaseObject* target = is_null(value) ? nullptr :
+                to_object(safe(uncolor_bits(to_zpointer(raw(value)))));
+            HeldFreeDiag::NoteFixSlot(&derived, target, wrote ? 1 : 0, "FixMinor.derived");
+        }
+    };
+    // fixenum: VisitMutatorRoots exposes derived pairs only as temporary base roots and
+    // deliberately leaves their real slots for PreForward. Minor fix needs the typed
+    // HeapReferenceMap callback so its root set matches mark without losing writeback.
     MutatorManager::Instance().VisitAllMutators(
-        [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+        [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
+            mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
+        });
     Heap::GetHeap().VisitStaticRoots(rawRootVisitor);
     Runtime::Current().GetConcurrencyModel().VisitGCRoots(&rawRootVisitor);
     collectorResources.GetFinalizerProcessor().VisitRawPointers(rawRootVisitor);
@@ -5388,10 +5436,24 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
             HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root.par");
         }
     };
-    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
+    DerivedPtrVisitor derivedFix = [this](BasePtrType basePtr, DerivedSlot& derived) {
+        BaseObject* knownBase = is_null(basePtr) ? nullptr :
+            to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
+        bool wrote = FixMinorEvacuatedSlot(derived, knownBase);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            zaddress_unsafe value = derived.LoadDerived();
+            BaseObject* target = is_null(value) ? nullptr :
+                to_object(safe(uncolor_bits(to_zpointer(raw(value)))));
+            HeldFreeDiag::NoteFixSlot(&derived, target, wrote ? 1 : 0, "FixMinor.derived.par");
+        }
+    };
+    threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix, derivedFix](size_t) {
         RootVisitor rawRootVisitor = rootFix;
+        DerivedPtrVisitor derivedVisitor = derivedFix;
         MutatorManager::Instance().VisitAllMutators(
-            [&rawRootVisitor](Mutator& mutator) { mutator.VisitMutatorRoots(rawRootVisitor); });
+            [&rawRootVisitor, &derivedVisitor](Mutator& mutator) {
+                mutator.VisitHeapReferences(rawRootVisitor, derivedVisitor);
+            });
     }));
     threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
         RootVisitor rawRootVisitor = rootFix;
