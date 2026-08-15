@@ -27,6 +27,7 @@ public:
         NO_COLLECTION_SET,
         DEFERRAL_ALREADY_USED,
         OLD_PRESSURE_HIGH,
+        WITHIN_EXISTING_HEU_WINDOW,
     };
 
     GCStats() = default;
@@ -54,7 +55,8 @@ public:
 
     YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
                                                  size_t promotedBytes, size_t candidateBytes,
-                                                 size_t maxCapacity);
+                                                 size_t maxCapacity, uint64_t durationNs,
+                                                 uint64_t heuMinIntervalNs);
 
     void RecordMajorGCFinish(uint64_t timestamp)
     {
