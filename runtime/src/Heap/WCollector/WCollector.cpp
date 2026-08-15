@@ -2933,16 +2933,14 @@ public:
         if (!doFork || newSize == 0) {
             return;
         }
-        TracingCollector::WorkStackBuf* hSplit = workStack.split(newSize);
-        size_t childSlot = shared.nextWorkerId.fetch_add(1, std::memory_order_relaxed);
+        size_t childSlot = shared.nextWorkerId.load(std::memory_order_relaxed);
+        while (childSlot < shared.objects.size() &&
+               !shared.nextWorkerId.compare_exchange_weak(childSlot, childSlot + 1, std::memory_order_relaxed)) {
+        }
         if (childSlot >= shared.objects.size()) {
-            TracingCollector::WorkStack child(hSplit);
-            while (!child.empty()) {
-                workStack.push_back(child.back());
-                child.pop_back();
-            }
             return;
         }
+        TracingCollector::WorkStackBuf* hSplit = workStack.split(newSize);
         shared.pool->AddWork(new YoungMarkingWork(shared, TracingCollector::WorkStack(hSplit), childSlot));
     }
 
