@@ -5657,6 +5657,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     }();
     const bool minorConcRefFix = minorConcRefFixEnv && stw != nullptr && *stw != nullptr;
 
+    // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     static const bool refFixCoveredDedup = []() {
         const char* v = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
         return v != nullptr && std::strcmp(v, "1") == 0;
@@ -7157,8 +7158,8 @@ void WCollector::DoYoungGarbageCollection()
     if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
         fullYoungScan = false;
     }
-    // remsetdrain: default-off hash-work reduction.  The drain side uses the
-    // bitmap's exact distinct count to reserve its destination.  The FYS-only
+    // remsetdrain: opt-in (`=1`) hash-work reduction; `=0` or unset keeps it off.
+    // The drain side uses the bitmap's exact distinct count to reserve its destination.  The FYS-only
     // consumed-ledger elision is decided later, after youngConcMark is known.
     static const bool remsetHashOptRequested = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
@@ -7243,6 +7244,7 @@ void WCollector::DoYoungGarbageCollection()
     // non-concurrent FYS path.  Keep the exact intersection instead of materialising
     // every reachable heap field.  Concurrent young marking is deliberately excluded:
     // its STW2 admits slots recorded after this initial remset snapshot.
+    // Keep opt-in (`=1`): `=0` or unset preserves the unrestricted-ledger path.
     static const bool markRemsetIntersectRequested = []() {
         const char* value = std::getenv("MRT_GCV2_MARK_REMSET_INTERSECT");
         return value != nullptr && std::strcmp(value, "1") == 0;
