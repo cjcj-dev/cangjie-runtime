@@ -38,6 +38,7 @@
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
+#include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/TagReuseProbe.h"
@@ -180,8 +181,19 @@ public:
     }
 
     // oneseq: tagged bumps so atexit/milestones show whether epoch advances per-list / per-region.
+    // Default off; enable with MRT_GCV2_ONESEQ=1 or MRT_GCV2_DIAG=oneseq.
+    static bool OneseqDiagEnabled()
+    {
+        static const bool enabled = DiagGate::LegacyOrToken("MRT_GCV2_ONESEQ", "oneseq");
+        return enabled;
+    }
+
     void BumpSnapshotEpochFromClearLiveInfo()
     {
+        if (!OneseqDiagEnabled()) {
+            BumpSnapshotEpoch();
+            return;
+        }
         size_t n;
         if (IsYoungRegion()) {
             n = oneseqBumpClearYoung.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -197,6 +209,10 @@ public:
     }
     void BumpSnapshotEpochFromInitRegion()
     {
+        if (!OneseqDiagEnabled()) {
+            BumpSnapshotEpoch();
+            return;
+        }
         size_t n = oneseqBumpInitRegion.fetch_add(1, std::memory_order_relaxed) + 1;
         BumpSnapshotEpoch();
         EnsureOneseqAtexit();
@@ -206,6 +222,10 @@ public:
     }
     void BumpSnapshotEpochFromResetAfterForward()
     {
+        if (!OneseqDiagEnabled()) {
+            BumpSnapshotEpoch();
+            return;
+        }
         size_t n = oneseqBumpResetAfterForward.fetch_add(1, std::memory_order_relaxed) + 1;
         BumpSnapshotEpoch();
         EnsureOneseqAtexit();
@@ -792,7 +812,7 @@ public:
     static std::atomic<size_t> markEpochStaleReadCount;
     static std::atomic<bool> markEpochAtexitInstalled;
 
-    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-on counters, atexit dump).
+    // oneseq: per-region epoch / LIVE_AUTHORITY currency probes (default-off counters and dump).
     static std::atomic<size_t> oneseqBumpClearYoung;
     static std::atomic<size_t> oneseqBumpClearOld;
     static std::atomic<size_t> oneseqBumpInitRegion;
@@ -1991,15 +2011,17 @@ public:
             }
         }
         // oneseq: authority vs epoch-empty divergence (const path uses relaxed atomics only).
-        oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
-        if (!auth && emptyByEpoch) {
-            oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
-        } else if (auth && emptyByEpoch) {
-            oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
-        } else if (auth && !emptyByEpoch) {
-            oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
-        } else {
-            oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+        if (OneseqDiagEnabled()) {
+            oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
+            if (!auth && emptyByEpoch) {
+                oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
+            } else if (auth && emptyByEpoch) {
+                oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
+            } else if (auth && !emptyByEpoch) {
+                oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
+            }
         }
         if (!auth) {
             return false;
