@@ -21,6 +21,7 @@ std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
 
 std::atomic<uint64_t> GCStats::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 std::atomic<uint64_t> GCStats::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
+std::atomic<uint64_t> GCStats::prevHeuFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 
 void GCStats::Init()
 {
@@ -95,7 +96,9 @@ GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestam
     }
 
     youngHeuDeferralUsed = true;
-    SetPrevGCFinishTime(timestamp);
+    // Keep native-allocation throttling on the actual full-GC clock. A young
+    // completion only participates in the heuristic allocation controller.
+    SetPrevHeuFinishTime(timestamp);
     return YoungHeuThrottleDecision::REFRESHED;
 }
 
