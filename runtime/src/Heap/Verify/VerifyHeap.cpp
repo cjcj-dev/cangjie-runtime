@@ -343,7 +343,14 @@ void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* p
     }
 
     ++stats.failures;
-    if (stats.failures > maxFailures) {
+    // Reachable holders are the product-path question.  Do not let the
+    // default 20-sample cap hide them behind earlier dead inventory.
+    constexpr size_t kReachablePrintCap = 64;
+    if (holderReachable) {
+        if (stats.h3ReachableHolder > kReachablePrintCap) {
+            return;
+        }
+    } else if (stats.failures > maxFailures) {
         ++stats.truncated;
         return;
     }
