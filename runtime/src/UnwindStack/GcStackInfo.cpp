@@ -11,6 +11,7 @@
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
 #include "Heap/Verify/EnumPushDiag.h"
+#include "Heap/Verify/StackRootSlotAttest.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "UnwindStack/StackFrameCursor.h"
 
@@ -19,7 +20,9 @@ namespace MapleRuntime {
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 }
@@ -35,7 +38,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 TracingCollector::VisitHeapReferencesOnStack(
@@ -122,7 +127,9 @@ void RecordStackInfo::VisitStackRoots(const RootVisitor &func, Mutator &mutator)
 void GCStackInfo::VisitStackRoots(const RootVisitor& func, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         StackFrameCursor::ProcessFrame(frame, regSlotsMap, func, mutator);
     }
 
@@ -165,7 +172,9 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                                              const DerivedPtrVisitor& derivedPtrVisitor, Mutator& mutator) const
 {
     RegSlotsMap regSlotsMap;
+    size_t frameIndex = 0;
     for (const auto& frame : stack) {
+        StackRootSlotAttest::FrameScope attestFrame(frameIndex++);
         switch (frame.GetFrameType()) {
             case FrameType::MANAGED: {
                 TracingCollector::VisitHeapReferencesOnStack(

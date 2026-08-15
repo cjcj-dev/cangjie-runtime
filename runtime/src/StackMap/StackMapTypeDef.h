@@ -41,6 +41,16 @@ constexpr U32 PURE_COMPRESSED_STACKMAP = 0;
 // derivedptr visitor parameters: basePtr, the reference of derivedptr
 using DerivedPtrVisitor = std::function<void(BasePtrType, DerivedSlot&)>;
 using DerivedPtrDebugVisitor = std::function<void(BasePtrType, DerivedPtrType)>;
+struct StackMapRootCounts {
+    size_t baseSlots{ 0 };
+    size_t baseRegs{ 0 };
+    size_t derivedSlots{ 0 };
+    size_t derivedRegs{ 0 };
+
+    size_t Base() const { return baseSlots + baseRegs; }
+    size_t Derived() const { return derivedSlots + derivedRegs; }
+    size_t Total() const { return Base() + Derived(); }
+};
 struct RegSlotsMap {
     SlotAddress addrMap[REGISTERS_COUNT]{ nullptr };
     bool isRecorded[REGISTERS_COUNT]{ false };

@@ -60,6 +60,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/StartWhoDiag.h"
+#include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
@@ -1509,6 +1510,7 @@ void WCollector::TraceHeap()
     }
 
     if (concurrentStackScan) {
+        StackRootSlotAttest::Begin("major");
         EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack");
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
@@ -1549,6 +1551,7 @@ void WCollector::TraceHeap()
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
             VerifyStackRootPostcondition(stackScanEpoch, "major");
+            StackRootSlotAttest::Finish();
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
             TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
@@ -7114,6 +7117,7 @@ void WCollector::DoYoungGarbageCollection()
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
         stw.reset();
 
+        StackRootSlotAttest::Begin("minor");
         EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-minor-stack");
         stackScanEpoch = handshake.epoch;
         CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
@@ -7140,6 +7144,7 @@ void WCollector::DoYoungGarbageCollection()
             }
         });
         VerifyStackRootPostcondition(stackScanEpoch, "minor");
+        StackRootSlotAttest::Finish();
     }
 
     // gchot: once-per-process (campaigns set FYS at process start, never mid-run setenv).

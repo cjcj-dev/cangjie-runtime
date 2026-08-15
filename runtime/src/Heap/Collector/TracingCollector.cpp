@@ -14,6 +14,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Verify/EnumPushDiag.h"
+#include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -430,10 +431,28 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     }
     // introot: use HeapReferenceMap so base/derived pairs are available. RootMap only
     // carries reg/slot roots and silently drops derived (RawArray+8 held across safepoint).
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
+    const bool attestFrame = StackRootSlotAttest::FrameActive();
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(attestFrame);
+    StackMapRootCounts declaredCounts;
+    StackMapRootCounts visitedCounts;
+    if (attestFrame && heapMap.IsValid()) {
+        declaredCounts = heapMap.CountRootSlots();
+    }
+    RootVisitor slotVisitor = visitor;
+    RootVisitor regVisitor = visitor;
+    if (attestFrame) {
+        slotVisitor = [&visitor, &visitedCounts](ObjectRef& root) {
+            ++visitedCounts.baseSlots;
+            visitor(root);
+        };
+        regVisitor = [&visitor, &visitedCounts](ObjectRef& root) {
+            ++visitedCounts.baseRegs;
+            visitor(root);
+        };
+    }
     if (heapMap.IsValid()) {
-        heapMap.VisitSlotRoots(visitor, slotDebugFunc);
-        if (!heapMap.VisitRegRoots(visitor, regDebugFunc, regSlotsMap)) {
+        heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
+        if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForTrace(gcInfo);
 #endif
@@ -442,7 +461,11 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
         }
         // Mark the base of each derived pair. Derived slot itself is not an object root;
         // leave it for PreForward's derived visitor to rewrite after evacuation.
-        DerivedPtrVisitor derivedMark = [&visitor](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+        DerivedPtrVisitor derivedMark = [&visitor, attestFrame, &visitedCounts](BasePtrType basePtr,
+                                                                               DerivedSlot& derivedPtr) {
+            if (attestFrame) {
+                ++visitedCounts.derivedSlots;
+            }
             (void)derivedPtr;
             if (is_null(basePtr)) {
                 return;
@@ -465,6 +488,9 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
+    if (attestFrame) {
+        StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
+    }
 }
 
 void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& rootVisitor,
@@ -483,7 +509,30 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     uintptr_t frameIP = reinterpret_cast<uintptr_t>(frame.mFrame.GetIP());
     uintptr_t frameAddress = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
     StackMapBuilder builder = StackMapBuilder(startIP, frameIP, frameAddress);
-    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>();
+    const bool attestFrame = StackRootSlotAttest::FrameActive();
+    HeapReferenceMap heapMap = builder.Build<HeapReferenceMap>(attestFrame);
+    StackMapRootCounts declaredCounts;
+    StackMapRootCounts visitedCounts;
+    if (attestFrame && heapMap.IsValid()) {
+        declaredCounts = heapMap.CountRootSlots();
+    }
+    RootVisitor attestRegVisitor = regRootVisitor;
+    RootVisitor attestSlotVisitor = slotRootVisitor;
+    DerivedPtrVisitor attestDerivedVisitor = derivedPtrVisitor;
+    if (attestFrame) {
+        attestRegVisitor = [&regRootVisitor, &visitedCounts](ObjectRef& root) {
+            ++visitedCounts.baseRegs;
+            regRootVisitor(root);
+        };
+        attestSlotVisitor = [&slotRootVisitor, &visitedCounts](ObjectRef& root) {
+            ++visitedCounts.baseSlots;
+            slotRootVisitor(root);
+        };
+        attestDerivedVisitor = [&derivedPtrVisitor, &visitedCounts](BasePtrType basePtr, DerivedSlot& derivedPtr) {
+            ++visitedCounts.derivedSlots;
+            derivedPtrVisitor(basePtr, derivedPtr);
+        };
+    }
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     auto infoNode = GCInfoNodeForFix::BuildNodeForFix(startIP, frameIP, frame.mFrame.GetFA());
     auto slotDebugFunc = [&infoNode](SlotBias off, const BaseObject* root) {
@@ -543,16 +592,16 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
 #endif
     }
     if (heapMap.IsValid()) {
-        if (!heapMap.VisitRegRoots(regRootVisitor, regDebugFunc, regSlotsMap)) {
+        if (!heapMap.VisitRegRoots(attestRegVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
             mutator.PushFrameInfoForFix(infoNode);
 #endif
             LOG(RTLOG_FATAL, "wrong reg info, start ip: %p frame pc: %p", reinterpret_cast<void*>(startIP),
                 reinterpret_cast<void*>(frameIP));
         }
-        heapMap.VisitSlotRoots(slotRootVisitor, slotDebugFunc);
+        heapMap.VisitSlotRoots(attestSlotVisitor, slotDebugFunc);
         // VisitDerivedPtr must be invoked after VisitRegRoots and VisitSlotRoots;
-        heapMap.VisitDerivedPtr(derivedPtrVisitor, derivedPtrDebugFunc, regSlotsMap);
+        heapMap.VisitDerivedPtr(attestDerivedVisitor, derivedPtrDebugFunc, regSlotsMap);
     } else {
         RecordSkippedStackMap(builder.GetInvalidReason(), frame, startIP, frameIP);
     }
@@ -560,6 +609,9 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     mutator.PushFrameInfoForFix(infoNode);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
+    if (attestFrame) {
+        StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
+    }
 }
 
 void TracingCollector::RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp)
