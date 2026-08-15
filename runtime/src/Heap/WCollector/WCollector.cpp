@@ -2916,6 +2916,10 @@ public:
         if (shared.pool == nullptr) {
             return;
         }
+        size_t childSlot = shared.nextWorkerId.load(std::memory_order_relaxed);
+        if (childSlot >= shared.objects.size()) {
+            return;
+        }
         size_t size = workStack.size();
         if (size <= kMarkparMinWorkSize) {
             return;
@@ -2933,7 +2937,6 @@ public:
         if (!doFork || newSize == 0) {
             return;
         }
-        size_t childSlot = shared.nextWorkerId.load(std::memory_order_relaxed);
         while (childSlot < shared.objects.size() &&
                !shared.nextWorkerId.compare_exchange_weak(childSlot, childSlot + 1, std::memory_order_relaxed)) {
         }
