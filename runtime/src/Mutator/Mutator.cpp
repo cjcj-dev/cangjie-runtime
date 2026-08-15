@@ -15,6 +15,7 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "Heap/Verify/StackExposureOracle.h"
@@ -838,14 +839,23 @@ static bool PushHeapRootIfPlausible(BaseObject* obj, const char* site)
 {
     BaseObject* plain = PlainRootObject(to_zaddress_unsafe(reinterpret_cast<MAddress>(obj)));
     if (!Heap::IsHeapAddress(plain)) {
+        if (UNLIKELY(EnumPushDiag::Enabled())) {
+            EnumPushDiag::NoteSkip(plain, site, "non-heap");
+        }
         return false;
     }
     // markfloor gate: tip-small-int (e.g. length at RawArray+8) must not enter work stack.
     if (!Collector::PlausibleManagedObjectGate(site, plain)) {
+        if (UNLIKELY(EnumPushDiag::Enabled())) {
+            EnumPushDiag::NoteSkip(plain, site, "implausible");
+        }
         return false;
     }
     AllocBuffer* buffer = AllocBuffer::GetOrCreateAllocBuffer();
     buffer->PushRoot(plain);
+    if (UNLIKELY(EnumPushDiag::Enabled())) {
+        EnumPushDiag::NotePush(plain, site, nullptr);
+    }
     return true;
 }
 

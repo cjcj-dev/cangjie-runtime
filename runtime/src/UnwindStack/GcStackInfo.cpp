@@ -10,6 +10,7 @@
 
 #include "Collector/TracingCollector.h"
 #include "Common/StackType.h"
+#include "Heap/Verify/EnumPushDiag.h"
 #include "Interpreter/InterpreterSpecific.h"
 #include "UnwindStack/StackFrameCursor.h"
 
@@ -42,12 +43,24 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 break;
             }
             case FrameType::C2R_STUB:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "C2R");
+                }
                 TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::C2N_STUB:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "C2N");
+                }
                 TracingCollector::RecordC2NStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::EXSLUSIVE:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "EXCLUSIVE");
+                }
                 TracingCollector::RecordExclusiveStubCalleeSaved(regSlotsMap,
                                                                  reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
@@ -55,9 +68,17 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
                 LOG(RTLOG_FATAL, "STACKGROW frame is not supported in VisitHeapReferencesOnStack");
                 break;
             case FrameType::SAFEPOINT:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "SAFEPOINT");
+                }
                 TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "NON_MANAGED");
+                }
                 break;
             }
         }
@@ -157,13 +178,25 @@ void GCStackInfo::VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor,
 #ifdef INTERPRETER_ENABLED
             case FrameType::INTERPRETER_C2I:
 #endif
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "STUB");
+                }
                 TracingCollector::RecordStubCalleeSaved(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             case FrameType::SAFEPOINT:
             case FrameType::STACKGROW:
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "SAFEPOINT");
+                }
                 TracingCollector::RecordStubAllRegister(regSlotsMap, reinterpret_cast<Uptr>(frame.mFrame.GetFA()));
                 break;
             default: {
+                if (UNLIKELY(EnumPushDiag::Enabled())) {
+                    EnumPushDiag::NoteFrame(0, reinterpret_cast<uintptr_t>(frame.mFrame.GetIP()),
+                                           reinterpret_cast<uintptr_t>(frame.mFrame.GetFA()), 0, 0, 0, 0, "NON_MANAGED");
+                }
                 break;
             }
         }
