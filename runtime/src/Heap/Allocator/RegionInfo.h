@@ -97,6 +97,8 @@ private:
 // region info is stored in the metadata of its primary unit (i.e. the first unit).
 class RegionInfo {
 public:
+    using CompactRouteTable = std::unordered_map<size_t, MAddress>;
+
     enum class RetainedLiveInfoState : uint8_t {
         NEVER_EXAMINED,
         SNAPSHOT_VALID,
@@ -1433,8 +1435,9 @@ public:
     {
         BaseObject* fromObj = t.From();
         MAddress fromAddress = reinterpret_cast<MAddress>(fromObj);
-        if (metadata.compactRouteTable != nullptr) {
-            BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress));
+        CompactRouteTable* compactRouteTable = LoadCompactRouteTable();
+        if (compactRouteTable != nullptr) {
+            BaseObject* packed = LookupCompactRoute(GetAddressOffset(fromAddress), compactRouteTable);
             if (packed != nullptr) {
                 return packed;
             }
@@ -1443,6 +1446,13 @@ public:
             if (fromObj->IsValidObject()) {
                 return fromObj;
             }
+            return nullptr;
+        }
+        // FreeCompactRouteTable publishes NORMAL before detaching a compact table. An
+        // already-admitted reader that loses the detach race must soft-miss rather than
+        // reinterpret a compact destination as prefix-sum geometry.
+        RouteState routeState = GetRouteState();
+        if (routeState != RouteState::ROUTED && routeState != RouteState::FORWARDED) {
             return nullptr;
         }
         uint64_t preLiveBytes = GetPreLiveBytesInGhostRegion(fromAddress);
@@ -1456,37 +1466,66 @@ public:
 
     void FreeCompactRouteTable()
     {
-        if (metadata.compactRouteTable != nullptr) {
-            delete static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
-            metadata.compactRouteTable = nullptr;
+        CompactRouteTable* table = static_cast<CompactRouteTable*>(
+            __atomic_exchange_n(&metadata.compactRouteTable, static_cast<void*>(nullptr), __ATOMIC_ACQ_REL));
+        if (table != nullptr) {
+            RetireCompactRouteTable(table);
         }
     }
 
     void EnsureCompactRouteTable()
     {
-        if (metadata.compactRouteTable == nullptr) {
-            metadata.compactRouteTable = new std::unordered_map<size_t, MAddress>();
+        if (LoadCompactRouteTable() == nullptr) {
+            CompactRouteTable* table = new CompactRouteTable();
+            void* expected = nullptr;
+            if (!__atomic_compare_exchange_n(&metadata.compactRouteTable, &expected, static_cast<void*>(table),
+                                             false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE)) {
+                delete table;
+            }
         }
     }
 
     void RecordCompactRoute(size_t fromOff, MAddress dest)
     {
         EnsureCompactRouteTable();
-        auto* table = static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
+        CompactRouteTable* table = LoadCompactRouteTable();
+        CHECK(table != nullptr);
         (*table)[fromOff] = dest;
     }
 
-    BaseObject* LookupCompactRoute(size_t fromOff) const
+    BaseObject* LookupCompactRoute(size_t fromOff, const CompactRouteTable* table) const
     {
-        auto* table = static_cast<std::unordered_map<size_t, MAddress>*>(metadata.compactRouteTable);
-        if (table == nullptr) {
-            return nullptr;
-        }
         auto it = table->find(fromOff);
         if (it == table->end()) {
             return nullptr;
         }
         return from_region_addr(it->second);
+    }
+
+    // A phase transition is a mutator grace period. Tables detached in generation N
+    // survive two completed transitions so a detach racing the transition boundary is
+    // conservatively assigned to either side without endangering a reader.
+    static void AdvanceCompactRouteTableGracePeriod()
+    {
+        std::vector<CompactRouteTable*> ready;
+        {
+            std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
+            uint64_t& generation = CompactRouteTableGraceGeneration();
+            ++generation;
+            auto& retired = RetiredCompactRouteTables();
+            auto it = retired.begin();
+            while (it != retired.end()) {
+                if (generation - it->generation >= 2) {
+                    ready.push_back(it->table);
+                    it = retired.erase(it);
+                } else {
+                    ++it;
+                }
+            }
+        }
+        for (CompactRouteTable* table : ready) {
+            delete table;
+        }
     }
 
     // Deleted: asking for a route with a bare BaseObject* is unspellable.
@@ -1604,8 +1643,10 @@ public:
         for (size_t i = 0; i < nUnit; i++) {
             array[i].SetInGhostRegion(0);
         }
-        FreeCompactRouteTable();
+        // Publish route retirement before detaching the table. A reader that observes
+        // the atomic nullptr then also observes NORMAL and soft-misses in GetRoute.
         SetRouteState(NORMAL);
+        FreeCompactRouteTable();
         SetMarkFaceSealed(false);
     }
 
@@ -2151,6 +2192,41 @@ public:
     }
 
 private:
+    struct RetiredCompactRouteTable {
+        CompactRouteTable* table;
+        uint64_t generation;
+    };
+
+    CompactRouteTable* LoadCompactRouteTable() const
+    {
+        return static_cast<CompactRouteTable*>(
+            __atomic_load_n(&metadata.compactRouteTable, __ATOMIC_ACQUIRE));
+    }
+
+    static std::mutex& CompactRouteTableRetireMutex()
+    {
+        static std::mutex mutex;
+        return mutex;
+    }
+
+    static uint64_t& CompactRouteTableGraceGeneration()
+    {
+        static uint64_t generation = 0;
+        return generation;
+    }
+
+    static std::vector<RetiredCompactRouteTable>& RetiredCompactRouteTables()
+    {
+        static std::vector<RetiredCompactRouteTable> retired;
+        return retired;
+    }
+
+    static void RetireCompactRouteTable(CompactRouteTable* table)
+    {
+        std::lock_guard<std::mutex> lock(CompactRouteTableRetireMutex());
+        RetiredCompactRouteTables().push_back({ table, CompactRouteTableGraceGeneration() });
+    }
+
     // Product geometry only — reachable from GetRoute(RouteTicket). External product
     // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
     size_t GetPreLiveBytesInGhostRegion(MAddress address)
@@ -2547,6 +2623,8 @@ private:
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
         SetUnitRole(UnitRole::FREE_UNITS);
+        // See DispelGhostFromRegion: retire the route before detaching its compact table.
+        SetRouteState(NORMAL);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
@@ -2587,7 +2665,7 @@ private:
         // between a reused region and answering a route out of the previous life's geometry.
         // The whole design rests on "the ghost bit bounds route readability"; this is the
         // one hole in that obligation.
-        SetRouteState(NORMAL);
+        // Route state was reset before FreeCompactRouteTable; clear the geometry here.
         metadata.routeInfo.SetRouteInfo(0);
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).

@@ -2136,6 +2136,7 @@ void WCollector::Preforward()
     MRT_PHASE_TIMER("Preforward");
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
+        RegionInfo::AdvanceCompactRouteTableGracePeriod();
         // This collector relocates both generations in one full-GC relocation set. Match the two
         // generation relocate-start flips while mutators are stopped, before any root is forwarded.
         flip_young_relocate_start();
