@@ -326,7 +326,8 @@ unsigned SiteBucket(const char* site)
     if (std::strstr(site, "TraceYoungClosure") != nullptr) {
         return 8;
     }
-    if (std::strstr(site, "PushYoungObject") != nullptr) {
+    if (std::strstr(site, "PushYoungObject") != nullptr ||
+        std::strstr(site, "AdmitYoungObject") != nullptr) {
         return 9;
     }
     // getsize7: dense region walks that call GetSize/GetAllocSize without a prior gate.
