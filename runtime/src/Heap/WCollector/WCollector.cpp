@@ -7059,7 +7059,7 @@ void WCollector::DoYoungGarbageCollection()
                             }
                         });
                     }
-                    object->ForEachRefField([this, &workStack, fullYoungScan](RefField<>& field) {
+                    object->ForEachRefField([this, &workStack, fullYoungScan, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
