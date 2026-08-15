@@ -7595,6 +7595,12 @@ void WCollector::DoYoungGarbageCollection()
         const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
+    static const bool verifyHeapEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    std::unordered_set<BaseObject*> rootReachableForVerify;
+    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
     // Independent remset completeness check (invariant R). Gated by MRT_GCV2_VERIFY_REMSET.
     // Uses the minor-acquired slot set: live remset is empty after AcquireRecordsForMinor.
     {
@@ -7606,11 +7612,11 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        if (verifyRemsetEnabled) {
-            std::unordered_set<BaseObject*> rootReachableForRemsetVerify;
+        if (needRootReachable) {
             RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                                 &minorCandidateRegions, remsetStats, &rootReachableForRemsetVerify);
-            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, &rootReachableForRemsetVerify);
+                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
+                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
         } else {
             RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
                                  &minorCandidateRegions, remsetStats, nullptr);
@@ -7625,10 +7631,10 @@ void WCollector::DoYoungGarbageCollection()
         const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
             VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-            VerifyHeapObjects("post-mark", true);
+            VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
             VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
         } else {
-            VerifyHeapObjects("pre-evacuate");
+            VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
         }
     }
 
