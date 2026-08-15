@@ -3110,6 +3110,8 @@ size_t MarkStripeCount(size_t workers)
 // Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
 // via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
 // Default-off counters: MRT_GCV2_MINOR_SCRUB_COUNT=1
+// Measurement-only kill switch (default OFF = scrub ON): MRT_GCV2_MINOR_SCRUB_OFF=1
+// ⛔ not a product default; h3hang B′ arm only.
 std::atomic<uint64_t> g_minorScrubSlotN{ 0 };
 std::atomic<uint64_t> g_minorScrubFreeN{ 0 };
 std::atomic<uint64_t> g_minorScrubGarbageN{ 0 };
@@ -3125,9 +3127,21 @@ bool MinorScrubCountEnabled()
     return on;
 }
 
+bool MinorScrubOff()
+{
+    static const bool off = []() {
+        const char* v = std::getenv("MRT_GCV2_MINOR_SCRUB_OFF");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return off;
+}
+
 // Returns true if the slot was scrubbed (caller must not push / treat as live edge).
 bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix)
 {
+    if (MinorScrubOff()) {
+        return false;
+    }
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
