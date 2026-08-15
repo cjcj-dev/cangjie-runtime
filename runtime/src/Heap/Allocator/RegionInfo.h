@@ -44,6 +44,7 @@
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
+#include "Heap/Verify/RouteDestHold.h"
 #include "Heap/Verify/RouteDom.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/TlRawDiag.h"
@@ -1002,6 +1003,22 @@ public:
         // gatehot: UNIT_SIZE is page size (power of two). ctz → shift for GetUnitIdxAt.
         CHECK(UNIT_SIZE != 0 && (UNIT_SIZE & (UNIT_SIZE - 1)) == 0);
         UnitInfo::unitSizeShift = static_cast<size_t>(__builtin_ctzll(static_cast<unsigned long long>(UNIT_SIZE)));
+        // routedest: per-unit metadata is per-page metadata, so any growth here is a
+        // percentage of the whole heap. Nobody had measured it; report it once so the cost
+        // of routeDestHold (one byte, expected to land in existing padding) is a number
+        // rather than an assumption. Paired with the static_assert below.
+        // routedest: per-unit metadata is per-page metadata, so growth here is a percentage
+        // of the whole heap. Measured on x86_64 at main 0626ab83: 192 bytes without
+        // routeDestHold, and 192 with it at its current placement — the flag is free.
+        // Pinned so that a future field addition has to be a deliberate edit rather than a
+        // silent heap-wide cost, and so that anyone who moves routeDestHold "somewhere more
+        // readable" finds out immediately.
+        static_assert(sizeof(UnitInfo) == 192, "per-unit metadata size changed; it is per-page, so price it");
+        if (RouteDestHold::AccountOn()) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][routedest] unit_metadata sizeof_UnitInfo=%zu unit_size=%zu overhead_permille=%zu",
+                sizeof(UnitInfo), static_cast<size_t>(UNIT_SIZE), (sizeof(UnitInfo) * 1000) / UNIT_SIZE);
+        }
     }
 
     static RegionInfo* GetRegionInfo(uint32_t idx)
@@ -1761,6 +1778,19 @@ public:
     {
         return __atomic_load_n(&metadata.notRelocatableThisCycle, __ATOMIC_ACQUIRE) != 0;
     }
+    // routedest: destination-side hold. Idempotent by construction, and it has to be:
+    // RouteOrCompactRegionImpl publishes the split plan twice for the same holder when the
+    // toRegion2 allocation fails (SetRouteInfo at RegionManager.cpp:1992, then again at
+    // :1999), so the stamp on toRegion1 runs twice. Stamping a byte twice is a no-op.
+    // Do NOT turn this into a reference count without handling that double publish.
+    void SetRouteDestHold(uint8_t flag)
+    {
+        __atomic_store_n(&metadata.routeDestHold, flag, __ATOMIC_RELEASE);
+    }
+    bool IsRouteDestHeld() const
+    {
+        return __atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) != 0;
+    }
     void SetInGhostRegion(uint8_t flag)
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1, flag);
@@ -2241,6 +2271,31 @@ private:
         uint32_t retainedPreserveCnt = 0;
         uint32_t retainedClearCnt = 0;
         uint8_t retainedLastOp = RETAINED_OP_NONE;
+        // routedest: 1 while some from-region's published RouteInfo still names this region
+        // as a destination. Stamped inside the ROUTING critical section by
+        // RouteOrCompactRegionImpl, dropped once per route generation by
+        // ClearRouteDestHoldFlags after PrepareFromRegionList's dispel walk has retired every
+        // route that could name it. Read by the reclaim entry points, which refuse a held
+        // region — the to-side counterpart of ZGC's per-page reference count, expressed as a
+        // gate rather than a count because the answer only has to change once per generation.
+        //
+        // Durability, and the reason this works at all: UnitInfo lives BELOW heapStartAddress
+        // (UnitInfo::GetUnitInfo returns heapStartAddress - (idx + 1) * sizeof(UnitInfo)),
+        // while ClearUnits MemorySets and ReleaseUnits madvises only payload at
+        // heapStartAddress + idx * UNIT_SIZE. A flag in UnitMetadata therefore survives both
+        // zeroing writers. Do not "fix" this on the assumption that ClearUnits wipes it.
+        //
+        // Placement: deliberately here, in the padding after retainedLastOp and before the
+        // 8-aligned retainedMarkWords pointer, not beside markFaceSealed where it reads more
+        // naturally. Measured: beside markFaceSealed it grew sizeof(UnitInfo) 192 -> 200,
+        // and per-unit metadata is per-page (UNIT_SIZE is the system page size), so that is
+        // +0.195% of the whole heap for one byte. Here it is free.
+        //
+        // Plain uint8_t rather than a regionStateBitField slot: bitfield writes are not
+        // atomic (see the comment on that union above) and this is written by a routing
+        // thread while reclaim threads read it. Same reason notRelocatableThisCycle and
+        // markFaceSealed are plain bytes.
+        uint8_t routeDestHold = 0;
         // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
@@ -2512,9 +2567,28 @@ private:
         metadata.retainedClearCnt = 0;
         metadata.retainedLastOp = RETAINED_OP_NONE;
         BumpSnapshotEpochFromInitRegion();
+        // routedest: this is the reuse edge named in the defect. TakeRegion has already run
+        // ClearUnits over this payload; if a published route still names this region, the
+        // route now answers into zeroed (or freshly re-allocated) memory. Count it here
+        // rather than at ClearUnits because this is the one call that runs exactly once per
+        // reuse. The hold is deliberately NOT cleared: reaching this point while held means
+        // a reclaim gate was bypassed, and leaving the flag set keeps the region out of the
+        // next collection set instead of silently papering over the escape.
+        RouteDestHold::NoteReuse(this, IsRouteDestHeld());
         SetRegionType(RegionType::FREE_REGION);
         SetTraceRegionFlag(0);
         SetNotRelocatableThisCycle(0);
+        // routedest part D: InitRegionInfo resets liveInfo, liveInfo0, the compact route
+        // table and every retained* field, but historically left routeState and routeInfo
+        // alone, so a re-taken region inherited its predecessor's plan and its predecessor's
+        // COMPACTED state. RouteObject reads `RouteRegion(r) || r->IsCompacted()`
+        // (RegionManager.h:605, :626), and the IsCompacted arm bypasses the ghost gate — so
+        // an inherited COMPACTED state left a null liveInfo0 as the only thing standing
+        // between a reused region and answering a route out of the previous life's geometry.
+        // The whole design rests on "the ghost bit bounds route readability"; this is the
+        // one hole in that obligation.
+        SetRouteState(NORMAL);
+        metadata.routeInfo.SetRouteInfo(0);
         // Ghost lives in unit metadata, not payload: ClearUnits cannot clear it.
         // TakeRegion reuses garbage without DispelGhostFromRegion (RegionInfo.h:667-698).
         SetInGhostRegion(0);
