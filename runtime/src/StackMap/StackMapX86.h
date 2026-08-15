@@ -126,6 +126,23 @@ public:
         return true;
     }
 
+    size_t CountRootSlots() const
+    {
+        RegBits bits = regBits;
+        size_t count = 0;
+        for (RegisterNum i = RAX; i <= R15; ++i, bits >>= 1) {
+            if ((bits & LOWEST_BIT) != 0) {
+                ++count;
+            }
+        }
+        for (RegisterNum i = XMM0; i <= XMM15; ++i, bits >>= 1) {
+            if ((bits & LOWEST_BIT) != 0) {
+                count += 2;
+            }
+        }
+        return count;
+    }
+
     static void RecordRegs(RegSlotsMap& regSlotsMap, Uptr fp)
     {
         RecordStubAllRegister(regSlotsMap, fp);

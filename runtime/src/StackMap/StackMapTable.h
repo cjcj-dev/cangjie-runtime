@@ -587,6 +587,30 @@ public:
 
     U32 GetRegBitsLen() const { return headerInfo[REG_BITS_LEN]; }
     U32 GetSlotBitsLen() const { return headerInfo[SLOT_BITS_LEN]; }
+    U32 GetDerivedPtrRows(Uptr startPC, Uptr framePC, U32 totalRows) const
+    {
+        const U32 recordNum = headerInfo[RECORD_NUM];
+        const U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 currentStart = 0;
+        for (U32 row = 0; row < recordNum; ++row) {
+            if (PCAt(row) == targetPCOff) {
+                currentStart = DerivePtrIdxAt(row);
+                break;
+            }
+        }
+        if (currentStart == 0 || currentStart > totalRows) {
+            return 0;
+        }
+
+        U32 nextStart = totalRows + 1;
+        for (U32 row = 0; row < recordNum; ++row) {
+            U32 candidate = DerivePtrIdxAt(row);
+            if (candidate > currentStart && candidate < nextStart) {
+                nextStart = candidate;
+            }
+        }
+        return nextStart - currentStart;
+    }
 
 private:
     void Init()
@@ -677,6 +701,7 @@ public:
         BitsManager rowBits = data.GetNext(row * rowBitsLen);
         return std::make_pair(rowBits.GetBits(regBitsLen), rowBits.GetNext(regBitsLen).GetBits(slotBitsLen));
     }
+    U32 GetRecordNum() const { return headerInfo[RECORD_NUM]; }
 
 private:
     void Init()

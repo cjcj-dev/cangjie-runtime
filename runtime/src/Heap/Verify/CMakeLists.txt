@@ -45,6 +45,7 @@ set(SRC_LIST
     "HeldFreeDiag.cpp"
     "YyEdgeDiag.cpp"
     "EnumPushDiag.cpp"
+    "StackRootSlotAttest.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
