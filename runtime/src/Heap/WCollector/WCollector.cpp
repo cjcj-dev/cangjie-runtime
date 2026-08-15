@@ -62,6 +62,7 @@
 #include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -805,6 +806,9 @@ bool WCollector::MarkObject(BaseObject* obj) const
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked = region->MarkObject(obj, objectSize);
+    if (UNLIKELY(HeldFreeDiag::Enabled()) && !marked) {
+        HeldFreeDiag::NoteMark(obj);
+    }
     if (!marked) {
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
@@ -2736,6 +2740,9 @@ void WCollector::VisitMinorRoots(const std::function<void(BaseObject*)>& visitor
 {
     RootVisitor rawRootVisitor = [this, &visitor](ObjectRef& root) {
         BaseObject* obj = ResolveMinorReference(root);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            HeldFreeDiag::NoteEnumSlot(&root, obj, gMinorRootOrigin);
+        }
         if (obj != nullptr && Heap::IsHeapAddress(obj) &&
             !Collector::PlausibleManagedObjectGate("VisitMinorRoots.raw", obj)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(obj);
@@ -2763,6 +2770,9 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             PushYoungObject(host, workStack, origin);
         }
         return;
+    }
+    if (UNLIKELY(HeldFreeDiag::Enabled())) {
+        HeldFreeDiag::NotePush(object, origin);
     }
     if (!object->IsValidObject()) {
         // Rich diagnosis before fail-closed abort: address looks like a heap range
@@ -2946,6 +2956,9 @@ void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStac
 {
     BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
     if (admitted != nullptr) {
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            HeldFreeDiag::NotePush(admitted, origin);
+        }
         workStack.push_back(admitted);
     }
 }
@@ -3607,10 +3620,13 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
     auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
-            BaseObject* target = ResolveMinorReference(field);
-            if (fullYoungScan) {
-                size_t before = workStack.size();
-                PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
+        BaseObject* target = ResolveMinorReference(field);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
+        }
+        if (fullYoungScan) {
+            size_t before = workStack.size();
+            PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
                 if (workStack.size() > before) {
                     ++g_markInternalCost.edgeYoungPushN;
                 }
@@ -3629,6 +3645,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             ++g_markInternalCost.edgeN;
         }
         BaseObject* target = ResolveMinorReference(field);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
+        }
         if (fullYoungScan) {
             size_t before = (markCostMode == 2) ? workStack.size() : 0;
             PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
@@ -5237,7 +5256,11 @@ void WCollector::FixMinorRootSlots()
     RootVisitor rawRootVisitor = [this](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        (void)FixMinorEvacuatedSlot(root);
+        bool wrote = FixMinorEvacuatedSlot(root);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            BaseObject* tgt = ResolveMinorReference(root);
+            HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root");
+        }
     };
     // Must match VisitMinorRootSlots: mutator_stack was enumerated at mark time but
     // previously omitted here (defect④ / stdbuildflag). After EvacuateYoungRegions,
@@ -5311,7 +5334,11 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     object->ForEachRefField([this, object](RefField<>& field) {
         NullRouteCaller::ScopedEdge _edge("liveobj", object, reinterpret_cast<uintptr_t>(&field));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        (void)FixMinorEvacuatedSlot(field);
+        bool wrote = FixMinorEvacuatedSlot(field);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            BaseObject* tgt = ResolveMinorReference(field);
+            HeldFreeDiag::NoteFixSlot(&field, tgt, wrote ? 1 : 0, "FixMinor.field");
+        }
     });
     EatArmDiag::SetFixHost(nullptr);
 }
@@ -5355,7 +5382,11 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
     auto rootFix = [this](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        (void)FixMinorEvacuatedSlot(root);
+        bool wrote = FixMinorEvacuatedSlot(root);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            BaseObject* tgt = ResolveMinorReference(root);
+            HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root.par");
+        }
     };
     threadPool->AddWork(new (std::nothrow) LambdaWork([this, rootFix](size_t) {
         RootVisitor rawRootVisitor = rootFix;
@@ -5427,7 +5458,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                if (UNLIKELY(HeldFreeDiag::Enabled())) {
+                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                    HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
+                }
             }
         }
     };
@@ -5445,7 +5480,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                (void)FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                if (UNLIKELY(HeldFreeDiag::Enabled())) {
+                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                    HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
+                }
             }
         }
     };
@@ -6707,6 +6746,7 @@ void WCollector::DoYoungGarbageCollection()
     RunPlainCensus("pre-minor", false);
     // This STW entry is the young-only mark start; old marking does not participate in a minor.
     flip_young_mark_start();
+    HeldFreeDiag::BeginYoungCycle();
     // minortime: STW rendezvous cost is already logged by ScopedStopTheWorld dtor
     // ("young collection stw time N us"). Body timers below exclude that wait.
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
@@ -6792,6 +6832,15 @@ void WCollector::DoYoungGarbageCollection()
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
         FysAuditDiag::CensusPostPinned(minorTotalRuns + 1, pinnedRemsetRecords);
         Heap::GetHeap().GetRememberedSet().DrainForMinor(rememberedSlots);
+        if (UNLIKELY(HeldFreeDiag::Enabled())) {
+            for (MAddress slot : rememberedSlots) {
+                if (!Heap::IsHeapAddress(slot)) {
+                    continue;
+                }
+                BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                HeldFreeDiag::NoteEnumSlot(reinterpret_cast<void*>(slot), tgt, "remset");
+            }
+        }
     }
 
     uint64_t stackScanEpoch = 0;
