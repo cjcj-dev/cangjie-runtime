@@ -45,6 +45,24 @@ bool GateOn()
     return on;
 }
 
+// whozero reuses the zero-write ring + crash match; default off.
+bool WhoZeroOn()
+{
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        if (EnvIsOne("MRT_GCV2_WHOZERO")) {
+            return true;
+        }
+        return DiagGate::TokenOn("whozero");
+    }();
+    return on;
+}
+
+bool ZeroTrackOn()
+{
+    return GateOn() || WhoZeroOn();
+}
+
 constexpr size_t kPairCap = 1u << 18;
 constexpr size_t kCollectCap = 1u << 16;
 
@@ -159,6 +177,30 @@ const char* SiteName(uint16_t site)
             return "WCollectorForwardRawGhost";
         case HealSite::WCollectorNormalizeRawRoot:
             return "WCollectorNormalizeRawRoot";
+        case HealSite::WCollectorMinorFixForwardNull:
+            return "WCollectorMinorFixForwardNull";
+        case HealSite::WCollectorMinorResolveDead:
+            return "WCollectorMinorResolveDead";
+        case HealSite::WCollectorFixOldTaggedDead:
+            return "WCollectorFixOldTaggedDead";
+        case HealSite::WCollectorRemsetResolveDead:
+            return "WCollectorRemsetResolveDead";
+        case HealSite::WCollectorResolveDeadRoot:
+            return "WCollectorResolveDeadRoot";
+        case HealSite::BaseObjectCompareExchangeRefField:
+            return "BaseObjectCompareExchangeRefField";
+        case HealSite::IdleReadReference:
+            return "IdleReadReference";
+        case HealSite::PreforwardReadReference:
+            return "PreforwardReadReference";
+        case HealSite::ForwardReadReference:
+            return "ForwardReadReference";
+        case HealSite::PostTraceReadReference:
+            return "PostTraceReadReference";
+        case HealSite::EnumReadReference:
+            return "EnumReadReference";
+        case HealSite::TraceReadReference:
+            return "TraceReadReference";
         default:
             return "other";
     }
@@ -704,11 +746,13 @@ void MaybeMidCopyStall(size_t size)
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
 {
     (void)newRaw;
-    if (!GateOn()) {
+    if (!ZeroTrackOn()) {
         return;
     }
-    HealthOnce();
-    EnsureAtexit();
+    if (GateOn()) {
+        HealthOnce();
+        EnsureAtexit();
+    }
     uint32_t seq = static_cast<uint32_t>(g_zeroTotal.fetch_add(1, std::memory_order_relaxed) + 1);
     uint32_t slotIdx = g_zeroNext.fetch_add(1, std::memory_order_relaxed);
     if (slotIdx >= kZeroCap) {
@@ -720,6 +764,133 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
     row.site = site;
     row.phase = CurrentPhase();
     row.seq = seq;
+    // whozero: rare-path log only (successful CAS to null). Cap keeps stderr bounded.
+    if (WhoZeroOn() && seq <= 256) {
+        char line[320];
+        int n = sprintf_s(line, sizeof(line),
+                          "[GCV2][whozero] path=heal_null n=%u slot=%p old=%#zx site=%s(%u) phase=%u\n",
+                          seq, slot, static_cast<size_t>(oldRaw), SiteName(site),
+                          static_cast<unsigned>(site), static_cast<unsigned>(row.phase));
+        if (n > 0) {
+            WriteLine(line, static_cast<size_t>(n));
+        }
+    }
+}
+
+void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx, uintptr_t r12)
+{
+    if (!ZeroTrackOn()) {
+        return;
+    }
+    // Signature A (LexerImpl::Scan): r13=holder, bytes@+0x28, end@+0x38, cursor@+0x48; rcx=Array* after peel.
+    uintptr_t slotBytes = (r13 != 0) ? (r13 + 0x28U) : 0;
+    uintptr_t rawBytes = 0;
+    uintptr_t endVal = 0;
+    uintptr_t cursorVal = 0;
+    uintptr_t tip = 0;
+    uintptr_t f30 = 0;
+    unsigned holderInHeap = 0;
+    unsigned slotOk = 0;
+    if (r13 != 0 && Runtime::CurrentRef() != nullptr && Heap::IsHeapAddress(r13)) {
+        holderInHeap = 1;
+        uintptr_t words[12];
+        std::memset(words, 0, sizeof(words));
+        if (CopyWords(r13, words, 12)) {
+            slotOk = 1;
+            tip = words[0] & 0xffffffffffffULL;
+            f30 = words[6]; // +0x30
+            rawBytes = words[5]; // +0x28
+            endVal = words[7]; // +0x38
+            cursorVal = words[9]; // +0x48
+        }
+    } else if (slotBytes != 0) {
+        uintptr_t w[1] = { 0 };
+        if (CopyWords(slotBytes, w, 1)) {
+            slotOk = 1;
+            rawBytes = w[0];
+        }
+    }
+    const char* q1 = "unknown";
+    if (slotOk) {
+        if (rawBytes == 0) {
+            q1 = "slot_was_0";
+        } else if (rcx == 0) {
+            q1 = "barrier_returned_0";
+        } else {
+            q1 = "slot_nonzero_rcx_nonzero";
+        }
+    }
+
+    uint32_t zeroN = static_cast<uint32_t>(
+        g_zeroTotal.load(std::memory_order_acquire) < kZeroCap ?
+            g_zeroTotal.load(std::memory_order_relaxed) : kZeroCap);
+    uint32_t zeroNext = g_zeroNext.load(std::memory_order_acquire);
+    size_t zeroTotal = g_zeroTotal.load(std::memory_order_acquire);
+    uint32_t zeroBase = (zeroTotal < kZeroCap) ? 0 : (zeroNext % kZeroCap);
+    uint32_t exactHits = 0;
+    uint32_t lastIdx = 0;
+    bool have = false;
+    uint32_t hitSiteCounts[8] = {};
+    const uint16_t trackSites[] = {
+        static_cast<uint16_t>(HealSite::WCollectorMinorFixForwardNull),
+        static_cast<uint16_t>(HealSite::WCollectorMinorResolveDead),
+        static_cast<uint16_t>(HealSite::WCollectorFixOldTaggedDead),
+        static_cast<uint16_t>(HealSite::WCollectorRemsetResolveDead),
+        static_cast<uint16_t>(HealSite::WCollectorResolveDeadRoot),
+        static_cast<uint16_t>(HealSite::BaseObjectCompareExchangeRefField),
+        static_cast<uint16_t>(HealSite::PreforwardReadReference),
+        static_cast<uint16_t>(HealSite::ForwardReadReference),
+    };
+    for (uint32_t i = 0; i < zeroN; ++i) {
+        uint32_t idx = (zeroBase + i) % kZeroCap;
+        const ZeroRow& row = g_zeros[idx];
+        if (slotBytes != 0 && row.slot == slotBytes) {
+            ++exactHits;
+            lastIdx = idx;
+            have = true;
+        }
+        for (size_t s = 0; s < 8; ++s) {
+            if (row.site == trackSites[s]) {
+                ++hitSiteCounts[s];
+            }
+        }
+    }
+
+    char line[768];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][whozero] crash q1=%s holder=%#zx holderInHeap=%u slotBytes=%#zx "
+                      "rawBytes=%#zx end=%#zx cursor=%#zx f30=%#zx tip=%#zx rcx=%#zx rsi=%#zx "
+                      "rbx=%#zx r12=%#zx zeroTotal=%zu zeroWrap=%zu exactHits=%u "
+                      "siteFixNull=%u siteResolve=%u siteF3=%u siteRemset=%u siteRoot=%u "
+                      "siteBaseCE=%u sitePreR=%u siteFwdR=%u\n",
+                      q1, r13, holderInHeap, slotBytes, rawBytes, endVal, cursorVal, f30, tip,
+                      rcx, rsi, rbx, r12, zeroTotal, g_zeroWrap.load(std::memory_order_relaxed),
+                      exactHits, hitSiteCounts[0], hitSiteCounts[1], hitSiteCounts[2],
+                      hitSiteCounts[3], hitSiteCounts[4], hitSiteCounts[5], hitSiteCounts[6],
+                      hitSiteCounts[7]);
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
+    if (have) {
+        DumpZero("whozeroExact", g_zeros[lastIdx]);
+    } else if (slotBytes != 0) {
+        char miss[192];
+        int mn = sprintf_s(miss, sizeof(miss),
+                           "[GCV2][whozero] exact_miss slot=%#zx (not in HealSlot-null ring)\n",
+                           slotBytes);
+        if (mn > 0) {
+            WriteLine(miss, static_cast<size_t>(mn));
+        }
+    }
+    // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.
+    unsigned fieldsAlive = (endVal != 0 || cursorVal != 0) ? 1U : 0U;
+    char clearLine[192];
+    int cn = sprintf_s(clearLine, sizeof(clearLine),
+                       "[GCV2][whozero] clearunits_whole_object=%u (0=other_fields_nonzero)\n",
+                       fieldsAlive == 0 && holderInHeap ? 1U : 0U);
+    if (cn > 0) {
+        WriteLine(clearLine, static_cast<size_t>(cn));
+    }
 }
 
 void NoteCrashRdi(uintptr_t rdi)

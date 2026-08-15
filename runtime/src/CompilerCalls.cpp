@@ -2014,21 +2014,21 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
     } else {
         result = Heap::GetBarrier().ReadReference(obj, *field);
     }
-    // Log only when ret is null AND GC is in concurrent fix window (Mode A phases).
-    // Idle null Option reads exhaust a flat 64-cap before Mode A; phase-filter keeps
-    // the sample budget for the crash window.
+    // Log when ret is null. 乙 (raw/addr non-zero → barrier null) always logged (rare).
+    // 甲 (slot already 0) only in concurrent GC windows so idle Option nulls don't exhaust cap.
     if (result == nullptr && ReadnullProbeEnabled()) {
         GCPhase phase = Heap::GetHeap().GetGCPhase();
-        // Mode A crash window: PREFORWARD/FORWARD name as enum_fix/trace_fix
-        // (Collector::GetGCPhaseName + FoldToken). Also admit concurrent mark.
+        const bool yiCandidate = (addrBefore != 0) || (rawBefore != 0);
         const bool inModeAWindow =
             phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD ||
             phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
             phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER ||
-            phase == GCPhase::GC_PHASE_POST_TRACE;
-        if (inModeAWindow) {
+            phase == GCPhase::GC_PHASE_POST_TRACE ||
+            phase == GCPhase::GC_PHASE_RECLAIM_SATB_NODE ||
+            phase == GCPhase::GC_PHASE_IDLE;
+        if (yiCandidate || inModeAWindow) {
             size_t n = g_readRefNullN.fetch_add(1, std::memory_order_relaxed);
-            if (n < 128) {
+            if (n < 256) {
                 const MAddress rawAfter =
                     field != nullptr ? static_cast<MAddress>(raw(field->GetFieldValue())) : 0;
                 const unsigned fieldInHeap =

@@ -239,7 +239,9 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         uintptr_t rcx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RCX]);
         uintptr_t rdx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDX]);
         uintptr_t rsi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RSI]);
+        uintptr_t r13 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R13]);
         HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
+        HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
 #endif
     }
 }
