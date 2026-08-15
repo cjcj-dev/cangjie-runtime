@@ -27,6 +27,7 @@ set(SRC_LIST
     "FysAuditDiag.cpp"
     "DiagGate.cpp"
     "RouteDom.cpp"
+    "RouteDestHold.cpp"
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
     "EmptyLiveDiag.cpp"

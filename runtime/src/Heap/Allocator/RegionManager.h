@@ -597,6 +597,9 @@ public:
     // twoflags: walk live region lists and clear notRelocatableThisCycle.
     void ClearNotRelocatableThisCycleFlags();
 
+    // routedest: walk the same lists and drop routeDestHold for one route generation.
+    void ClearRouteDestHoldFlags();
+
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
     // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
@@ -713,6 +716,21 @@ public:
         VLOG(REPORT, "[MarkQuarantine] installed_regions=%zu installed_bytes=%zu held_units=%u",
              markQuarantinedRegions, markQuarantinedBytes, freeRegionManager.GetMarkQuarantineUnitCount());
 
+        // routedest: the walk above retired the whole outgoing route generation —
+        // DispelGhostFromRegion clears the ghost bit and sets routeState NORMAL in one
+        // statement, after which both product readers fail (RouteRegion soft-nulls on
+        // !IsGhostFromRegion, and the `|| IsCompacted()` bypass is false too). Drop the
+        // destination holds those routes were keeping alive, before the next generation's
+        // destinations are enrolled by the PrepareForwardableRegion walk below.
+        //
+        // Dropping a hold does not by itself make a region reclaimable: it must still be
+        // picked up by a later Assemble / PrepareYoungGarbageCandidates, evacuated and
+        // collected. That is why this ordering does not have to be defended against the
+        // reclaim schedules that are not phase-driven — the mutator garbage fast path and
+        // the finalizer both reach a live region only through TakeReclaimableGarbageRegion,
+        // and a held region never reaches garbageRegionList in the first place.
+        ClearRouteDestHoldFlags();
+
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->GetLiveByteCount(), region->GetRegionEnd());
@@ -816,7 +834,14 @@ private:
              region = region->GetNextRegion()) {
             if (region->IsGhostFromRegion()) {
                 bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr) {
+            } else if (candidate == nullptr &&
+                       !RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_GARBAGE)) {
+                // routedest: defence in depth. A held region should never have reached
+                // garbageRegionList — the two Assemble gates and the two young gates refuse
+                // it first — so a non-zero count at this site means one of those was
+                // bypassed. This one chokepoint covers both reclaim schedules that are not
+                // phase-driven at once: the mutator garbage fast path (TakeRegion) and the
+                // finalizer, whose ReclaimGarbageRegions loops on this function.
                 candidate = region;
             }
         }
@@ -837,6 +862,11 @@ private:
             if (region == target) {
                 CHECK(region->IsGarbageRegion());
                 CHECK(!region->IsGhostFromRegion());
+                // routedest: refuse a held region here too, so it is neither quarantined nor
+                // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
+                if (RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
+                    return false;
+                }
                 RemoveRegionLocked(&garbageRegionList, region);
                 return true;
             }
