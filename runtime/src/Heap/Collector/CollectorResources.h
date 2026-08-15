@@ -42,6 +42,11 @@ public:
 
     GCThreadPool* GetThreadPool() const { return gcThreadPool; }
 
+    // evacpar: optional phase-local pool for young region copying.  Keeping it
+    // separate prevents a copy-only worker experiment from widening marking or
+    // reference fixing through the shared GC pool.
+    GCThreadPool* GetEvacuationThreadPool() const { return evacuationThreadPool; }
+
     bool IsHeapMarked() const { return isHeapMarked; }
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
@@ -71,6 +76,8 @@ private:
 
     // the thread pool for parallel tracing.
     GCThreadPool* gcThreadPool = nullptr;
+    // Created only when MRT_GCV2_EVACPAR_WORKERS requests at least two workers.
+    GCThreadPool* evacuationThreadPool = nullptr;
     int32_t gcThreadCount = 1;
     TaskQueue<GCExecutor>* taskQueue = nullptr;
 

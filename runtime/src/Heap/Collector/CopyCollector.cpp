@@ -7,6 +7,9 @@
 
 #include "CopyCollector.h"
 
+#include <cstdlib>
+#include <cstring>
+
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
 #include "Heap/Verify/GarbRegionDiag.h"
@@ -114,7 +117,27 @@ void CopyCollector::ForwardFromSpace()
     stats.liveBytesBeforeGC = space.AllocatedBytes();
     stats.fromSpaceSize = space.FromSpaceSize();
     GarbRegionDiag::CensusBeforeForward("pre-forward");
-    space.ForwardFromSpace(GetThreadPool());
+    GCThreadPool* copyPool = GetThreadPool();
+    const char* poolKind = "shared";
+    if (gcReason == GC_REASON_YOUNG) {
+        const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
+        const bool forceSerial =
+            forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
+        GCThreadPool* evacuationPool = collectorResources.GetEvacuationThreadPool();
+        if (forceSerial) {
+            copyPool = nullptr;
+            poolKind = "serial";
+        } else if (evacuationPool != nullptr) {
+            copyPool = evacuationPool;
+            poolKind = "dedicated";
+        }
+        VLOG(REPORT,
+             "[GCV2][evacpar][copy] parallel=%u workers=%d pool=%s forceSerial=%u",
+             static_cast<unsigned>(copyPool != nullptr),
+             copyPool == nullptr ? 1 : copyPool->GetMaxThreadNum() + 1, poolKind,
+             static_cast<unsigned>(forceSerial));
+    }
+    space.ForwardFromSpace(copyPool);
 }
 
 void CopyCollector::RefineFromSpace()
