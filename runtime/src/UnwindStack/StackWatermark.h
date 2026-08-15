@@ -34,7 +34,8 @@ namespace MapleRuntime {
 //
 // Invariants (asserted when MRT_GCV2_STACK_WATERMARK_VERIFY=1, or always for
 // structural CHECK on illegal transitions when verify is on):
-//   ① phase order: NOT_STARTED → SCANNING → DONE; no back-edge, no skip
+//   ① phase order: NOT_STARTED → SCANNING → DONE; DONE(incomplete) may
+//      retry SCANNING in the same epoch, but DONE(complete) has no back-edge
 //   ② single owner while SCANNING
 //   ③ create/exit close to NOT_STARTED; park leaves a stable publishable state
 //   ④ cursorIndex is a valid resume token for StackFrameCursor::ResumeAt
@@ -153,7 +154,8 @@ public:
 
     // Begin a scan for `scanEpoch`. Exactly one owner may claim.
     // Legal: NOT_STARTED → SCANNING, or DONE of a prior epoch → SCANNING of a new epoch.
-    // Illegal: SCANNING → SCANNING (double begin), DONE same epoch → SCANNING.
+    // Illegal: SCANNING → SCANNING (double begin), DONE(complete) same epoch
+    // → SCANNING. DONE(incomplete) may be retried by the closing STW.
     bool TryBegin(uint64_t scanEpoch, Owner claimOwner, size_t totalFrames)
     {
         CHECK_DETAIL(scanEpoch != 0, "[GCV2][stack-watermark] epoch must not be zero");
@@ -172,7 +174,8 @@ public:
             }
             return false;
         }
-        if (expected == WM_DONE && epoch.load(std::memory_order_acquire) == scanEpoch) {
+        if (expected == WM_DONE && epoch.load(std::memory_order_acquire) == scanEpoch &&
+            complete.load(std::memory_order_acquire)) {
             if (VerifyEnabled()) {
                 CHECK_DETAIL(false,
                              "[GCV2][stack-watermark] ILLEGAL_TRANSITION begin after DONE same epoch=%llu",
@@ -222,18 +225,26 @@ public:
         RequireOwnerScanning(claimOwner, "Finish");
         size_t idx = cursorIndex.load(std::memory_order_relaxed);
         size_t total = frameCount.load(std::memory_order_relaxed);
-        if (VerifyEnabled()) {
-            CHECK_DETAIL(idx == total,
-                         "[GCV2][stack-watermark] Finish with residual frames cursor=%zu total=%zu", idx, total);
+        if (idx != total) {
+            if (VerifyEnabled()) {
+                CHECK_DETAIL(false,
+                             "[GCV2][stack-watermark] Finish with residual frames cursor=%zu total=%zu",
+                             idx, total);
+            }
+            // DONE is a postcondition, not a claim by the caller.  Even with
+            // verification disabled, a partial frame traversal must remain
+            // observably incomplete so the closing STW can retry it.
+            FinishIncomplete(claimOwner);
+            return;
         }
         owner.store(WM_OWNER_NONE, std::memory_order_relaxed);
         complete.store(true, std::memory_order_relaxed);
         phase.store(WM_DONE, std::memory_order_release);
     }
 
-    // Close a fully traversed cursor whose RootMap lookup was incomplete. The
-    // phase remains monotonic, but IsDone(epoch) must stay false so the STW
-    // consumer takes the legacy fallback for this mutator.
+    // Close a traversal that cannot establish the frame-coverage postcondition.
+    // IsDone(epoch) stays false so the closing STW can retry the epoch; if that
+    // still cannot start, the consumer takes the legacy fallback.
     void FinishIncomplete(Owner claimOwner)
     {
         RequireOwnerScanning(claimOwner, "FinishIncomplete");
@@ -267,6 +278,7 @@ public:
     uint64_t GetEpoch() const { return epoch.load(std::memory_order_acquire); }
     size_t GetCursorIndex() const { return cursorIndex.load(std::memory_order_acquire); }
     size_t GetFrameCount() const { return frameCount.load(std::memory_order_acquire); }
+    bool HasCoveredAllFrames() const { return GetCursorIndex() == GetFrameCount(); }
     uint64_t GetStackGeneration() const { return stackGeneration.load(std::memory_order_acquire); }
     intptr_t GetLastGrowOffset() const { return lastGrowOffset.load(std::memory_order_acquire); }
     size_t GetGrowCount() const { return growCount.load(std::memory_order_acquire); }

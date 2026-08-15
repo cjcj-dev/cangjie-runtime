@@ -91,6 +91,24 @@ run_abort()
     return 1
 }
 
+run_verify_off()
+{
+    local case=$1
+    set +e
+    env -u MRT_GCV2_STACK_WATERMARK_VERIFY \
+        taskset -c "$cpuset" "$probe_tmp/stack-watermark" "$case" \
+        >"$probe_tmp/$case.stdout" 2>"$probe_tmp/$case.stderr"
+    local rc=$?
+    set -e
+    if [[ "$rc" -eq 0 ]] && grep -aq "HARNESS_OK case=$case" "$probe_tmp/$case.stderr"; then
+        echo "STACKMARK_CASE result=PASS case=$case rc=$rc verify=off"
+        return 0
+    fi
+    echo "STACKMARK_CASE result=FAIL case=$case rc=$rc verify=off"
+    cat "$probe_tmp/$case.stderr"
+    return 1
+}
+
 passed=0
 run_ok happy && passed=$((passed + 1))
 run_ok park_ok && passed=$((passed + 1))
@@ -98,6 +116,7 @@ run_ok create_closed && passed=$((passed + 1))
 run_abort illegal_transition 'ILLEGAL_TRANSITION|begin while SCANNING' && passed=$((passed + 1))
 run_abort dual_owner 'OWNER_NOT_UNIQUE|ILLEGAL_TRANSITION' && passed=$((passed + 1))
 run_abort exit_scanning 'EXIT_WHILE_SCANNING' && passed=$((passed + 1))
+run_verify_off coverage_guard && passed=$((passed + 1))
 
-echo "STACKMARK_PROBE result=PASS cases=$passed/6"
-[[ "$passed" -eq 6 ]]
+echo "STACKMARK_PROBE result=PASS cases=$passed/7"
+[[ "$passed" -eq 7 ]]

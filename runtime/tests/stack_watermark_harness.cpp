@@ -15,6 +15,7 @@
 //   exit_scanning    — OnExit while SCANNING (must CHECK)
 //   park_ok          — OnPark in each phase does not regress
 //   create_closed    — OnCreate from DONE is closed
+//   coverage_guard   — residual frames cannot satisfy IsDone(epoch), verify off
 
 #include <cstdlib>
 #include <cstring>
@@ -39,7 +40,7 @@ int main(int argc, char** argv)
 {
     if (argc != 2) {
         std::cerr << "usage: stack_watermark_harness "
-                     "happy|illegal_transition|dual_owner|exit_scanning|park_ok|create_closed\n";
+                     "happy|illegal_transition|dual_owner|exit_scanning|park_ok|create_closed|coverage_guard\n";
         return 2;
     }
     const char* testCase = argv[1];
@@ -53,6 +54,7 @@ int main(int argc, char** argv)
         wm.AdvanceTo(2, StackWatermark::WM_OWNER_SELF);
         Expect(wm.GetCursorIndex() == 2, "cursor 2");
         wm.AdvanceTo(4, StackWatermark::WM_OWNER_SELF);
+        Expect(wm.HasCoveredAllFrames(), "all frames covered");
         wm.Finish(StackWatermark::WM_OWNER_SELF);
         Expect(wm.IsDone(), "DONE");
         Expect(wm.GetOwner() == StackWatermark::WM_OWNER_NONE, "owner cleared");
@@ -110,6 +112,24 @@ int main(int argc, char** argv)
         Expect(wm.IsNotStarted(), "OnCreate closes to NOT_STARTED");
         Expect(wm.GetEpoch() == 0, "epoch cleared");
         std::cerr << "HARNESS_OK case=create_closed\n";
+        return 0;
+    }
+
+    if (std::strcmp(testCase, "coverage_guard") == 0) {
+        Expect(!StackWatermark::VerifyEnabled(), "coverage guard must run with verify off");
+        Expect(wm.TryBegin(7, StackWatermark::WM_OWNER_GC, 4), "begin");
+        wm.AdvanceTo(2, StackWatermark::WM_OWNER_GC);
+        Expect(!wm.HasCoveredAllFrames(), "residual frames visible");
+        // Finish must not publish a false epoch completion even without CHECKs.
+        wm.Finish(StackWatermark::WM_OWNER_GC);
+        Expect(wm.IsDone(), "traversal closed");
+        Expect(!wm.IsDone(7), "epoch completion rejected");
+        Expect(wm.TryBegin(7, StackWatermark::WM_OWNER_GC, 4), "retry incomplete epoch");
+        wm.AdvanceTo(4, StackWatermark::WM_OWNER_GC);
+        wm.Finish(StackWatermark::WM_OWNER_GC);
+        Expect(wm.IsDone(7), "retry establishes epoch completion");
+        std::cerr << "HARNESS_OK case=coverage_guard cursor=" << wm.GetCursorIndex()
+                  << " frames=" << wm.GetFrameCount() << '\n';
         return 0;
     }
 
