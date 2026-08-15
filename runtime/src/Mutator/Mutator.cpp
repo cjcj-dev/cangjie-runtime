@@ -893,15 +893,17 @@ bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, St
 #endif
     StackFrameCursor cursor(uwContext);
     bool began = stackWatermark.TryBegin(epoch, owner, cursor.FrameCount());
-    size_t rootMapMissesBefore = TracingCollector::CurrentThreadRootMapMissCount();
     if (began) {
         while (cursor.ProcessOne(visitor, *this)) {
             stackWatermark.AdvanceTo(cursor.Cursor(), owner);
         }
         VisitRawObjects(visitor);
-        scannedFrames = cursor.FrameCount();
+        // Frame coverage is the completion quantity.  FrameCount alone is the
+        // size of the snapshot and therefore cannot prove that the cursor
+        // actually processed it.
+        scannedFrames = cursor.Cursor();
     }
-    bool complete = began && TracingCollector::CurrentThreadRootMapMissCount() == rootMapMissesBefore;
+    bool complete = began && scannedFrames == stackWatermark.GetFrameCount();
     if (began) {
         if (complete) {
             stackWatermark.Finish(owner);

@@ -77,6 +77,66 @@
 namespace MapleRuntime {
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
 
+namespace {
+bool VerifyStackRootPostconditionEnabled()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return on;
+}
+
+bool InjectStackRootPostconditionFailure()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE_INJECT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return on;
+}
+
+// ZGC's finish_processing() is imperative: its return establishes that the
+// target thread's stack has been processed.  Keep the product path report-only
+// until frame coverage can also attest every root-bearing slot inside a frame.
+void VerifyStackRootPostcondition(uint64_t stackScanEpoch)
+{
+    if (!VerifyStackRootPostconditionEnabled()) {
+        return;
+    }
+
+    const bool inject = InjectStackRootPostconditionFailure();
+    bool injected = false;
+    size_t checked = 0;
+    size_t incomplete = 0;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        ++checked;
+        StackWatermark& watermark = mutator.GetStackWatermark();
+        const bool actualDone = watermark.IsDone(stackScanEpoch);
+        const bool injectedHere = inject && !injected;
+        injected = injected || injectedHere;
+        if (actualDone && !injectedHere) {
+            return;
+        }
+
+        ++incomplete;
+        LOG(RTLOG_ERROR,
+            "[GCV2][verify][stack-roots-complete] INCOMPLETE epoch=%llu mutator=%p tid=%u cjthread=%p "
+            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu injected=%d "
+            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+            static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(), mutator.GetCjthreadPtr(),
+            mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
+            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
+            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount(),
+            injectedHere ? 1 : 0);
+    });
+    LOG(RTLOG_ERROR,
+        "[GCV2][verify][stack-roots-complete] SUMMARY epoch=%llu checked=%zu incomplete=%zu injected=%d "
+        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+        static_cast<unsigned long long>(stackScanEpoch), checked, incomplete, injected ? 1 : 0);
+}
+} // namespace
+
 // Phase A (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6): races in ForwardUpdateRawRef.
 // Total counts every lost CAS -- it is the positive control, proving the site is reached at all,
 // so a zero in StillBad means "did not happen" rather than "never wired up". StillBad counts the
@@ -6997,16 +7057,19 @@ void WCollector::DoYoungGarbageCollection()
         stw = std::make_unique<ScopedStopTheWorld>("young collection", false);
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
 
-        // An incomplete concurrent cursor (RootMap miss or missing managed
-        // bounds) cannot replace the legacy phase-enum path: GcPhaseEnum also
-        // traverses stack-allocated objects through CheckAndPush, while the raw
-        // root pass below only sees direct heap roots. Re-run that exact path
-        // under the closing STW before alloc-buffer roots are merged.
+        // finish_processing semantics: under the closing STW first ask the GC
+        // owner to complete every unfinished epoch cursor. If a cursor still
+        // cannot establish DONE (for example, missing managed bounds), preserve
+        // the exact legacy phase-enum fallback before roots are merged.
         MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+            if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, stackScanEpoch, false);
+            }
             if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
             }
         });
+        VerifyStackRootPostcondition(stackScanEpoch);
     }
 
     // gchot: once-per-process (campaigns set FYS at process start, never mid-run setenv).
