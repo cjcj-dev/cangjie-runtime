@@ -81,6 +81,13 @@ void IncReason(std::array<std::atomic<uint64_t>, kReasonBuckets>& arr, size_t id
 bool Enabled()
 {
     static const bool on = EnvOn("MRT_GCV2_RECORD_REMSET_EVENTS") || EnvOn("MRT_GCPHASE_PROBE");
+    static const bool atexitArmed = []() {
+        if (on) {
+            std::atexit([]() { DumpSummary("atexit"); });
+        }
+        return on;
+    }();
+    (void)atexitArmed;
     return on;
 }
 

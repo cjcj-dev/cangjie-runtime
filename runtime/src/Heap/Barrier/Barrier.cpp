@@ -12,6 +12,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
+#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
 #include "Heap/WCollector/IdleBarrier.h"
@@ -884,6 +885,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             if (idleEdgeOn) {
                 IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, kGenYoung, kGenYoung,
                                                   static_cast<uint8_t>(REASON_HOLDER_YOUNG), holderObjGen);
+            }
+            if (UNLIKELY(YyEdgeDiag::Enabled())) {
+                YyEdgeDiag::NoteYoungToYoung(obj, fieldAddress, ref);
             }
             return;
         }

@@ -63,6 +63,7 @@
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
+#include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
@@ -7072,6 +7073,9 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.mark_from_remset");
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger);
+    }
+    if (UNLIKELY(YyEdgeDiag::Enabled())) {
+        YyEdgeDiag::PublishProductVec(reachableVec);
     }
     g_markInternalCost.Report("mark_from_remset");
     if (youngConcMark && stw != nullptr) {

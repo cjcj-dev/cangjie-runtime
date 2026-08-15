@@ -43,6 +43,7 @@ set(SRC_LIST
     "HdrWhoDiag.cpp"
     "WhoPushDiag.cpp"
     "HeldFreeDiag.cpp"
+    "YyEdgeDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
