@@ -60,6 +60,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/StartWhoDiag.h"
+#include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/MutatorManager.h"
@@ -2862,9 +2863,13 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
         }
     }
     if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+        if (UNLIKELY(WhoPushDiag::Enabled())) {
+            WhoPushDiag::NotePush(object, origin);
+        }
         if (UNLIKELY(StartWhoDiag::Enabled())) {
             if (origin != nullptr &&
-                (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0)) {
+                (std::strcmp(origin, "closure_edge") == 0 || std::strcmp(origin, "young_alloc_black") == 0 ||
+                 std::strcmp(origin, "young_satb") == 0 || std::strcmp(origin, "young_satb_final") == 0)) {
                 StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
             } else if (origin != nullptr &&
                        (std::strcmp(origin, "minor_root") == 0 ||
@@ -2899,6 +2904,50 @@ constexpr size_t kMarkStripeShift = 20; // 1 MiB address chunks, from zstripe ph
 constexpr size_t kMarkStripeMultiplier = 4;
 constexpr size_t kMarkStripeLocalCapacity = 64;
 constexpr size_t kMarkStripeMax = 64;
+
+// FYS raw workStack.push_back used to skip PushYoungObject recover + StartWho.
+// Admit the same host that FYS=0 would have pushed; never enqueue an interior.
+BaseObject* AdmitYoungObject(BaseObject* object, const char* origin, const void* slot = nullptr,
+                             BaseObject* holder = nullptr)
+{
+    if (!Heap::IsHeapAddress(object)) {
+        return nullptr;
+    }
+    if (UNLIKELY(WhoPushDiag::Enabled())) {
+        WhoPushDiag::NotePush(object, origin, slot, holder);
+    }
+    if (!Collector::PlausibleManagedObjectGate("AdmitYoungObject", object)) {
+        BaseObject* host = Collector::TryRecoverInteriorBase(object);
+        if (host == nullptr || host == object) {
+            return nullptr;
+        }
+        object = host;
+        if (!Collector::PlausibleManagedObjectGate("AdmitYoungObject.host", object)) {
+            return nullptr;
+        }
+    }
+    if (UNLIKELY(StartWhoDiag::Enabled())) {
+        if (origin != nullptr &&
+            (std::strstr(origin, "root") != nullptr || std::strstr(origin, "alloc_buffer") != nullptr ||
+             std::strstr(origin, "seal") != nullptr)) {
+            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::ROOT_DERIVED, origin, slot, holder);
+        } else if (origin != nullptr && std::strstr(origin, "remset") != nullptr) {
+            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::REMSET, origin, slot, holder);
+        } else {
+            StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin, slot, holder);
+        }
+    }
+    return object;
+}
+
+void PushAdmittedYoung(BaseObject* object, TracingCollector::WorkStack& workStack, const char* origin,
+                       const void* slot = nullptr, BaseObject* holder = nullptr)
+{
+    BaseObject* admitted = AdmitYoungObject(object, origin, slot, holder);
+    if (admitted != nullptr) {
+        workStack.push_back(admitted);
+    }
+}
 
 size_t MarkStripeCount(size_t workers)
 {
@@ -2982,9 +3031,7 @@ public:
         auto pushTarget = [collector, fullYoungScan, this](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
             if (fullYoungScan) {
-                if (Heap::IsHeapAddress(target)) {
-                    workStack.push_back(target);
-                }
+                PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
             } else {
                 collector->PushYoungObject(target, workStack, "closure_edge");
             }
@@ -3002,7 +3049,7 @@ public:
             if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
                 BaseObject* host = Collector::TryRecoverInteriorBase(object);
                 if (host != nullptr && host != object) {
-                    workStack.push_back(host);
+                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
                 }
                 continue;
             }
@@ -3038,7 +3085,7 @@ public:
                                     StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
                                                                "ghostroute.parallel.bitmap", &field, object);
                                 }
-                                workStack.push_back(target);
+                                PushAdmittedYoung(target, workStack, "ghostroute.parallel.bitmap", &field, object);
                             });
                         }
                         if (shared.pool != nullptr) {
@@ -3087,7 +3134,7 @@ public:
                                     StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
                                                                "ghostroute.parallel.legacy", &field, object);
                                 }
-                                workStack.push_back(target);
+                                PushAdmittedYoung(target, workStack, "ghostroute.parallel.legacy", &field, object);
                             });
                         }
                         if (shared.pool != nullptr) {
@@ -3422,6 +3469,9 @@ private:
         if (UNLIKELY(StartWhoDiag::Enabled())) {
             StartWhoDiag::NoteProduced(object, StartWhoDiag::Source::HEAP_FIELD, origin);
         }
+        if (UNLIKELY(WhoPushDiag::Enabled())) {
+            WhoPushDiag::NotePush(object, origin);
+        }
         PushObject(object);
     }
 
@@ -3433,7 +3483,10 @@ private:
         if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
             BaseObject* host = Collector::TryRecoverInteriorBase(object);
             if (host != nullptr && host != object) {
-                PushObject(host);
+                BaseObject* admitted = AdmitYoungObject(host, "TraceYoungClosure.recover.striped");
+                if (admitted != nullptr) {
+                    PushObject(admitted);
+                }
             }
             return;
         }
@@ -3503,8 +3556,9 @@ private:
         auto pushTarget = [this, collector](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
             if (shared.fullYoungScan) {
-                if (Heap::IsHeapAddress(target)) {
-                    PushObject(target);
+                BaseObject* admitted = AdmitYoungObject(target, "closure_edge.fys.striped", &field);
+                if (admitted != nullptr) {
+                    PushObject(admitted);
                 }
             } else {
                 PushFilteredYoung(target, "closure_edge");
@@ -3554,8 +3608,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             uint64_t t0 = TimeUtil::NanoSeconds();
             BaseObject* target = ResolveMinorReference(field);
             if (fullYoungScan) {
-                if (Heap::IsHeapAddress(target)) {
-                    workStack.push_back(target);
+                size_t before = workStack.size();
+                PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
+                if (workStack.size() > before) {
                     ++g_markInternalCost.edgeYoungPushN;
                 }
             } else {
@@ -3574,11 +3629,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         }
         BaseObject* target = ResolveMinorReference(field);
         if (fullYoungScan) {
-            if (Heap::IsHeapAddress(target)) {
-                workStack.push_back(target);
-                if (markCostMode == 2) {
-                    ++g_markInternalCost.edgeYoungPushN;
-                }
+            size_t before = (markCostMode == 2) ? workStack.size() : 0;
+            PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
+            if (markCostMode == 2 && workStack.size() > before) {
+                ++g_markInternalCost.edgeYoungPushN;
             }
         } else {
             size_t before = (markCostMode == 2) ? workStack.size() : 0;
@@ -3603,7 +3657,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
                 BaseObject* host = Collector::TryRecoverInteriorBase(object);
                 if (host != nullptr && host != object) {
-                    workStack.push_back(host);
+                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
                 }
                 ++g_markInternalCost.skipGateN;
                 g_markInternalCost.popGateNs += TimeUtil::NanoSeconds() - t0;
@@ -3628,7 +3682,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (!Collector::PlausibleManagedObjectGate("TraceYoungClosure", object)) {
                 BaseObject* host = Collector::TryRecoverInteriorBase(object);
                 if (host != nullptr && host != object) {
-                    workStack.push_back(host);
+                    PushAdmittedYoung(host, workStack, "TraceYoungClosure.recover");
                 }
                 if (markCostMode == 2) {
                     ++g_markInternalCost.skipGateN;
@@ -3688,7 +3742,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
                                                        "ghostroute.serial.bitmap", &field, object);
                         }
-                        workStack.push_back(target);
+                        PushAdmittedYoung(target, workStack, "ghostroute.serial.bitmap", &field, object);
                     });
                     continue;
                 }
@@ -3737,7 +3791,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
                                                        "ghostroute.serial.legacy", &field, object);
                         }
-                        workStack.push_back(target);
+                        PushAdmittedYoung(target, workStack, "ghostroute.serial.legacy", &field, object);
                     });
                 }
                 continue;
@@ -4137,7 +4191,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
                 continue;
             }
             if (fullYoungScan) {
-                workStack.push_back(obj);
+                PushAdmittedYoung(obj, workStack, "young_satb.fys");
             } else {
                 PushYoungObject(obj, workStack, "young_satb");
             }
@@ -6813,9 +6867,7 @@ void WCollector::DoYoungGarbageCollection()
                 allocationRoots.insert(object);
             }
             if (fullYoungScan) {
-                if (Heap::IsHeapAddress(object)) {
-                    workStack.push_back(object);
-                }
+                PushAdmittedYoung(object, workStack, "alloc_buffer.fys");
             } else {
                 PushYoungObject(object, workStack, "alloc_buffer");
             }
@@ -6837,7 +6889,7 @@ void WCollector::DoYoungGarbageCollection()
                             g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
                         }
                     }
-                    workStack.push_back(object);
+                    PushAdmittedYoung(object, workStack, "minor_root.fys");
                 }
             } else {
                 // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
@@ -7007,13 +7059,13 @@ void WCollector::DoYoungGarbageCollection()
                             }
                         });
                     }
-                    object->ForEachRefField([this, &workStack, fullYoungScan](RefField<>& field) {
+                    object->ForEachRefField([this, &workStack, fullYoungScan, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
                         }
                         if (fullYoungScan) {
-                            workStack.push_back(target);
+                            PushAdmittedYoung(target, workStack, "young_alloc_black.fys", &field, object);
                         } else {
                             PushYoungObject(target, workStack, "young_alloc_black");
                         }
@@ -7044,8 +7096,9 @@ void WCollector::DoYoungGarbageCollection()
                             allocationRoots.insert(object);
                         }
                         if (fullYoungScan) {
-                            if (Heap::IsHeapAddress(object)) {
-                                workStack.push_back(object);
+                            size_t before = workStack.size();
+                            PushAdmittedYoung(object, workStack, "alloc_buffer_final.fys");
+                            if (workStack.size() > before) {
                                 ++rootExtraN;
                             }
                         } else {
@@ -7058,8 +7111,9 @@ void WCollector::DoYoungGarbageCollection()
                     }
                     VisitMinorRoots([this, fullYoungScan, &workStack, &rootExtraN](BaseObject* object) {
                         if (fullYoungScan) {
-                            if (Heap::IsHeapAddress(object)) {
-                                workStack.push_back(object);
+                            size_t before = workStack.size();
+                            PushAdmittedYoung(object, workStack, "minor_root_final.fys");
+                            if (workStack.size() > before) {
                                 ++rootExtraN;
                             }
                         } else {
@@ -7085,8 +7139,11 @@ void WCollector::DoYoungGarbageCollection()
                             continue;
                         }
                         if (fullYoungScan) {
-                            workStack.push_back(obj);
-                            ++satbExtraN;
+                            size_t before = workStack.size();
+                            PushAdmittedYoung(obj, workStack, "young_satb_final.fys");
+                            if (workStack.size() > before) {
+                                ++satbExtraN;
+                            }
                         } else {
                             size_t before = workStack.size();
                             PushYoungObject(obj, workStack, "young_satb_final");
@@ -7147,7 +7204,7 @@ void WCollector::DoYoungGarbageCollection()
                                 StartWhoDiag::NoteProduced(target, StartWhoDiag::Source::HEAP_FIELD,
                                                            "youngconc.field_rescan", &field, object);
                             }
-                            fieldExtra.push_back(target);
+                            PushAdmittedYoung(target, fieldExtra, "youngconc.field_rescan", &field, object);
                         });
                     }
                     fieldExtraN = fieldExtra.size();
@@ -7241,7 +7298,7 @@ void WCollector::DoYoungGarbageCollection()
                                                "youngstatic.seal", &root);
                 }
                 (void)MarkObject(obj);
-                workStack.push_back(obj);
+                PushAdmittedYoung(obj, workStack, "youngstatic.seal");
                 ++sealed;
             });
             if (!workStack.empty()) {
