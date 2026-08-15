@@ -8,9 +8,17 @@
 
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+
+#if defined(_WIN64)
+#include <windows.h>
+#elif defined(__linux__) || defined(__APPLE__) || defined(__OHOS__)
+#include <sys/mman.h>
+#include <unistd.h>
+#endif
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -35,7 +43,7 @@ constexpr size_t kDefaultMaxFailures = 20;
 // si_addr=0x18 SEGV_MAPERR (zstripe baseline_serial_post, si_code=1).
 constexpr uintptr_t kMinPlausibleTypeInfoAddr = 0x100000000ULL;
 
-bool TipAddrSafeToDereference(uintptr_t tipAddr)
+bool TipAddrLooksPlausible(uintptr_t tipAddr)
 {
     if (tipAddr < kMinPlausibleTypeInfoAddr) {
         return false;
@@ -44,6 +52,56 @@ bool TipAddrSafeToDereference(uintptr_t tipAddr)
         return false;
     }
     return true;
+}
+
+// Verifier-only: is the TypeInfo page mapped? Product paths never load type@+8
+// on leftover payload tips. After the 4GiB floor, POST_EVAC still SEGV'd on
+// unmapped tips (cand-fork rbx=0x6c6275700a70 → si_addr=+8; basic cand
+// rbx=0x3500020428). mincore/VirtualQuery report that; they do not relax
+// IsVaildType / IsValidObject / PlausibleManagedObjectGate.
+bool TipPageIsMapped(uintptr_t tipAddr)
+{
+    static thread_local uintptr_t lastMappedPage = 0;
+#if defined(_WIN64)
+    SYSTEM_INFO info;
+    GetSystemInfo(&info);
+    const uintptr_t pageSize = static_cast<uintptr_t>(info.dwPageSize);
+#else
+    static const uintptr_t pageSize = static_cast<uintptr_t>(sysconf(_SC_PAGESIZE));
+#endif
+    if (pageSize == 0) {
+        return false;
+    }
+    const uintptr_t page = tipAddr & ~(pageSize - 1);
+    if (page == lastMappedPage) {
+        return true;
+    }
+#if defined(_WIN64)
+    MEMORY_BASIC_INFORMATION memoryInfo;
+    if (VirtualQuery(reinterpret_cast<const void*>(tipAddr), &memoryInfo, sizeof(memoryInfo)) == 0) {
+        return false;
+    }
+    if (memoryInfo.State != MEM_COMMIT || (memoryInfo.Protect & PAGE_NOACCESS) != 0) {
+        return false;
+    }
+    lastMappedPage = page;
+    return true;
+#elif defined(__linux__) || defined(__APPLE__) || defined(__OHOS__)
+    unsigned char vec = 0;
+    if (mincore(reinterpret_cast<void*>(page), pageSize, reinterpret_cast<unsigned char*>(&vec)) != 0) {
+        (void)errno;
+        return false;
+    }
+    lastMappedPage = page;
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool TipAddrSafeToDereference(uintptr_t tipAddr)
+{
+    return TipAddrLooksPlausible(tipAddr) && TipPageIsMapped(tipAddr);
 }
 
 // Defect channel (BAD_OBJ): real invariant-H breaks — invalid-kind / tip-in-heap /
@@ -103,8 +161,9 @@ void PushSample(HeapVerifyStats& stats, void* addr)
 //   2) misaligned → INFO (true phenomenon; not defect D — gcvtag CORE_PC)
 //   3) tip ∈ heap address range → DEFECT (defect D: tip in heap anonymous)
 //   4) tip below the product-path floor (Collector.cpp TipWordLooksLikeTypeInfo)
-//      → DEFECT without dereference. Old code called IsVaildType here and SEGV'd
-//      on small-integer tips (postevac: tip=0x10, si_addr=0x18).
+//      or on an unmapped page → DEFECT without dereference. Old code called
+//      IsVaildType here and SEGV'd (postevac: tip=0x10 → si_addr=0x18;
+//      leftover payload tip=0x6c6275700a70 → si_addr=+8).
 //   5) !IsVaildType() → DEFECT (type byte ≥ TYPE_KIND_MAX)
 //   6) TypeInfoManager::ContainsAddress(tip) → strongest online positive
 //   7) else non-heap + valid type → accept (static TypeInfo in load module)
@@ -128,6 +187,17 @@ HeapVerifyChannel CheckTypeInfoRegion(TypeInfo* tip, HeapVerifyStats& stats, con
         reason = "typeinfo-in-heap";
         return HeapVerifyChannel::Defect;
     }
+    // TIM mmap is mapped by construction — accept before the page probe.
+    if (TypeInfoManager::GetTypeInfoManager().ContainsAddress(tipAddr)) {
+        if (!tip->IsVaildType()) {
+            ++stats.h2InvalidTypeKind;
+            reason = "invalid-type-kind";
+            return HeapVerifyChannel::Defect;
+        }
+        ++stats.h2TipInTim;
+        reason = "ok";
+        return HeapVerifyChannel::Ok;
+    }
     // Product PlausibleManagedObjectGate rejects this set before any TypeInfo
     // field load. The verifier must report it, not crash on type@+8.
     if (!TipAddrSafeToDereference(tipAddr)) {
@@ -140,11 +210,7 @@ HeapVerifyChannel CheckTypeInfoRegion(TypeInfo* tip, HeapVerifyStats& stats, con
         reason = "invalid-type-kind";
         return HeapVerifyChannel::Defect;
     }
-    if (TypeInfoManager::GetTypeInfoManager().ContainsAddress(tipAddr)) {
-        ++stats.h2TipInTim;
-    } else {
-        ++stats.h2TipNonHeapOk;
-    }
+    ++stats.h2TipNonHeapOk;
     reason = "ok";
     return HeapVerifyChannel::Ok;
 }
