@@ -773,6 +773,13 @@ public:
         if (IsFreeRegion() || IsGarbageRegion() || GetRegionType() == RegionType::FREE_REGION) {
             return true;
         }
+        if (!PlausibleManagedObjectGate("RegionInfo::EnqueueObject", const_cast<BaseObject*>(obj))) {
+            // Rejected objects are reported as already enqueued: ShouldEnqueue
+            // treats true as "do not SATB-push". Lost work is the SATB entry and
+            // the later mark/trace of this address; if the gate ever rejects a
+            // real object, that object's SATB-driven liveness is the miss.
+            return true;
+        }
         if (IsLargeRegion()) {
             if (metadata.isEnqueued != 1) {
                 SetEnqueuedRegionFlag(1);
