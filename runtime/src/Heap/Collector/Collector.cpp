@@ -625,6 +625,12 @@ BaseObject* Collector::FindLatestVersion(BaseObject* obj) const
 
     BaseObject* to = FindToVersion(obj);
     if (to != nullptr) {
+        if (to != obj && Heap::IsHeapAddress(to) && !to->IsValidObject()) {
+            CHECK_DETAIL(obj->IsValidObject(),
+                         "FindLatestVersion: route dest %p has no tip and from %p is not valid",
+                         to, obj);
+            return obj;
+        }
         return to;
     }
     CHECK_DETAIL(obj->IsValidObject(),
