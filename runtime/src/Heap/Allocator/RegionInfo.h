@@ -36,6 +36,7 @@
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
+#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Allocator/RouteTicket.h"
 #include "Heap/Verify/AllocPhaseDiag.h"
 #include "Heap/Verify/DiagGate.h"
@@ -676,6 +677,12 @@ public:
     // MarkBits returns true if already marked; false on first paint. AddLive only then.
     bool MarkObject(const BaseObject* obj)
     {
+        if (!PlausibleManagedObjectGate("RegionInfo::MarkObject.unsized", const_cast<BaseObject*>(obj))) {
+            // Rejected objects are deliberately reported as already marked: callers must not
+            // enqueue/scan them. If the gate ever rejects a real object, its liveness and
+            // transitive reference closure are the work lost by this fail-closed branch.
+            return true;
+        }
         if (IsLargeRegion()) {
             if (metadata.isMarked != 1) {
                 SetMarkedRegionFlag(1);

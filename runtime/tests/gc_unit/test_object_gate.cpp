@@ -11,7 +11,9 @@
 #include <cstdint>
 #include <cstring>
 
+#include "Heap/Allocator/SlotList.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/ManagedObjectGate.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
@@ -74,4 +76,19 @@ GC_TEST(ObjectGate, NonInteriorNoFalseRecover)
     GcHeapFixture fx;
     BaseObject* host = Collector::TryRecoverInteriorBase(fx.obj0);
     GC_EXPECT_TRUE(host == nullptr);
+}
+
+// sizegate2: allocator-header consumers fail closed on a FREE_REGION without
+// entering BaseObject::GetSize. This is the deterministic counterpart to the
+// stochastic compiler-load GetSize/0x8 signature.
+GC_TEST(ObjectGate, HeaderConsumersRejectFreeRegion)
+{
+    GcHeapFixture fx;
+    fx.region0->SetRegionType(RegionInfo::RegionType::FREE_REGION);
+
+    GC_EXPECT_FALSE(MapleRuntime::PlausibleManagedObjectGate("gc_unit.free", fx.obj0));
+    GC_EXPECT_TRUE(fx.region0->MarkObject(fx.obj0));
+
+    SlotList slots;
+    GC_EXPECT_FALSE(slots.ClearExtraContent(fx.obj0));
 }

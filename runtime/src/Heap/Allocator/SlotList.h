@@ -9,6 +9,7 @@
 #define MRT_SLOT_LIST_H
 
 #include "Common/BaseObject.h"
+#include "Heap/Collector/ManagedObjectGate.h"
 
 namespace MapleRuntime {
 struct ObjectSlot {
@@ -21,7 +22,11 @@ public:
     void PushFront(BaseObject* slot)
     {
         ObjectSlot* headSlot = reinterpret_cast<ObjectSlot*>(slot);
-        ClearExtraContent(slot);
+        if (!ClearExtraContent(slot)) {
+            // Do not link an uncleared, rejected slot: it would later be handed back as
+            // pinned allocation storage. The slot stays stranded until region reclamation.
+            return;
+        }
         headSlot->next = head;
         head = headSlot;
     }
@@ -29,13 +34,19 @@ public:
     void Clear() { head = nullptr; }
 
     // Clear the rest memory of slot object if the slot object size is greater than ObjectSlot(16 Bytes).
-    void ClearExtraContent(BaseObject* slot)
+    bool ClearExtraContent(BaseObject* slot)
     {
+        if (!PlausibleManagedObjectGate("SlotList::ClearExtraContent", slot)) {
+            // The caller treats false as "do not add to the free-slot list". Stale payload
+            // remains uncleared, and this slot's individual reuse opportunity is lost.
+            return false;
+        }
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
             CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
         }
+        return true;
     }
 
 private:
