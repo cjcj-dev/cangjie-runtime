@@ -9,6 +9,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <new>
+#include <vector>
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
 #include <cstdio>
 #include <dlfcn.h>
@@ -172,6 +173,20 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
 
+    // remsetdrain: both switches are default-off.  The probe separates bitmap decode
+    // from unordered_set insertion without changing the drained slot identity.  The
+    // candidate only pre-sizes the existing destination from the bitmap's exact
+    // distinct count; it does not weaken or bypass any producer/backstop scan.
+    static const bool breakdownProbe = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_DRAIN_PROBE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool reserveDestination = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const uint64_t drainStartNs = breakdownProbe ? TimeUtil::NanoSeconds() : 0;
+
     // DoYoungGarbageCollection owns a ScopedStopTheWorld across this operation.
     // GC workers start rebuilding records only after this synchronous drain returns.
     size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
@@ -180,28 +195,82 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
                  "remembered-set next buffer is not empty at minor swap");
     activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
 
-    for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
-        uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
-        while (dirty != 0) {
-            unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
-            size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
-            if (wordIdx < wordCount) {
-                uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
-                while (word != 0) {
-                    unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
-                    size_t bit = wordIdx * kBitsPerWord + bitInWord;
-                    if (bit < bitCount) {
-                        records.insert(heapStart + bit * kFieldBytes);
+    const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
+    if (reserveDestination) {
+        records.reserve(expectedRecords);
+    }
+
+    uint64_t bitmapWalkNs = 0;
+    uint64_t setInsertNs = 0;
+    if (breakdownProbe) {
+        // One dirty-map word covers at most 4096 field slots.  Batch at that
+        // boundary so clock reads do not perturb every insertion, while keeping
+        // the same monotonically increasing insert order and normal rehashes.
+        std::vector<MAddress> decoded;
+        decoded.reserve(kBitsPerWord * kBitsPerWord);
+        for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+            decoded.clear();
+            uint64_t startNs = TimeUtil::NanoSeconds();
+            uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
+            while (dirty != 0) {
+                unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+                size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
+                if (wordIdx < wordCount) {
+                    uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
+                    while (word != 0) {
+                        unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                        size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                        if (bit < bitCount) {
+                            decoded.push_back(heapStart + bit * kFieldBytes);
+                        }
+                        word &= word - 1;
                     }
-                    word &= word - 1;
                 }
+                dirty &= dirty - 1;
             }
-            dirty &= dirty - 1;
+            bitmapWalkNs += TimeUtil::NanoSeconds() - startNs;
+            startNs = TimeUtil::NanoSeconds();
+            records.insert(decoded.begin(), decoded.end());
+            setInsertNs += TimeUtil::NanoSeconds() - startNs;
+        }
+    } else {
+        for (size_t dirtyIdx = 0; dirtyIdx < dirtyWordCount; ++dirtyIdx) {
+            uint64_t dirty = dirtyMaps[scanBuffer][dirtyIdx].exchange(0, std::memory_order_relaxed);
+            while (dirty != 0) {
+                unsigned wordInDirty = static_cast<unsigned>(__builtin_ctzll(dirty));
+                size_t wordIdx = dirtyIdx * kBitsPerWord + wordInDirty;
+                if (wordIdx < wordCount) {
+                    uint64_t word = bitmaps[scanBuffer][wordIdx].exchange(0, std::memory_order_relaxed);
+                    while (word != 0) {
+                        unsigned bitInWord = static_cast<unsigned>(__builtin_ctzll(word));
+                        size_t bit = wordIdx * kBitsPerWord + bitInWord;
+                        if (bit < bitCount) {
+                            records.insert(heapStart + bit * kFieldBytes);
+                        }
+                        word &= word - 1;
+                    }
+                }
+                dirty &= dirty - 1;
+            }
         }
     }
     size_t recorded = recordCounts[scanBuffer].exchange(0, std::memory_order_relaxed);
     CHECK_DETAIL(recorded == records.size(), "remembered-set count mismatch: bitmap=%zu records=%zu", recorded,
                  records.size());
+    if (breakdownProbe) {
+        uint64_t drainTotalNs = TimeUtil::NanoSeconds() - drainStartNs;
+        uint64_t otherNs = drainTotalNs > bitmapWalkNs + setInsertNs
+            ? drainTotalNs - bitmapWalkNs - setInsertNs
+            : 0;
+        VLOG(REPORT,
+             "[GCV2][remsetdrain][breakdown] records=%zu reserve=%u bitmapWalkNs=%llu "
+             "setInsertNs=%llu otherNs=%llu drainTotalNs=%llu buckets=%zu loadMilli=%zu",
+             recorded, static_cast<unsigned>(reserveDestination),
+             static_cast<unsigned long long>(bitmapWalkNs), static_cast<unsigned long long>(setInsertNs),
+             static_cast<unsigned long long>(otherNs), static_cast<unsigned long long>(drainTotalNs),
+             records.bucket_count(),
+             records.bucket_count() == 0 ? 0 : records.size() * 1000 / records.bucket_count());
+    }
 
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
