@@ -3573,7 +3573,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
-    const bool useParallel = threadPool != nullptr && !forceSerialEnv && !forceSerialForCost;
+    const bool useParallel = threadPool != nullptr && std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr &&
+                             !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
         VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
