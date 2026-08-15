@@ -99,7 +99,7 @@ bool InjectStackRootPostconditionFailure()
 // ZGC's finish_processing() is imperative: its return establishes that the
 // target thread's stack has been processed.  Keep the product path report-only
 // until frame coverage can also attest every root-bearing slot inside a frame.
-void VerifyStackRootPostcondition(uint64_t stackScanEpoch)
+void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
 {
     if (!VerifyStackRootPostconditionEnabled()) {
         return;
@@ -121,19 +121,19 @@ void VerifyStackRootPostcondition(uint64_t stackScanEpoch)
 
         ++incomplete;
         LOG(RTLOG_ERROR,
-            "[GCV2][verify][stack-roots-complete] INCOMPLETE epoch=%llu mutator=%p tid=%u cjthread=%p "
+            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
             "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu injected=%d "
             "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-            static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(), mutator.GetCjthreadPtr(),
-            mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
+            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
+            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
             static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
             static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount(),
             injectedHere ? 1 : 0);
     });
     LOG(RTLOG_ERROR,
-        "[GCV2][verify][stack-roots-complete] SUMMARY epoch=%llu checked=%zu incomplete=%zu injected=%d "
+        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu injected=%d "
         "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
-        static_cast<unsigned long long>(stackScanEpoch), checked, incomplete, injected ? 1 : 0);
+        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete, injected ? 1 : 0);
 }
 } // namespace
 
@@ -1489,21 +1489,79 @@ void WCollector::TraceHeap()
     // plaincensus Phase 1a: measure plain HeapSlots before major mark.
     RunPlainCensus("pre-major-mark", false);
 
-    // Full collection starts young and old marking in the same pause, as
-    // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
-    flip_young_mark_start();
-    flip_old_mark_start();
+    const bool concurrentStackScan = MutatorManager::ConcurrentStackScanEnabled();
+    uint64_t stackScanEpoch = 0;
+
+    if (concurrentStackScan) {
+        // Publish the mark colours and ENUM barrier while every mutator is stopped.
+        // An epoch ack may then enumerate its own stack, or the handshake GC owner
+        // may enumerate a parked mutator, without running the legacy enum first.
+        ScopedStopTheWorld stw("major stack scan prepare", false);
+        flip_young_mark_start();
+        flip_old_mark_start();
+        Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_ENUM);
+        Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
+    } else {
+        // Full collection starts young and old marking in the same pause, as
+        // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
+        flip_young_mark_start();
+        flip_old_mark_start();
+    }
+
+    if (concurrentStackScan) {
+        EpochHandshakeStats handshake = MutatorManager::Instance().RunEpochHandshake("pre-major-stack");
+        stackScanEpoch = handshake.epoch;
+        CHECK_DETAIL(stackScanEpoch != 0 && handshake.stackScanned + handshake.stackFallback == handshake.requested,
+                     "major concurrent stack scan accounting failed: epoch=%llu requested=%zu scanned=%zu "
+                     "fallback=%zu",
+                     static_cast<unsigned long long>(stackScanEpoch), handshake.requested, handshake.stackScanned,
+                     handshake.stackFallback);
+    }
 
     {
         MRT_PHASE_TIMER("enum roots & update old pointers within");
-        TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
-        DoEnumeration(workStack, foreignStack);
+        if (concurrentStackScan) {
+            // This is major's root-enumeration closing edge. StopTheWorld establishes
+            // InSaferegion for the fixed mutator roster, so WM_OWNER_GC may finish a
+            // different mutator's epoch cursor. If completion still cannot be
+            // established, run the legacy enum but leave the watermark incomplete;
+            // the report-only postcondition below must observe that residual state.
+            {
+                ScopedStopTheWorld stw("major stack scan close", false);
+                TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+                MutatorManager::Instance().VisitAllMutators([stackScanEpoch](Mutator& mutator) {
+                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM, stackScanEpoch, false);
+                    }
+                    if (!mutator.GetStackWatermark().IsDone(stackScanEpoch)) {
+                        (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
+                    }
+                });
+                // CLEAR freezes further ENUM pushes before releasing the
+                // mutator-list lock owned by StopTheWorld. DoEnumeration cannot
+                // run inside this scope: MergeMutatorRoots takes that same
+                // non-recursive write lock.
+            }
+
+            // Merge mutator alloc-buffer roots before declaring enumeration closed.
+            // Mutators are under the TRACE barrier's CLEAR phase, but DoTracing has
+            // not started; this is the last point at which an incomplete stack-root
+            // receipt can be reported before any mark-closure work consumes the roots.
+            DoEnumeration(workStack, foreignStack);
+            VerifyStackRootPostcondition(stackScanEpoch, "major");
+            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        } else {
+            TransitionToGCPhase(GCPhase::GC_PHASE_ENUM, true);
+            DoEnumeration(workStack, foreignStack);
+        }
     }
 
     {
         MRT_PHASE_TIMER("trace live objects & update old pointers in ref-fields");
         markedObjectCount.store(0, std::memory_order_relaxed);
-        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        if (!concurrentStackScan) {
+            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         DoTracing(workStack, foreignStack);
 
@@ -7069,7 +7127,7 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
             }
         });
-        VerifyStackRootPostcondition(stackScanEpoch);
+        VerifyStackRootPostcondition(stackScanEpoch, "minor");
     }
 
     // gchot: once-per-process (campaigns set FYS at process start, never mid-run setenv).
