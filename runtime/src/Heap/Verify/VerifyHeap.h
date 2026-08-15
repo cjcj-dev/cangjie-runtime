@@ -8,10 +8,11 @@
 #define MRT_VERIFY_HEAP_H
 
 #include <cstddef>
+#include <unordered_set>
 
 namespace MapleRuntime {
 
-// Full-heap object verifier — HotSpot G1HeapVerifier::verify inventory #10.
+class BaseObject;
 //
 // Invariant H (per live object o walked via Heap::ForEachObj):
 //   H1  o->IsValidObject()
@@ -28,7 +29,10 @@ namespace MapleRuntime {
 //
 // Enumeration is independent of minor reachableObjects / TraceYoungClosure / remset.
 // force=true: run even when MRT_GCV2_VERIFY_HEAP is unset (post-evac hook uses this).
-void VerifyHeapObjects(const char* point, bool force = false);
+// rootReachableHolders, when supplied, is DiffPathExplainer's independent full-root
+// closure.  H3 uses it to split dead inventory from an edge a product walk can reach.
+void VerifyHeapObjects(const char* point, bool force = false,
+                       const std::unordered_set<BaseObject*>* rootReachableHolders = nullptr);
 
 } // namespace MapleRuntime
 

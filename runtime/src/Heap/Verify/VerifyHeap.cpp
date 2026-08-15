@@ -119,6 +119,9 @@ struct HeapVerifyStats {
     size_t h2TipInTim = 0; // tip in TypeInfoManager mmap (positive online hit)
     size_t h2TipNonHeapOk = 0;
     size_t h3BadRef = 0;
+    size_t h3ReachableHolder = 0;
+    size_t h3UnreachableHolder = 0;
+    size_t h3ReachabilityUnknown = 0;
     size_t h4BadRegion = 0;
     size_t failures = 0;     // defect-channel count (drives FATAL / maxFailures)
     size_t infoCount = 0;    // INFO-channel count (misaligned etc.)
@@ -324,9 +327,63 @@ int SampleTypeByte(BaseObject* obj)
     }
     return -1;
 }
+
+void ReportH3BadRegion(HeapVerifyStats& stats, size_t maxFailures, const char* point, BaseObject* target,
+                       BaseObject* holder, RefField<>& field,
+                       const std::unordered_set<BaseObject*>* rootReachableHolders)
+{
+    const bool reachabilityKnown = rootReachableHolders != nullptr;
+    const bool holderReachable = reachabilityKnown && rootReachableHolders->count(holder) != 0;
+    if (!reachabilityKnown) {
+        ++stats.h3ReachabilityUnknown;
+    } else if (holderReachable) {
+        ++stats.h3ReachableHolder;
+    } else {
+        ++stats.h3UnreachableHolder;
+    }
+
+    ++stats.failures;
+    if (stats.failures > maxFailures) {
+        ++stats.truncated;
+        return;
+    }
+    PushSample(stats, target);
+
+    RegionInfo* targetRegion =
+        target == nullptr ? nullptr : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    RegionInfo* holderRegion =
+        holder == nullptr ? nullptr : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    uintptr_t targetHeader0 = 0;
+    uintptr_t targetHeader1 = 0;
+    TypeInfo* targetTip = nullptr;
+    if (target != nullptr) {
+        const uintptr_t* raw = reinterpret_cast<const uintptr_t*>(target);
+        targetHeader0 = raw[0];
+        targetHeader1 = raw[1];
+        targetTip = target->GetTypeInfo();
+    }
+
+    TypeInfo* holderTip = holder == nullptr ? nullptr : holder->GetTypeInfo();
+    const char* holderType = holderTip == nullptr || holderTip->GetName() == nullptr ? "?" : holderTip->GetName();
+
+    VLOG(REPORT,
+         "[GCV2][verify][heap] BAD_OBJ reason=h3-target-bad-region point=%s "
+         "obj=%p related=%p field=%p fieldOffset=%zd typeByte=%d "
+         "region=%s regionBase=%p tip=%p header0=%#zx header1=%#zx "
+         "holderRegion=%s holderRegionBase=%p holderTip=%p holderType=%s "
+         "holderReachabilityKnown=%u holderReachable=%u "
+         "failure=%zu max=%zu env=MRT_GCV2_VERIFY_HEAP=1",
+         point == nullptr ? "?" : point, target, holder, &field, BaseObject::FieldOffset(holder, &field),
+         SampleTypeByte(target), RegionKindName(targetRegion),
+         targetRegion == nullptr ? nullptr : reinterpret_cast<void*>(targetRegion->GetRegionStart()), targetTip,
+         static_cast<size_t>(targetHeader0), static_cast<size_t>(targetHeader1), RegionKindName(holderRegion),
+         holderRegion == nullptr ? nullptr : reinterpret_cast<void*>(holderRegion->GetRegionStart()), holderTip,
+         holderType, static_cast<unsigned>(reachabilityKnown), static_cast<unsigned>(holderReachable),
+         stats.failures, maxFailures);
+}
 } // namespace
 
-void VerifyHeapObjects(const char* point, bool force)
+void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<BaseObject*>* rootReachableHolders)
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC DIAGNOSTIC pattern.
     // force=true lets post-evac run without enabling the global pre-evacuate gate.
@@ -361,7 +418,7 @@ void VerifyHeapObjects(const char* point, bool force)
     HeapVerifyStats stats;
 
     Heap::GetHeap().ForEachObj(
-        [&stats, maxFailures](BaseObject* obj) {
+        [&stats, maxFailures, point, rootReachableHolders](BaseObject* obj) {
             if (obj == nullptr) {
                 return;
             }
@@ -391,7 +448,7 @@ void VerifyHeapObjects(const char* point, bool force)
             if (!obj->HasRefField()) {
                 return;
             }
-            obj->ForEachRefField([&stats, maxFailures, obj](RefField<>& field) {
+            obj->ForEachRefField([&stats, maxFailures, point, rootReachableHolders, obj](RefField<>& field) {
                 BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr) {
                     return;
@@ -404,7 +461,7 @@ void VerifyHeapObjects(const char* point, bool force)
                 if (tRegion == nullptr || tRegion->IsFreeRegion() || tRegion->IsGarbageRegion()) {
                     ++stats.h3BadRef;
                     ++stats.h4BadRegion;
-                    ReportDefect(stats, maxFailures, "h3-target-bad-region", target, obj, SampleTypeByte(target));
+                    ReportH3BadRegion(stats, maxFailures, point, target, obj, field, rootReachableHolders);
                     return;
                 }
                 const char* tReason = "ok";
@@ -424,13 +481,15 @@ void VerifyHeapObjects(const char* point, bool force)
          "[GCV2][verify][heap] point=%s invoke=%zu env=MRT_GCV2_VERIFY_HEAP=1 "
          "objects=%zu failures=%zu info=%zu truncated=%zu infoTruncated=%zu "
          "H1_invalid=%zu H2_nullTip=%zu H2_misalign=%zu H2_tipInHeap=%zu H2_badKind=%zu "
-         "H2_tipInTim=%zu H2_tipNonHeapOk=%zu H3_badRef=%zu H4_badRegion=%zu "
+         "H2_tipInTim=%zu H2_tipNonHeapOk=%zu H3_badRef=%zu "
+         "H3_reachableHolder=%zu H3_unreachableHolder=%zu H3_reachabilityUnknown=%zu H4_badRegion=%zu "
          "costNs=%llu maxFailures=%zu "
          "samples=[%p,%p,%p,%p]",
          point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.failures, stats.infoCount,
          stats.truncated, stats.infoTruncated, stats.h1InvalidObject, stats.h2NullTip, stats.h2MisalignedTip,
          stats.h2TipInHeap, stats.h2InvalidTypeKind, stats.h2TipInTim, stats.h2TipNonHeapOk, stats.h3BadRef,
-         stats.h4BadRegion, static_cast<unsigned long long>(stats.costNs), maxFailures, stats.samples[0],
+         stats.h3ReachableHolder, stats.h3UnreachableHolder, stats.h3ReachabilityUnknown, stats.h4BadRegion,
+         static_cast<unsigned long long>(stats.costNs), maxFailures, stats.samples[0],
          stats.samples[1], stats.samples[2], stats.samples[3]);
 
     if (EnvEnabled("MRT_GCV2_VERIFY_HEAP_FATAL") && stats.failures != 0) {

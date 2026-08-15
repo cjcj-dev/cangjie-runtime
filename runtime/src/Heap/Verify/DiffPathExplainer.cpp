@@ -138,7 +138,14 @@ void RunFullClosure(const std::function<void(const std::function<void(BaseObject
 {
     std::vector<BaseObject*> stack;
     auto seed = [&](BaseObject* object, const ParentEdge& edge) {
+        // A free/garbage target proves its already-reachable holder is live,
+        // but must not itself enter the closure: following reclaimed payload
+        // invents reachability and lets the diagnostic walk that payload.
         if (!Heap::IsHeapAddress(object)) {
+            return;
+        }
+        RegionInfo* seedRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+        if (seedRegion == nullptr || seedRegion->IsFreeRegion() || seedRegion->IsGarbageRegion()) {
             return;
         }
         if (!reachable.insert(object).second) {
@@ -168,7 +175,11 @@ void RunFullClosure(const std::function<void(const std::function<void(BaseObject
             HeapSlot<>& referentField =
                 HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             BaseObject* referent = resolveField(referentField);
-            if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
+            RegionInfo* referentRegion =
+                Heap::IsHeapAddress(referent) ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(referent)) :
+                                                nullptr;
+            if (referentRegion != nullptr && !referentRegion->IsFreeRegion() && !referentRegion->IsGarbageRegion() &&
+                referent->IsValidObject() && referent->HasRefField()) {
                 referent->ForEachRefField([&](RefField<>& field) {
                     BaseObject* target = resolveField(field);
                     ParentEdge e;
@@ -245,7 +256,11 @@ void RunYoungOnlyClosure(const std::function<void(const std::function<void(BaseO
             HeapSlot<>& referentField =
                 HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
             BaseObject* referent = resolveField(referentField);
-            if (Heap::IsHeapAddress(referent) && referent->IsValidObject() && referent->HasRefField()) {
+            RegionInfo* referentRegion =
+                Heap::IsHeapAddress(referent) ? RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(referent)) :
+                                                nullptr;
+            if (referentRegion != nullptr && !referentRegion->IsFreeRegion() && !referentRegion->IsGarbageRegion() &&
+                referent->IsValidObject() && referent->HasRefField()) {
                 referent->ForEachRefField([&](RefField<>& field) {
                     BaseObject* target = resolveField(field);
                     ParentEdge e;
