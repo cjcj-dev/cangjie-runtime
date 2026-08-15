@@ -91,4 +91,8 @@ GC_TEST(ObjectGate, HeaderConsumersRejectFreeRegion)
 
     SlotList slots;
     GC_EXPECT_FALSE(slots.ClearExtraContent(fx.obj0));
+
+    // sizecaller: EnqueueObject is the third header-inline GetSize caller.
+    // Gate reject must report already-enqueued so ShouldEnqueue does not SATB-push.
+    GC_EXPECT_TRUE(fx.region0->EnqueueObject(fx.obj0, 0));
 }
