@@ -202,7 +202,9 @@ void CJFileLoader::RegisterTypeInfoCreatedByFE(BaseFile* baseFile)
 {
     TypeInfoManager& typeInfoMgr = TypeInfoManager::GetTypeInfoManager();
     Uptr typeInfoBase = baseFile->GetTypeInfoBase();
-    Uptr typeInfoEnd = typeInfoBase + baseFile->GetTypeInfoTotalSize();
+    U32 typeInfoTotalSize = baseFile->GetTypeInfoTotalSize();
+    typeInfoMgr.NoteTypeInfoImage(typeInfoBase, typeInfoTotalSize);
+    Uptr typeInfoEnd = typeInfoBase + typeInfoTotalSize;
     while (typeInfoBase < typeInfoEnd) {
         TypeInfo* ti = reinterpret_cast<TypeInfo*>(typeInfoBase);
         constexpr uint32_t typeInfoAlign = 16u;

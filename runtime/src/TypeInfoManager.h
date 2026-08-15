@@ -81,6 +81,22 @@ public:
         }
         return false;
     }
+    // Product-path TypeInfo residence: TIM mmap or a loaded file's TypeInfo table.
+    // ASCII / leftover payload tips are outside both. Does not dereference tip.
+    bool IsResidentTypeInfoAddress(uintptr_t addr) const
+    {
+        if (ContainsAddress(addr)) {
+            return true;
+        }
+        for (const auto& m : imageList) {
+            if (addr >= m.first && addr < m.first + m.second) {
+                return true;
+            }
+        }
+        return false;
+    }
+    void NoteTypeInfoImage(uintptr_t base, size_t size);
+    void ForgetTypeInfoImage(uintptr_t base, size_t size);
 private:
     uintptr_t Allocate(size_t size);
     CString GetGCTibStr(TypeInfo* typeInfo);
@@ -227,6 +243,7 @@ private:
     std::atomic<U16> ttMaxUUID { 1 };
     TypeGCInfo typeGCInfo;
     std::vector<std::pair<uintptr_t, size_t>> mmapList;
+    std::vector<std::pair<uintptr_t, size_t>> imageList;
     std::unordered_map<U32, MTableDesc*> mTableList;
     // Record two special TypeInfo, Any is the subclass of all types,
     // and Object is the superclass of all classes.

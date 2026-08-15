@@ -2327,7 +2327,10 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
     if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
         reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
-        size_t objSize = obj->GetSize();
+        size_t objSize = 0;
+        if (Collector::PlausibleManagedObjectGate("EnsureRouteDomain.size", obj)) {
+            objSize = obj->GetSize();
+        }
         MAddress regionStart = region->GetRegionStart();
         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - regionStart);
         if (objSize > 0 && offset + objSize <= regionSize) {
@@ -4312,7 +4315,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
         bool targetKnown = hasKnownTypeInfo("RescanRememberedSet.target", target);
         unsigned interiorCandidateCount = 0;
-        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+        for (unsigned offset : { 8u, 16u, 24u, 32u, 40u, 48u, 56u, 64u }) {
             if (address < offset) {
                 continue;
             }
@@ -4352,7 +4355,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         }
 
         BaseObject* recovered = nullptr;
-        for (unsigned offset : { 8u, 16u, 24u, 32u }) {
+        for (unsigned offset : { 8u, 16u, 24u, 32u, 40u, 48u, 56u, 64u }) {
             if (address < offset) {
                 continue;
             }
@@ -5734,7 +5737,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     g0 = region->GetLiveInfo0ForProbe();
                     if (g0 != nullptr && g0->markBitmap != nullptr &&
                         reinterpret_cast<uintptr_t>(g0->markBitmap) != LiveInfo::TEMPORARY_PTR) {
-                        size_t objSize = obj->GetSize();
+                        size_t objSize = 0;
+                        if (Collector::PlausibleManagedObjectGate("youngstatic.pregrant.size", obj)) {
+                            objSize = obj->GetSize();
+                        }
                         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
                         if (objSize > 0 && offset + objSize <= regionSize) {
                             SealCheck::NotePaint(region, offset, objSize, "youngstatic.pregrant.ghost");

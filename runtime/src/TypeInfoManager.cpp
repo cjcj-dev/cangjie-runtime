@@ -149,6 +149,7 @@ void TypeInfoManager::Fini()
 {
     // release resources
     registeredTypeInfos.clear();
+    imageList.clear();
     for (const auto& mTable : mTableList) {
         delete mTable.second;
     }
@@ -284,6 +285,34 @@ bool TypeInfoManager::ContainsTypeInfo(TypeInfo* ti)
     return registeredTypeInfos.count(ti) != 0;
 }
 
+void TypeInfoManager::NoteTypeInfoImage(uintptr_t base, size_t size)
+{
+    if (base == 0 || size == 0) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    for (const auto& m : imageList) {
+        if (m.first == base && m.second == size) {
+            return;
+        }
+    }
+    imageList.push_back(std::make_pair(base, size));
+}
+
+void TypeInfoManager::ForgetTypeInfoImage(uintptr_t base, size_t size)
+{
+    if (base == 0 || size == 0) {
+        return;
+    }
+    std::lock_guard<std::recursive_mutex> lock(tiMutex);
+    for (auto it = imageList.begin(); it != imageList.end(); ++it) {
+        if (it->first == base && it->second == size) {
+            imageList.erase(it);
+            return;
+        }
+    }
+}
+
 void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
 {
     if (size == 0) {
@@ -294,6 +323,13 @@ void TypeInfoManager::RemoveTypeInfosInRange(uintptr_t begin, size_t size)
         uintptr_t address = reinterpret_cast<uintptr_t>(*it);
         if (address >= begin && address - begin < size) {
             it = registeredTypeInfos.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    for (auto it = imageList.begin(); it != imageList.end();) {
+        if (it->first == begin && it->second == size) {
+            it = imageList.erase(it);
         } else {
             ++it;
         }
