@@ -71,6 +71,8 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     VLOG(REPORT, "[GC] Start %s %s gcIndex= %lu", GetCollectorName(), g_gcRequests[gcReason].name, gcIndex);
     GCStats& gcStats = GetGCStats();
     gcStats.collectedBytes = 0;
+    gcStats.youngCandidateBytes = 0;
+    gcStats.youngPromotedBytes = 0;
     gcStats.gcStartTime = TimeUtil::NanoSeconds();
 
     DoGarbageCollection();
@@ -99,8 +101,19 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     g_gcTotalTimeUs.fetch_add(gcTimeNs / NS_PER_US, std::memory_order_release);
     g_gcCollectedTotalBytes.fetch_add(gcStats.collectedBytes, std::memory_order_release);
     gcStats.collectionRate = rate;
-    if (reason != GC_REASON_YOUNG) {
-        GCStats::SetPrevGCFinishTime(TimeUtil::NanoSeconds());
+    uint64_t finishTime = TimeUtil::NanoSeconds();
+    if (reason == GC_REASON_YOUNG) {
+        size_t allocatedAfter = Heap::GetHeap().GetAllocatedSize();
+        size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
+        GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
+            finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity);
+        VLOG(REPORT,
+             "[GCV2][heu-loop] minor-finish action=%s allocated-after=%zu promoted=%zu "
+             "candidate=%zu major-safety-limit=%zu",
+             GCStats::YoungHeuThrottleDecisionName(decision), allocatedAfter, gcStats.youngPromotedBytes,
+             gcStats.youngCandidateBytes, maxCapacity / 2);
+    } else {
+        gcStats.RecordMajorGCFinish(finishTime);
     }
     collectorResources.NotifyGCFinished(gcIndex);
 }

@@ -30,6 +30,9 @@ void GCStats::Init()
     gcEndTime = TimeUtil::NanoSeconds();
     collectedObjects = 0;
     collectedBytes = 0;
+    youngCandidateBytes = 0;
+    youngPromotedBytes = 0;
+    youngHeuDeferralUsed = false;
 
     fromSpaceSize = 0;
     smallGarbageSize = 0;
@@ -62,6 +65,47 @@ void GCStats::Init()
     }
     VLOG(REPORT, "[GCV2][jvm-ihop] enabled=%d initial-threshold=%zu max-capacity=%zu adaptive-update=1",
          useJvmIhop, heapThreshold.load(std::memory_order_relaxed), maxCapacity);
+}
+
+GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
+                                                               size_t promotedBytes, size_t candidateBytes,
+                                                               size_t maxCapacity)
+{
+    if (candidateBytes == 0) {
+        return YoungHeuThrottleDecision::NO_COLLECTION_SET;
+    }
+
+    // A copying major needs to preserve a to-space reserve. Do not defer it if
+    // another promotion wave of the size just observed would reach half heap.
+    const size_t majorSafetyLimit = maxCapacity / 2;
+    const bool oldPressureHigh = allocatedAfter >= majorSafetyLimit ||
+        promotedBytes >= majorSafetyLimit - allocatedAfter;
+    if (oldPressureHigh) {
+        return YoungHeuThrottleDecision::OLD_PRESSURE_HIGH;
+    }
+    if (youngHeuDeferralUsed) {
+        return YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED;
+    }
+
+    youngHeuDeferralUsed = true;
+    SetPrevGCFinishTime(timestamp);
+    return YoungHeuThrottleDecision::REFRESHED;
+}
+
+const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
+{
+    switch (decision) {
+        case YoungHeuThrottleDecision::REFRESHED:
+            return "refreshed";
+        case YoungHeuThrottleDecision::NO_COLLECTION_SET:
+            return "no-collection-set";
+        case YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED:
+            return "deferral-already-used";
+        case YoungHeuThrottleDecision::OLD_PRESSURE_HIGH:
+            return "old-pressure-high";
+        default:
+            return "invalid";
+    }
 }
 
 void GCStats::Dump() const

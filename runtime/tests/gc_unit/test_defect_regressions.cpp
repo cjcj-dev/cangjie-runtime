@@ -313,6 +313,43 @@ GC_TEST(DefectRegress, GcCompleteHeuSuppressedAfterPublish)
     GC_EXPECT_FALSE(HeuSuppressed(1'300, publishedFinish, minInterval));
 }
 
+GC_TEST(DefectRegress, YoungFinishDefersHeuAtMostOncePerMajor)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    auto first = stats.RecordYoungGCFinish(2'000, 64 * MB, 24 * MB, 32 * MB, heap);
+    GC_EXPECT_EQ(first, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
+
+    auto second = stats.RecordYoungGCFinish(3'000, 88 * MB, 24 * MB, 32 * MB, heap);
+    GC_EXPECT_EQ(second, GCStats::YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
+
+    stats.RecordMajorGCFinish(4'000);
+    auto afterMajor = stats.RecordYoungGCFinish(5'000, 64 * MB, 24 * MB, 32 * MB, heap);
+    GC_EXPECT_EQ(afterMajor, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 5'000u);
+}
+
+GC_TEST(DefectRegress, YoungFinishDoesNotDeferMajorUnderOldPressure)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    // 108 MiB live + the observed 24 MiB promotion wave would cross the
+    // copying collector's 128 MiB safety boundary.
+    auto pressure = stats.RecordYoungGCFinish(2'000, 108 * MB, 24 * MB, 32 * MB, heap);
+    GC_EXPECT_EQ(pressure, GCStats::YoungHeuThrottleDecision::OLD_PRESSURE_HIGH);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+
+    auto empty = stats.RecordYoungGCFinish(3'000, 64 * MB, 0, 0, heap);
+    GC_EXPECT_EQ(empty, GCStats::YoungHeuThrottleDecision::NO_COLLECTION_SET);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+}
+
 GC_TEST(DefectRegress, GcCountExportReadsAtomic)
 {
     size_t before = MCC_GetGCCount();
