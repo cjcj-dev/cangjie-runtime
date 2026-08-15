@@ -18,6 +18,7 @@
 #include "Common/BaseObject.h"
 #include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/ManagedObjectGate.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "TypeInfoManager.h"
@@ -443,7 +444,7 @@ void Collector::ReportMarkGoodHeapGateCounts()
 // "Did the gate fire?" under product defaults → set that env and read
 // ReportPlausibleManagedObjectGateCounts / [markfloor-obj-gate] reject= lines.
 // Reject/admit predicate is bit-identical (GATEEQUIV); only side-effect counters move.
-bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
+bool PlausibleManagedObjectGate(const char* site, BaseObject* obj)
 {
     if (obj == nullptr) {
         if (GateEquivOn()) {
@@ -575,6 +576,11 @@ bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
         }
     }
     return product;
+}
+
+bool Collector::PlausibleManagedObjectGate(const char* site, BaseObject* obj)
+{
+    return MapleRuntime::PlausibleManagedObjectGate(site, obj);
 }
 
 BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* knownBase)
