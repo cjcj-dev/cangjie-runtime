@@ -321,20 +321,16 @@ GC_TEST(DefectRegress, YoungFinishDefersHeuAtMostOncePerMajor)
 
     auto first = stats.RecordYoungGCFinish(2'000, 64 * MB, 24 * MB, 32 * MB, heap, 200, 150);
     GC_EXPECT_EQ(first, GCStats::YoungHeuThrottleDecision::REFRESHED);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 2'000u);
-    // The native-allocation controller remains tied to actual major finish.
-    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
 
     auto second = stats.RecordYoungGCFinish(3'000, 88 * MB, 24 * MB, 32 * MB, heap, 200, 150);
     GC_EXPECT_EQ(second, GCStats::YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 2'000u);
-    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
 
     stats.RecordMajorGCFinish(4'000);
     auto afterMajor = stats.RecordYoungGCFinish(5'000, 64 * MB, 24 * MB, 32 * MB, heap, 200, 150);
     GC_EXPECT_EQ(afterMajor, GCStats::YoungHeuThrottleDecision::REFRESHED);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 5'000u);
-    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 4'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 5'000u);
 }
 
 GC_TEST(DefectRegress, YoungFinishInsideExistingWindowDoesNotExtendHeuThrottle)
@@ -345,13 +341,12 @@ GC_TEST(DefectRegress, YoungFinishInsideExistingWindowDoesNotExtendHeuThrottle)
 
     auto quick = stats.RecordYoungGCFinish(2'000, 64 * MB, 24 * MB, 32 * MB, heap, 149, 150);
     GC_EXPECT_EQ(quick, GCStats::YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
 
     // The quick minor did not consume the one deferral credit.
     auto slow = stats.RecordYoungGCFinish(3'000, 64 * MB, 24 * MB, 32 * MB, heap, 150, 150);
     GC_EXPECT_EQ(slow, GCStats::YoungHeuThrottleDecision::REFRESHED);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 3'000u);
-    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 3'000u);
 }
 
 GC_TEST(DefectRegress, YoungFinishDoesNotDeferMajorUnderOldPressure)
@@ -364,11 +359,11 @@ GC_TEST(DefectRegress, YoungFinishDoesNotDeferMajorUnderOldPressure)
     // copying collector's 128 MiB safety boundary.
     auto pressure = stats.RecordYoungGCFinish(2'000, 108 * MB, 24 * MB, 32 * MB, heap, 100, 150);
     GC_EXPECT_EQ(pressure, GCStats::YoungHeuThrottleDecision::OLD_PRESSURE_HIGH);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
 
     auto empty = stats.RecordYoungGCFinish(3'000, 64 * MB, 0, 0, heap, 100, 150);
     GC_EXPECT_EQ(empty, GCStats::YoungHeuThrottleDecision::NO_COLLECTION_SET);
-    GC_EXPECT_EQ(GCStats::GetPrevHeuFinishTime(), 1'000u);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
 }
 
 GC_TEST(DefectRegress, GcCountExportReadsAtomic)
