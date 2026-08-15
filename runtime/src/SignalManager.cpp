@@ -226,10 +226,11 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         uintptr_t rax = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RAX]);
         uintptr_t r12 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R12]);
         uintptr_t r14 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R14]);
+        uintptr_t rbp = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBP]);
         TlRawDiag::NoteCrashRdi(rdi);
         StartWhoDiag::NoteCrash();
         HealPairDiag::NoteCrashRdi(rdi);
-        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14);
+        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
 #endif
     }
 }
