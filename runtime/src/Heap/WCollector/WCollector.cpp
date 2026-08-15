@@ -3105,6 +3105,81 @@ size_t MarkStripeCount(size_t workers)
     }
     return count;
 }
+
+// h3seed3 乙: live-holder slot → free|garbage target → HealSlot null.
+// Criterion fields (RegionInfo state word): IsFreeRegion() / IsGarbageRegion()
+// via TryGetRegionInfoAt(target) at the call site (closure edge or Fix).
+// Default-off counters: MRT_GCV2_MINOR_SCRUB_COUNT=1
+std::atomic<uint64_t> g_minorScrubSlotN{ 0 };
+std::atomic<uint64_t> g_minorScrubFreeN{ 0 };
+std::atomic<uint64_t> g_minorScrubGarbageN{ 0 };
+std::atomic<uint64_t> g_minorScrubClosureN{ 0 };
+std::atomic<uint64_t> g_minorScrubFixN{ 0 };
+
+bool MinorScrubCountEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MINOR_SCRUB_COUNT");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+// Returns true if the slot was scrubbed (caller must not push / treat as live edge).
+bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix)
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region == nullptr) {
+        return false;
+    }
+    const bool isFree = region->IsFreeRegion();
+    const bool isGarbage = region->IsGarbageRegion();
+    if (!isFree && !isGarbage) {
+        return false;
+    }
+    RefField<> oldField(field);
+    MAddress oldVal = raw(oldField.GetFieldValue());
+    if (oldVal != 0) {
+        (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
+                       HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
+    }
+    if (MinorScrubCountEnabled()) {
+        g_minorScrubSlotN.fetch_add(1, std::memory_order_relaxed);
+        if (isFree) {
+            g_minorScrubFreeN.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (isGarbage) {
+            g_minorScrubGarbageN.fetch_add(1, std::memory_order_relaxed);
+        }
+        if (fromFix) {
+            g_minorScrubFixN.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            g_minorScrubClosureN.fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+    return true;
+}
+
+void DumpMinorScrubCountIfEnabled(const char* point)
+{
+    if (!MinorScrubCountEnabled()) {
+        return;
+    }
+    uint64_t slots = g_minorScrubSlotN.exchange(0, std::memory_order_relaxed);
+    uint64_t freeN = g_minorScrubFreeN.exchange(0, std::memory_order_relaxed);
+    uint64_t garbN = g_minorScrubGarbageN.exchange(0, std::memory_order_relaxed);
+    uint64_t cloN = g_minorScrubClosureN.exchange(0, std::memory_order_relaxed);
+    uint64_t fixN = g_minorScrubFixN.exchange(0, std::memory_order_relaxed);
+    VLOG(REPORT,
+         "[GCV2][minor-scrub] point=%s slots=%llu free=%llu garbage=%llu closure=%llu fix=%llu "
+         "env=MRT_GCV2_MINOR_SCRUB_COUNT=1",
+         point, static_cast<unsigned long long>(slots), static_cast<unsigned long long>(freeN),
+         static_cast<unsigned long long>(garbN), static_cast<unsigned long long>(cloN),
+         static_cast<unsigned long long>(fixN));
+}
 } // namespace
 
 struct YoungMarkingShared {
@@ -3177,6 +3252,10 @@ public:
 
         auto pushTarget = [collector, fullYoungScan, this](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
+            // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
+            if (ScrubMinorFreeTarget(field, target, false)) {
+                return;
+            }
             if (fullYoungScan) {
                 PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
             } else {
@@ -3702,6 +3781,10 @@ private:
         }
         auto pushTarget = [this, collector](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
+            // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
+            if (ScrubMinorFreeTarget(field, target, false)) {
+                return;
+            }
             if (shared.fullYoungScan) {
                 BaseObject* admitted = AdmitYoungObject(target, "closure_edge.fys.striped", &field);
                 if (admitted != nullptr) {
@@ -3759,29 +3842,11 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN, g_minorLedgerCost.slotInsNew,
                            g_minorLedgerCost.slotInsNs);
     };
-    auto scrubFreeTarget = [](RefField<>& field, BaseObject* target) -> bool {
-        // h3seed2 乙: if a live holder still names a free/garbage region, null the
-        // slot during mark so pre-evacuate H3 does not inventory UAF edges.
-        if (target == nullptr || !Heap::IsHeapAddress(target)) {
-            return false;
-        }
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (region == nullptr || !(region->IsFreeRegion() || region->IsGarbageRegion())) {
-            return false;
-        }
-        RefField<> oldField(field);
-        MAddress oldVal = raw(oldField.GetFieldValue());
-        if (oldVal != 0) {
-            (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
-                           HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
-        }
-        return true;
-    };
-    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode, &scrubFreeTarget](RefField<>& field) {
+    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
         BaseObject* target = ResolveMinorReference(field);
-        if (scrubFreeTarget(field, target)) {
+        if (ScrubMinorFreeTarget(field, target, false)) {
             g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
             ++g_markInternalCost.edgeN;
             return;
@@ -3810,7 +3875,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             ++g_markInternalCost.edgeN;
         }
         BaseObject* target = ResolveMinorReference(field);
-        if (scrubFreeTarget(field, target)) {
+        if (ScrubMinorFreeTarget(field, target, false)) {
             return;
         }
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
@@ -5075,21 +5140,13 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
-    // h3seed2 乙 residual: live holder field still points at a region that minor
+    // h3seed2/3 乙 residual: live holder field still points at a region that minor
     // already CollectRegion'd (ClearUnits). Prefer silent null over UAF; CAS so
     // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
     // nulling here clears it before the next VERIFY_HEAP inventory.
-    {
-        RegionInfo* freeOrGarbage = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (freeOrGarbage != nullptr &&
-            (freeOrGarbage->IsFreeRegion() || freeOrGarbage->IsGarbageRegion())) {
-            MAddress oldVal = raw(oldField.GetFieldValue());
-            if (oldVal != 0) {
-                (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
-                               HealSite::WCollectorMinorFixForwardNull, HealNull::Allow);
-            }
-            return true;
-        }
+    // Criterion: RegionInfo::IsFreeRegion|IsGarbageRegion at this Fix call (file:line).
+    if (ScrubMinorFreeTarget(field, target, true)) {
+        return true;
     }
     // interiorsrc2 / introot: value may be RawArray+8 (derived interior). Relocate via host;
     // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
@@ -8116,6 +8173,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     // STEER4: DumpScrubCostAndReset is a no-op unless MRT_GCV2_SCRUB_COST=1.
     RegionManager::DumpScrubCostAndReset("post-minor");
+    DumpMinorScrubCountIfEnabled("post-minor");
     IdleEdgeDiag::DumpProcessTotals("post-minor");
     FysAuditDiag::DumpProcessTotals("post-minor");
     O2ORemsetDiag::DumpAndMaybeReset("post-minor", /*reset*/ true);
