@@ -7158,12 +7158,12 @@ void WCollector::DoYoungGarbageCollection()
     if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
         fullYoungScan = false;
     }
-    // remsetdrain: opt-in (`=1`) hash-work reduction; `=0` or unset keeps it off.
-    // The drain side uses the bitmap's exact distinct count to reserve its destination.  The FYS-only
-    // consumed-ledger elision is decided later, after youngConcMark is known.
+    // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
+    // The drain side uses the bitmap's exact distinct count to reserve its destination.
+    // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
     static const bool remsetHashOptRequested = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value != nullptr && std::strcmp(value, "1") == 0;
+        return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
     static const bool useBitmapLedger = []() {

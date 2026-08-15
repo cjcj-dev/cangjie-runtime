@@ -173,17 +173,17 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
 
-    // remsetdrain: both switches are opt-in (`=1`) and remain default-off.  The probe
-    // separates bitmap decode from unordered_set insertion without changing the drained
-    // slot identity.  The candidate only pre-sizes the existing destination from the
-    // bitmap's exact distinct count; it does not weaken or bypass any producer/backstop scan.
+    // remsetdrain: the breakdown probe remains opt-in.  Hash reduction defaults on;
+    // `MRT_GCV2_REMSET_HASH_OPT=0` is its immediate rollback.  It only pre-sizes the
+    // existing destination from the bitmap's exact distinct count; it does not weaken
+    // or bypass any producer/backstop scan.
     static const bool breakdownProbe = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_DRAIN_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool reserveDestination = []() {
         const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
-        return value != nullptr && std::strcmp(value, "1") == 0;
+        return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     const uint64_t drainStartNs = breakdownProbe ? TimeUtil::NanoSeconds() : 0;
 
