@@ -111,6 +111,9 @@ std::atomic<size_t> RegionInfo::tipInHeapHits { 0 };
 
 void RegionInfo::ReportOneseqCounts(const char* point)
 {
+    if (!OneseqDiagEnabled()) {
+        return;
+    }
     std::fprintf(stderr,
                  "[GCV2][oneseq] point=%s bump_clear_young=%zu bump_clear_old=%zu "
                  "bump_init=%zu bump_reset_fwd=%zu "
@@ -134,6 +137,9 @@ void RegionInfo::ReportOneseqCounts(const char* point)
 
 void RegionInfo::EnsureOneseqAtexit()
 {
+    if (!OneseqDiagEnabled()) {
+        return;
+    }
     bool expected = false;
     if (oneseqAtexitInstalled.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         std::atexit([]() { ReportOneseqCounts("atexit"); });
