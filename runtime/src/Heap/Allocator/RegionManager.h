@@ -95,6 +95,7 @@ public:
 class RegionManager {
     friend class VerifyRegions;
     friend class TagReuseProbe;
+    friend struct PinRootTestAccess;
 
 public:
     /* region memory layout:

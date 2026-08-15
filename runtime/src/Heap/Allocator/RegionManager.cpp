@@ -1624,6 +1624,11 @@ void RegionManager::ForwardFromRegions()
 
 size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
 {
+    // pinroot: raw-pointer pin is a liveness hold — do not free any slot while count > 0.
+    // AddRawPointerObject only bumps this counter (no mark bit / root set); reclaim must honour it.
+    if (region->GetRawPointerObjectCount() > 0) {
+        return 0;
+    }
     // traverse pinned region to reclaim free pinned objects.
     size_t start = region->GetRegionStart();
     size_t garbageSize = 0;
@@ -1653,6 +1658,11 @@ size_t RegionManager::CollectPinnedGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldPinnedRegionList.GetHeadRegion();
     while (region != nullptr) {
+        // pinroot: whole-region reclaim also ignores pins; skip while any raw pointer holds.
+        if (region->GetRawPointerObjectCount() > 0) {
+            region = region->GetNextRegion();
+            continue;
+        }
         if (region->IsKnownEmpty()) {
             RegionInfo* del = region;
             region = region->GetNextRegion();

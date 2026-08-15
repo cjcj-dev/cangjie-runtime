@@ -25,6 +25,7 @@
 #include "Heap/Heap.h"
 #include "ObjectModel/Flags.h"
 #include "ObjectModel/MClass.h"
+#include "TypeInfoManager.h"
 
 namespace MapleRuntime {
 namespace GcUnit {
@@ -56,6 +57,9 @@ struct GcHeapFixture {
         GCTib gctib {};
         gctib.tag = SIGN_BIT | 1;
         typeInfo->SetGCTib(gctib);
+        // Product gate requires TypeInfo residence (TIM image/mmap); stack-planted TI needs note.
+        TypeInfoManager::GetTypeInfoManager().NoteTypeInfoImage(
+            reinterpret_cast<uintptr_t>(typeInfoStorage), sizeof(typeInfoStorage));
 
         obj0 = PlaceObject(heapStart + 64);
         obj1 = PlaceObject(heapStart + RegionInfo::UNIT_SIZE + 64);

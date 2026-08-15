@@ -48,7 +48,7 @@ public:
     TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
 
 protected:
-    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const override
+    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
     {
         field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
     }

@@ -21,6 +21,7 @@ set(GC_UNIT_SOURCES
     test_region_age.cpp
     test_unwind_regressions.cpp
     test_gctibzero.cpp
+    test_pinroot.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
