@@ -3759,10 +3759,32 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN, g_minorLedgerCost.slotInsNew,
                            g_minorLedgerCost.slotInsNs);
     };
-    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
+    auto scrubFreeTarget = [](RefField<>& field, BaseObject* target) -> bool {
+        // h3seed2 乙: if a live holder still names a free/garbage region, null the
+        // slot during mark so pre-evacuate H3 does not inventory UAF edges.
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return false;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (region == nullptr || !(region->IsFreeRegion() || region->IsGarbageRegion())) {
+            return false;
+        }
+        RefField<> oldField(field);
+        MAddress oldVal = raw(oldField.GetFieldValue());
+        if (oldVal != 0) {
+            (void)field.CompareExchange(oldField.GetFieldValue(), 0);
+        }
+        return true;
+    };
+    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode, &scrubFreeTarget](RefField<>& field) {
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
         BaseObject* target = ResolveMinorReference(field);
+        if (scrubFreeTarget(field, target)) {
+            g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
+            ++g_markInternalCost.edgeN;
+            return;
+        }
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
         }
@@ -3787,6 +3809,9 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             ++g_markInternalCost.edgeN;
         }
         BaseObject* target = ResolveMinorReference(field);
+        if (scrubFreeTarget(field, target)) {
+            return;
+        }
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
         }
@@ -5048,6 +5073,21 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
     // Same heap gate as ForwardUpdateRawRef / FindToVersion.
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
+    }
+    // h3seed2 乙 residual: live holder field still points at a region that minor
+    // already CollectRegion'd (ClearUnits). Prefer silent null over UAF; CAS so
+    // concurrent fix peers can win. Pre-evac H3 samples the prior cycle's residue —
+    // nulling here clears it before the next VERIFY_HEAP inventory.
+    {
+        RegionInfo* freeOrGarbage = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (freeOrGarbage != nullptr &&
+            (freeOrGarbage->IsFreeRegion() || freeOrGarbage->IsGarbageRegion())) {
+            MAddress oldVal = raw(oldField.GetFieldValue());
+            if (oldVal != 0) {
+                (void)field.CompareExchange(oldField.GetFieldValue(), 0);
+            }
+            return true;
+        }
     }
     // interiorsrc2 / introot: value may be RawArray+8 (derived interior). Relocate via host;
     // write plain only. Storage is still HeapSlot (fields/remset) — DerivedSlot cannot CAS
