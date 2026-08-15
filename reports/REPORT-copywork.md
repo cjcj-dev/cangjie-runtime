@@ -1,5 +1,6 @@
-PROGRESS=DONE · verdict=GATE_DONE_DEFAULT_OFF；survival_auto_vs_S1 wall-med -5.70% / young-p99 -36.21%；allocation_auto_vs_S1 wall-med +1.62% / young-p99 +5.43%；不解锁默认 · LANE=copywork
+PROGRESS=DONE · verdict=自适应门已实现且保持默认关闭；可完成负载有得有失，不解锁默认 · LANE=copywork
 SIDE_EFFECT: 产品仅改 young copy 的可选 worker gate 与诊断；新增 `MRT_GCV2_EVACPAR_WORK_GATE=1` 才生效，默认路径仍把原有 pool 及其全部配置 worker 原样传入 copy；未改 `evac_finish`、三门、SATB、驻留合同或共享 SDK。
+DELIVERY_REF=cangjie_runtime|fix/copywork|f27e8ddcaa8595360939414f57bd7982a7610363
 
 # copywork：young copy 的 bytes/workers 自适应门
 
