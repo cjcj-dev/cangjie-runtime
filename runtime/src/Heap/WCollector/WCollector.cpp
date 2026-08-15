@@ -5824,12 +5824,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const bool useParallel = threadPool != nullptr && !forceSerial;
 
         if (refFixCoveredDedup) {
+            const size_t coveredLedger = refFixCoveredDedupActive && rememberedSlots.size() >= remsetVec.size()
+                ? rememberedSlots.size() - remsetVec.size()
+                : 0;
             VLOG(REPORT,
                  "[GCV2][reffixconc][dedup] requested=1 active=%u input=%zu covered=%zu residual=%zu "
                  "interior=%zu concMarkCompatible=%u concRefFix=%u",
                  static_cast<unsigned>(refFixCoveredDedupActive), rememberedSlots.size(),
-                 refFixCoveredDedupActive ? rememberedSlots.size() - remsetVec.size() : 0,
-                 remsetVec.size(), interiorBases.size(),
+                 coveredLedger, remsetVec.size(), interiorBases.size(),
                  static_cast<unsigned>(refFixSlotsCoveredByReachable), static_cast<unsigned>(minorConcRefFix));
         }
 
@@ -7017,6 +7019,13 @@ void WCollector::DoYoungGarbageCollection()
     if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
         fullYoungScan = false;
     }
+    // remsetdrain: default-off hash-work reduction.  The drain side uses the
+    // bitmap's exact distinct count to reserve its destination.  The FYS-only
+    // consumed-ledger elision is decided later, after youngConcMark is known.
+    static const bool remsetHashOptRequested = []() {
+        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
     static const bool useBitmapLedger = []() {
         const char* v = std::getenv("MRT_GCV2_SETBITMAP");
@@ -7032,6 +7041,12 @@ void WCollector::DoYoungGarbageCollection()
     MinorObjectSet allocationRoots;
     MinorSlotSet reachableSlots;
     MinorSlotSet weakSlots;
+    if (remsetHashOptRequested && fullYoungScan) {
+        // Runtime lower bound only: if holder closure covers the remset, this
+        // avoids growth rehashes; if it does not, unordered_set still grows
+        // normally.  Capacity does not admit or discard a slot.
+        reachableSlots.reserve(rememberedSlots.size());
+    }
     {
         // minortime: ③ root enum (alloc buffers + VisitMinorRoots)
         MRT_PHASE_TIMER("young.root_enum");
@@ -7111,26 +7126,69 @@ void WCollector::DoYoungGarbageCollection()
         FysDesignDiag::Report("post_root_mark");
         tlsCollector = nullptr;
     }
+    static const bool refFixCoveredDedupRequested = []() {
+        const char* value = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool minorConcRefFixRequested = []() {
+        const char* value = std::getenv("MRT_GCV2_MINOR_CONC_REF_FIX");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    auto envOne = [](const char* name) {
+        const char* value = std::getenv(name);
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    };
+    const bool consumedIdentityRequired = ReffixConcProbeOn() || FysAuditDiag::Enabled() ||
+        envOne("MRT_GCV2_DIFF_PATH") || envOne("MRT_GCV2_VERIFY_REMSET") ||
+        envOne("MRT_GCV2_VERIFY_HEAP");
+    // Fail closed: Rescan itself still performs every filter/resolve/scrub/push
+    // and interior-base recovery.  Only its redundant consumed-address set is
+    // omitted, and only when covered ref-fix will not consume ordinary entries.
+    // Rescan's FYS gate makes every consumed slot a member of reachableSlots at
+    // runtime; this is a control-flow invariant, not a workload coverage guess.
+    const bool remsetConsumedLedgerElideActive = remsetHashOptRequested && fullYoungScan && !youngConcMark &&
+        refFixCoveredDedupRequested && !minorConcRefFixRequested && !consumedIdentityRequired;
+
     MinorSlotSet liveRememberedSlots;
+    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
+        liveRememberedSlots.reserve(rememberedSlots.size());
+    }
+    size_t liveRememberedCount = 0;
     for (MAddress slot : rememberedSlots) {
         if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
             (!fullYoungScan ||
              LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
-            liveRememberedSlots.insert(slot);
+            ++liveRememberedCount;
+            if (!remsetConsumedLedgerElideActive) {
+                liveRememberedSlots.insert(slot);
+            }
         }
     }
     // Remset consume-vs-recorded (G1SummarizeRSetStats analog) + optional dual-closure
     // diff-path explainer. Both gated default-off; see DiffPathExplainer.h.
     DiffPathRemsetStats remsetStats;
     remsetStats.recorded = rememberedSlots.size();
-    remsetStats.live = liveRememberedSlots.size();
+    remsetStats.live = liveRememberedCount;
     MinorSlotSet consumedSlots;
+    if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
+        consumedSlots.reserve(rememberedSlots.size());
+    }
     MinorInteriorBaseMap remsetInteriorBases;
     {
         // minortime: ④ remset rescan + ⑤ mark closure pass-2 (from remset edges)
         MRT_PHASE_TIMER("young.remset_rescan");
-        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan, &consumedSlots,
-                            &remsetStats, &remsetInteriorBases);
+        RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan,
+                            remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
+                            &remsetInteriorBases);
+    }
+    if (remsetHashOptRequested) {
+        VLOG(REPORT,
+             "[GCV2][remsetdrain][hash-opt] requested=1 active=%u recorded=%zu live=%zu consumed=%zu "
+             "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u concRefFix=%u identityRequired=%u",
+             static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
+             remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
+             static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark),
+             static_cast<unsigned>(minorConcRefFixRequested), static_cast<unsigned>(consumedIdentityRequired));
     }
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
     if (FysAuditDiag::Enabled()) {
@@ -7465,14 +7523,16 @@ void WCollector::DoYoungGarbageCollection()
         // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
         // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
         liveRememberedSlots.clear();
+        liveRememberedCount = 0;
         for (MAddress slot : rememberedSlots) {
             if (LedgerCount(weakSlots, slot, g_minorLedgerCost.weakLookN, g_minorLedgerCost.weakLookNs) == 0 &&
                 (!fullYoungScan ||
                  LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0)) {
                 liveRememberedSlots.insert(slot);
+                ++liveRememberedCount;
             }
         }
-        remsetStats.live = liveRememberedSlots.size();
+        remsetStats.live = liveRememberedCount;
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark done; STW2 post-mark+evac reachable=%zu",
              reachableVec.size());
         // youngstatic: seal static-root young targets into mark face under STW2.
@@ -7790,12 +7850,12 @@ void WCollector::DoYoungGarbageCollection()
     // "invalid object route" (fysfloor B10). FYS=1 masked via reachableSlots
     // filtering both live-build and Rescan. Unifying on consumed restores
     // fix-domain ⊆ mark/route-domain without widening AdmitForRoute.
-    if (remsetStats.live != consumedSlots.size()) {
+    if (remsetStats.live != remsetStats.consumed) {
         VLOG(REPORT,
              "[GCV2][fysfixa] remset_slot_authority live=%zu consumed=%zu gap=%zu "
              "(evac uses consumed)",
-             remsetStats.live, consumedSlots.size(),
-             remsetStats.live > consumedSlots.size() ? remsetStats.live - consumedSlots.size() : 0);
+             remsetStats.live, remsetStats.consumed,
+             remsetStats.live > remsetStats.consumed ? remsetStats.live - remsetStats.consumed : 0);
     }
     // In non-concurrent FYS, RescanRememberedSet only consumes slots in reachableSlots;
     // their holders are in reachableVec and will be scanned by FixMinorObjectSlots.
@@ -7837,7 +7897,7 @@ void WCollector::DoYoungGarbageCollection()
          "[GCV2Minor] run=%zu fallbackFullScan=%u candidates=%zu candidateBytes=%zu liveBytes=%zu "
          "remembered=%zu reclaimedBytes=%zu pause=%zu us",
          minorTotalRuns, static_cast<unsigned>(fullYoungScan), stats.candidateRegions, stats.candidateBytes,
-         liveBytes, liveRememberedSlots.size(), stats.reclaimedBytes, pauseUs);
+         liveBytes, liveRememberedCount, stats.reclaimedBytes, pauseUs);
     // csetalloc: surface cumulative "would allocate into CSet" count (always-on counter,
     // zero-cost when no hits; LOG only if non-zero so default noise stays quiet).
     {
