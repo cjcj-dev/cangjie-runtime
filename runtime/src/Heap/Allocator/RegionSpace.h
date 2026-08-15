@@ -218,7 +218,11 @@ public:
 
     static bool ShouldEnqueue(const BaseObject* obj)
     {
-        RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        RegionInfo* regionInfo = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        if (regionInfo == nullptr || regionInfo->IsFreeRegion() || regionInfo->IsGarbageRegion() ||
+            regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
+            return false;
+        }
         if (regionInfo->IsTraceRegion()) {
             return false;
         }
