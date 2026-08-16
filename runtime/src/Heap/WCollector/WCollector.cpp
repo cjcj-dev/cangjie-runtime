@@ -2736,9 +2736,19 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
+            // fwdgate: 1be34721 put the satbfix tip test on the non-old ghost arm of the
+            // RefField overload (:2596) and left this overload's identical arm bare, so
+            // the same geometric route this branch rejects for a heap field is still
+            // written into a root slot -- and a root is the worse of the two, because
+            // DoEnumeration hands it to the tracer and the mutator reads it back plain.
+            // Same test as the old-tag arm 9 lines below (:2715).
             if (to != nullptr && Heap::IsHeapAddress(to)) {
-                HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
-                return to;
+                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+                if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+                    to->IsValidObject()) {
+                    HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
+                    return to;
+                }
             }
         }
         return object;
