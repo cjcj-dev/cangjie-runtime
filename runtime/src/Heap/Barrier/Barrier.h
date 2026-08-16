@@ -139,11 +139,9 @@ protected:
     // store plain. Typed on RootSlot so a coloured write cannot be spelled (see Barrier.cpp).
     void ResolveStaticStructRoots(MAddress dst, const GCTib gctib) const;
 
-    // MRT_GCV2_ZGC_SELFHEAL: the ported OpenJDK ZBarrier::self_heal loop
-    // (RefField.h / zBarrier.inline.hpp:72-110), with the ZBarrierFastPath every
-    // ReadReference already spells inline: target == nullptr || is_load_good(field).
+    // OpenJDK ZBarrier::self_heal (RefField.h / zBarrier.inline.hpp:72-110).
     // One definition here rather than six lambdas so the exit predicate cannot drift
-    // between phases. Only reached when ZgcSelfHealEnabled().
+    // between phases.
     void ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
                              HealSite site) const;
     void ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,

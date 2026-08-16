@@ -30,8 +30,7 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
 
 BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
-    // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -48,17 +47,9 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (UNLIKELY(ZgcSelfHealEnabled())) {
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::TraceReadReference);
-            return loadGood;
-        }
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::TraceReadReference)) {
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::TraceReadReference);
+        return loadGood;
     }
 }
 

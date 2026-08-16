@@ -202,13 +202,13 @@ void NoteViolation(std::atomic<uint64_t>& counter, const char* which, uintptr_t 
 
 bool Enabled()
 {
-    static const bool on = []() { return ReadFlag("MRT_GCV2_ZGC_SELFHEAL"); }();
+    static const bool on = []() { return true; }();
     return on;
 }
 
 bool CensusEnabled()
 {
-    static const bool on = []() { return Enabled() || ReadFlag("MRT_GCV2_ZGC_SELFHEAL_REPORT"); }();
+    static const bool on = []() { return ReadFlag("MRT_GCV2_ZGC_SELFHEAL_REPORT"); }();
     return on;
 }
 

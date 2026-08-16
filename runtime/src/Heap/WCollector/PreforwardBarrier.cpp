@@ -21,7 +21,7 @@ namespace MapleRuntime {
 BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -49,18 +49,9 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
-        if (UNLIKELY(ZgcSelfHealEnabled())) {
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::PreforwardReadReference);
-            return loadGood;
-        }
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                     HealSite::PreforwardReadReference)) {
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::PreforwardReadReference);
+        return loadGood;
     }
 }
 
@@ -108,7 +99,7 @@ void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size
 BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
     // Bound kSelfHealAttempts: colour writers can re-tag the same slot (ATOMIC_READ_PROTOCOL Q2).
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -136,19 +127,9 @@ BaseObject* PreforwardBarrier::AtomicReadReference(BaseObject* obj, RefField<tru
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         CHECK(theCollector.is_load_good(goodField));
-        if (UNLIKELY(ZgcSelfHealEnabled())) {
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::PreforwardAtomicReadReference);
-            return loadGood;
-        }
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                     HealSite::PreforwardAtomicReadReference)) {
-            DLOG(PBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::PreforwardAtomicReadReference);
+        return loadGood;
     }
 }
 

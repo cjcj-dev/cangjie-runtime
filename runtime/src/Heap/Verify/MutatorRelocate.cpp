@@ -139,16 +139,14 @@ bool InjectOn()
 
 bool DrainEnabled()
 {
-    // The relocate leg is not safe without the drain: a mutator inside ForwardObjectImpl is
-    // reading the from-object's payload, and DispelGhostFromRegion / ClearUnits would retire
-    // that state underneath it. So enabling the leg enables the drain, never the other way
-    // round. Standalone drain is offered so the drain's own cost is measurable.
+    // Drain is unconditional (ZForwardingLife). This flag only turns the census
+    // on; it no longer gates the wait.
     static const bool on = []() {
         EnsureAtexit();
-        if (EnvIsOne("MRT_GCV2_MUTRELOC_DRAIN")) {
+        if (EnvIsOne("MRT_GCV2_MUTRELOC_STATS")) {
             return true;
         }
-        return DiagGate::TokenOn("mutrelocdrain");
+        return DiagGate::TokenOn("mutrelocstats") || DiagGate::TokenOn("mutrelocdrain");
     }();
     return on || Enabled();
 }

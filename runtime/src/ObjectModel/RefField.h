@@ -339,18 +339,9 @@ inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desir
     return ok;
 }
 
-// MRT_GCV2_ZGC_SELFHEAL=1 routes the six read barriers through ZgcSelfHeal below instead of
-// their bounded kSelfHealAttempts loop. Default off; promoting it is a main-control ruling.
-// Read only on the barrier slow path (after is_load_good has already failed), so the
-// function-local static guard is not on any fast path.
-inline bool ZgcSelfHealEnabled()
-{
-    static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_ZGC_SELFHEAL");
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
+// ZBarrier::self_heal is the product path (zBarrier.inline.hpp:72-110). The
+// bounded kSelfHealAttempts loop is gone: ZGC's loop is unbounded and
+// terminates on colour monotonicity.
 
 // OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-110, transcribed.
 //

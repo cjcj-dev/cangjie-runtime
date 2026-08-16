@@ -23,6 +23,7 @@ set(GC_UNIT_SOURCES
     test_gctibzero.cpp
     test_pinroot.cpp
     test_followedge.cpp
+    test_z_forwarding_life.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

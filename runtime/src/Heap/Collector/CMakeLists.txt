@@ -18,6 +18,7 @@ set(SRC_LIST
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
     "PromotedRegionDomain.cpp"
+    "ZForwardingLife.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
