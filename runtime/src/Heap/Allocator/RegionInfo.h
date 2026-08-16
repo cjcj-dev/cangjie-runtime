@@ -48,6 +48,7 @@
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDestHold.h"
+#include "Heap/Verify/FwdInflight.h"
 #include "Heap/Verify/RouteDom.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/TlRawDiag.h"
@@ -1942,6 +1943,11 @@ public:
 
     void DispelGhostFromRegion()
     {
+        // fwdinflight: this is one of the three edges that retire from-side route state, and
+        // it is unconditional -- nothing here waits for a reader. ZGC's equivalent,
+        // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
+        // Count what we would be invalidating. Default off; never blocks.
+        FwdInflight::NoteRetireRegion(this, FwdInflight::Retire::DISPEL_GHOST);
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),

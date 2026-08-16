@@ -22,6 +22,7 @@
 #include "Common/BaseObject.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
+#include "Heap/Verify/FwdInflight.h"
 #include "Heap/GcThreadPool.h"
 #include "RegionList.h"
 #include "Heap/Verify/EmptyLiveDiag.h"
@@ -635,6 +636,10 @@ public:
     // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
+        // fwdinflight: AdmitForRoute reads the from object's tip and the ghost mark bitmap,
+        // and GetRoute reads liveInfo0 geometry. Publish for the whole span so a retire edge
+        // can see it. Default off; no control-flow effect.
+        FwdInflight::Scope inflight(fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION);
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
             if (!ticket) {
@@ -655,6 +660,9 @@ public:
             return nullptr;
         }
 
+        // fwdinflight: see the sibling overload. Publication starts once the ghost lookup has
+        // named a region -- before that there is nothing to protect.
+        FwdInflight::Scope inflight(fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP);
         // a from-object may be compacted or forwarded.
         if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
             OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);

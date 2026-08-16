@@ -40,6 +40,11 @@ void ForwardDataManager::ClearPreviousForwardData()
     RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     regionSpace.GetRegionManager().NullLiveInfoFieldsInRange(rangeStart, rangeSize);
     TagReuseProbe::ScanBeforeRelease(rangeStart, rangeSize, prev, liveStart, livePos, bmStart, bmPos);
+    // fwdinflight: the "structural guarantee" above is that no region FIELD still addresses
+    // this range. That is not a drain -- AdmitForRoute (RegionInfo.h:1494) loads liveInfo0
+    // into a local before using it, and nulling the field afterwards does not reach that
+    // local. Count readers in flight anywhere at the instant of release. Default off.
+    FwdInflight::NoteRetireGlobal(rangeStart, rangeSize, FwdInflight::Retire::ARENA_RELEASE);
     space.ReleaseMemory();
 }
 

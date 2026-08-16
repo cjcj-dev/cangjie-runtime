@@ -1522,6 +1522,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                                         static_cast<unsigned int>(head->GetRouteState()));
             // promodomain obligation①: undischarged flip-promoted region must not ClearUnits.
             PromotedRegionDomain::CheckNotUndischargedForReuse(head, "TakeRegion.garbage_reuse");
+            // fwdinflight: the reuse edge. ClearUnits zeroes the payload with no region
+            // rwLock held -- CollectRegion's write lock (RegionManager.h:436-447) covers only
+            // the list move, not this. Count readers still inside a route lookup on it.
+            FwdInflight::NoteRetireRegion(head, FwdInflight::Retire::TAKE_GARBAGE);
             auto idx = head->GetUnitIdx();
             RegionInfo::ClearUnits(idx, num);
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
