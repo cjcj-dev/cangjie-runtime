@@ -88,11 +88,10 @@ GC_TEST(ColourAddress, LoadBadMaskRejectsStaleRemap)
     }
 }
 
-// U2: tagged (mid-evacuation) is always load-bad, whichever remap colour it carries.
-GC_TEST(ColourAddress, TaggedAlwaysLoadBad)
+// U2: a stale remap colour is always load-bad (no isTagged bit).
+GC_TEST(ColourAddress, StaleRemapAlwaysLoadBad)
 {
-    Uptr taggedBit = Uptr(1) << 48; // isTagged
-    Uptr v = Color(kSampleAddr, ZPointerRemapped00 | taggedBit);
+    Uptr v = Color(kSampleAddr, ZPointerRemapped01);
     GC_EXPECT_FALSE(IsLoadGood(v, kInitialLoadBadMask));
     GC_EXPECT_EQ(raw(uncolor_bits(to_zpointer(v))), kSampleAddr);
 }
@@ -111,7 +110,7 @@ GC_TEST(ColourAddress, RootSlotRejectsColouredValue)
 // U1: after peel, high colour bits must be zero (STACK_ROOTS_STAY_PLAIN write-back shape).
 GC_TEST(ColourAddress, PeelForRootWriteBackClearsHighBits)
 {
-    Uptr coloured = Color(kSampleAddr, REMAP_COLOUR_MASK | MARKED_YOUNG_1 | MARKED_OLD_1 | (Uptr(1) << 48));
+    Uptr coloured = Color(kSampleAddr, REMAP_COLOUR_MASK | MARKED_YOUNG_1 | MARKED_OLD_1);
     Uptr peeled = raw(uncolor_bits(to_zpointer(coloured)));
     GC_EXPECT_TRUE(IsPlainRootValue(peeled));
     GC_EXPECT_EQ(peeled, kSampleAddr);

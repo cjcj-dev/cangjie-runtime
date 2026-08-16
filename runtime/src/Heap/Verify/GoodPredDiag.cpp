@@ -115,7 +115,7 @@ bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site)
     InstallOnce();
     const unsigned s = site < kSiteCount ? site : 0u;
     g_reads[s].fetch_add(1, std::memory_order_relaxed);
-    if ((value & TAGGED_BITS_MASK) != 0) {
+    if ((value & (REMAP_COLOUR_MASK & static_cast<uintptr_t>(::g_cjLoadBadMask))) != 0) {
         g_taggedSeen[s].fetch_add(1, std::memory_order_relaxed);
     }
     if (legacy) {
@@ -134,9 +134,6 @@ bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site)
         const uintptr_t mask = static_cast<uintptr_t>(::g_cjLoadBadMask);
         const uintptr_t remapBits = value & REMAP_COLOUR_MASK;
         const uintptr_t current = ColourPredicates::current_remapped(mask);
-        if ((value & TAGGED_BITS_MASK) != 0) {
-            g_causeTagged.fetch_add(1, std::memory_order_relaxed);
-        }
         if ((remapBits & ~current) != 0) {
             g_causeStaleRemap.fetch_add(1, std::memory_order_relaxed);
         }
@@ -155,7 +152,7 @@ bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site)
                          "load_bad_mask=%#lx tagged=%u remap_bits=%#lx current_remap=%#lx\n",
                          static_cast<unsigned long>(value), s, static_cast<unsigned>(legacy ? 1 : 0),
                          static_cast<unsigned>(zgc ? 1 : 0), static_cast<unsigned long>(mask),
-                         static_cast<unsigned>((value & TAGGED_BITS_MASK) != 0 ? 1 : 0),
+                         static_cast<unsigned>((remapBits & ~current) != 0 ? 1 : 0),
                          static_cast<unsigned long>(remapBits), static_cast<unsigned long>(current));
             std::fflush(stderr);
         }

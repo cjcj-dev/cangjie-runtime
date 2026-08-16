@@ -221,14 +221,12 @@ public:
     }
 
     // note this api is not atomic, caller should take care of this.
-    // N>2: any non-current tagged ref is "old" (not only previous); else older tags are dropped.
-    bool IsOldPointer(RefField<>& ref) const override
-    {
-        return IsLoadBad(ref) && ref.GetTagID() != currentTagID;
-    }
+    // Stale remap colour (ZGC: the value itself says it may be stale). No pointer tagID.
+    bool IsOldPointer(RefField<>& ref) const override { return IsLoadBad(ref); }
 
     // note this api is not atomic, caller should take care of this.
-    bool IsCurrentPointer(RefField<>& ref) const override { return IsLoadBad(ref) && ref.GetTagID() == currentTagID; }
+    // Current colour: has the remap bit being handed out now. Plain (no colour) is neither.
+    bool IsCurrentPointer(RefField<>& ref) const override { return is_load_good(ref); }
 
     // OpenJDK ZPointer::is_young_load_good/is_old_load_good
     // (zAddress.inline.hpp:648-655): the conceptual generation epoch is represented by the two
@@ -516,27 +514,27 @@ protected:
 
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
-        // Null carries no colour (ZGC zAddress: null is never load-bad). Colouring a null
-        // yields a colour-only word; after a phase flip IsLoadBad becomes true while
-        // tagID stays 0, so IsOldPointer can fire and ForwardUpdateRawRef's E-class
-        // CHECK (oldInv) aborts on a value that is not an object at all.
+        // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        // Phase C: colour every reference, not only the ones being evacuated. The else branch used
-        // to hand back a bare pointer, and that bare pointer was the trust state -- a value that
-        // neither IsOldPointer nor IsCurrentPointer recognised, so readers dereferenced it without
-        // asking anything. Handing out the current colour instead means a later phase flip turns
-        // this reference bad on its own, and the reader finds out by testing the value it holds.
-        // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83,
-        // ZAddress::store_good). Written refs must be store-good so a second store of the
-        // same edge takes the is_store_good fast path.
-        const Uptr storeColour =
-            currentRemapColour | currentMarkedYoung | currentMarkedOld | currentRemembered;
-        if (IsFromObject(target)) {
-            return RefField<>(target, 1, currentTagID, storeColour);
+        // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83).
+        // Mid-evacuation is not a pointer bit (zAddress.hpp:60-128). A from-address is
+        // resolved via the region table before it is painted current. If it is still
+        // from, paint a stale remap one-hot so the value stays load-bad (ZGC: remapped
+        // means the address is already the current location).
+        if (IsFromObject(target) || IsGhostFromObject(target)) {
+            BaseObject* to = FindToVersion(target);
+            if (to != nullptr) {
+                target = to;
+            }
         }
-        return RefField<>(target, 0, 0, storeColour);
+        const bool stillFrom = IsFromObject(target) || IsGhostFromObject(target);
+        const Uptr notCurrent = REMAP_COLOUR_MASK ^ currentRemapColour;
+        const Uptr staleOneHot = notCurrent & -notCurrent;
+        const Uptr remap = stillFrom ? staleOneHot : currentRemapColour;
+        const Uptr storeColour = remap | currentMarkedYoung | currentMarkedOld | currentRemembered;
+        return RefField<>(target, storeColour);
     }
 
     // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back

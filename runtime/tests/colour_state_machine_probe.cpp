@@ -89,10 +89,9 @@ constexpr BadMasks WitnessBadMasks(EpochColours e)
     return BadMasks{
         e.remappedYoungMask & e.remappedOldMask,
 #ifdef MRT_C4TABLE_INJECT_FORMULA
-        // Positive control: the "tidy" rewrite this comparison exists to catch. Good ^ Metadata
-        // looks more like ZGC (zAddress.cpp:85) but STORE_METADATA_MASK carries no tagged bits,
-        // so every mid-evacuation reference silently becomes load-good.
-        (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)),
+        // Positive control: flip a remap bit so the witness disagrees with ComputeBadMasks.
+        // (Used to drop TAGGED_BITS_MASK; that term is now 0, so dropping it is a no-op.)
+        (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)) ^ ZPointerRemapped00,
 #else
         TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)),
 #endif
@@ -147,10 +146,9 @@ constexpr bool LatticeOrderHolds()
     return ok;
 }
 
-// isTagged (mid-evacuation) is bad at all three barriers, on every epoch. Today this is a
-// property of one term in one expression (WCollector.h:134 folds TAGGED_BITS_MASK into loadBad);
-// pinning it here means that when tagID is finally removed (C7, cross-repo) the question "what
-// did that bit guarantee?" is a table diff and not an excavation.
+// Mid-evacuation is no longer a pointer bit (TAGGED_BITS_MASK == 0). The
+// identity (0 & mask) == 0 holds on every epoch; keep the check so a
+// regression that reintroduces a non-zero tagged term is a table failure.
 constexpr bool TaggedImpliesAllBad()
 {
     bool ok = true;
@@ -216,7 +214,7 @@ struct Colour {
     unsigned oMark;  // MarkedOld / Finalizable epoch carried, 0|1
     unsigned fin;    // 0 = strongly marked old, 1 = finalizable-marked old
     unsigned rem;    // 0 = Remembered epoch0, 1 = epoch1, 2 = both bits (forgotten old-to-old)
-    unsigned tagged; // mid-evacuation (our tagID ring; no ZGC equivalent)
+    unsigned tagged; // unused: mid-evacuation is not a pointer bit
     unsigned ghost;  // redundant family: physically encoded, read by nothing
     unsigned shadow; // coordinate no encoding carries at all
 };
@@ -252,7 +250,7 @@ constexpr uintptr_t EncodeWord(Colour p)
     return (uintptr_t(1) << (REMAP_COLOUR_SHIFT + p.rY + 2u * p.rO)) | (p.yMark ? MARKED_YOUNG_1 : MARKED_YOUNG_0) |
         (p.fin ? (p.oMark ? FINALIZABLE_1 : FINALIZABLE_0) : (p.oMark ? MARKED_OLD_1 : MARKED_OLD_0)) |
         (p.rem == 2u ? REMEMBERED_MASK : (p.rem == 1u ? REMEMBERED_1 : REMEMBERED_0)) |
-        (p.tagged ? (uintptr_t(1) << 48) : uintptr_t(0)) | (p.ghost ? (uintptr_t(1) << 62) : uintptr_t(0));
+        (p.ghost ? (uintptr_t(1) << 62) : uintptr_t(0));
 }
 
 // Which family a configuration is missing. "Ghost" is the control for the drop machinery: a
@@ -325,9 +323,8 @@ constexpr unsigned kEventCount = 3u;
 constexpr Act Action(Colour p, unsigned ei, unsigned ev)
 {
     const ModelEpoch e = ModelEpochAt(ei);
-    // Mid-evacuation: our tagID ring routes through the forwarding table whatever colour the
-    // reference carries (WCollector.h:134 folds TAGGED_BITS_MASK into loadBad). No ZGC analogue.
-    // The inject arms sit below this line so that they perturb only the enumerated half.
+    // Mid-evacuation is not a pointer bit. The inject arms sit below this line
+    // so that they perturb only the enumerated half.
     if (p.tagged != 0u) {
         return Act::RemapTagged;
     }
@@ -443,9 +440,9 @@ constexpr bool ModelAgreesWithLiveMasks()
     for (unsigned ei = 0; ei < kEpochCount; ++ei) {
         const ModelEpoch e = ModelEpochAt(ei);
         const BadMasks m = ComputeBadMasks(EpochColoursOf(e));
-        for (unsigned k = 0; k < 2u * kColourCount; ++k) {
-            const Colour p = (k < kColourCount) ? ColourAt(k) : ColourAtTagged(k - kColourCount);
-            if (p.fin != 0u || p.ghost != 0u || p.shadow != 0u) {
+        for (unsigned k = 0; k < kColourCount; ++k) {
+            const Colour p = ColourAt(k);
+            if (p.fin != 0u || p.ghost != 0u || p.shadow != 0u || p.tagged != 0u) {
                 continue;
             }
             const uintptr_t w = EncodeWord(p);
@@ -528,10 +525,10 @@ static_assert(LatticeOrderHolds(),
               "C4TABLE_LATTICE: store-bad no longer contains mark-bad, or mark-bad no longer contains "
               "load-bad, on some epoch.");
 static_assert(TaggedImpliesAllBad(),
-              "C4TABLE_TAGGED: a mid-evacuation reference is no longer bad at all three barriers.");
-static_assert(TaggedRowsAreConstant(),
-              "C4TABLE_TAGGED: a mid-evacuation reference now takes an exit that depends on its colour, "
-              "so the tagged half can no longer be left out of the enumerated table.");
+              "C4TABLE_TAGGED: TAGGED_BITS_MASK is no longer identically 0, or a zero term is not "
+              "contained in every published mask.");
+static_assert(TAGGED_BITS_MASK == 0,
+              "C4TABLE_TAGGED: pointer layout reintroduced isTagged/tagID.");
 static_assert(kEvStore == 2u && kEventCount == 3u, "C4TABLE: event set changed.");
 static_assert(ModelAgreesWithLiveMasks(),
               "C4TABLE_MODEL_TIE: the action function's good/bad predicates no longer match the masks "

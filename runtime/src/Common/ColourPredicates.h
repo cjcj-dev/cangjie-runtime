@@ -93,10 +93,11 @@ constexpr uintptr_t current_remembered(uintptr_t storeBadMask)
     return REMEMBERED_MASK & ~storeBadMask;
 }
 
-// ZPointer::is_load_bad -- true when TAGGED_BITS_MASK or a non-current remap
-// bit is present. A plain word is not mask-bad, but is_load_good below still
-// rejects it because it has no current remap bit. The answer can change when
-// the remap epoch flips in GC_PHASE_PREFORWARD.
+// ZPointer::is_load_bad -- true when a non-current remap bit is present.
+// Mid-evacuation is not a pointer bit (zAddress.hpp:60-128). A plain word is
+// not mask-bad, but is_load_good below still rejects it because it has no
+// current remap bit. The answer can change when the remap epoch flips in
+// GC_PHASE_PREFORWARD.
 constexpr bool is_load_bad(uintptr_t value, uintptr_t loadBadMask)
 {
     return (value & loadBadMask) != 0;

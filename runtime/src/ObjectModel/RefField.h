@@ -234,7 +234,7 @@ public:
         return to_zpointer(static_cast<MAddress>(ret));
     }
 
-    // 地址位（已剥 isTagged/colour）。返回裸 MAddress 供布局/偏移算术；
+    // 地址位（已剥 colour）。返回裸 MAddress 供布局/偏移算术；
     // 若要当对象指针，经 uncolor_bits(GetFieldValue()) 或 GetTargetObject()。
     MAddress GetAddress() const
     {
@@ -245,40 +245,25 @@ public:
 #endif
     }
 
-    bool IsTagged() const { return isTagged == 1; }
-    uint16_t GetTagID() const { return tagID; }
-
     ~HeapSlot() = default;
     explicit HeapSlot(MAddress val) : fieldVal(val) {}
     // 凭什么: zpointer 就是槽里的带色位模式，与 MAddress 同宽。
     explicit HeapSlot(zpointer val) : fieldVal(static_cast<RefFieldValue>(raw(val))) {}
     HeapSlot(const HeapSlot& ref) : fieldVal(ref.fieldVal) {}
 #ifdef __arm__
-    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid) : isTagged(tagged), tagID(tagid)
+    HeapSlot(const BaseObject* obj, MAddress colour)
     {
+        (void)colour;
         address = reinterpret_cast<MAddress>(obj) >> ARM32_MARKED_FLAG_BITS;
     }
 #else
-    // Phase C: colour-carrying form. The three-argument form below keeps working and leaves the
-    // colour clear, which reads as "never written" -- see Collector::IsLoadBad.
-    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid, MAddress colour)
-        : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid),
+    HeapSlot(const BaseObject* obj, MAddress colour)
+        : address(reinterpret_cast<MAddress>(obj)),
           remapColour((colour >> REMAP_COLOUR_SHIFT) & ((MAddress(1) << REMAP_COLOUR_BITS) - 1)),
           markedYoung((colour >> MARKED_YOUNG_SHIFT) & ((MAddress(1) << MARKED_YOUNG_BITS) - 1)),
           markedOld((colour >> MARKED_OLD_SHIFT) & ((MAddress(1) << MARKED_OLD_BITS) - 1)),
-          // Remembered occupies low bits of padding (bits 58-59); spare stays 0.
-          // OpenJDK zAddress.cpp:83 StoreGood = MarkGood | Remembered.
           padding((colour >> REMEMBERED_SHIFT) & ((MAddress(1) << TAG_ID_PADDING_BITS) - 1))
     {
-        CHECK(tagid < TAG_ID_COUNT);
-    }
-
-    HeapSlot(const BaseObject* obj, uint16_t tagged, uint16_t tagid)
-        : address(reinterpret_cast<MAddress>(obj)), isTagged(tagged), tagID(tagid), remapColour(0),
-          markedYoung(0), markedOld(0), padding(0)
-    {
-        // Was a silent bitfield truncate when tagID was 1 bit; diagnose out-of-range writes.
-        CHECK(tagid < TAG_ID_COUNT);
     }
 #endif
 
@@ -311,9 +296,8 @@ private:
 #ifdef __arm__
     union {
         struct {
-            MAddress isTagged : 1;
-            MAddress tagID : 1;
             MAddress address : 30;
+            MAddress reserved : 2;
         };
         RefFieldValue fieldVal;
     };
@@ -321,10 +305,7 @@ private:
     union {
         struct {
             MAddress address : 48;
-            MAddress isTagged : 1;
-            MAddress tagID : TAG_ID_BITS;
-            // Phase C: one-hot RemappedYoung x RemappedOld state. address stays at bits 0..47;
-            // a compiler fast path must strip bits 48..63 before exposing a load-good address.
+            // ZGC layout (zAddress.hpp:60-128): remap starts at bit 48. No isTagged, no tagID.
             MAddress remapColour : REMAP_COLOUR_BITS;
             MAddress markedYoung : MARKED_YOUNG_BITS;
             MAddress markedOld : MARKED_OLD_BITS;
@@ -332,10 +313,9 @@ private:
         };
         RefFieldValue fieldVal;
     };
-    static_assert(48 + 1 + TAG_ID_BITS + REMAP_COLOUR_BITS + MARKED_YOUNG_BITS + MARKED_OLD_BITS +
-                          TAG_ID_PADDING_BITS ==
-                      64,
-                  "HeapSlot tag layout must fill 64 bits");
+    static_assert(48 + REMAP_COLOUR_BITS + MARKED_YOUNG_BITS + MARKED_OLD_BITS + TAG_ID_PADDING_BITS == 64,
+                  "HeapSlot colour layout must fill 64 bits");
+    static_assert(TAGGED_BITS_MASK == 0, "pointer no longer carries isTagged/tagID");
     static_assert(TAG_ID_COUNT > 1 && TAG_ID_COUNT <= (1u << TAG_ID_BITS), "TAG_ID_COUNT out of bit width");
 #endif
 };
