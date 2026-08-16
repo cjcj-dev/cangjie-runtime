@@ -13,6 +13,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
@@ -380,13 +381,24 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 {
     zaddress_unsafe observed = field.LoadPlain();
     if (is_null(observed)) {
+        if (UNLIKELY(LoadGoodProbe::Enabled())) {
+            LoadGoodProbe::NoteNull(LoadGoodProbe::kFaceRoot);
+        }
         return nullptr;
     }
     // Decode any legacy colour bits at an external ABI boundary without exposing
     // the RootSlot storage as a HeapSlot.
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* target = to_object(observedBits.GetTargetObject());
-    if (target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target)) {
+    // Hoisted out of the `if` below purely so the probe can record the same decision
+    // production makes. Short-circuit order and effects are unchanged.
+    const bool ghost =
+        target != nullptr && Heap::IsHeapAddress(target) && theCollector.IsGhostFromObject(target);
+    if (UNLIKELY(LoadGoodProbe::Enabled())) {
+        LoadGoodProbe::NoteRead(LoadGoodProbe::kFaceRoot, raw(observed), ghost,
+                                theCollector.is_load_good(observedBits));
+    }
+    if (ghost) {
         target = theCollector.FindLatestVersion(target);
     }
     return target;

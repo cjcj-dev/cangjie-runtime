@@ -15,6 +15,7 @@
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
@@ -1044,6 +1045,9 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
     MarkFaceSnap::Report("gc_end");
     NoTracedDiag::Report("gc_end");
+    // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
+    // cross-table has to be on stderr before the crash, not only at exit.
+    LoadGoodProbe::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);

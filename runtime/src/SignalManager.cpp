@@ -39,6 +39,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/MarkFaceSnap.h"
+#include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/HdrWhoDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
@@ -215,6 +216,9 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
     if (n > 0) {
         WriteSigDiag(line, static_cast<size_t>(n));
     }
+    // loadgood: counters only, no register access and no heap walk, so it is placed ahead
+    // of every probe that is known to be able to abort. Default off.
+    LoadGoodProbe::Report("crash");
     // paramzero: dump -0x50(%rbp) + heap CAS-null counters (gate MRT_GCV2_NULLSLOT).
     // Mode A pc_off=0x6ef90a / si_addr=0x38: answer "was entry arg already 0?".
     if (context != nullptr) {
