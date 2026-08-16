@@ -20,7 +20,7 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
     // Align ordinary Read with Idle/Enum/Trace/Preforward/Forward: colour test + self-heal.
     // Template: IdleBarrier.cpp:19-51 / TraceBarrier.cpp:31-57; ZGC zBarrier.inline.hpp:294-344.
     // Replaces E-class CHECK(!IsOldPointer)+direct return (tagdel E08) which trusted plain/stale colour.
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -37,18 +37,9 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (UNLIKELY(ZgcSelfHealEnabled())) {
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::PostTraceReadReference);
-            return loadGood;
-        }
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::PostTraceReadReference)) {
-            DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::PostTraceReadReference);
+        return loadGood;
     }
 }
 
@@ -176,7 +167,7 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
     // Colour self-heal on the real slot (OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-107).
     // Exact observed value is the CAS expected; concurrent updates win and force a reload.
     // Bound kSelfHealAttempts: no colour lattice here (ATOMIC_READ_PROTOCOL Q2).
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -191,19 +182,9 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         DCHECK(theCollector.is_load_good(goodField));
-        if (UNLIKELY(ZgcSelfHealEnabled())) {
-            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                                HealSite::PostTraceAtomicReadReference);
-            return loadGood;
-        }
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                     HealSite::PostTraceAtomicReadReference)) {
-            DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::PostTraceAtomicReadReference);
+        return loadGood;
     }
 }
 

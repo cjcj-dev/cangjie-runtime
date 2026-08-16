@@ -173,11 +173,6 @@ void CaseSpinAlarm(unsigned threshold)
 
 int main(int argc, char** argv)
 {
-    if (!MapleRuntime::ZgcSelfHealEnabled()) {
-        std::printf("FAIL MRT_GCV2_ZGC_SELFHEAL is not 1; the runner must set it before load\n");
-        return 1;
-    }
-
     // Two modes, separate processes: the spin case moves retry by four figures and would
     // bury the arm counts the default mode exists to pin down.
     const bool spinMode = argc > 1 && std::strcmp(argv[1], "spin") == 0;

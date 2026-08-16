@@ -25,13 +25,13 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
     // deadlock2_gcfloor388_0010: mutator in IdleBarrier::ReadReference vs gc-main
     // in EnsurePhaseTransition(GC_PHASE_IDLE). Sibling barriers already bounded
     // (Enum/Trace/Forward/Preforward @ e0824f25); Idle was the leftover.
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         // loadgood: heap face of the ZGC_LOAD_BARRIER_PARITY §四·① observation. Same
         // instrument as Barrier::ReadStaticRef, on the slot class that does carry colour.
         // Only the first attempt is recorded, so a self-heal retry is not a second read.
-        if (UNLIKELY(LoadGoodProbe::Enabled()) && attempts == 0) {
+        if (UNLIKELY(LoadGoodProbe::Enabled())) {
             const uintptr_t rawWord = raw(oldField.GetFieldValue());
             if (rawWord == 0) {
                 LoadGoodProbe::NoteNull(LoadGoodProbe::kFaceHeap);
@@ -57,16 +57,9 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
             return loadGood;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
-        // the CAS expected value. A concurrent GC update therefore wins rather than being
-        // overwritten; on failure, reload and apply the barrier to the newer value.
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::IdleReadReference)) {
-            DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::IdleReadReference);
+        return loadGood;
     }
 }
 
@@ -82,7 +75,7 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
     // TRUST_STATE_KILL_PLAN Phase 1: retire TryUntagRefField plain-CAS from the read path.
     // Match Forward/Preforward/PostTrace: load-good test + make_load_good + observed-raw CAS
     // self-heal with current colour (not heap-slot untag-to-plain).
-    for (int attempts = 0;;) {
+    for (;;) {
         RefField<false> oldField(field.GetFieldValue(order));
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
@@ -97,15 +90,9 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
             return loadGood;
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
-        if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
-                     HealSite::IdleAtomicReadReference)) {
-            DLOG(BARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()),
-                 loadGood);
-            return loadGood;
-        }
-        if (++attempts >= kSelfHealAttempts) {
-            return loadGood;
-        }
+        ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                            HealSite::IdleAtomicReadReference);
+        return loadGood;
     }
 }
 

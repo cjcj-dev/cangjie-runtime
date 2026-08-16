@@ -179,8 +179,6 @@ public:
         ::g_cjLoadBadMask = m.loadBad;
         ::g_cjMarkBadMask = m.markBad;
         ::g_cjStoreBadMask = m.storeBad;
-        // Default off; first line of the callee is `if (!MaskEquivOn()) return;`.
-        MaskEquivCheck(e, m);
     }
 
     // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start

@@ -9,6 +9,7 @@
 #define MRT_COLLECTOR_H
 
 #include "Common/ColourMask.h"
+#include "Common/ColourPredicates.h"
 #include <atomic>
 #include <cstdint>
 #include <cstdlib>
@@ -158,41 +159,20 @@ public:
     virtual bool is_young_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_young_load_good"); }
     virtual bool is_old_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_old_load_good"); }
 
-    // goodpred: the tree carries two definitions of load-good and they disagree.
-    //
-    // legacy (below, and what every barrier fast path has been running) accepts a reference whose
-    // remap bit is in both the young and the old accepted mask.
-    //
-    // zgc is ColourPredicates::is_load_good, the transcription of OpenJDK
-    // ZPointer::is_load_good (zAddress.inline.hpp:631-633): one AND against g_cjLoadBadMask,
-    // which ComputeBadMasks builds as REMAP_COLOUR_MASK ^ current. A stale remap colour
-    // goes down the barrier slow path.
-    //
-    // Not the default: switching it changes how much traffic the six barriers push through
-    // make_load_good. MRT_GCV2_ZGC_LOADGOOD=1 selects it; MRT_GCV2_LOADGOOD_AUDIT=1 evaluates
-    // both and censuses the disagreement without changing the answer.
-    //
-    // is_mark_good/is_store_good below are unaffected by the choice: both already require
-    // (value & g_cjMarkBadMask)==0, g_cjMarkBadMask is a superset of g_cjLoadBadMask, and under
-    // that precondition the two definitions are provably equal (the only remap bit a value may
-    // carry is the current one, which is what both then test for).
+    // ZPointer::is_load_good (zAddress.inline.hpp:631-633). Product path is the
+    // ZGC definition. MRT_GCV2_LOADGOOD_AUDIT=1 still evaluates both and
+    // censuses disagreement; the answer stays ZGC either way.
     bool is_load_good(RefField<>& ref) const { return is_load_good_at(ref, GoodPredDiag::kSiteBarrier); }
 
-    // Which caller asked. The audit needs it because the answer can only differ at
-    // kSiteBarrier and kSiteMakeLoadGood: the two other sites reach here having already
-    // required (value & g_cjMarkBadMask) == 0, and under that precondition the two
-    // definitions are equal, so counting them would inflate the denominator with reads
-    // that cannot diverge.
     bool is_load_good_at(RefField<>& ref, uint8_t site) const
     {
-        if (LIKELY(GoodPredDiag::g_mode == GoodPredDiag::kLegacy)) {
-            return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
+        if (LIKELY(GoodPredDiag::g_mode != GoodPredDiag::kAudit)) {
+            return ColourPredicates::is_load_good(static_cast<uintptr_t>(raw(ref.GetFieldValue())),
+                                                  static_cast<uintptr_t>(::g_cjLoadBadMask));
         }
         return is_load_good_switched(ref, site);
     }
 
-    // Out-of-line so the default path keeps one load and one branch. Reached only when
-    // MRT_GCV2_ZGC_LOADGOOD or MRT_GCV2_LOADGOOD_AUDIT is set.
     bool is_load_good_switched(RefField<>& ref, uint8_t site) const;
 
     virtual ZGenerationId remap_generation(RefField<>&) const

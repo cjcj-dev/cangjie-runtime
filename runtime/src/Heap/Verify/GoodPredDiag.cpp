@@ -25,12 +25,11 @@ bool EnvIsOne(const char* name)
 
 uint8_t ReadMode()
 {
-    const bool audit = EnvIsOne("MRT_GCV2_LOADGOOD_AUDIT");
-    const bool zgc = EnvIsOne("MRT_GCV2_ZGC_LOADGOOD");
-    if (audit) {
+    // Product is ZGC. AUDIT still evaluates both; the answer is always ZGC.
+    if (EnvIsOne("MRT_GCV2_LOADGOOD_AUDIT")) {
         return kAudit;
     }
-    return zgc ? kZgc : kLegacy;
+    return kZgc;
 }
 
 // Per call site, because only kSiteBarrier and kSiteMakeLoadGood can diverge: the mark/store
@@ -108,7 +107,7 @@ void InstallOnce()
 } // namespace
 
 uint8_t g_mode = ReadMode();
-bool g_applyZgc = EnvIsOne("MRT_GCV2_ZGC_LOADGOOD");
+bool g_applyZgc = true;
 
 bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site)
 {
