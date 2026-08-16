@@ -310,6 +310,25 @@ std::atomic<uint64_t> g_claimLedger[kClaimLedgerCap];
 std::atomic<size_t> g_claimLedgerInsertFail{ 0 };
 std::atomic<size_t> g_claimLedgerLookupMiss{ 0 };
 
+// The mark ring is intentionally narrow and can wrap within one major.  Keep
+// the rare wasMarked=true event in a separate exact ledger so a later crash can
+// still distinguish "major skipped" from "no probe record".  Object pointers
+// are 8-byte aligned, so the low 48 address bits fit in 45 packed bits.
+constexpr size_t kMajorSkipLedgerCap = 1u << 18;
+constexpr size_t kMajorSkipLedgerProbe = 64;
+constexpr uint64_t kMajorSkipKeyMask = (1ULL << 45) - 1;
+std::atomic<uint64_t> g_majorSkipLedger[kMajorSkipLedgerCap];
+std::atomic<size_t> g_majorSkipLedgerInsertFail{ 0 };
+
+struct MajorSkipMeta {
+    uint32_t gc = 0;
+    uint16_t phase = 0;
+    uint8_t source = MARK_SOURCE_UNKNOWN;
+    uint8_t regionYoung = 0xff;
+    uint8_t hasRef = 0xff;
+    uint8_t nonYoungRef = 0xff;
+};
+
 struct YoungClaimGcStats {
     std::atomic<size_t> youngClaim{ 0 };
     std::atomic<size_t> majorClaim{ 0 };
@@ -390,6 +409,78 @@ uint8_t LookupClaimLedger(uintptr_t obj, uint32_t& gc)
     }
     g_claimLedgerLookupMiss.fetch_add(1, std::memory_order_relaxed);
     return MARK_SOURCE_UNKNOWN;
+}
+
+size_t MajorSkipLedgerIndex(uintptr_t obj)
+{
+    uint64_t x = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return static_cast<size_t>(x) & (kMajorSkipLedgerCap - 1);
+}
+
+uint64_t PackMajorSkip(uintptr_t obj, const MajorSkipMeta& meta)
+{
+    uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    return (key & kMajorSkipKeyMask) |
+        ((static_cast<uint64_t>(meta.source) & 0x3ULL) << 45) |
+        ((static_cast<uint64_t>(meta.gc) & 0x3ffULL) << 47) |
+        ((static_cast<uint64_t>(meta.phase) & 0xfULL) << 57) |
+        ((static_cast<uint64_t>(meta.regionYoung) & 0x1ULL) << 61) |
+        ((static_cast<uint64_t>(meta.hasRef) & 0x1ULL) << 62) |
+        ((static_cast<uint64_t>(meta.nonYoungRef) & 0x1ULL) << 63);
+}
+
+void RecordMajorSkipLedger(uintptr_t obj, const MajorSkipMeta& meta)
+{
+    if (obj == 0) {
+        return;
+    }
+    const uint64_t packed = PackMajorSkip(obj, meta);
+    const uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    size_t idx = MajorSkipLedgerIndex(obj);
+    for (size_t probe = 0; probe < kMajorSkipLedgerProbe; ++probe) {
+        std::atomic<uint64_t>& cell = g_majorSkipLedger[(idx + probe) & (kMajorSkipLedgerCap - 1)];
+        uint64_t old = cell.load(std::memory_order_acquire);
+        if ((old & kMajorSkipKeyMask) == key && old != 0) {
+            cell.store(packed, std::memory_order_release);
+            return;
+        }
+        if (old == 0 && cell.compare_exchange_strong(old, packed, std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed)) {
+            return;
+        }
+    }
+    g_majorSkipLedgerInsertFail.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool LookupMajorSkipLedger(uintptr_t obj, MajorSkipMeta& meta)
+{
+    if (obj == 0) {
+        return false;
+    }
+    const uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    size_t idx = MajorSkipLedgerIndex(obj);
+    for (size_t probe = 0; probe < kMajorSkipLedgerProbe; ++probe) {
+        uint64_t packed =
+            g_majorSkipLedger[(idx + probe) & (kMajorSkipLedgerCap - 1)].load(std::memory_order_acquire);
+        if (packed == 0) {
+            break;
+        }
+        if ((packed & kMajorSkipKeyMask) == key) {
+            meta.source = static_cast<uint8_t>((packed >> 45) & 0x3ULL);
+            meta.gc = static_cast<uint32_t>((packed >> 47) & 0x3ffULL);
+            meta.phase = static_cast<uint16_t>((packed >> 57) & 0xfULL);
+            meta.regionYoung = static_cast<uint8_t>((packed >> 61) & 0x1ULL);
+            meta.hasRef = static_cast<uint8_t>((packed >> 62) & 0x1ULL);
+            meta.nonYoungRef = static_cast<uint8_t>((packed >> 63) & 0x1ULL);
+            return true;
+        }
+    }
+    return false;
 }
 
 const char* MarkSourceName(uint8_t source)
@@ -1711,8 +1802,11 @@ void NoteMajorWasMarked(const void* obj)
         stats.majorWasMarkedYoung.fetch_add(1, std::memory_order_relaxed);
     }
 
+    // A region may have been promoted in place after the young claim.  Its
+    // current generation is evidence to report, not a precondition for the
+    // address/source join.
     uint32_t claimGc = 0;
-    uint8_t source = young ? LookupClaimLedger(o, claimGc) : MARK_SOURCE_UNKNOWN;
+    uint8_t source = LookupClaimLedger(o, claimGc);
     uint8_t hasRef = 0;
     uint8_t nonYoungRef = 0;
     if (source == MARK_SOURCE_YOUNG) {
@@ -1740,6 +1834,15 @@ void NoteMajorWasMarked(const void* obj)
         }
     }
 
+    MajorSkipMeta skipMeta;
+    skipMeta.gc = gc;
+    skipMeta.phase = CurrentPhase();
+    skipMeta.source = source;
+    skipMeta.regionYoung = young ? 1 : 0;
+    skipMeta.hasRef = hasRef;
+    skipMeta.nonYoungRef = nonYoungRef;
+    RecordMajorSkipLedger(o, skipMeta);
+
     uint32_t seq = static_cast<uint32_t>(g_markTotal.fetch_add(1, std::memory_order_relaxed) + 1);
     uint32_t slotIdx = g_markNext.fetch_add(1, std::memory_order_relaxed);
     if (slotIdx >= kMarkCap) {
@@ -1751,7 +1854,7 @@ void NoteMajorWasMarked(const void* obj)
     row.off = static_cast<uint32_t>(reg->GetAddressOffset(static_cast<MAddress>(o)));
     row.gcCount = gc;
     row.seq = seq;
-    row.phase = CurrentPhase();
+    row.phase = skipMeta.phase;
     row.kind = MARK_EVENT_MAJOR_SKIP;
     row.source = source;
     row.regionYoung = young ? 1 : 0;
