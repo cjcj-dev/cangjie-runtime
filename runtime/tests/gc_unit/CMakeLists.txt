@@ -22,6 +22,7 @@ set(GC_UNIT_SOURCES
     test_unwind_regressions.cpp
     test_gctibzero.cpp
     test_pinroot.cpp
+    test_followedge.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
