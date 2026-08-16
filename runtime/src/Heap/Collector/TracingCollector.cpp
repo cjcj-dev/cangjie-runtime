@@ -13,6 +13,7 @@
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
@@ -306,6 +307,18 @@ public:
             // get next object from work stack.
             BaseObject* obj = workStack.back();
             workStack.pop_back();
+            // A partial-array chunk is a continuation of an array that was
+            // already marked, so it skips MarkObject entirely -- same order as
+            // ZGC's ZMark::mark_and_follow (zMark.cpp:392-400), which dispatches
+            // on the partial_array flag before the mark step. Forking still runs
+            // below, which is the point: the chunk makes the tail stealable.
+            if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
+                collector.FollowPartialArray(obj, workStack);
+                if (threadPool != nullptr) {
+                    TryForkTask();
+                }
+                continue;
+            }
             bool wasMarked = collector.MarkObject(obj);
             if (!wasMarked) {
                 nNewlyMarked++;
@@ -884,6 +897,13 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         BaseObject* obj = workStack.back();
         workStack.pop_back();
 
+        // TraceObjectRefFields below can push partial-array chunks onto this
+        // stack too, so this loop has to decode them as well.
+        if (UNLIKELY(MarkPartialArray::IsPartialArrayEntry(obj))) {
+            FollowPartialArray(obj, workStack);
+            continue;
+        }
+
         // skip if the object already marked.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
@@ -1048,6 +1068,8 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
     // cross-table has to be on stderr before the crash, not only at exit.
     LoadGoodProbe::Report("gc_end");
+    // portarray: positive control for large-array chunking; self-gates, default off.
+    MarkPartialArray::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);

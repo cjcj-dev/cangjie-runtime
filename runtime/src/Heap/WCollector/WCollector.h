@@ -77,6 +77,7 @@ public:
     void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const override;
     void TraceRefField(BaseObject* obj, RefField<>& ref, WorkStack& workStack) const;
     void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) override;
+    void FollowPartialArray(BaseObject* entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
     void PostResolveCycleTask();
@@ -564,6 +565,18 @@ private:
 
     bool MarkObjectImpl(BaseObject* obj, bool youngClaim) const;
     bool MarkYoungObject(BaseObject* obj) const { return MarkObjectImpl(obj, true); }
+
+    // Large reference-array chunking, ported from ZGC's ZMark (zMark.cpp:185-263).
+    // `holder` is the owning array, carried only for diagnostics; it is nullptr
+    // when the elements arrive as a chunk popped off the work stack, because
+    // ZGC's partial-array entry does not carry the holder either.
+    void PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack) const;
+    void FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
+                                  WorkStack& workStack) const;
+    void FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
+                                  WorkStack& workStack) const;
+    void FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
+                             WorkStack& workStack) const;
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;

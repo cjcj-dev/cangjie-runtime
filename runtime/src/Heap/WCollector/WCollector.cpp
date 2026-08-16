@@ -32,6 +32,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
@@ -1276,9 +1277,13 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             return;
         }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
+        // obj is null when the field arrived as a partial-array chunk, which
+        // carries no holder (ZGC's entry does not either). Only this message
+        // loses detail; the check itself is unchanged.
         CHECK_DETAIL(targetObj->IsValidObject(),
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
-                     obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                     obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
+                     obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
         if (!IsMarkedObject<Generation::Old>(targetObj)) {
             if (UNLIKELY(StartWhoDiag::Enabled())) {
                 StartWhoDiag::NoteProduced(targetObj, StartWhoDiag::Source::HEAP_FIELD,
@@ -1302,7 +1307,8 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
-                 latest, obj, obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
+                 latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
+                 obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
@@ -1319,6 +1325,103 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         }
         workStack.push_back(latest);
     }
+}
+
+// Ported from ZGC ZMark::push_partial_array (zMark.cpp:185-196). ZGC pushes a
+// tagged entry onto its mark stack; we push the same descriptor encoded into a
+// BaseObject* slot of our work stack, so TryForkTask can hand it to another
+// worker. If the descriptor does not fit one word we trace the chunk here
+// rather than drop it -- correctness never depends on the encoding succeeding.
+void WCollector::PushPartialArray(RefField<>* addr, size_t length, WorkStack& workStack) const
+{
+    if (UNLIKELY(!MarkPartialArray::Encodable(addr, length))) {
+        MarkPartialArray::NoteNotEncodable();
+        FollowArrayElementsSmall(nullptr, addr, length, workStack);
+        return;
+    }
+    MarkPartialArray::NoteChunkPushed();
+    workStack.push_back(MarkPartialArray::Encode(addr, length));
+}
+
+// zMark.cpp:208-214 (follow_array_elements_small).
+void WCollector::FollowArrayElementsSmall(BaseObject* holder, RefField<>* addr, size_t length,
+                                          WorkStack& workStack) const
+{
+    for (size_t i = 0; i < length; ++i) {
+        TraceRefField(holder, addr[i], workStack);
+    }
+}
+
+// zMark.cpp:216-255 (follow_array_elements_large), transcribed.
+void WCollector::FollowArrayElementsLarge(BaseObject* holder, RefField<>* addr, size_t length,
+                                          WorkStack& workStack) const
+{
+    RefField<>* const start = addr;
+    RefField<>* const end = start + length;
+
+    // Calculate the aligned middle start/end/size, where the middle start
+    // should always be greater than the start (hence the +1 below) to make
+    // sure we always do some follow work, not just split the array into pieces.
+    RefField<>* const middleStart = AlignUp(start + 1, MarkPartialArray::MIN_SIZE);
+    const size_t middleLength =
+        AlignDown(static_cast<size_t>(end - middleStart), MarkPartialArray::MIN_LENGTH);
+    RefField<>* const middleEnd = middleStart + middleLength;
+
+    MarkPartialArray::NoteArraySplit();
+
+    // Push unaligned trailing part
+    if (end > middleEnd) {
+        PushPartialArray(middleEnd, static_cast<size_t>(end - middleEnd), workStack);
+    }
+
+    // Push aligned middle part(s)
+    RefField<>* partialAddr = middleEnd;
+    while (partialAddr > middleStart) {
+        const size_t parts = 2;
+        const size_t partialLength = AlignUp(static_cast<size_t>(partialAddr - middleStart) / parts,
+                                             MarkPartialArray::MIN_LENGTH);
+        partialAddr -= partialLength;
+        PushPartialArray(partialAddr, partialLength, workStack);
+    }
+
+    // Follow leading part
+    CHECK_DETAIL(start < middleStart, "Miscalculated middle start");
+    FollowArrayElementsSmall(holder, start, static_cast<size_t>(middleStart - start), workStack);
+}
+
+// zMark.cpp:257-263 (follow_array_elements). The encodability probe has no ZGC
+// counterpart: ZGC bounds its heap so the entry always fits, whereas ours is
+// only checked here. Failing it means "trace inline", i.e. today's behaviour.
+void WCollector::FollowArrayElements(BaseObject* holder, RefField<>* addr, size_t length,
+                                     WorkStack& workStack) const
+{
+    if (length <= MarkPartialArray::MIN_LENGTH) {
+        FollowArrayElementsSmall(holder, addr, length, workStack);
+        return;
+    }
+    // Every chunk this split can produce starts inside [addr, addr+length) and
+    // is no longer than `length`, so probing the last element bounds them all.
+    if (UNLIKELY(length > MarkPartialArray::MAX_LENGTH ||
+                 !MarkPartialArray::Encodable(
+                     reinterpret_cast<const void*>(
+                         AlignDown(reinterpret_cast<MAddress>(addr + length),
+                                   static_cast<MAddress>(MarkPartialArray::MIN_SIZE))),
+                     1))) {
+        MarkPartialArray::NoteNotEncodable();
+        FollowArrayElementsSmall(holder, addr, length, workStack);
+        return;
+    }
+    FollowArrayElementsLarge(holder, addr, length, workStack);
+}
+
+// zMark.cpp:265-270 (follow_partial_array).
+void WCollector::FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+{
+    MAddress chunkStart = 0;
+    size_t length = 0;
+    MarkPartialArray::Decode(entry, chunkStart, length);
+    MarkPartialArray::NoteChunkFollowed();
+    FollowArrayElements(nullptr, &HeapSlotAt<>(chunkStart), length, workStack);
 }
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
@@ -1347,6 +1450,13 @@ void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
         } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                    componentTypeInfo->IsInterface()) {
             HeapSlot<>* arrayContent = &HeapSlotAt<>(array->ConvertToCArray());
+            // This is ZGC's objArrayOop case (zMark.cpp:346-369 follow_array_object):
+            // a flat run of reference slots, the only shape it chunks. The struct
+            // -component branch above has no ZGC counterpart and is left alone.
+            if (UNLIKELY(MarkPartialArray::Enabled())) {
+                FollowArrayElements(obj, arrayContent, arrayLength, workStack);
+                return;
+            }
             for (MIndex i = 0; i < arrayLength; ++i) {
                 visitor(arrayContent[i]);
             }
