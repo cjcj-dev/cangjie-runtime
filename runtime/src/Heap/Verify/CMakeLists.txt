@@ -28,6 +28,7 @@ set(SRC_LIST
     "DiagGate.cpp"
     "RouteDom.cpp"
     "RouteDestHold.cpp"
+    "FwdInflight.cpp"
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
     "EmptyLiveDiag.cpp"
