@@ -139,10 +139,16 @@ bool InjectOn()
 
 bool DrainEnabled()
 {
-    // Drain is now unconditional (ZForwardingLife). The flag is gone; this stays
-    // true so existing census lines still print.
-    EnsureAtexit();
-    return true;
+    // Drain is unconditional (ZForwardingLife). This flag only turns the census
+    // on; it no longer gates the wait.
+    static const bool on = []() {
+        EnsureAtexit();
+        if (EnvIsOne("MRT_GCV2_MUTRELOC_STATS")) {
+            return true;
+        }
+        return DiagGate::TokenOn("mutrelocstats") || DiagGate::TokenOn("mutrelocdrain");
+    }();
+    return on || Enabled();
 }
 
 bool StatsOn()
