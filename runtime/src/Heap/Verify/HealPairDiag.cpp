@@ -17,6 +17,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Collector/GcStats.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
@@ -56,6 +57,22 @@ bool WhoZeroOn()
             return true;
         }
         return DiagGate::TokenOn("whozero");
+    }();
+    return on;
+}
+
+// edgemiss: non-zero write ring for large targets + first-mark ring. Default off.
+bool EdgeMissOn()
+{
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        if (EnvIsOne("MRT_GCV2_EDGEMISS")) {
+            return true;
+        }
+        if (EnvIsOne("MRT_GCV2_WHOZERO")) {
+            return true;
+        }
+        return DiagGate::TokenOn("edgemiss") || DiagGate::TokenOn("whozero");
     }();
     return on;
 }
@@ -207,6 +224,108 @@ std::atomic<size_t> g_copyWrap{ 0 };
 std::atomic<size_t> g_zeroWrap{ 0 };
 std::atomic<size_t> g_zeroRemap{ 0 };
 thread_local InflightCopy g_inflight{};
+
+// edgemiss rings (narrow: large target / first mark). Remap slots on copy.
+constexpr size_t kEdgeCap = 1u << 16; // larger: null→large only is sparse
+constexpr size_t kMarkCap = 1u << 16;
+struct EdgeRow {
+    uintptr_t slot = 0;
+    uintptr_t oldRaw = 0;
+    uintptr_t newRaw = 0;
+    uintptr_t tgt = 0;
+    uintptr_t holder = 0;
+    uintptr_t pc = 0;
+    uint32_t gcCount = 0;
+    uint32_t seq = 0;
+    uint16_t phase = 0;
+    uint8_t barrier = 0;
+    uint8_t satbOld = 0;
+    uint8_t satbNew = 0;
+    uint8_t large = 0;
+    uint8_t holderMarked = 0xff;
+    uint8_t holderYoung = 0xff;
+};
+struct MarkRow {
+    uintptr_t obj = 0;
+    uintptr_t start = 0;
+    uint32_t off = 0;
+    uint32_t gcCount = 0;
+    uint32_t seq = 0;
+    uint16_t phase = 0;
+};
+EdgeRow g_edges[kEdgeCap];
+MarkRow g_marks[kMarkCap];
+std::atomic<uint32_t> g_edgeNext{ 0 };
+std::atomic<uint32_t> g_markNext{ 0 };
+std::atomic<size_t> g_edgeTotal{ 0 };
+std::atomic<size_t> g_markTotal{ 0 };
+std::atomic<size_t> g_edgeWrap{ 0 };
+std::atomic<size_t> g_markWrap{ 0 };
+std::atomic<size_t> g_edgeRemap{ 0 };
+std::atomic<size_t> g_markRemap{ 0 };
+// Page filter for edge-slot remap (share zero-page style).
+uint8_t g_edgePageBits[kZeroPageBits / 8] = {};
+inline void MarkEdgePage(uintptr_t slot)
+{
+    if (slot == 0) {
+        return;
+    }
+    size_t bit = (slot >> kZeroPageShift) & (kZeroPageBits - 1);
+    g_edgePageBits[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+}
+inline bool EdgePageMarked(uintptr_t addr)
+{
+    if (addr == 0) {
+        return false;
+    }
+    size_t bit = (addr >> kZeroPageShift) & (kZeroPageBits - 1);
+    return (g_edgePageBits[bit / 8] & static_cast<uint8_t>(1u << (bit % 8))) != 0;
+}
+inline bool EdgeRangeMaybeMarked(uintptr_t from, uintptr_t size)
+{
+    if (from == 0 || size == 0) {
+        return false;
+    }
+    uintptr_t end = from + size - 1;
+    uintptr_t p = from & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    uintptr_t pEnd = end & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    for (;;) {
+        if (EdgePageMarked(p)) {
+            return true;
+        }
+        if (p >= pEnd) {
+            return false;
+        }
+        p += (uintptr_t(1) << kZeroPageShift);
+    }
+}
+const char* BarrierName(uint8_t b)
+{
+    switch (b) {
+        case 1:
+            return "Idle";
+        case 2:
+            return "Enum";
+        case 3:
+            return "Trace";
+        case 4:
+            return "PostTrace";
+        case 5:
+            return "Preforward";
+        case 6:
+            return "Forward";
+        case 7:
+            return "STW";
+        default:
+            return "unknown";
+    }
+}
+bool PhaseSatbActive(uint16_t phase)
+{
+    return phase == static_cast<uint16_t>(GCPhase::GC_PHASE_ENUM) ||
+        phase == static_cast<uint16_t>(GCPhase::GC_PHASE_TRACE) ||
+        phase == static_cast<uint16_t>(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+}
 
 // slotwindow inflight=0: g_inflight is TLS. Crash dump runs on the mutator,
 // so it never sees the GC thread's mid-copy. This table is the cross-thread view.
@@ -375,6 +494,161 @@ void DumpCopy(const char* tag, const CopyRow& row)
     }
 }
 
+// Join edge-write (T1) + first-mark (T2) + regionlife free (T3) for a whozero slot/target.
+void DumpEdgeJoin(uintptr_t slot, uintptr_t holder, uintptr_t tgt, const char* tag)
+{
+    if (!EdgeMissOn()) {
+        return;
+    }
+    uint32_t en = static_cast<uint32_t>(
+        g_edgeTotal.load(std::memory_order_acquire) < kEdgeCap ?
+            g_edgeTotal.load(std::memory_order_relaxed) : kEdgeCap);
+    uint32_t enext = g_edgeNext.load(std::memory_order_acquire);
+    size_t etot = g_edgeTotal.load(std::memory_order_acquire);
+    uint32_t ebase = (etot < kEdgeCap) ? 0 : (enext % kEdgeCap);
+    int lastEi = -1;
+    uint32_t edgeHits = 0;
+    for (uint32_t i = 0; i < en; ++i) {
+        const EdgeRow& er = g_edges[(ebase + i) % kEdgeCap];
+        bool hit = (slot != 0 && er.slot == slot);
+        if (!hit && tgt != 0 && er.tgt == tgt && holder != 0 && er.holder == holder) {
+            hit = true;
+        }
+        if (hit) {
+            ++edgeHits;
+            lastEi = static_cast<int>((ebase + i) % kEdgeCap);
+        }
+    }
+    uint32_t mn = static_cast<uint32_t>(
+        g_markTotal.load(std::memory_order_acquire) < kMarkCap ?
+            g_markTotal.load(std::memory_order_relaxed) : kMarkCap);
+    uint32_t mnext = g_markNext.load(std::memory_order_acquire);
+    size_t mtot = g_markTotal.load(std::memory_order_acquire);
+    uint32_t mbase = (mtot < kMarkCap) ? 0 : (mnext % kMarkCap);
+    int lastMi = -1;
+    uint32_t markHits = 0;
+    if (holder != 0) {
+        for (uint32_t i = 0; i < mn; ++i) {
+            const MarkRow& mr = g_marks[(mbase + i) % kMarkCap];
+            if (mr.obj == holder) {
+                ++markHits;
+                lastMi = static_cast<int>((mbase + i) % kMarkCap);
+            }
+        }
+    }
+    uint32_t freeSeq = 0;
+    uint32_t freeLife = 0;
+    uint16_t freePath = 0;
+    uint16_t freePhase = 0;
+    uint32_t freeGc = 0;
+    uintptr_t freeStart = 0;
+    uintptr_t freeEnd = 0;
+    uint8_t freeKnown = 0;
+    uint64_t freeLive = 0;
+    uint8_t freeYoung = 0;
+    uint8_t freeNever = 0;
+    uint8_t freeAuth = 0;
+    uint8_t freeSame = 0;
+    uint32_t takeLife = 0;
+    unsigned haveFree = 0;
+    if (tgt != 0) {
+        haveFree = RegionLifeDiag::LookupLastFree(tgt, &freeSeq, &freeLife, &freePath, &freePhase, &freeGc, &freeStart,
+                                                  &freeEnd, &freeKnown, &freeLive, &freeYoung, &freeNever, &freeAuth,
+                                                  &freeSame, &takeLife)
+                       ? 1U
+                       : 0U;
+    }
+    unsigned verdict = 0;
+    const char* verdictName = "na";
+    if (lastEi < 0) {
+        verdict = 1;
+        verdictName = "jia_no_t1";
+    } else if (lastMi < 0) {
+        verdict = 4;
+        verdictName = "no_t2_mark";
+    } else {
+        const EdgeRow& er = g_edges[static_cast<size_t>(lastEi)];
+        const MarkRow& mr = g_marks[static_cast<size_t>(lastMi)];
+        if (er.holderMarked == 1) {
+            verdict = 2;
+            verdictName = "yi_post_mark";
+        } else if (er.gcCount < mr.gcCount) {
+            verdict = 3;
+            verdictName = "bing_pre_mark";
+        } else if (er.gcCount > mr.gcCount) {
+            verdict = 2;
+            verdictName = "yi_post_mark_gc";
+        } else if (er.phase < mr.phase) {
+            verdict = 3;
+            verdictName = "bing_pre_mark_phase";
+        } else if (er.phase > mr.phase) {
+            verdict = 2;
+            verdictName = "yi_post_mark_phase";
+        } else {
+            verdict = 2;
+            verdictName = "yi_same_phase_conc";
+        }
+    }
+    char line[768];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][edgemiss] join tag=%s slot=%#zx holder=%#zx tgt=%#zx "
+                      "haveT1=%u edgeHits=%u edgeTotal=%zu edgeRemap=%zu "
+                      "haveT2=%u markHits=%u markTotal=%zu "
+                      "haveT3=%u freePath=%u freePhase=%u freeGc=%u neverExam=%u sameLife=%u "
+                      "verdict=%s(%u)\n",
+                      tag != nullptr ? tag : "?", slot, holder, tgt, lastEi >= 0 ? 1U : 0U, edgeHits, etot,
+                      g_edgeRemap.load(std::memory_order_relaxed), lastMi >= 0 ? 1U : 0U, markHits, mtot, haveFree,
+                      static_cast<unsigned>(freePath), static_cast<unsigned>(freePhase), freeGc,
+                      static_cast<unsigned>(freeNever), static_cast<unsigned>(freeSame), verdictName, verdict);
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
+    if (lastEi >= 0) {
+        const EdgeRow& er = g_edges[static_cast<size_t>(lastEi)];
+        char e[640];
+        int en2 = sprintf_s(e, sizeof(e),
+                            "[GCV2][edgemiss] T1 write slot=%#zx tgt=%#zx holder=%#zx phase=%u gc=%u "
+                            "barrier=%s(%u) satbOld=%u satbNew=%u hMarked@w=%u hYoung=%u seq=%u pc=%#zx\n",
+                            er.slot, er.tgt, er.holder, static_cast<unsigned>(er.phase), er.gcCount,
+                            BarrierName(er.barrier), static_cast<unsigned>(er.barrier),
+                            static_cast<unsigned>(er.satbOld), static_cast<unsigned>(er.satbNew),
+                            static_cast<unsigned>(er.holderMarked), static_cast<unsigned>(er.holderYoung), er.seq,
+                            er.pc);
+        if (en2 > 0) {
+            WriteLine(e, static_cast<size_t>(en2));
+        }
+    } else {
+        char miss[256];
+        int mn2 = sprintf_s(miss, sizeof(miss),
+                            "[GCV2][edgemiss] T1_missing slot=%#zx tgt=%#zx edgeTotal=%zu "
+                            "(no barrier NoteEdgeWrite for large tgt; not proof of plain store alone)\n",
+                            slot, tgt, etot);
+        if (mn2 > 0) {
+            WriteLine(miss, static_cast<size_t>(mn2));
+        }
+    }
+    if (lastMi >= 0) {
+        const MarkRow& mr = g_marks[static_cast<size_t>(lastMi)];
+        char m[320];
+        int mn3 = sprintf_s(m, sizeof(m),
+                            "[GCV2][edgemiss] T2 mark obj=%#zx start=%#zx off=%u phase=%u gc=%u seq=%u\n",
+                            mr.obj, mr.start, mr.off, static_cast<unsigned>(mr.phase), mr.gcCount, mr.seq);
+        if (mn3 > 0) {
+            WriteLine(m, static_cast<size_t>(mn3));
+        }
+    }
+    if (haveFree) {
+        char f[320];
+        int fn = sprintf_s(f, sizeof(f),
+                           "[GCV2][edgemiss] T3 free path=%u phase=%u gc=%u start=%#zx neverExam=%u sameLife=%u\n",
+                           static_cast<unsigned>(freePath), static_cast<unsigned>(freePhase), freeGc, freeStart,
+                           static_cast<unsigned>(freeNever), static_cast<unsigned>(freeSame));
+        if (fn > 0) {
+            WriteLine(f, static_cast<size_t>(fn));
+        }
+    }
+}
+
 void DumpZero(const char* tag, const ZeroRow& row)
 {
     char line[768];
@@ -405,6 +679,9 @@ void DumpZero(const char* tag, const ZeroRow& row)
     // regionlife: last free of CAS-null target (same-life via lifeId anti-reuse).
     if (WhoZeroOn() && row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
         RegionLifeDiag::DumpJoinForTarget(row.tgt, tag);
+    }
+    if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
+        DumpEdgeJoin(row.slot, row.holderObj, row.tgt, tag);
     }
 }
 
@@ -727,8 +1004,8 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
 
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
 {
-    // whozero needs the copy ring to reconcile HealSlot-null against post-move slot addrs.
-    if (!GateOn() && !WhoZeroOn()) {
+    // whozero/edgemiss need the copy ring to reconcile rings against post-move slot addrs.
+    if (!GateOn() && !WhoZeroOn() && !EdgeMissOn()) {
         return;
     }
     if (GateOn()) {
@@ -804,6 +1081,47 @@ void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t do
                 zr.slot = ns;
                 MarkZeroPage(ns);
                 g_zeroRemap.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    // edgemiss: remap edge-ring slots + mark-ring objects that lived in from-object.
+    if (done != 0 && EdgeMissOn() && size > 0 && from != 0 && to != 0) {
+        uintptr_t f0 = from;
+        uintptr_t t0 = to;
+        uintptr_t sz = static_cast<uintptr_t>(size);
+        if (EdgeRangeMaybeMarked(from, sz)) {
+            uint32_t en = static_cast<uint32_t>(
+                g_edgeTotal.load(std::memory_order_acquire) < kEdgeCap ?
+                    g_edgeTotal.load(std::memory_order_relaxed) : kEdgeCap);
+            uint32_t enext = g_edgeNext.load(std::memory_order_acquire);
+            size_t etot = g_edgeTotal.load(std::memory_order_acquire);
+            uint32_t ebase = (etot < kEdgeCap) ? 0 : (enext % kEdgeCap);
+            for (uint32_t ei = 0; ei < en; ++ei) {
+                EdgeRow& er = g_edges[(ebase + ei) % kEdgeCap];
+                if (er.slot >= f0 && er.slot < f0 + sz) {
+                    er.slot = t0 + (er.slot - f0);
+                    MarkEdgePage(er.slot);
+                    g_edgeRemap.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (er.holder >= f0 && er.holder < f0 + sz) {
+                    er.holder = t0 + (er.holder - f0);
+                }
+            }
+        }
+        if (EdgeRangeMaybeMarked(from, sz)) {
+            uint32_t mn = static_cast<uint32_t>(
+                g_markTotal.load(std::memory_order_acquire) < kMarkCap ?
+                    g_markTotal.load(std::memory_order_relaxed) : kMarkCap);
+            uint32_t mnext = g_markNext.load(std::memory_order_acquire);
+            size_t mtot = g_markTotal.load(std::memory_order_acquire);
+            uint32_t mbase = (mtot < kMarkCap) ? 0 : (mnext % kMarkCap);
+            for (uint32_t mi = 0; mi < mn; ++mi) {
+                MarkRow& mr = g_marks[(mbase + mi) % kMarkCap];
+                if (mr.obj >= f0 && mr.obj < f0 + sz) {
+                    mr.obj = t0 + (mr.obj - f0);
+                    MarkEdgePage(mr.obj);
+                    g_markRemap.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         }
     }
@@ -1005,6 +1323,100 @@ void FillZeroTargetSnapshot(ZeroRow& row)
     }
 }
 
+void NoteEdgeWrite(const void* holder, const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint8_t barrierKind)
+{
+    if (!EdgeMissOn()) {
+        return;
+    }
+    uintptr_t tgt = newRaw & 0x0000ffffffffffffULL;
+    uintptr_t oldTgt = oldRaw & 0x0000ffffffffffffULL;
+    // Narrow: only null→large installs (edge establish). Avoid ring thrash on retargets.
+    if (oldTgt != 0 || tgt == 0 || Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(tgt)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(tgt));
+    if (reg == nullptr || !reg->IsLargeRegion()) {
+        return;
+    }
+    uint32_t seq = static_cast<uint32_t>(g_edgeTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_edgeNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kEdgeCap) {
+        g_edgeWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    EdgeRow& row = g_edges[slotIdx % kEdgeCap];
+    row.slot = reinterpret_cast<uintptr_t>(slot);
+    row.oldRaw = oldRaw;
+    row.newRaw = newRaw;
+    row.tgt = tgt;
+    row.holder = reinterpret_cast<uintptr_t>(holder);
+    row.pc = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    row.gcCount = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    row.seq = seq;
+    row.phase = CurrentPhase();
+    row.barrier = barrierKind;
+    const bool satb = PhaseSatbActive(row.phase);
+    row.satbOld = (satb && ((oldRaw & 0x0000ffffffffffffULL) != 0)) ? 1 : 0;
+    row.satbNew = (satb && tgt != 0) ? 1 : 0;
+    row.large = 1;
+    row.holderMarked = 0xff;
+    row.holderYoung = 0xff;
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(row.holder));
+        if (hr != nullptr) {
+            row.holderYoung = hr->IsYoungRegion() ? 1 : 0;
+            BaseObject* hobj = reinterpret_cast<BaseObject*>(const_cast<void*>(holder));
+            if (Collector::PlausibleManagedObjectGate("edgemiss.holder", hobj)) {
+                row.holderMarked = hr->IsMarkedObject(hobj) ? 1 : 0;
+            }
+        }
+    }
+    MarkEdgePage(row.slot);
+    if (seq <= 64) {
+        char line[512];
+        int n = sprintf_s(line, sizeof(line),
+                          "[GCV2][edgemiss] write n=%u slot=%#zx old=%#zx new=%#zx tgt=%#zx "
+                          "holder=%#zx phase=%u gc=%u barrier=%s(%u) satbOld=%u satbNew=%u "
+                          "hMarked=%u hYoung=%u pc=%#zx\n",
+                          seq, row.slot, static_cast<size_t>(oldRaw), static_cast<size_t>(newRaw), tgt,
+                          row.holder, static_cast<unsigned>(row.phase), row.gcCount, BarrierName(row.barrier),
+                          static_cast<unsigned>(row.barrier), static_cast<unsigned>(row.satbOld),
+                          static_cast<unsigned>(row.satbNew), static_cast<unsigned>(row.holderMarked),
+                          static_cast<unsigned>(row.holderYoung), row.pc);
+        if (n > 0) {
+            WriteLine(line, static_cast<size_t>(n));
+        }
+    }
+}
+
+void NoteFirstMark(const void* obj)
+{
+    if (!EdgeMissOn() || obj == nullptr) {
+        return;
+    }
+    // Narrow: only young holders matter for majoryoung join (avoid mark-ring thrash).
+    uintptr_t o = reinterpret_cast<uintptr_t>(obj);
+    if (Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(o)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(o));
+    if (reg == nullptr || !reg->IsYoungRegion()) {
+        return;
+    }
+    uint32_t seq = static_cast<uint32_t>(g_markTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_markNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kMarkCap) {
+        g_markWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    MarkRow& row = g_marks[slotIdx % kMarkCap];
+    row.obj = o;
+    row.start = reg->GetRegionStart();
+    row.off = static_cast<uint32_t>(reg->GetAddressOffset(static_cast<MAddress>(o)));
+    row.gcCount = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    row.seq = seq;
+    row.phase = CurrentPhase();
+    MarkEdgePage(o); // reuse page filter so copy remap only scans when needed
+}
+
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
 {
     (void)newRaw;
@@ -1057,6 +1469,9 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
         }
         if (row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
             RegionLifeDiag::DumpJoinForTarget(row.tgt, "heal_null");
+        }
+        if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
+            DumpEdgeJoin(row.slot, row.holderObj, row.tgt, "heal_null");
         }
     }
 }
