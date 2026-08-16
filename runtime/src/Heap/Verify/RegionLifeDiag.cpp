@@ -188,9 +188,10 @@ void RecordFree(RegionInfo* region, uint16_t path)
     LifeSlot* life = FindLife(start, true);
     uint32_t lifeId = life != nullptr ? life->lifeId : 0;
     uint32_t takeSeq = life != nullptr ? life->takeSeq : 0;
-    const bool knownEmpty = region->IsKnownEmpty();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
     const bool neverExam =
-        knownEmpty && region->GetMarkBitmap() == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart();
+        knownEmpty && region->GetRouteMarkBitmap() == nullptr &&
+        region->GetRegionAllocPtr() > region->GetRegionStart();
     uint32_t freeSeq = static_cast<uint32_t>(g_freeTotal.fetch_add(1, std::memory_order_relaxed) + 1);
     uint32_t slotIdx = g_freeNext.fetch_add(1, std::memory_order_relaxed);
     if (slotIdx >= kFreeCap) {

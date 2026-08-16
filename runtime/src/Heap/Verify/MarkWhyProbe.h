@@ -15,6 +15,7 @@ namespace MapleRuntime {
 class RegionInfo;
 struct RegionBitmap;
 class BaseObject;
+enum class Generation : uint8_t;
 
 // Read-only probe: after MarkBits, before CHECK(IsMarkedObject), dump identity of
 // write/read bitmap, offsets, region metadata, GC phase, thread role.
@@ -34,7 +35,7 @@ public:
     // build must not pay for a bitmap read. See the .cpp for why.
     static bool NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, size_t offsetWrite, size_t objSize,
                                   size_t regionSizeArg, RegionBitmap* writeBm, bool markBitsReturnedAlreadyMarked,
-                                  const char* site);
+                                  const char* site, Generation generation);
 };
 
 } // namespace MapleRuntime

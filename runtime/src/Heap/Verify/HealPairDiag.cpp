@@ -907,9 +907,13 @@ void FillZeroTargetSnapshot(ZeroRow& row)
             row.holderFree = hr->IsFreeRegion() ? 1 : 0;
             row.holderGarb = hr->IsGarbageRegion() ? 1 : 0;
             row.holderAuth = hr->IsLiveCountAuthoritative() ? 1 : 0;
-            RegionBitmap* mb = hr->GetMarkBitmap();
+            RegionBitmap* mb = hr->IsYoungRegion()
+                ? hr->GetMarkBitmap(hr->GetMarkView<Generation::Young>())
+                : hr->GetMarkBitmap(hr->GetMarkView<Generation::Old>());
             row.holderMb = (mb != nullptr) ? 1 : 0;
-            const bool knownEmpty = hr->IsKnownEmpty();
+            const bool knownEmpty = hr->IsYoungRegion()
+                ? hr->IsKnownYoungEmpty(hr->GetMarkView<Generation::Young>())
+                : hr->IsKnownEmpty(hr->GetMarkView<Generation::Old>());
             row.holderNeverExam =
                 (knownEmpty && mb == nullptr && hr->GetRegionAllocPtr() > hr->GetRegionStart()) ? 1 : 0;
             // Resolve holder object covering this slot (move-independent via region start above).
@@ -936,10 +940,12 @@ void FillZeroTargetSnapshot(ZeroRow& row)
                 row.holderResolved = 1;
                 row.holderObj = reinterpret_cast<uintptr_t>(host);
                 if (Collector::PlausibleManagedObjectGate("majoryoung.holder", host)) {
-                    row.holderMarked = hr->IsMarkedObject(host) ? 1 : 0;
+                    row.holderMarked = hr->IsYoungRegion()
+                        ? (hr->IsMarkedObject(hr->GetMarkView<Generation::Young>(), host) ? 1 : 0)
+                        : (hr->IsMarkedObject(hr->GetMarkView<Generation::Old>(), host) ? 1 : 0);
                     size_t hoff = hr->GetAddressOffset(static_cast<MAddress>(row.holderObj));
                     LiveInfo* hg0 = hr->GetLiveInfo0ForProbe();
-                    row.holderLive0 = (hg0 != nullptr && hg0->IsSurvivedObject(hoff)) ? 1 : 0;
+                    row.holderLive0 = (hg0 != nullptr && hr->IsRouteSurvivedObject(hoff)) ? 1 : 0;
                 } else {
                     row.holderMarked = 0;
                     row.holderLive0 = 0;
@@ -979,10 +985,10 @@ void FillZeroTargetSnapshot(ZeroRow& row)
     row.ghostR = reg->IsGhostFromRegion() ? 1 : 0;
     size_t off = reg->GetAddressOffset(static_cast<MAddress>(tgt));
     LiveInfo* g0 = reg->GetLiveInfo0ForProbe();
-    row.live0 = (g0 != nullptr && g0->IsSurvivedObject(off)) ? 1 : 0;
+    row.live0 = (g0 != nullptr && reg->IsRouteSurvivedObject(off)) ? 1 : 0;
     BaseObject* obj = reinterpret_cast<BaseObject*>(tgt);
     if (Collector::PlausibleManagedObjectGate("noforward.zero", obj)) {
-        row.marked = reg->IsMarkedObject(obj) ? 1 : 0;
+        row.marked = reg->IsRouteMarkedObject(obj) ? 1 : 0;
         row.fwdWord = static_cast<uint32_t>(obj->GetStateWord().GetObjectState().GetStateBits());
     } else {
         row.marked = 0;
@@ -1261,14 +1267,20 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
             crashHFree = chr->IsFreeRegion() ? 1 : 0;
             crashHGarb = chr->IsGarbageRegion() ? 1 : 0;
             crashHAuth = chr->IsLiveCountAuthoritative() ? 1 : 0;
-            RegionBitmap* cmb = chr->GetMarkBitmap();
+            RegionBitmap* cmb = chr->IsYoungRegion()
+                ? chr->GetMarkBitmap(chr->GetMarkView<Generation::Young>())
+                : chr->GetMarkBitmap(chr->GetMarkView<Generation::Old>());
             crashHMb = (cmb != nullptr) ? 1 : 0;
-            const bool cke = chr->IsKnownEmpty();
+            const bool cke = chr->IsYoungRegion()
+                ? chr->IsKnownYoungEmpty(chr->GetMarkView<Generation::Young>())
+                : chr->IsKnownEmpty(chr->GetMarkView<Generation::Old>());
             crashHNever =
                 (cke && cmb == nullptr && chr->GetRegionAllocPtr() > chr->GetRegionStart()) ? 1 : 0;
             BaseObject* hobj = reinterpret_cast<BaseObject*>(r13);
             if (Collector::PlausibleManagedObjectGate("majoryoung.crash_holder", hobj)) {
-                crashHMarked = chr->IsMarkedObject(hobj) ? 1 : 0;
+                crashHMarked = chr->IsYoungRegion()
+                    ? (chr->IsMarkedObject(chr->GetMarkView<Generation::Young>(), hobj) ? 1 : 0)
+                    : (chr->IsMarkedObject(chr->GetMarkView<Generation::Old>(), hobj) ? 1 : 0);
             } else {
                 crashHMarked = 0;
             }

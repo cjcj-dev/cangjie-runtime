@@ -116,7 +116,7 @@ void SatbBuffer::ReportCarryProbe()
         BaseObject* host = g_satbCarryProbeHosts[index].load(std::memory_order_relaxed);
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(host));
         if (host != nullptr && region != nullptr && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
-            RegionSpace::IsMarkedObject(host)) {
+            RegionSpace::IsMarkedObject<Generation::Old>(host)) {
             ++marked;
         } else {
             ++leaked;
@@ -141,7 +141,7 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     if (UNLIKELY(obj == nullptr)) {
         return false;
     }
-    return RegionSpace::ShouldEnqueue(obj);
+    return RegionSpace::ShouldEnqueue<Generation::Old>(obj);
 }
 
 void SatbBuffer::Filter(Node* node)

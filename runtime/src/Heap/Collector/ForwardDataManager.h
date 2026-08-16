@@ -188,8 +188,8 @@ private:
         regionUnitCount = unitCnt;
         // 64: bitmap 1 bit marks the 64 bits in region.
         constexpr uint8_t bitMarksSize = 64;
-        // 3 bitmap for each region: markBitmap,resurrectBitmap, enqueueBitmap.
-        constexpr uint8_t bitmapNum = 3;
+        // 4 bitmaps for each region: young mark, old mark, resurrect, enqueue.
+        constexpr uint8_t bitmapNum = 4;
         return unitCnt * sizeof(LiveInfo) +
             unitCnt * (sizeof(RegionBitmap) + (REGION_UNIT_SIZE / bitMarksSize)) * bitmapNum;
     }

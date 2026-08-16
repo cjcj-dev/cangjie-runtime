@@ -12,6 +12,8 @@
 
 namespace MapleRuntime {
 
+enum class Generation : uint8_t;
+
 // Read-only probe: before ReleaseMemory(previous tag), scan regions whose liveInfo /
 // liveInfo0 / retainedLiveInfo still point into the range about to be madvise'd.
 // Gate (default off): MRT_GCV2_TAG_REUSE=1
@@ -30,6 +32,8 @@ public:
     // Returns true if the bit stuck (or probe off).
     static bool NoteMarkBitsSticky(class RegionInfo* region, size_t offset, bool markBitsReturnedTrue,
                                    const char* site);
+    static bool NoteMarkBitsSticky(class RegionInfo* region, size_t offset, bool markBitsReturnedTrue,
+                                   const char* site, Generation generation);
 };
 
 } // namespace MapleRuntime

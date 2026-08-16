@@ -301,13 +301,14 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    if (region->IsSafeKnownEmpty()) {
+    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+    if (region->IsSafeKnownYoungEmpty(view)) {
         if (fysGapProbe) {
             VLOG(REPORT,
                  "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
                  "knownEmpty=1 hasBitmap=%u mode=safe-empty",
                  region,
-                 static_cast<unsigned>(region->GetMarkBitmap() != nullptr ||
+                 static_cast<unsigned>(region->GetMarkBitmap(view) != nullptr ||
                                        region->GetResurrectBitmap() != nullptr));
         }
         return 0;
@@ -317,16 +318,16 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     size_t liveEdges = 0;
     size_t deadEdges = 0;
     size_t unknownEdges = 0;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
         region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
-    auto recordFromObject = [region, &rememberedSet, &recorded, &liveEdges, &deadEdges,
+    auto recordFromObject = [region, view, &rememberedSet, &recorded, &liveEdges, &deadEdges,
                              &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
         bool survived = hasObjectLiveness &&
-            region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+            region->IsSurvivedObject(view, region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
         if (useLiveOnly && !survived) {
             if (fysGapProbe) {
                 object->ForEachRefField([&deadEdges](RefField<>& field) {
@@ -384,7 +385,8 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         VLOG(REPORT,
              "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
              "knownEmpty=%u hasBitmap=%u mode=%s",
-             region, recorded, liveEdges, deadEdges, unknownEdges, static_cast<unsigned>(region->IsKnownEmpty()),
+             region, recorded, liveEdges, deadEdges, unknownEdges,
+             static_cast<unsigned>(region->IsKnownYoungEmpty(view)),
              static_cast<unsigned>(hasObjectLiveness), useLiveOnly ? "live-only" : "scan-all");
     }
     return recorded;
@@ -571,6 +573,7 @@ const size_t RegionManager::MAX_UNIT_COUNT_PER_REGION = (128 * KB) / MapleRuntim
 // size of huge page is 2048KB.
 const size_t RegionManager::HUGE_PAGE = (2048 * KB) / MapleRuntime::MRT_PAGE_SIZE;;
 
+template<Generation G>
 class ForwardTask : public HeapWork {
 public:
     ForwardTask(RegionManager& manager, RegionList& fromSpace)
@@ -583,7 +586,7 @@ public:
         while (true) {
             RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
             if (region == nullptr) { break; }
-            regionManager.ForwardRegion(region);
+            regionManager.ForwardRegion<G>(region);
         }
     }
 
@@ -653,17 +656,11 @@ bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*
 {
     // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
     // is not an emptiness proof — fall through and consult the mark bitmap.
-    if (IsKnownEmpty()) {
+    if (IsRouteKnownEmpty()) {
         return true;
     }
-    // tipnull arm R: Admit/GetRoute use liveInfo0 after PrepareForwardable; walk same face.
-    LiveInfo* ghostFace = metadata.liveInfo0;
-    auto survivedAt = [this, ghostFace](size_t offset) -> bool {
-        if (ghostFace != nullptr) {
-            return ghostFace->IsSurvivedObject(offset);
-        }
-        return IsSurvivedObject(offset);
-    };
+    // tipnull arm R: Admit/GetRoute use the typed liveInfo0 face after PrepareForwardable.
+    auto survivedAt = [this](size_t offset) -> bool { return IsRouteSurvivedObject(offset); };
     if (IsLargeRegion()) {
         BaseObject* obj = from_region_addr(GetRegionStart());
         if (!Collector::PlausibleManagedObjectGate("VisitLiveObjects", obj)) {
@@ -1154,14 +1151,18 @@ void RegionManager::AssembleSmallGarbageCandidates()
         }
     }
 
-    fromRegionList.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
+    fromRegionList.VisitAllRegions([](RegionInfo* region) {
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        region->ClearLiveInfo(view);
+    });
 }
 
 void RegionManager::AssembleLargeGarbageCandidates()
 {
     oldLargeRegionList.MergeRegionList(recentLargeRegionList, RegionInfo::RegionType::LARGE_REGION);
     for (RegionInfo* region = oldLargeRegionList.GetHeadRegion(); region != nullptr; region = region->GetNextRegion()) {
-        region->ClearLiveInfo();
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        region->ClearLiveInfo(view);
     }
 }
 
@@ -1231,7 +1232,8 @@ void RegionManager::AssemblePinnedGarbageCandidates(bool collectAll)
             oldPinnedRegionList.DeleteRegion(region);
             rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
         }
-        region->ClearLiveInfo();
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        region->ClearLiveInfo(view);
         region = nextRegion;
     }
 }
@@ -1266,7 +1268,8 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        region->ClearLiveInfo();
+        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        region->ClearLiveInfo(view);
         visitor(region);
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
@@ -1289,7 +1292,8 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
             region = next;
             continue;
         }
-        region->ClearLiveInfo();
+        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        region->ClearLiveInfo(view);
         visitor(region);
         ++stats.candidateRegions;
         stats.candidateBytes += region->GetRegionAllocatedSize();
@@ -1382,7 +1386,8 @@ void RegionManager::ForEachObjUnsafe(const std::function<void(BaseObject*)>& vis
         if (!region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
             continue;
         }
-        if (skipKnownEmptyRegions && region->IsKnownEmpty()) {
+        MarkView<Generation::Old> oldView = region->GetMarkView<Generation::Old>();
+        if (skipKnownEmptyRegions && region->IsKnownEmpty(oldView)) {
             continue;
         }
         region->VisitAllObjects([&visitor](BaseObject* object) { visitor(object); });
@@ -1420,8 +1425,13 @@ void RegionManager::PromoteAllRegions()
             } else if (region->GetRawPointerObjectCount() == 0) {
                 region->PreserveRetainedLiveInfo(region->GetRegionStart());
             }
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            if (region->IsYoungRegion()) {
+                MarkView<Generation::Young> youngView = region->GetMarkView<Generation::Young>();
+                (void)region->PromoteYoungRegion(youngView);
+            } else {
+                // Preserve the pre-genface cleanup for already-old regions.
+                region->SetYoungAge(0);
+            }
         }
     }
 }
@@ -1574,6 +1584,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     return nullptr;
 }
 
+template<Generation G>
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
     if (threadPool != nullptr) {
@@ -1587,11 +1598,11 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
         // we start threadPool before adding work so that we can concurrently add tasks;
         threadPool->Start();
         for (int32_t i = 0; i < threadNum; ++i) {
-            threadPool->AddWork(new (std::nothrow) ForwardTask(*this, fromRegionList));
+            threadPool->AddWork(new (std::nothrow) ForwardTask<G>(*this, fromRegionList));
         }
         threadPool->WaitFinish();
     } else {
-        ForwardFromRegions();
+        ForwardFromRegions<G>();
     }
 }
 
@@ -1600,6 +1611,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
 
+template<Generation G>
 void RegionManager::ForwardFromRegions()
 {
     // Use the same ownership transition as ForwardTask.  Walking the linked
@@ -1612,7 +1624,7 @@ void RegionManager::ForwardFromRegions()
             break;
         }
         MRT_ASSERT(region->IsValidRegion(), "the head region of fromRegionList is invalid");
-        ForwardRegion(region);
+        ForwardRegion<G>(region);
     }
 
     VLOG(REPORT, "forward %zu from-region units", fromRegionList.GetUnitCount());
@@ -1634,9 +1646,10 @@ size_t RegionManager::CollectFreePinnedSlots(RegionInfo* region)
     // traverse pinned region to reclaim free pinned objects.
     size_t start = region->GetRegionStart();
     size_t garbageSize = 0;
-    region->VisitAllObjects([this, region, start, &garbageSize](BaseObject* object) {
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+    region->VisitAllObjects([this, region, view, start, &garbageSize](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
-        if (!region->IsSurvivedObject(offset)) {
+        if (!region->IsSurvivedObject(view, offset)) {
             if (!Collector::PlausibleManagedObjectGate("CollectFreePinnedSlots", object)) {
                 return;
             }
@@ -1667,7 +1680,8 @@ size_t RegionManager::CollectPinnedGarbage()
             region = region->GetNextRegion();
             continue;
         }
-        if (region->IsKnownEmpty()) {
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        if (region->IsKnownEmpty(view)) {
             RegionInfo* del = region;
             region = region->GetNextRegion();
             oldPinnedRegionList.DeleteRegion(del);
@@ -1676,7 +1690,7 @@ size_t RegionManager::CollectPinnedGarbage()
             del->VisitAllObjects(fixToObj);
 
             RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_PINNED_GARBAGE);
-            garbageSize += CollectRegion(del);
+            garbageSize += CollectRegion<Generation::Old>(del);
             continue;
         } else {
             garbageSize += CollectFreePinnedSlots(region);
@@ -1693,7 +1707,8 @@ size_t RegionManager::CollectLargeGarbage()
     RegionInfo* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
         // for large region, the offset of obj is 0
-        if (!region->IsSurvivedObject(0)) {
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        if (!region->IsSurvivedObject(view, 0)) {
             DLOG(REGION, "reclaim large region %p@[0x%zx+%zu, 0x%zx) type %u", region, region->GetRegionStart(),
                  region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
@@ -1704,17 +1719,18 @@ size_t RegionManager::CollectLargeGarbage()
                 garbageSize += ReleaseRegion(del);
             } else {
                 RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_LARGE_GARBAGE);
-                garbageSize += CollectRegion(del);
+                garbageSize += CollectRegion<Generation::Old>(del);
             }
         } else {
-            region->ResetMarkBit();
+            region->ResetMarkBit(view);
             region = region->GetNextRegion();
         }
     }
 
     region = recentLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
-        region->ResetMarkBit();
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        region->ResetMarkBit(view);
         region = region->GetNextRegion();
     }
 
@@ -1997,7 +2013,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
     if (planFace == nullptr) {
         planFace = region->GetLiveInfo();
     }
-    size_t bitmapLive = (planFace != nullptr) ? planFace->GetBitmapLiveBytes() : 0;
+    size_t bitmapLive = region->GetRouteBitmapLiveBytes(planFace);
     if (bitmapLive > fromBytes) {
         fromBytes = bitmapLive;
     }
@@ -2143,13 +2159,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
     // copy the same set — region->IsSurvivedObject reads current liveInfo (+ mark-epoch), which
     // can disagree with the ghost face. Wrong face ⇒ copy nothing / wrong set, memset free-tail
     // that still holds root-named from → leave-alone → reclaim → GetSize UAF (FYS1 deadold).
-    LiveInfo* ghostFace = region->GetLiveInfo0ForProbe();
-    auto survivedAt = [region, ghostFace](size_t offset) -> bool {
-        if (ghostFace != nullptr) {
-            return ghostFace->IsSurvivedObject(offset);
-        }
-        return region->IsSurvivedObject(offset);
-    };
+    auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
     // resolveto: keep dense pack (no holes). Record fromOff→dest so GetRoute on
     // COMPACTED answers the packed slot, not the prefix-sum hole.
     region->FreeCompactRouteTable();
@@ -2229,13 +2239,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     BaseObject* currentObj = from_region_addr(currentPtr);
     CopyCollector& collector = reinterpret_cast<CopyCollector&>(Heap::GetHeap().GetCollector());
     // uafclose: same ghost-face survivor as CompactRegion(region) / VisitLive / Admit.
-    LiveInfo* ghostFace = region->GetLiveInfo0ForProbe();
-    auto survivedAt = [region, ghostFace](size_t offset) -> bool {
-        if (ghostFace != nullptr) {
-            return ghostFace->IsSurvivedObject(offset);
-        }
-        return region->IsSurvivedObject(offset);
-    };
+    auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
     region->FreeCompactRouteTable();
     while (true) {
         CHECK(currentPtr>=regionStart);
@@ -2402,7 +2406,7 @@ void PermhitReceiptAudit(RegionInfo* region, const char* point)
             break;
         }
         size_t offset = position - start;
-        bool survived = ghost != nullptr ? ghost->IsSurvivedObject(offset) : region->IsSurvivedObject(offset);
+        bool survived = region->IsRouteSurvivedObject(offset);
         if (survived) {
             g_phStarts.fetch_add(1, std::memory_order_relaxed);
             if (o->IsForwarded()) {
@@ -2437,8 +2441,10 @@ void PermhitReceiptAudit(RegionInfo* region, const char* point)
 }
 } // namespace
 
+template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
+    MarkView<G> markView = region->GetRouteMarkView<G>();
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());
 
@@ -2447,7 +2453,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->GetRegionType(), region->GetLiveByteCount());
 
     bool youngRegion = region->IsYoungRegion();
-    if (region->IsKnownEmpty()) {
+    if (IsKnownEmptyForView(region, markView)) {
         // ClearLiveInfo arms LIVE_AUTHORITY|0 before mark. MarkObject is the only path that
         // allocates the mark bitmap and raises live bytes. A region with allocated payload but
         // no mark bitmap was never entered by MarkObject — under a correct mark that means
@@ -2460,7 +2466,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
         // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
         // young regions is what produces the hang.
-        bool neverExamined = region->GetMarkBitmap() == nullptr &&
+        bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
         if (neverExamined) {
             // Volume control, not detail reduction. This line fired 50,282 times in a 60s run
@@ -2488,7 +2494,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                      "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
                      gcNow, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                      region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
-                     region->GetLiveByteCount(), region->GetMarkBitmap(), reasonName,
+                     region->GetLiveByteCount(), region->GetMarkBitmap(markView), reasonName,
                      static_cast<int>(gcReason));
             }
         }
@@ -2498,7 +2504,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungAge(0);
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
-        CollectRegion(region);
+        CollectRegion<G>(region);
         return;
     }
 
@@ -2514,6 +2520,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
     if (forceInPlace || !RouteRegion(region)) {
         if (youngRegion) {
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             // In-place promote (compacted / unrouted): scan before clearing young flag.
             // promodomain §A.3: register durable domain (default off); old scan stays.
             // Register only during young GC (discharge runs in young.evac_finish only).
@@ -2529,8 +2536,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 size_t recEdges = RecordPromotedCrossGenEdges(region);
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 0, recEdges);
             }
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            (void)region->PromoteYoungRegion(promotionView);
         }
         return;
     }
@@ -2614,13 +2620,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // Incomplete: DispelGhost (no geometric plan) + Exempt — never FORWARDED empty, never
     // ROUTED forever (TIMEOUT), never soft-null after Collect (SEGV si_addr=0x8).
     auto allLiveBitsHaveReceipt = [region]() -> bool {
-        LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-        auto survivedAt = [region, ghost](size_t offset) -> bool {
-            if (ghost != nullptr) {
-                return ghost->IsSurvivedObject(offset);
-            }
-            return region->IsSurvivedObject(offset);
-        };
+        auto survivedAt = [region](size_t offset) -> bool { return region->IsRouteSurvivedObject(offset); };
         if (region->IsLargeRegion()) {
             if (!survivedAt(0)) {
                 return true;
@@ -2742,6 +2742,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             PermWhoAdmit::NoteAbandon(region, walked, forwarded);
         }
         if (youngRegion) {
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             // promodomain §A.3 abandon arm: register + old sync walk (default domain off).
             // Register only on young GC (domain discharge is minor-only).
             region->PreserveRetainedLiveInfo();
@@ -2756,8 +2757,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 size_t recEdges = RecordPromotedCrossGenEdges(region);
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
             }
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            (void)region->PromoteYoungRegion(promotionView);
         }
         // DispelGhost → NORMAL + clear ghost bit: GetGhostFromRegionAt null ⇒ RouteObject
         // miss ⇒ mutator keeps from (valid). Do not SetRouteInfo(0): that sets
@@ -2789,7 +2789,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 }
                 ++totalObjs;
                 size_t off = pos - start;
-                if (region->IsSurvivedObject(off)) {
+                if (region->IsSurvivedObject(markView, off)) {
                     ++survivedObjs;
                 } else {
                     ++residualValid;
@@ -2814,7 +2814,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             size_t validBefore = 0;
             size_t markedBefore = 0;
             F3Why2Diag::CountMarks(region, validBefore, markedBefore);
-            region->VerifyLiveBooks("pre-ResetLiveMapAfterForward");
+            region->VerifyLiveBooks(markView, "pre-ResetLiveMapAfterForward");
             // Simulated split for ORDER: live-only then mark-only was the old bug;
             // measure residual marks after live-zero before joint reset.
             region->ResetLiveByteCount();
@@ -2823,13 +2823,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             size_t markedAfterReset = 0;
             F3Why2Diag::CountMarks(region, validAfterReset, markedAfterReset);
             // Joint publish (restores live empty + epoch bump in one API).
-            region->ResetLiveMapAfterForward();
+            region->ResetLiveMapAfterForward(markView);
             size_t validAfterInv = 0;
             size_t markedAfterInv = 0;
             F3Why2Diag::CountMarks(region, validAfterInv, markedAfterInv);
             F3Why2Diag::NoteForwardOrder(region, liveBefore, markedBefore, liveAfterReset, markedAfterReset,
                                          markedAfterInv);
-            region->VerifyLiveBooks("post-ResetLiveMapAfterForward");
+            region->VerifyLiveBooks(markView, "post-ResetLiveMapAfterForward");
             if (youngRegion) {
                 if (promotedRecords != 0) {
                     g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
@@ -2854,7 +2854,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             (void)validAfterInv;
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_AFTER_COPY);
-        CollectRegion(region);
+        CollectRegion<G>(region);
     }
 }
 
@@ -2888,4 +2888,11 @@ uintptr_t RegionManager::AllocPinnedFromFreeList(size_t size)
     (reinterpret_cast<CopyCollector*>(&Heap::GetHeap().GetCollector()))->MarkObject(object);
     return allocPtr;
 }
+
+template void RegionManager::ForwardFromRegions<Generation::Young>(GCThreadPool*);
+template void RegionManager::ForwardFromRegions<Generation::Old>(GCThreadPool*);
+template void RegionManager::ForwardFromRegions<Generation::Young>();
+template void RegionManager::ForwardFromRegions<Generation::Old>();
+template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
+template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
 } // namespace MapleRuntime

@@ -85,18 +85,19 @@ size_t OracleScanRegionMatchProduct(RegionInfo* region, std::unordered_set<MAddr
     if (region == nullptr) {
         return 0;
     }
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
+    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
     size_t n = 0;
-    region->VisitAllObjects([&out, &n, region, hasObjectLiveness, useLiveOnly](BaseObject* object) {
+    region->VisitAllObjects([&out, &n, region, view, hasObjectLiveness, useLiveOnly](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
         if (useLiveOnly) {
             bool survived =
                 hasObjectLiveness &&
-                region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+                region->IsSurvivedObject(view,
+                    region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
             if (!survived) {
                 return;
             }

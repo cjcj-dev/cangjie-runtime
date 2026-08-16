@@ -730,7 +730,7 @@ void TracingCollector::FindUselessExternObjects()
         auto listIt = ls.begin();
         auto listEnd = ls.end();
         while (listIt != listEnd) {
-            if (IsMarkedObject(*listIt)) {
+            if (IsMarkedObject<Generation::Old>(*listIt)) {
                 listIt = ls.erase(listIt);
             } else {
                 MarkObject(*listIt);
@@ -812,7 +812,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         while (!remarkStack.empty()) {
             BaseObject* obj = remarkStack.back();
             remarkStack.pop_back();
-            if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject(obj)) {
+            if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
                 workStack.push_back(obj);
                 DLOG(TRACE, "satb buffer add obj %p", obj);
             }
@@ -859,7 +859,7 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
     RootVisitor func = [&workStack, this](ObjectRef& ref) {
         HeapSlot<> tmpField(to_zpointer(raw(ref.LoadPlain())));
         BaseObject* finalizerObj = to_object(tmpField.GetTargetObject());
-        if (!IsMarkedObject(finalizerObj)) {
+        if (!IsMarkedObject<Generation::Old>(finalizerObj)) {
             DLOG(TRACE, "resurrectable obj @%p:%p", &ref, finalizerObj);
             workStack.push_back(finalizerObj);
         }
@@ -878,7 +878,8 @@ void TracingCollector::DoResurrection(WorkStack& workStack)
         // skip if the object already marked.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        if (regionInfo->IsSurvivedObject(offset)) {
+        MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
+        if (regionInfo->IsSurvivedObject(view, offset)) {
             continue;
         }
 
@@ -1058,7 +1059,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                 if (!Collector::MarkGoodHeapGate("DFSTraceExportObject", targetObj)) {
                     return;
                 }
-                if (IsMarkedObject(targetObj)) {
+                if (IsMarkedObject<Generation::Old>(targetObj)) {
                     return;
                 }
                 if (targetObj->GetTypeInfo()->IsForeignType()) {
@@ -1090,7 +1091,7 @@ void TracingCollector::DFSTraceExportObject(BaseObject *exportObj)
                      raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
             }
 
-            if (IsMarkedObject(latest)) {
+            if (IsMarkedObject<Generation::Old>(latest)) {
                 return;
             }
             if (latest->GetTypeInfo()->IsForeignType()) {

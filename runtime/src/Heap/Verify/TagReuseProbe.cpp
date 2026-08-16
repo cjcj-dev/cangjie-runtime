@@ -212,6 +212,18 @@ void TagReuseProbe::ScanBeforeRelease(uintptr_t rangeStart, size_t rangeSize, ui
 
 bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /*expectMarked*/, const char* site)
 {
+    // Windows ABI compatibility for an old diagnostic-only export. Product call
+    // sites use the generation-bearing overload below; the compatibility entry
+    // deliberately performs no mark read.
+    (void)region;
+    (void)offset;
+    (void)site;
+    return true;
+}
+
+bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /*expectMarked*/, const char* site,
+                                       Generation generation)
+{
     if (!MarkBitsStickyEnabled() || region == nullptr) {
         return true;
     }
@@ -220,15 +232,20 @@ bool TagReuseProbe::NoteMarkBitsSticky(RegionInfo* region, size_t offset, bool /
         STICKY_LOG("ARMED env=MRT_GCV2_MARK_BITS_STICKY=1 site=%s", site);
     }
     gMarkStickyN.fetch_add(1, std::memory_order_relaxed);
-    bool nowMarked = region->IsMarkedObject(offset);
+    bool nowMarked = generation == Generation::Young
+        ? region->IsMarkedObject(region->GetMarkView<Generation::Young>(), offset)
+        : region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offset);
     if (!nowMarked) {
         gMarkStickyFail.fetch_add(1, std::memory_order_relaxed);
         static std::atomic<uint64_t> dumpLeft{64};
         uint64_t left = dumpLeft.load(std::memory_order_relaxed);
         if (left > 0 && dumpLeft.compare_exchange_strong(left, left - 1, std::memory_order_relaxed)) {
+            RegionBitmap* bitmap = generation == Generation::Young
+                ? region->GetMarkBitmap(region->GetMarkView<Generation::Young>())
+                : region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
             STICKY_LOG("NOT_STICKY site=%s offset=%zu region=%p type=%u liveInfo=%p bitmap=%p", site, offset,
                        static_cast<void*>(region), static_cast<unsigned>(region->GetRegionType()),
-                       static_cast<void*>(region->GetLiveInfo()), static_cast<void*>(region->GetMarkBitmap()));
+                       static_cast<void*>(region->GetLiveInfo()), static_cast<void*>(bitmap));
         }
         return false;
     }

@@ -97,12 +97,12 @@ void CountMarksEpochSplit(RegionInfo* region, size_t& validOut, size_t& epochEqO
     if (region == nullptr) {
         return;
     }
-    snapEpochOut = region->GetSnapshotEpoch();
+    snapEpochOut = region->GetRouteMarkSnapshotEpoch();
 
     if (region->IsLargeRegion()) {
         faceStateOut = 2;
         validOut = 1;
-        const bool ep = region->IsMarkedObject(static_cast<size_t>(0));
+        const bool ep = region->IsRouteMarkedObject(static_cast<size_t>(0));
         if (ep) {
             ++epochEqOut;
             ++rawBitOut;
@@ -112,14 +112,10 @@ void CountMarksEpochSplit(RegionInfo* region, size_t& validOut, size_t& epochEqO
     }
 
     LiveInfo* liveInfo = region->GetLiveInfo();
-    RegionBitmap* mb = nullptr;
+    RegionBitmap* mb = region->GetRouteMarkBitmap(liveInfo);
     if (liveInfo != nullptr) {
-        faceEpochOut = liveInfo->markEpoch;
-        mb = __atomic_load_n(&liveInfo->markBitmap, std::memory_order_acquire);
-        if (reinterpret_cast<MAddress>(mb) == LiveInfo::TEMPORARY_PTR) {
-            mb = nullptr;
-        }
-        faceStateOut = (liveInfo->markEpoch == snapEpochOut) ? 1 : 0;
+        faceEpochOut = region->GetRouteMarkEpoch(liveInfo);
+        faceStateOut = (faceEpochOut == snapEpochOut) ? 1 : 0;
     }
 
     size_t start = region->GetRegionStart();
@@ -139,7 +135,7 @@ void CountMarksEpochSplit(RegionInfo* region, size_t& validOut, size_t& epochEqO
             break;
         }
         ++validOut;
-        if (region->IsMarkedObject(o)) {
+        if (region->IsRouteMarkedObject(o)) {
             ++epochEqOut;
         }
         if (mb != nullptr) {
@@ -183,7 +179,7 @@ void NoteCollectEnter(RegionInfo* region)
         return;
     }
 
-    const bool knownEmpty = region->IsKnownEmpty();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
     if (knownEmpty) {
         g_knownEmpty.fetch_add(1, std::memory_order_relaxed);
     } else {
@@ -236,7 +232,7 @@ void NoteCollectEnter(RegionInfo* region)
                          static_cast<unsigned long long>(region->GetLiveByteCount()),
                          static_cast<unsigned>(region->IsLiveCountAuthoritative()), faceSt,
                          static_cast<unsigned long long>(faceEp), static_cast<unsigned long long>(snapEp), valid,
-                         epochEq, rawBit, staleBit, eqBit, noFace, region->GetMarkBitmap());
+                         epochEq, rawBit, staleBit, eqBit, noFace, region->GetRouteMarkBitmap());
             std::fflush(stderr);
         }
     } else {

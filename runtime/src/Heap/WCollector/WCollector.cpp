@@ -405,10 +405,22 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
     const bool toSafe = to != nullptr && toRegion != nullptr && Heap::IsHeapAddress(to) &&
                         !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion();
     if (fromSafe) {
-        fromMarked = static_cast<int>(fromRegion->IsMarkedObject(from));
+        if (fromRegion->IsYoungRegion()) {
+            auto view = fromRegion->GetMarkView<Generation::Young>();
+            fromMarked = static_cast<int>(fromRegion->IsMarkedObject(view, from));
+        } else {
+            auto view = fromRegion->GetMarkView<Generation::Old>();
+            fromMarked = static_cast<int>(fromRegion->IsMarkedObject(view, from));
+        }
     }
     if (toSafe) {
-        toMarked = static_cast<int>(toRegion->IsMarkedObject(to));
+        if (toRegion->IsYoungRegion()) {
+            auto view = toRegion->GetMarkView<Generation::Young>();
+            toMarked = static_cast<int>(toRegion->IsMarkedObject(view, to));
+        } else {
+            auto view = toRegion->GetMarkView<Generation::Old>();
+            toMarked = static_cast<int>(toRegion->IsMarkedObject(view, to));
+        }
     }
     int fromValid = fromSafe ? static_cast<int>(from->IsValidObject()) : -1;
     int toValid = toSafe ? static_cast<int>(to->IsValidObject()) : -1;
@@ -879,7 +891,14 @@ bool WCollector::MarkObject(BaseObject* obj) const
     StartWhoDiag::ScopedCaller caller("WCollector::MarkObject", obj);
     size_t objectSize = obj->GetSize();
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
-    bool marked = region->MarkObject(obj, objectSize);
+    bool marked;
+    if (gcReason == GC_REASON_YOUNG) {
+        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        marked = region->MarkObject(view, obj, objectSize);
+    } else {
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        marked = region->MarkObject(view, obj, objectSize);
+    }
     if (UNLIKELY(HeldFreeDiag::Enabled()) && !marked) {
         HeldFreeDiag::NoteMark(obj);
     }
@@ -1253,7 +1272,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         CHECK_DETAIL(targetObj->IsValidObject(),
                      "Invalid object %p is referenced by strong object %p: %s and offset %zd", targetObj, obj,
                      obj->GetTypeInfo()->GetName(), BaseObject::FieldOffset(obj, &field));
-        if (!IsMarkedObject(targetObj)) {
+        if (!IsMarkedObject<Generation::Old>(targetObj)) {
             if (UNLIKELY(StartWhoDiag::Enabled())) {
                 StartWhoDiag::NoteProduced(targetObj, StartWhoDiag::Source::HEAP_FIELD,
                                            "TraceRefField.mark_good", &field, obj);
@@ -1286,7 +1305,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
 
-    if (!IsMarkedObject(latest)) {
+    if (!IsMarkedObject<Generation::Old>(latest)) {
         if (UNLIKELY(StartWhoDiag::Enabled())) {
             StartWhoDiag::NoteProduced(latest, StartWhoDiag::Source::HEAP_FIELD,
                                        "TraceRefField.slow", &field, obj);
@@ -1862,7 +1881,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             return;
         }
         if (requireSurvivedMark) {
-            if (!IsSurvivedObject(obj)) {
+            if (!IsSurvivedObject<Generation::Old>(obj)) {
                 if (account) {
                     ++acc.filteredObjects;
                 }
@@ -1956,7 +1975,8 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             // Regions that spill past limit still belong entirely to this worker.
             if (addr >= rangeStart && addr < limit) {
                 if (region->IsValidRegion() && !region->IsFreeRegion() && !region->IsGarbageRegion() &&
-                    !(requireSurvivedMark && region->IsKnownEmpty())) {
+                    !(requireSurvivedMark &&
+                      region->IsKnownEmpty(region->GetMarkView<Generation::Old>()))) {
                     if (account && region != lastProcessedRegion) {
                         lastProcessedRegion = region;
                         ++acc.processedRegions;
@@ -2004,14 +2024,16 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                     lastAccountRegion = region;
                     ++regions;
                     ++regionTypes[static_cast<size_t>(region->GetRegionType())];
-                    if (requireSurvivedMark && region->IsKnownEmpty()) {
+                    if (requireSurvivedMark &&
+                        region->IsKnownEmpty(region->GetMarkView<Generation::Old>())) {
                         ++knownEmptyRegions;
                     }
                     if (requireSurvivedMark && region->IsFromRegion()) {
                         ++fromRegions;
                     }
                 }
-                if (requireSurvivedMark && region->IsKnownEmpty()) {
+                if (requireSurvivedMark &&
+                    region->IsKnownEmpty(region->GetMarkView<Generation::Old>())) {
                     ++knownEmptyObjects;
                 }
             },
@@ -2272,7 +2294,7 @@ void WCollector::PostTrace()
     // IsOldPointer cannot outlive FindToVersion's ghost gate (D phase).
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
     InvalidateOldTaggedRefsBeforeDispel();
-    fwdTable.PrepareForwardTable();
+    fwdTable.PrepareForwardTable<Generation::Old>();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
@@ -2454,7 +2476,14 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     if (face == nullptr) {
         face = region->GetLiveInfo();
     }
-    if (face != nullptr && face->IsSurvivedObject(offset)) {
+    bool alreadyInDomain = false;
+    if (isGhost) {
+        alreadyInDomain = region->IsRouteSurvivedObject(offset);
+    } else {
+        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        alreadyInDomain = region->IsSurvivedObject(view, face, offset);
+    }
+    if (alreadyInDomain) {
         g_installDomainAlready.fetch_add(1, std::memory_order_relaxed);
         return;
     }
@@ -2475,8 +2504,8 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     }
     LiveInfo* live = region->GetLiveInfo();
     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    if (ghost != nullptr && ghost != live && ghost->markBitmap != nullptr &&
-        reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+    RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : region->GetRouteMarkBitmap(ghost);
+    if (ghost != nullptr && ghost != live && ghostBitmap != nullptr) {
         size_t objSize = 0;
         if (Collector::PlausibleManagedObjectGate("EnsureRouteDomain.size", obj)) {
             objSize = obj->GetSize();
@@ -2487,13 +2516,13 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
             SealCheck::NotePaint(region, offset, objSize, "EnsureRouteDomainMembership.ghost");
             // MarkObject already maintained liveByteCount on the live face; ghost paint is
             // domain-visible bits only (do not double-count).
-            (void)ghost->markBitmap->MarkBits(offset, objSize, regionSize);
+            (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
         }
     }
     // Re-check: grant only counts if GetRoute face now accepts (positive control truth).
     ghost = region->GetLiveInfo0ForProbe();
     if (isGhost) {
-        if (ghost != nullptr && ghost->IsSurvivedObject(offset)) {
+        if (ghost != nullptr && region->IsRouteSurvivedObject(offset)) {
             g_installDomainGrant.fetch_add(1, std::memory_order_relaxed);
         } else {
             g_installDomainTooLate.fetch_add(1, std::memory_order_relaxed);
@@ -2535,15 +2564,15 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
     if (region->GetRouteState() != RegionInfo::RouteState::FORWARDABLE) {
         LiveInfo* g0 = region->GetLiveInfo0ForProbe();
         size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        return g0 != nullptr && g0->IsSurvivedObject(offset);
+        return g0 != nullptr && region->IsRouteSurvivedObject(offset);
     }
     (void)collector->MarkObject(obj);
     region->BindLiveInfo0FromLiveIfNull();
     LiveInfo* g0 = region->GetLiveInfo0ForProbe();
     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-    if (g0 != nullptr && g0->markBitmap != nullptr &&
-        reinterpret_cast<uintptr_t>(g0->markBitmap) != LiveInfo::TEMPORARY_PTR) {
-        if (!g0->IsSurvivedObject(offset)) {
+    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetRouteMarkBitmap(g0);
+    if (g0 != nullptr && ghostBitmap != nullptr) {
+        if (!region->IsRouteSurvivedObject(offset)) {
             size_t objSize = 0;
             if (Collector::PlausibleManagedObjectGate("statresid.force_domain.size", obj)) {
                 objSize = obj->GetSize();
@@ -2553,12 +2582,12 @@ bool ForceRootRouteDomainWhileForwardable(WCollector* collector, BaseObject* obj
                 SealCheck::NotePaint(region, offset, objSize, "statresid.force_domain.ghost");
                 // MarkObject above already counted liveByteCount when first paint on live.
                 // Ghost-only MarkBits must not double-count (FYS0 OverflowException risk).
-                (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+                (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
             }
         }
     }
     g0 = region->GetLiveInfo0ForProbe();
-    return g0 != nullptr && g0->IsSurvivedObject(offset);
+    return g0 != nullptr && region->IsRouteSurvivedObject(offset);
 }
 } // namespace
 
@@ -2948,7 +2977,8 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsFreeRegion()),
                  region == nullptr ? 0u : static_cast<unsigned>(region->IsGarbageRegion()),
                  region == nullptr ? 0u
-                                   : static_cast<unsigned>(region->GetMarkBitmap() == nullptr &&
+                                   : static_cast<unsigned>(region->GetMarkBitmap(
+                                         region->GetMarkView<Generation::Young>()) == nullptr &&
                                                           region->GetRegionAllocPtr() > region->GetRegionStart()));
             // HEADER_DUMP: first 64 bytes as hex + field decode + zap check.
             auto* bytes = reinterpret_cast<const uint8_t*>(object);
@@ -3010,14 +3040,15 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
             g_ysPushSeen.fetch_add(1, std::memory_order_relaxed);
             if (!region->IsYoungRegion()) {
                 g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
-            } else if (region->IsMarkedObject(object)) {
+            } else if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
                 g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
             } else {
                 g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
-    if (region->IsYoungRegion() && !region->IsMarkedObject(object)) {
+    if (region->IsYoungRegion() &&
+        !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
         if (UNLIKELY(WhoPushDiag::Enabled())) {
             WhoPushDiag::NotePush(object, origin);
         }
@@ -3332,7 +3363,8 @@ public:
                                 }
                                 RegionInfo* tr =
                                     RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                                if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                                if (tr == nullptr || !tr->IsYoungRegion() ||
+                                    tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                                     return;
                                 }
                                 if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -3381,7 +3413,8 @@ public:
                                 }
                                 RegionInfo* tr =
                                     RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                                if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                                if (tr == nullptr || !tr->IsYoungRegion() ||
+                                    tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                                     return;
                                 }
                                 if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -3694,7 +3727,8 @@ private:
             target = host;
         }
         RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-        if (targetRegion == nullptr || !targetRegion->IsYoungRegion() || targetRegion->IsMarkedObject(target)) {
+        if (targetRegion == nullptr || !targetRegion->IsYoungRegion() ||
+            targetRegion->IsMarkedObject(targetRegion->GetMarkView<Generation::Young>(), target)) {
             return;
         }
         if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -3721,7 +3755,8 @@ private:
             return;
         }
         RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(object));
-        if (!region->IsYoungRegion() || region->IsMarkedObject(object)) {
+        if (!region->IsYoungRegion() ||
+            region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
             return;
         }
         if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -4022,7 +4057,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             target = host;
                         }
                         RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                        if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                        if (tr == nullptr || !tr->IsYoungRegion() ||
+                            tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                             return;
                         }
                         if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -4071,7 +4107,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                             target = host;
                         }
                         RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                        if (tr == nullptr || !tr->IsYoungRegion() || tr->IsMarkedObject(target)) {
+                        if (tr == nullptr || !tr->IsYoungRegion() ||
+                            tr->IsMarkedObject(tr->GetMarkView<Generation::Young>(), target)) {
                             return;
                         }
                         if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -4812,9 +4849,11 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                             }
                         } else if (holderRegion->IsLargeRegion()) {
                             LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
+                            MarkView<Generation::Old> retainedView =
+                                holderRegion->GetMarkView<Generation::Old>();
                             keepByRetainedSnapshot = retainedLiveInfo != nullptr
-                                ? retainedLiveInfo->IsSurvivedObject(0)
-                                : holderRegion->IsSurvivedObject(0);
+                                ? holderRegion->IsSurvivedObject(retainedView, retainedLiveInfo, 0)
+                                : holderRegion->IsSurvivedObject(retainedView, 0);
                             if (retainedProbe && !keepByRetainedSnapshot) {
                                 ++directDeadDrop;
                             }
@@ -4832,7 +4871,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                             } else {
                                 LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
                                 CHECK(retainedLiveInfo != nullptr);
-                                keepByRetainedSnapshot = retainedLiveInfo->IsSurvivedObject(holderOffset);
+                                MarkView<Generation::Old> retainedView =
+                                    holderRegion->GetMarkView<Generation::Old>();
+                                keepByRetainedSnapshot = holderRegion->IsSurvivedObject(
+                                    retainedView, retainedLiveInfo, holderOffset);
                             }
                             if (retainedProbe && !keepByRetainedSnapshot) {
                                 ++directDeadDrop;
@@ -4981,7 +5023,15 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                     if (tRegion->IsYoungRegion()) {
                         ++btTargetYoung;
                     }
-                    if (tRegion->GetMarkBitmap() == nullptr &&
+                    bool noDecisionFace = false;
+                    if (tRegion->IsYoungRegion()) {
+                        noDecisionFace = tRegion->GetMarkBitmap(
+                            tRegion->GetMarkView<Generation::Young>()) == nullptr;
+                    } else {
+                        noDecisionFace = tRegion->GetMarkBitmap(
+                            tRegion->GetMarkView<Generation::Old>()) == nullptr;
+                    }
+                    if (noDecisionFace &&
                         tRegion->GetRegionAllocPtr() > tRegion->GetRegionStart()) {
                         ++btNeverExamined;
                     }
@@ -5048,7 +5098,10 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                      targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->IsGarbageRegion()),
                      targetRegion == nullptr
                          ? 0u
-                         : static_cast<unsigned>(targetRegion->GetMarkBitmap() == nullptr &&
+                         : static_cast<unsigned>((targetRegion->IsYoungRegion()
+                               ? targetRegion->GetMarkBitmap(targetRegion->GetMarkView<Generation::Young>())
+                               : targetRegion->GetMarkBitmap(targetRegion->GetMarkView<Generation::Old>())) ==
+                              nullptr &&
                                                  targetRegion->GetRegionAllocPtr() > targetRegion->GetRegionStart()));
             }
             continue;
@@ -5058,7 +5111,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         if (UNLIKELY(StartWhoDiag::Enabled())) {
             RegionInfo* targetRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
             noteRemsetHandoff = targetRegion != nullptr && targetRegion->IsYoungRegion() &&
-                !targetRegion->IsMarkedObject(target);
+                !targetRegion->IsMarkedObject(targetRegion->GetMarkView<Generation::Young>(), target);
         }
         if (noteRemsetHandoff) {
             BaseObject* holder = originIt != rememberedOrigins.end() ? originIt->second : nullptr;
@@ -5278,8 +5331,12 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
                     liveBytes = tgtReg->GetLiveByteCount();
                     off = tgtReg->GetAddressOffset(reinterpret_cast<MAddress>(target));
                     LiveInfo* g0 = tgtReg->GetLiveInfo0ForProbe();
-                    live0 = (g0 != nullptr && g0->IsSurvivedObject(off)) ? 1 : 0;
-                    marked = tgtReg->IsMarkedObject(target) ? 1 : 0;
+                    live0 = (g0 != nullptr && tgtReg->IsRouteSurvivedObject(off)) ? 1 : 0;
+                    if (tgtReg->IsYoungRegion()) {
+                        marked = tgtReg->IsMarkedObject(tgtReg->GetMarkView<Generation::Young>(), target) ? 1 : 0;
+                    } else {
+                        marked = tgtReg->IsMarkedObject(tgtReg->GetMarkView<Generation::Old>(), target) ? 1 : 0;
+                    }
                 }
                 uintptr_t fieldAddr = reinterpret_cast<uintptr_t>(&field);
                 RegionInfo* holderReg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(fieldAddr));
@@ -5397,8 +5454,8 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
             static std::atomic<size_t> g_fwdnullN{ 0 };
             size_t n = g_fwdnullN.fetch_add(1, std::memory_order_relaxed);
             if (n < 64) {
-                const bool marked = IsMarkedObject(target);
-                const bool survived = IsSurvivedObject(target);
+                const bool marked = IsMarkedObject<Generation::Young>(target);
+                const bool survived = IsSurvivedObject<Generation::Young>(target);
                 const bool ghost = IsGhostFromObject(target);
                 const bool unmov = IsUnmovableFromObject(target);
                 RegionInfo* reg = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(target));
@@ -5419,8 +5476,9 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
                     offset = reg->GetAddressOffset(reinterpret_cast<MAddress>(target));
                     LiveInfo* g0 = reg->GetLiveInfo0ForProbe();
                     LiveInfo* li = reg->GetLiveInfo();
-                    live0Surv = (g0 != nullptr && g0->IsSurvivedObject(offset)) ? 1 : 0;
-                    liveSurv = (li != nullptr && li->IsSurvivedObject(offset)) ? 1 : 0;
+                    live0Surv = (g0 != nullptr && reg->IsRouteSurvivedObject(offset)) ? 1 : 0;
+                    MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
+                    liveSurv = (li != nullptr && reg->IsSurvivedObject(view, li, offset)) ? 1 : 0;
                     OptionalRouteTicket ticket = reg->AdmitForRoute(target);
                     admitOk = ticket ? 1 : 0;
                     if (ticket) {
@@ -6111,7 +6169,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // Prior order ran FixMinorRootSlots before pregrant; that RouteRegion→ROUTED
             // freezes liveByteCount so Ensure on liveobj edges is tooLate (iorsource 5/5 ROUTED).
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
-            fwdTable.PrepareForwardTable();
+            fwdTable.PrepareForwardTable<Generation::Young>();
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
             postEvacPoint("pre-fix-forwarded", false);
         }
@@ -6202,13 +6260,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 EnsureRouteDomainMembership(const_cast<WCollector*>(this), obj);
                 LiveInfo* g0 = region->GetLiveInfo0ForProbe();
                 size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-                if (g0 == nullptr || !g0->IsSurvivedObject(offset)) {
+                if (g0 == nullptr || !region->IsRouteSurvivedObject(offset)) {
                     // Last resort under FORWARDABLE: MarkObject + bind ghost.
                     (void)MarkObject(obj);
                     region->BindLiveInfo0FromLiveIfNull();
                     g0 = region->GetLiveInfo0ForProbe();
-                    if (g0 != nullptr && g0->markBitmap != nullptr &&
-                        reinterpret_cast<uintptr_t>(g0->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+                    RegionBitmap* ghostBitmap = g0 == nullptr ? nullptr : region->GetRouteMarkBitmap(g0);
+                    if (g0 != nullptr && ghostBitmap != nullptr) {
                         size_t objSize = 0;
                         if (Collector::PlausibleManagedObjectGate("youngstatic.pregrant.size", obj)) {
                             objSize = obj->GetSize();
@@ -6216,11 +6274,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                         size_t regionSize = static_cast<size_t>(region->GetRegionEnd() - region->GetRegionStart());
                         if (objSize > 0 && offset + objSize <= regionSize) {
                             SealCheck::NotePaint(region, offset, objSize, "youngstatic.pregrant.ghost");
-                            (void)g0->markBitmap->MarkBits(offset, objSize, regionSize);
+                            (void)ghostBitmap->MarkBits(offset, objSize, regionSize);
                         }
                     }
                     g0 = region->GetLiveInfo0ForProbe();
-                    if (g0 == nullptr || !g0->IsSurvivedObject(offset)) {
+                    if (g0 == nullptr || !region->IsRouteSurvivedObject(offset)) {
                         ++ysRootMissAfter;
                     }
                 }
@@ -6287,8 +6345,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     size_t offset = region->GetAddressOffset(reinterpret_cast<MAddress>(object));
                     LiveInfo* live = region->GetLiveInfo();
                     LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-                    const bool curOk = live != nullptr && live->IsSurvivedObject(offset);
-                    const bool g0Ok = ghost != nullptr && ghost->IsSurvivedObject(offset);
+                    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+                    const bool curOk = live != nullptr && region->IsSurvivedObject(view, live, offset);
+                    const bool g0Ok = ghost != nullptr && region->IsRouteSurvivedObject(offset);
                     if (curOk) {
                         ++markedLive;
                     }
@@ -6461,6 +6520,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         bool keptOneYoung = false;
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
+                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 if (keepOneYoung && !keptOneYoung) {
                     keptOneYoung = true;
                     continue;
@@ -6477,8 +6537,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
                                                      /*site*/ 2, recEdges);
                 residualPromoteRecords += recEdges;
-                region->SetYoungRegionFlag(0);
-                region->SetYoungAge(0);
+                (void)region->PromoteYoungRegion(promotionView);
             }
         }
         if (keepOneYoung && !keptOneYoung) {
@@ -6575,7 +6634,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
-        fwdTable.PrepareForwardTable();
+        fwdTable.PrepareForwardTable<Generation::Young>();
         ValidateMinorReferences("after-dispel", nullptr);
         manager.ReassembleFromSpace();
     }
@@ -6828,7 +6887,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
         if (region == nullptr) {
             continue;
         }
-        if (region->IsMarkedObject(object)) {
+        if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
             ++markedYoung;
             continue;
         }
@@ -6897,11 +6956,12 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
     size_t residualUnmarkedAndFullReachable = 0;
     size_t neverExaminedCandidates = 0;
     for (RegionInfo* region : minorCandidateRegions) {
-        if (region->GetMarkBitmap() == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart()) {
+        if (region->GetMarkBitmap(region->GetMarkView<Generation::Young>()) == nullptr &&
+            region->GetRegionAllocPtr() > region->GetRegionStart()) {
             ++neverExaminedCandidates;
         }
         region->VisitAllObjects([&](BaseObject* object) {
-            if (region->IsMarkedObject(object)) {
+            if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
                 return;
             }
             if (!object->IsValidObject()) {
@@ -7002,7 +7062,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
     if (useBitmap) {
         for (RegionInfo* region : minorCandidateRegions) {
             region->VisitAllObjects([&](BaseObject* object) {
-                if (!region->IsMarkedObject(object)) {
+                if (!region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
                     return;
                 }
                 ++actualYoung;
@@ -7039,7 +7099,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
                 ++expectedCandidateYoung;
             } else {
                 ++expectedOffCandidateYoung;
-                const bool marked = region->IsMarkedObject(object);
+                const bool marked = region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object);
                 const bool inMinorClosure = minorClosureSet.count(object) != 0;
                 const bool allocationRoot = allocationRoots.count(object) != 0;
                 const bool routeDestHeld = region->IsRouteDestHeld();
@@ -7065,7 +7125,8 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
                 }
             }
             bool missing = false;
-            if (useBitmap && !region->IsMarkedObject(object)) {
+            if (useBitmap &&
+                !region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
                 missing = true;
             }
             if (requireMinorClosure && minorClosureSet.count(object) == 0) {
@@ -7359,7 +7420,8 @@ void WCollector::DoYoungGarbageCollection()
                         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
                         if (region == nullptr || !region->IsYoungRegion()) {
                             g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
-                        } else if (region->IsMarkedObject(object)) {
+                        } else if (region->IsMarkedObject(
+                                       region->GetMarkView<Generation::Young>(), object)) {
                             g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
                         } else {
                             g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
@@ -7781,7 +7843,8 @@ void WCollector::DoYoungGarbageCollection()
                             if (region == nullptr || !region->IsYoungRegion()) {
                                 return;
                             }
-                            if (region->IsMarkedObject(target)) {
+                            if (region->IsMarkedObject(
+                                    region->GetMarkView<Generation::Young>(), target)) {
                                 return;
                             }
                             if (UNLIKELY(StartWhoDiag::Enabled())) {
@@ -7874,7 +7937,7 @@ void WCollector::DoYoungGarbageCollection()
                     return;
                 }
                 ++staticYoung;
-                if (region->IsMarkedObject(obj)) {
+                if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), obj)) {
                     ++already;
                     return;
                 }
@@ -7948,7 +8011,7 @@ void WCollector::DoYoungGarbageCollection()
                         EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::NOT_YOUNG);
                         return;
                     }
-                    if (region->IsMarkedObject(target)) {
+                    if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), target)) {
                         EatArmDiag::NoteFixpointEdge(object, target, EatArmDiag::FixpointReason::ALREADY_MARKED);
                         return;
                     }
@@ -8286,7 +8349,9 @@ void WCollector::MarkNewObject(BaseObject* obj)
 
 void WCollector::ProcessFinalizers()
 {
-    std::function<bool(BaseObject*)> finalizable = [this](BaseObject* obj) { return !IsMarkedObject(obj); };
+    std::function<bool(BaseObject*)> finalizable = [this](BaseObject* obj) {
+        return !IsMarkedObject<Generation::Old>(obj);
+    };
     FinalizerProcessor& fp = collectorResources.GetFinalizerProcessor();
     fp.EnqueueFinalizables(finalizable, snapshotFinalizerNum);
     fp.Notify();
@@ -8388,7 +8453,7 @@ void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
     if (r == nullptr) {
         return;
     }
-    f.knownEmpty = static_cast<unsigned>(r->IsKnownEmpty());
+    f.knownEmpty = static_cast<unsigned>(r->IsRouteKnownEmpty());
     f.liveAuth = static_cast<unsigned>(r->IsLiveCountAuthoritative());
     f.regionEpoch = static_cast<unsigned long long>(r->GetSnapshotEpoch());
     f.ghostSize = r->GetGhostRegionSize();
@@ -8402,10 +8467,16 @@ void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
     LiveInfo* ghost = r->GetLiveInfo0ForProbe();
     f.ghost0Null = static_cast<unsigned>(ghost == nullptr);
     if (ghost != nullptr) {
-        f.faceEpoch = static_cast<unsigned long long>(ghost->markEpoch);
-        f.markBmNull = static_cast<unsigned>(ghost->markBitmap == nullptr);
+        if (r->GetRouteMarkGeneration() == Generation::Young) {
+            MarkView<Generation::Young> view = r->GetRouteMarkView<Generation::Young>();
+            f.faceEpoch = static_cast<unsigned long long>(r->GetMarkEpoch(view, ghost));
+        } else {
+            MarkView<Generation::Old> view = r->GetRouteMarkView<Generation::Old>();
+            f.faceEpoch = static_cast<unsigned long long>(r->GetMarkEpoch(view, ghost));
+        }
+        f.markBmNull = static_cast<unsigned>(r->GetRouteMarkBitmap(ghost) == nullptr);
         f.resBmNull = static_cast<unsigned>(ghost->resurrectBitmap == nullptr);
-        f.ghostSurv = static_cast<unsigned>(ghost->IsSurvivedObject(f.fromOffset));
+        f.ghostSurv = static_cast<unsigned>(r->IsRouteSurvivedObject(f.fromOffset));
         // GetPreMaskInfo divides by the ghost region size; a zero size would fault inside
         // the diagnostic rather than reporting anything.
         if (f.ghostSize > 0) {
@@ -8413,7 +8484,14 @@ void CollectPermHoleMeta(RegionInfo* r, BaseObject* from, PermHoleFacts& f)
                 static_cast<unsigned long long>(r->GetPreLiveBytesInGhostRegionForProbe(fromAddr));
         }
     }
-    f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(f.fromOffset));
+    LiveInfo* current = r->GetLiveInfo();
+    if (r->GetRouteMarkGeneration() == Generation::Young) {
+        MarkView<Generation::Young> view = r->GetRouteMarkView<Generation::Young>();
+        f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(view, current, f.fromOffset));
+    } else {
+        MarkView<Generation::Old> view = r->GetRouteMarkView<Generation::Old>();
+        f.curSurv = static_cast<unsigned>(r->IsSurvivedObject(view, current, f.fromOffset));
+    }
     f.fromGhost = static_cast<unsigned>(r->IsGhostFromRegion());
     f.fromFree = static_cast<unsigned>(r->IsFreeRegion());
     f.fromGarbage = static_cast<unsigned>(r->IsGarbageRegion());

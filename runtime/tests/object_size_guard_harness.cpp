@@ -73,7 +73,8 @@ int main(int argc, char** argv)
     size_t invalidSize = MapleRuntime::InvalidSizeFor(argv[1]);
     std::cerr << "GUARD_FIRES_PROOF invoking case=" << argv[1] << " obj=" << fixture.object
               << " objSize=" << invalidSize << '\n';
-    (void)fixture.region->MarkObject(fixture.object, invalidSize);
+    (void)fixture.region->MarkObject(
+        fixture.region->GetMarkView<Generation::Old>(), fixture.object, invalidSize);
     std::cerr << "GUARD_DID_NOT_FIRE\n";
     return 1;
 }

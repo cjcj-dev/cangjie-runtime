@@ -33,7 +33,9 @@ target_include_directories(cj_gc_unit PRIVATE
     ${CMAKE_SOURCE_DIR}/include
 )
 target_compile_features(cj_gc_unit PRIVATE cxx_std_17)
-target_compile_options(cj_gc_unit PRIVATE -fno-rtti)
+# The product target disables C++ exceptions globally, while this deliberately
+# tiny test runner reports assertion failures with throw/catch.
+target_compile_options(cj_gc_unit PRIVATE -fno-rtti -fexceptions)
 # Prefer in-tree runtime library when building as part of the product tree.
 if (TARGET cangjie-runtime)
     target_link_libraries(cj_gc_unit PRIVATE cangjie-runtime)

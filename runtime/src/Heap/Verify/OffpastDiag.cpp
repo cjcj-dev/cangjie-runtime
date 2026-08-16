@@ -111,10 +111,10 @@ void FillSnap(Snap& s, RegionInfo* region, BaseObject* obj)
     s.g0Null = (g0 == nullptr) ? 1 : 0;
     s.sameG0Live = (g0 != nullptr && g0 == live) ? 1 : 0;
     if (g0 != nullptr) {
-        RegionBitmap* bm = g0->markBitmap;
+        RegionBitmap* bm = region->GetRouteMarkBitmap(g0);
         s.bm = reinterpret_cast<uintptr_t>(bm);
         s.bmNull = (bm == nullptr || reinterpret_cast<MAddress>(bm) == LiveInfo::TEMPORARY_PTR) ? 1 : 0;
-        s.surv = g0->IsSurvivedObject(static_cast<size_t>(s.off)) ? 1 : 0;
+        s.surv = region->IsRouteSurvivedObject(static_cast<size_t>(s.off)) ? 1 : 0;
     } else {
         s.bm = 0;
         s.bmNull = 1;

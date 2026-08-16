@@ -149,8 +149,11 @@ public:
     RegionInfo* AllocateThreadLocalRegion(bool expectPhysicalMem = false, bool youngRegion = true,
                                           bool allowSaferegion = true);
 
+    template<Generation G>
     void ForwardFromRegions(GCThreadPool* threadPool);
+    template<Generation G>
     void ForwardFromRegions();
+    template<Generation G>
     void ForwardRegion(RegionInfo* region);
     // Before clearing the young flag on a promoted region, record every live
     // old→young out-edge that mutators skipped while the source was still young.
@@ -244,7 +247,7 @@ public:
             // the region was not needed after all, hand it back the same way
             // RegionSpace::FeedHungryBuffers() does (RegionSpace.cpp:302-306).
             RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_UNUSED_PINNED);
-            (void)CollectRegion(region);
+            (void)CollectRegion<Generation::Old>(region);
         }
 
         DLOG(ALLOC, "alloc pinned obj 0x%zx(%zu)", addr, size);
@@ -347,8 +350,21 @@ public:
         return RegionInfo::GetYoungRegionCount() * GetThreadLocalRegionSize();
     }
 
+    static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Young> view)
+    {
+        return region->IsKnownYoungEmpty(view);
+    }
+
+    static bool IsKnownEmptyForView(RegionInfo* region, MarkView<Generation::Old> view)
+    {
+        return region->IsKnownEmpty(view);
+    }
+
+    template<Generation G>
     size_t CollectRegion(RegionInfo* region)
     {
+        MarkView<G> view = region->GetRouteMarkView<G>();
+        const bool knownEmpty = IsKnownEmptyForView(region, view);
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
@@ -364,14 +380,14 @@ public:
         HealPairDiag::NoteCollect(region->GetRegionStart(), region->GetRegionEnd(),
                                  region->GetLiveByteCount(),
                                  static_cast<uint32_t>(region->GetRegionType()),
-                                 region->IsKnownEmpty() ? 1U : 0U);
+                                 knownEmpty ? 1U : 0U);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
                 const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
-            if (probe && region != nullptr && region->IsKnownEmpty()) {
+            if (probe && region != nullptr && knownEmpty) {
                 size_t start = region->GetRegionStart();
                 size_t alloc = region->GetRegionAllocPtr();
                 size_t end = region->GetRegionEnd();
@@ -390,7 +406,7 @@ public:
                             break;
                         }
                         ++validObjs;
-                        if (region->IsMarkedObject(o)) {
+                        if (region->IsMarkedObject(view, o)) {
                             ++markedObjs;
                         }
                         pos += sz;
@@ -695,6 +711,7 @@ public:
         } while (true);
     }
 
+    template<Generation G>
     void PrepareFromRegionList()
     {
         size_t retainedRegions = 0;
@@ -744,7 +761,8 @@ public:
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->GetLiveByteCount(), region->GetRegionEnd());
-            region->PrepareForwardableRegion();
+            MarkView<G> view = region->GetMarkView<G>();
+            region->PrepareForwardableRegion(view);
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
@@ -771,16 +789,16 @@ public:
 
     void ClearAllLiveInfo()
     {
-        ClearLiveInfo(tlRegionList);
-        ClearLiveInfo(recentFullRegionList);
-        ClearLiveInfo(fullTraceRegions);
-        ClearLiveInfo(unmovableFromRegionList);
-        ClearLiveInfo(recentPinnedRegionList);
-        ClearLiveInfo(oldPinnedRegionList);
-        ClearLiveInfo(rawPointerPinnedRegionList);
-        ClearLiveInfo(oldLargeRegionList);
-        ClearLiveInfo(recentLargeRegionList);
-        ClearLiveInfo(largeTraceRegions);
+        ClearLiveInfo<Generation::Old>(tlRegionList);
+        ClearLiveInfo<Generation::Old>(recentFullRegionList);
+        ClearLiveInfo<Generation::Old>(fullTraceRegions);
+        ClearLiveInfo<Generation::Old>(unmovableFromRegionList);
+        ClearLiveInfo<Generation::Old>(recentPinnedRegionList);
+        ClearLiveInfo<Generation::Old>(oldPinnedRegionList);
+        ClearLiveInfo<Generation::Old>(rawPointerPinnedRegionList);
+        ClearLiveInfo<Generation::Old>(oldLargeRegionList);
+        ClearLiveInfo<Generation::Old>(recentLargeRegionList);
+        ClearLiveInfo<Generation::Old>(largeTraceRegions);
     }
 
     // Probe-only: visit every region on managed lists with its list name (tag-reuse scan).
@@ -931,11 +949,15 @@ private:
     inline void TagHugePage(RegionInfo* region, size_t num) const;
     inline void UntagHugePage(RegionInfo* region, size_t num) const;
 
+    template<Generation G>
     void ClearLiveInfo(RegionList& list)
     {
         RegionList tmp("temp region list");
         list.CopyListTo(tmp);
-        tmp.VisitAllRegions([](RegionInfo* region) { region->ClearLiveInfo(); });
+        tmp.VisitAllRegions([](RegionInfo* region) {
+            MarkView<G> view = region->GetMarkView<G>();
+            region->ClearLiveInfo(view);
+        });
     }
 
     FreeRegionManager freeRegionManager;

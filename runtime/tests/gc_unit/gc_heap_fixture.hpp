@@ -86,13 +86,19 @@ struct GcHeapFixture {
     {
         auto* live = new LiveInfo();
         live->bindedRegion = region;
-        live->markBitmap = nullptr;
+        live->GetMarkFace<Generation::Young>().epoch.store(
+            region->GetMarkSnapshotEpoch<Generation::Young>(), std::memory_order_relaxed);
+        live->GetMarkFace<Generation::Young>().bitmap = nullptr;
+        live->GetMarkFace<Generation::Old>().epoch.store(
+            region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
+        live->GetMarkFace<Generation::Old>().bitmap = nullptr;
         live->resurrectBitmap = nullptr;
         live->enqueueBitmap = nullptr;
         region->metadata.liveInfo = live;
         return live;
     }
 
+    template<Generation G = Generation::Old>
     RegionBitmap* PlantMarkBitmap(LiveInfo* live, size_t regionSize)
     {
         size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
@@ -101,7 +107,7 @@ struct GcHeapFixture {
             std::abort();
         }
         auto* bm = new (mem) RegionBitmap(regionSize);
-        live->markBitmap = bm;
+        live->GetMarkFace<G>().bitmap = bm;
         return bm;
     }
 
@@ -110,10 +116,17 @@ struct GcHeapFixture {
         if (live == nullptr) {
             return;
         }
-        if (live->markBitmap != nullptr) {
-            live->markBitmap->~RegionBitmap();
-            std::free(live->markBitmap);
-            live->markBitmap = nullptr;
+        RegionBitmap* young = live->GetMarkFace<Generation::Young>().bitmap;
+        RegionBitmap* old = live->GetMarkFace<Generation::Old>().bitmap;
+        if (young != nullptr) {
+            young->~RegionBitmap();
+            std::free(young);
+            live->GetMarkFace<Generation::Young>().bitmap = nullptr;
+        }
+        if (old != nullptr && old != young) {
+            old->~RegionBitmap();
+            std::free(old);
+            live->GetMarkFace<Generation::Old>().bitmap = nullptr;
         }
         delete live;
     }

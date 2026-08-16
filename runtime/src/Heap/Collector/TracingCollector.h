@@ -310,13 +310,17 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
 
-    // live but not resurrected object.
-    bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject(obj); }
+    // live but not resurrected object.  The generation is part of the predicate;
+    // there is intentionally no IsMarkedObject(BaseObject*) compatibility API.
+    template<Generation G>
+    bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject<G>(obj); }
 
     // live or resurrected object.
+    template<Generation G>
     inline bool IsSurvivedObject(const BaseObject* obj) const
     {
-        return RegionSpace::IsMarkedObject(obj) || RegionSpace::IsResurrectedObject(obj);
+        return RegionSpace::IsMarkedObject<G>(obj) ||
+            (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
     void DFSTraceExportObject(BaseObject* exportObj);
     virtual bool MarkObject(BaseObject* obj) const
@@ -328,7 +332,14 @@ public:
         }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
         // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
-        bool marked = regionInfo->MarkObject(obj);
+        bool marked;
+        if (gcReason == GC_REASON_YOUNG) {
+            MarkView<Generation::Young> view = regionInfo->GetMarkView<Generation::Young>();
+            marked = regionInfo->MarkObject(view, obj);
+        } else {
+            MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
+            marked = regionInfo->MarkObject(view, obj);
+        }
         if (!marked) {
             size_t objSize = obj->GetSize();
             if (!fixReferences && regionInfo->IsFromRegion()) {
