@@ -88,8 +88,20 @@ bool TipPageIsMapped(uintptr_t tipAddr)
     lastMappedPage = page;
     return true;
 #elif defined(__linux__) || defined(__APPLE__) || defined(__OHOS__)
-    unsigned char vec = 0;
-    if (mincore(reinterpret_cast<void*>(page), pageSize, reinterpret_cast<unsigned char*>(&vec)) != 0) {
+    // mincore's out-parameter is spelled differently per platform: Darwin and
+    // the BSDs declare it `char*`, Linux and OHOS declare it `unsigned char*`,
+    // and the two are distinct types. The previous form cast `&vec` to
+    // `unsigned char*` at the call, which pinned the argument to one platform's
+    // spelling no matter what the platform actually declares. Name the type once
+    // here and pass `&vec` uncast, so this alias is the only place the spelling
+    // is decided.
+#if defined(__APPLE__)
+    using MincoreVec = char;
+#else
+    using MincoreVec = unsigned char;
+#endif
+    MincoreVec vec = 0;
+    if (mincore(reinterpret_cast<void*>(page), pageSize, &vec) != 0) {
         (void)errno;
         return false;
     }
