@@ -28,6 +28,11 @@ bool Enabled();
 // True when free ring is recorded (REGIONLIFE or WHOZERO).
 bool FreeTrackOn();
 
+// Current allocation life for the region containing addr.  Used by diagnostics
+// that need to distinguish a moved object from a later tenant at the same heap
+// address.  Returns 0 when region-life tracking is disabled or no life is known.
+uint32_t CurrentLifeId(uintptr_t addr);
+
 void NoteTake(RegionInfo* region);
 void NoteFree(RegionInfo* region, uint16_t path);
 void NoteRelease(RegionInfo* region, uint16_t path);

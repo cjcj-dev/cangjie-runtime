@@ -9,6 +9,10 @@ namespace HealPairDiag {
 
 bool Enabled();
 
+// youngage: one cached gate shared by the minor histogram and the existing
+// CopyObject NoteCopy hook.  Default off: MRT_GCV2_YOUNGAGE=1.
+bool YoungAgeEnabled();
+
 void NoteRaw(const void* oldAddr, const void* newAddr, const void* slot, uint16_t site);
 
 void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rtype, uint32_t knownEmpty);

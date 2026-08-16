@@ -242,6 +242,19 @@ bool FreeTrackOn()
     return GateOn() || WhoZeroOn();
 }
 
+uint32_t CurrentLifeId(uintptr_t addr)
+{
+    if (!FreeTrackOn() || addr == 0 || !Heap::IsHeapAddress(addr)) {
+        return 0;
+    }
+    RegionInfo* region = RegionInfo::GetRegionInfoAt(static_cast<MAddress>(addr));
+    if (region == nullptr) {
+        return 0;
+    }
+    LifeSlot* life = FindLife(region->GetRegionStart(), false);
+    return life == nullptr ? 0 : life->lifeId;
+}
+
 void SetNextFreePath(uint16_t path)
 {
     t_nextPath = path;

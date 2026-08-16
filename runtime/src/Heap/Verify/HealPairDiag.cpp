@@ -1,10 +1,15 @@
 #include "Heap/Verify/HealPairDiag.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstddef>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
+#include <string>
+#include <unordered_map>
+#include <vector>
 #include <unistd.h>
 
 #include "Base/Log.h"
@@ -58,6 +63,32 @@ bool WhoZeroOn()
         return DiagGate::TokenOn("whozero");
     }();
     return on;
+}
+
+enum CopyTrackMode : uint8_t {
+    COPY_TRACK_HEALPAIR = 1u << 0,
+    COPY_TRACK_WHOZERO = 1u << 1,
+    COPY_TRACK_YOUNGAGE = 1u << 2,
+};
+
+uint8_t CopyTrackModes()
+{
+    // CopyObject already calls NoteCopy unconditionally.  Keep the default-off
+    // hot path to one cached test (rather than adding another call/branch there).
+    static const uint8_t modes = []() {
+        uint8_t value = 0;
+        if (GateOn()) {
+            value |= COPY_TRACK_HEALPAIR;
+        }
+        if (WhoZeroOn()) {
+            value |= COPY_TRACK_WHOZERO;
+        }
+        if (EnvIsOne("MRT_GCV2_YOUNGAGE")) {
+            value |= COPY_TRACK_YOUNGAGE;
+        }
+        return value;
+    }();
+    return modes;
 }
 
 bool ZeroTrackOn()
@@ -204,6 +235,41 @@ std::atomic<uint32_t> g_zeroNext{ 0 };
 std::atomic<size_t> g_copyTotal{ 0 };
 std::atomic<size_t> g_zeroTotal{ 0 };
 std::atomic<size_t> g_copyWrap{ 0 };
+
+// youngage copy lineage.  Address alone is not an identity: a freed region may
+// be re-taken at the same address.  Pair it with REGIONLIFE's monotonically
+// increasing life id, then carry the lineage id across each successful copy.
+struct YoungCopyKey {
+    uintptr_t addr;
+    uint32_t lifeId;
+
+    bool operator==(const YoungCopyKey& other) const
+    {
+        return addr == other.addr && lifeId == other.lifeId;
+    }
+};
+
+struct YoungCopyKeyHash {
+    size_t operator()(const YoungCopyKey& key) const
+    {
+        size_t h = std::hash<uintptr_t>{}(key.addr);
+        return h ^ (static_cast<size_t>(key.lifeId) * static_cast<size_t>(0x9e3779b1U));
+    }
+};
+
+struct YoungCopyLineage {
+    uint64_t bytesCopied = 0;
+    uint32_t copies = 0;
+    uint32_t minorCopies = 0;
+    bool firstCopyWasMinor = false;
+};
+
+std::mutex g_youngCopyLock;
+std::unordered_map<YoungCopyKey, uint32_t, YoungCopyKeyHash> g_youngCurrent;
+std::vector<YoungCopyLineage> g_youngLineages;
+std::atomic<size_t> g_youngLifeMissing{ 0 };
+std::atomic<size_t> g_youngToOverwrite{ 0 };
+std::atomic<bool> g_youngHealthOnce{ false };
 std::atomic<size_t> g_zeroWrap{ 0 };
 std::atomic<size_t> g_zeroRemap{ 0 };
 thread_local InflightCopy g_inflight{};
@@ -287,6 +353,104 @@ void WriteLine(const char* buf, size_t len)
         return;
     }
     (void)write(STDERR_FILENO, buf, len);
+}
+
+uint32_t NearestRank(std::vector<uint32_t>& values, size_t numerator, size_t denominator)
+{
+    if (values.empty()) {
+        return 0;
+    }
+    size_t rank = (values.size() * numerator + denominator - 1) / denominator;
+    rank = std::max<size_t>(1, std::min(rank, values.size()));
+    return values[rank - 1];
+}
+
+void NoteYoungCopy(uintptr_t from, uintptr_t to, size_t size)
+{
+    uint32_t fromLife = RegionLifeDiag::CurrentLifeId(from);
+    uint32_t toLife = RegionLifeDiag::CurrentLifeId(to);
+    if (fromLife == 0 || toLife == 0) {
+        g_youngLifeMissing.fetch_add(1, std::memory_order_relaxed);
+    }
+    GCReason reason = Heap::GetHeap().GetCollector().GetGCStats().reason;
+    bool isMinor = reason == GC_REASON_YOUNG;
+
+    std::lock_guard<std::mutex> guard(g_youngCopyLock);
+    YoungCopyKey fromKey{ from, fromLife };
+    YoungCopyKey toKey{ to, toLife };
+    uint32_t lineageId;
+    auto prior = g_youngCurrent.find(fromKey);
+    if (prior == g_youngCurrent.end()) {
+        lineageId = static_cast<uint32_t>(g_youngLineages.size());
+        YoungCopyLineage lineage;
+        lineage.firstCopyWasMinor = isMinor;
+        g_youngLineages.push_back(lineage);
+    } else {
+        lineageId = prior->second;
+        g_youngCurrent.erase(prior);
+    }
+    auto destinationPrior = g_youngCurrent.find(toKey);
+    if (destinationPrior != g_youngCurrent.end() && destinationPrior->second != lineageId) {
+        g_youngToOverwrite.fetch_add(1, std::memory_order_relaxed);
+    }
+    g_youngCurrent[toKey] = lineageId;
+    YoungCopyLineage& lineage = g_youngLineages[lineageId];
+    ++lineage.copies;
+    lineage.minorCopies += isMinor ? 1U : 0U;
+    lineage.bytesCopied += size;
+}
+
+void ReportYoungCopies(const char* point)
+{
+    std::lock_guard<std::mutex> guard(g_youngCopyLock);
+    std::vector<uint32_t> allCopies;
+    std::vector<uint32_t> youngCopies;
+    allCopies.reserve(g_youngLineages.size());
+    youngCopies.reserve(g_youngLineages.size());
+    size_t youngCopyEvents = 0;
+    size_t youngMinorCopyEvents = 0;
+    size_t youngGtOne = 0;
+    size_t youngGtThree = 0;
+    size_t hist[17] = {};
+    for (const YoungCopyLineage& lineage : g_youngLineages) {
+        allCopies.push_back(lineage.copies);
+        if (!lineage.firstCopyWasMinor) {
+            continue;
+        }
+        youngCopies.push_back(lineage.copies);
+        youngCopyEvents += lineage.copies;
+        youngMinorCopyEvents += lineage.minorCopies;
+        youngGtOne += lineage.copies > 1 ? 1 : 0;
+        youngGtThree += lineage.copies > 3 ? 1 : 0;
+        ++hist[std::min<size_t>(lineage.copies, 16)];
+    }
+    std::sort(allCopies.begin(), allCopies.end());
+    std::sort(youngCopies.begin(), youngCopies.end());
+    std::string histText;
+    for (size_t copies = 1; copies <= 16; ++copies) {
+        if (copies != 1) {
+            histText += ',';
+        }
+        histText += copies == 16 ? "16+:" : std::to_string(copies) + ':';
+        histText += std::to_string(hist[copies]);
+    }
+    char line[2048];
+    int n = sprintf_s(
+        line, sizeof(line),
+        "[GCV2][youngage-copy] point=%s lineages=%zu youngOriginN=%zu "
+        "youngCopyEvents=%zu youngMinorCopyEvents=%zu youngMajorCopyEvents=%zu "
+        "youngMedian=%u youngP90=%u youngP99=%u youngGt1=%zu youngGt3=%zu "
+        "allMedian=%u currentKeys=%zu lifeMissing=%zu toOverwrite=%zu hist=%s\n",
+        point != nullptr ? point : "none", g_youngLineages.size(), youngCopies.size(),
+        youngCopyEvents, youngMinorCopyEvents, youngCopyEvents - youngMinorCopyEvents,
+        NearestRank(youngCopies, 1, 2), NearestRank(youngCopies, 9, 10),
+        NearestRank(youngCopies, 99, 100), youngGtOne, youngGtThree,
+        NearestRank(allCopies, 1, 2), g_youngCurrent.size(),
+        g_youngLifeMissing.load(std::memory_order_relaxed),
+        g_youngToOverwrite.load(std::memory_order_relaxed), histText.c_str());
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
 }
 
 void HealthOnce()
@@ -674,6 +838,11 @@ bool Enabled()
     return GateOn();
 }
 
+bool YoungAgeEnabled()
+{
+    return (CopyTrackModes() & COPY_TRACK_YOUNGAGE) != 0;
+}
+
 void NoteRaw(const void* oldAddr, const void* newAddr, const void* slot, uint16_t site)
 {
     if (!GateOn()) {
@@ -727,11 +896,27 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
 
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
 {
+    uint8_t modes = CopyTrackModes();
     // whozero needs the copy ring to reconcile HealSlot-null against post-move slot addrs.
-    if (!GateOn() && !WhoZeroOn()) {
+    if (modes == 0) {
         return;
     }
-    if (GateOn()) {
+    if ((modes & COPY_TRACK_YOUNGAGE) != 0) {
+        bool expected = false;
+        if (g_youngHealthOnce.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][youngage] health probe_live=1 env=MRT_GCV2_YOUNGAGE=1 "
+                "identity=address+regionLifeId");
+        }
+        EnsureAtexit();
+        if (done != 0) {
+            NoteYoungCopy(reinterpret_cast<uintptr_t>(fromAddr), reinterpret_cast<uintptr_t>(toAddr), size);
+        }
+    }
+    if ((modes & (COPY_TRACK_HEALPAIR | COPY_TRACK_WHOZERO)) == 0) {
+        return;
+    }
+    if ((modes & COPY_TRACK_HEALPAIR) != 0) {
         HealthOnce();
         EnsureAtexit();
     }
@@ -1666,6 +1851,9 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14, u
 
 void Report(const char* point)
 {
+    if (YoungAgeEnabled()) {
+        ReportYoungCopies(point);
+    }
     if (!GateOn()) {
         return;
     }

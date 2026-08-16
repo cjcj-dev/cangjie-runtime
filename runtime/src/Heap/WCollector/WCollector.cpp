@@ -8121,6 +8121,59 @@ void WCollector::DoYoungGarbageCollection()
     }
     GetGCStats().youngCandidateBytes = stats.candidateBytes;
     GetGCStats().youngPromotedBytes = liveBytes;
+    if (UNLIKELY(HealPairDiag::YoungAgeEnabled())) {
+        // One summary per minor, never per object.  Age is region-granular in
+        // this collector; count both objects and authoritative marked bytes.
+        constexpr size_t ageBucketCount = 64;
+        std::array<size_t, ageBucketCount> ageObjects{};
+        std::array<size_t, ageBucketCount> ageBytes{};
+        size_t liveRegions = 0;
+        size_t liveObjects = 0;
+        size_t walkedBytes = 0;
+        size_t incompleteWalks = 0;
+        for (RegionInfo* region : minorCandidateRegions) {
+            size_t regionLive = region->GetLiveByteCount();
+            if (regionLive == 0) {
+                continue;
+            }
+            ++liveRegions;
+            size_t age = std::min<size_t>(region->GetYoungAge(), ageBucketCount - 1);
+            ageBytes[age] += regionLive;
+            bool complete = region->VisitLiveObjectsUntilFalse([&](BaseObject* object) {
+                size_t objectBytes = RegionSpace::GetAllocSize(*object);
+                ++ageObjects[age];
+                ++liveObjects;
+                walkedBytes += objectBytes;
+                return true;
+            });
+            incompleteWalks += complete ? 0 : 1;
+        }
+        auto formatHistogram = [](const std::array<size_t, ageBucketCount>& buckets) {
+            std::string text;
+            for (size_t age = 0; age < buckets.size(); ++age) {
+                if (buckets[age] == 0) {
+                    continue;
+                }
+                if (!text.empty()) {
+                    text += ',';
+                }
+                text += std::to_string(age) + ':' + std::to_string(buckets[age]);
+            }
+            return text.empty() ? std::string("empty") : text;
+        };
+        size_t survivalPpm = stats.candidateBytes == 0 ? 0 :
+            static_cast<size_t>((static_cast<unsigned long long>(liveBytes) * 1000000ULL) / stats.candidateBytes);
+        std::string objectHist = formatHistogram(ageObjects);
+        std::string byteHist = formatHistogram(ageBytes);
+        VLOG(REPORT,
+             "[GCV2][youngage] minor=%zu candidateRegions=%zu candidateBytes=%zu "
+             "liveRegions=%zu liveObjects=%zu liveBytes=%zu walkedBytes=%zu "
+             "promotedBytes=%zu survivalPpm=%zu ageObjects=%s ageBytes=%s "
+             "incompleteWalks=%zu effectiveTenureMinors=1 env=MRT_GCV2_YOUNGAGE=1",
+             minorTotalRuns + 1, stats.candidateRegions, stats.candidateBytes, liveRegions,
+             liveObjects, liveBytes, walkedBytes, liveBytes, survivalPpm,
+             objectHist.c_str(), byteHist.c_str(), incompleteWalks);
+    }
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
