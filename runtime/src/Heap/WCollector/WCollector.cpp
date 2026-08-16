@@ -6456,16 +6456,22 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // from-faces (ZGC load-barrier). GC does NOT concurrent-forward or concurrent
                 // field-walk here — both raced (ForEachBitmapWord rdi=0 / TypeInfo+8 MAPERR;
                 // O2 NEW 11/20 after forward_only). Slot fix + residual ForwardFromSpace stay STW.
-                stw->reset();
-                VLOG(REPORT,
-                     "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
-                     "mode=mutator_self_heal",
-                     reachableVec.size(), remsetVec.size());
-                // Brief yield so mutators actually run; without this the re-STW can re-enter
-                // before any mutator progress (still correct, but no concurrent work done).
-                sched_yield();
-                *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
-                                                            GCPhase::GC_PHASE_PREFORWARD);
+                // concreffix: the released window is the entire product of this flag, so time it
+                // on the structured channel. The record can only be emitted from inside this
+                // branch, which makes it the positive control that the flag took effect.
+                {
+                    MRT_PHASE_TIMER("young.ref_fix_conc_window");
+                    stw->reset();
+                    VLOG(REPORT,
+                         "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
+                         "mode=mutator_self_heal",
+                         reachableVec.size(), remsetVec.size());
+                    // Brief yield so mutators actually run; without this the re-STW can re-enter
+                    // before any mutator progress (still correct, but no concurrent work done).
+                    sched_yield();
+                    *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
+                                                                GCPhase::GC_PHASE_PREFORWARD);
+                }
                 VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
 
                 // STW slot fix after concurrent forward (roots may have been dirtied by mutators).
@@ -6487,6 +6493,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     VLOG(REPORT,
                          "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
                          rememberedSlots.size(), concRemset.size(), remsetVec.size());
+                    // concreffix: conc_new is the only observable a mutator can leave behind in
+                    // this window, so it decides whether the window did anything at all. The
+                    // VLOG above needs REPORT; mirror it on the always-on channel next to the
+                    // other per-minor [GCV2] lines so it survives a REPORT-off measurement run.
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                        rememberedSlots.size(), concRemset.size(), remsetVec.size());
                 }
                 if (!useParallel) {
                     size_t taken = 0;
