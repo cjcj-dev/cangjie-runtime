@@ -111,6 +111,10 @@ struct CopyRow {
 
 // noforward: site-52/42 CAS-null snapshot of the *target* (oldRaw peel) + holder gen.
 // classKind: 1=甲 unmarked 2=乙 free|garbage 3=丙 marked no fwd 4=丁 not in cset/ghost 0=n/a
+// majoryoung holder face (CAS-null time): myBranch 1=甲 2=乙 3=丙 0=n/a
+//   乙 = holderMarked=1 (edge miss into neverExam target)
+//   丙 = holderMarked=0 && holder region still live (young/large reclaim inconsistency)
+//   甲 = holderMarked=0 && holder free|garbage (holder also judged dead)
 struct ZeroRow {
     uintptr_t slot;
     uintptr_t oldRaw;
@@ -129,6 +133,18 @@ struct ZeroRow {
     uint8_t live0;
     uint8_t holderYoung;
     uint8_t classKind;
+    uintptr_t holderObj;
+    uintptr_t holderStart;
+    uint8_t holderMarked;
+    uint8_t holderMb;
+    uint8_t holderFree;
+    uint8_t holderGarb;
+    uint8_t holderAuth;
+    uint8_t holderLive0;
+    uint8_t holderNeverExam;
+    uint8_t myBranch;
+    uint8_t holderRtype;
+    uint8_t holderResolved;
 };
 
 // Page filter for whozero zero-slot remapping on copy (4KiB pages). Default unused until WHOZERO.
@@ -360,11 +376,13 @@ void DumpCopy(const char* tag, const CopyRow& row)
 
 void DumpZero(const char* tag, const ZeroRow& row)
 {
-    char line[640];
+    char line[768];
     int n = sprintf_s(line, sizeof(line),
                       "[GCV2][slotwindow] %s slot=%#zx old=%#zx site=%u phase=%u seq=%u "
                       "tgt=%#zx rtype=%u rs=%u free=%u garb=%u young=%u ghost=%u "
-                      "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u\n",
+                      "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u "
+                      "hObj=%#zx hStart=%#zx hMarked=%u hMb=%u hFree=%u hGarb=%u "
+                      "hAuth=%u hLive0=%u hNeverExam=%u hRtype=%u hRes=%u myBranch=%u\n",
                       tag, row.slot, row.oldRaw, static_cast<unsigned>(row.site),
                       static_cast<unsigned>(row.phase), row.seq, row.tgt,
                       static_cast<unsigned>(row.rtype), static_cast<unsigned>(row.routeState),
@@ -372,7 +390,14 @@ void DumpZero(const char* tag, const ZeroRow& row)
                       static_cast<unsigned>(row.youngR), static_cast<unsigned>(row.ghostR),
                       static_cast<unsigned>(row.marked), static_cast<unsigned>(row.live0),
                       row.fwdWord, static_cast<unsigned>(row.holderYoung),
-                      static_cast<unsigned>(row.classKind));
+                      static_cast<unsigned>(row.classKind), row.holderObj, row.holderStart,
+                      static_cast<unsigned>(row.holderMarked), static_cast<unsigned>(row.holderMb),
+                      static_cast<unsigned>(row.holderFree), static_cast<unsigned>(row.holderGarb),
+                      static_cast<unsigned>(row.holderAuth), static_cast<unsigned>(row.holderLive0),
+                      static_cast<unsigned>(row.holderNeverExam),
+                      static_cast<unsigned>(row.holderRtype),
+                      static_cast<unsigned>(row.holderResolved),
+                      static_cast<unsigned>(row.myBranch));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
@@ -854,6 +879,18 @@ void FillZeroTargetSnapshot(ZeroRow& row)
     row.live0 = 0xff;
     row.holderYoung = 0xff;
     row.classKind = 0;
+    row.holderObj = 0;
+    row.holderStart = 0;
+    row.holderMarked = 0xff;
+    row.holderMb = 0xff;
+    row.holderFree = 0;
+    row.holderGarb = 0;
+    row.holderAuth = 0xff;
+    row.holderLive0 = 0xff;
+    row.holderNeverExam = 0xff;
+    row.myBranch = 0;
+    row.holderRtype = 0xff;
+    row.holderResolved = 0;
     if (!WhoZeroOn()) {
         return;
     }
@@ -864,6 +901,62 @@ void FillZeroTargetSnapshot(ZeroRow& row)
         RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(row.slot));
         if (hr != nullptr) {
             row.holderYoung = hr->IsYoungRegion() ? 1 : 0;
+            row.holderStart = hr->GetRegionStart();
+            row.holderRtype = static_cast<uint8_t>(hr->GetRegionType());
+            row.holderFree = hr->IsFreeRegion() ? 1 : 0;
+            row.holderGarb = hr->IsGarbageRegion() ? 1 : 0;
+            row.holderAuth = hr->IsLiveCountAuthoritative() ? 1 : 0;
+            RegionBitmap* mb = hr->GetMarkBitmap();
+            row.holderMb = (mb != nullptr) ? 1 : 0;
+            const bool knownEmpty = hr->IsKnownEmpty();
+            row.holderNeverExam =
+                (knownEmpty && mb == nullptr && hr->GetRegionAllocPtr() > hr->GetRegionStart()) ? 1 : 0;
+            // Resolve holder object covering this slot (move-independent via region start above).
+            BaseObject* host = nullptr;
+            if (!hr->IsFreeRegion() && !hr->IsGarbageRegion()) {
+                hr->VisitAllObjects([&host, slot = row.slot](BaseObject* holder) {
+                    if (host != nullptr || holder == nullptr) {
+                        return;
+                    }
+                    uintptr_t h = reinterpret_cast<uintptr_t>(holder);
+                    if (slot < h) {
+                        return;
+                    }
+                    if (holder->HasRefField()) {
+                        holder->ForEachRefField([holder, &host, slot](RefField<>& field) {
+                            if (reinterpret_cast<uintptr_t>(&field) == slot) {
+                                host = holder;
+                            }
+                        });
+                    }
+                });
+            }
+            if (host != nullptr) {
+                row.holderResolved = 1;
+                row.holderObj = reinterpret_cast<uintptr_t>(host);
+                if (Collector::PlausibleManagedObjectGate("majoryoung.holder", host)) {
+                    row.holderMarked = hr->IsMarkedObject(host) ? 1 : 0;
+                    size_t hoff = hr->GetAddressOffset(static_cast<MAddress>(row.holderObj));
+                    LiveInfo* hg0 = hr->GetLiveInfo0ForProbe();
+                    row.holderLive0 = (hg0 != nullptr && hg0->IsSurvivedObject(hoff)) ? 1 : 0;
+                } else {
+                    row.holderMarked = 0;
+                    row.holderLive0 = 0;
+                }
+            } else {
+                // Fall back: mark bit at field offset is wrong semantics; report region face only.
+                row.holderMarked = 0xff;
+            }
+            // majoryoung branch (holder face at CAS-null).
+            if (row.holderMarked == 1) {
+                row.myBranch = 2; // 乙 edge miss
+            } else if (row.holderMarked == 0) {
+                if (row.holderFree || row.holderGarb) {
+                    row.myBranch = 1; // 甲 holder also dead
+                } else {
+                    row.myBranch = 3; // 丙 holder unmarked but region kept
+                }
+            }
         }
     }
     if (tgt == 0 || Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(tgt)) {
@@ -932,11 +1025,13 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
     }
     // whozero: rare-path log only (successful CAS to null). Cap keeps stderr bounded.
     if (WhoZeroOn() && seq <= 256) {
-        char line[512];
+        char line[640];
         int n = sprintf_s(line, sizeof(line),
                           "[GCV2][whozero] path=heal_null n=%u slot=%p old=%#zx site=%s(%u) "
                           "phase=%u tgt=%#zx rtype=%u rs=%u free=%u garb=%u young=%u ghost=%u "
-                          "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u\n",
+                          "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u "
+                          "hObj=%#zx hStart=%#zx hMarked=%u hMb=%u hFree=%u hGarb=%u "
+                          "hAuth=%u hLive0=%u hNeverExam=%u myBranch=%u\n",
                           seq, slot, static_cast<size_t>(oldRaw), SiteName(site),
                           static_cast<unsigned>(site), static_cast<unsigned>(row.phase), row.tgt,
                           static_cast<unsigned>(row.rtype), static_cast<unsigned>(row.routeState),
@@ -944,7 +1039,12 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
                           static_cast<unsigned>(row.youngR), static_cast<unsigned>(row.ghostR),
                           static_cast<unsigned>(row.marked), static_cast<unsigned>(row.live0),
                           row.fwdWord, static_cast<unsigned>(row.holderYoung),
-                          static_cast<unsigned>(row.classKind));
+                          static_cast<unsigned>(row.classKind), row.holderObj, row.holderStart,
+                          static_cast<unsigned>(row.holderMarked), static_cast<unsigned>(row.holderMb),
+                          static_cast<unsigned>(row.holderFree), static_cast<unsigned>(row.holderGarb),
+                          static_cast<unsigned>(row.holderAuth), static_cast<unsigned>(row.holderLive0),
+                          static_cast<unsigned>(row.holderNeverExam),
+                          static_cast<unsigned>(row.myBranch));
         if (n > 0) {
             WriteLine(line, static_cast<size_t>(n));
         }
@@ -1130,6 +1230,46 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
                            slotBytes, histN, copyTotal);
         if (mn > 0) {
             WriteLine(miss, static_cast<size_t>(mn));
+        }
+    }
+    // Crash-time holder mark face (r13 = LexerImpl holder). Complements CAS-null snapshot.
+    if (holderInHeap && r13 != 0) {
+        unsigned crashHMarked = 0xff;
+        unsigned crashHMb = 0xff;
+        unsigned crashHYoung = 0xff;
+        unsigned crashHFree = 0;
+        unsigned crashHGarb = 0;
+        unsigned crashHAuth = 0xff;
+        unsigned crashHNever = 0xff;
+        uintptr_t crashHStart = 0;
+        RegionInfo* chr = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(r13));
+        if (chr != nullptr) {
+            crashHStart = chr->GetRegionStart();
+            crashHYoung = chr->IsYoungRegion() ? 1 : 0;
+            crashHFree = chr->IsFreeRegion() ? 1 : 0;
+            crashHGarb = chr->IsGarbageRegion() ? 1 : 0;
+            crashHAuth = chr->IsLiveCountAuthoritative() ? 1 : 0;
+            RegionBitmap* cmb = chr->GetMarkBitmap();
+            crashHMb = (cmb != nullptr) ? 1 : 0;
+            const bool cke = chr->IsKnownEmpty();
+            crashHNever =
+                (cke && cmb == nullptr && chr->GetRegionAllocPtr() > chr->GetRegionStart()) ? 1 : 0;
+            BaseObject* hobj = reinterpret_cast<BaseObject*>(r13);
+            if (Collector::PlausibleManagedObjectGate("majoryoung.crash_holder", hobj)) {
+                crashHMarked = chr->IsMarkedObject(hobj) ? 1 : 0;
+            } else {
+                crashHMarked = 0;
+            }
+        }
+        char hline[384];
+        int hn = sprintf_s(hline, sizeof(hline),
+                           "[GCV2][majoryoung] crash_holder=%#zx hStart=%#zx hYoung=%u "
+                           "hMarked=%u hMb=%u hFree=%u hGarb=%u hAuth=%u hNeverExam=%u "
+                           "(CAS-null myBranch on whozeroExact; crash face may be later cycle)\n",
+                           r13, crashHStart, crashHYoung, crashHMarked, crashHMb, crashHFree,
+                           crashHGarb, crashHAuth, crashHNever);
+        if (hn > 0) {
+            WriteLine(hline, static_cast<size_t>(hn));
         }
     }
     // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.
