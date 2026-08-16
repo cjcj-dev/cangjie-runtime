@@ -92,8 +92,18 @@ void Report(const char* point)
     if (!Enabled() && !ForceReport()) {
         return;
     }
-    // fprintf+fflush, same reason as the f3-deadarm report in WCollector.cpp:280:
-    // the line has to survive on stderr even when VLOG is late or redirected.
+    // fprintf+fflush rather than LOG(): the logger forks its sink. Setting
+    // MRT_LOG_PATH sends every LOG() line to that path with a ".<pid>" suffix
+    // appended (Log.cpp:194-200 GetLogPath, Log.cpp:426 FormatLog) and leaves
+    // nothing on stderr, while fprintf-based lines (GCLOG, the f3-deadarm
+    // report at WCollector.cpp:280) are unaffected. A control pair has to land
+    // in one stream: otherwise flipping a harness env var scatters the open and
+    // closed arms across two sinks and the comparison silently stops being one.
+    //
+    // NB LOG(RTLOG_ERROR) itself is fine -- it reaches stderr whenever
+    // MRT_LOG_PATH is unset. Commit 1f9056ab's message claimed it "did not
+    // reach stderr" as a general fact; that was wrong. See the docs commit
+    // that added this comment.
     std::fprintf(stderr,
                  "[GCV2][partial-array] point=%s arrays_split=%zu chunks_pushed=%zu "
                  "chunks_followed=%zu not_encodable=%zu min_length=%zu enabled=%d\n",
