@@ -28,6 +28,7 @@
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
@@ -376,6 +377,9 @@ public:
         {
             uint16_t freePath = RegionLifeDiag::TakeNextFreePath();
             RegionLifeDiag::NoteFree(region, freePath);
+            // holdercapture: last instant the mark face still exists. InitFreeUnits is
+            // below; after it the bitmap/LiveInfo answer for the wrong reason.
+            MarkFaceSnap::NoteRegionFree(region, freePath);
         }
         HealPairDiag::NoteCollect(region->GetRegionStart(), region->GetRegionEnd(),
                                  region->GetLiveByteCount(),

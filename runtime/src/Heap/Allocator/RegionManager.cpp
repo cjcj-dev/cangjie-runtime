@@ -1088,6 +1088,9 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
     RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
+    // holdercapture: large regions above the release threshold never reach CollectRegion,
+    // so the snapshot has to be taken on this path too or the face is lost unrecorded.
+    MarkFaceSnap::NoteRegionFree(region, RegionLifeDiag::PATH_RELEASE_LARGE);
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();

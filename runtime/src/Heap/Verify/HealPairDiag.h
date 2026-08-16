@@ -60,6 +60,13 @@ void NoteMajorWasMarked(const void* obj);
 // SIGKILL cannot erase the activity/group counters already observed.
 void ReportYoungClaim(const char* point);
 
+// holdercapture: silent read of the claim / major-skip ledgers for one object.
+// Returns the claim source (0 unknown, 1 young, 2 major, 3 other) and fills the
+// out-params from the major wasMarked=true skip record when one exists.
+// Does not print and does not move the lookup-miss counter.
+uint8_t LookupMarkOrigin(uintptr_t obj, uint32_t* claimGc, uint8_t* majorSkip, uint32_t* majorGc,
+                         uint8_t* hasRef, uint8_t* nonYoungRef);
+
 // whozero: crash-time match of LexerImpl-style null Array* (rcx=0) against zero-write ring.
 // Gate: MRT_GCV2_WHOZERO=1 or MRT_GCV2_HEALPAIR / healpair token. Default off.
 void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx, uintptr_t r12);

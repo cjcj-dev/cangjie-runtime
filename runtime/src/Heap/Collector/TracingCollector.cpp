@@ -15,6 +15,7 @@
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -1040,6 +1041,8 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
     // completed GC cycles. Both probes self-gate and remain default off.
     HealPairDiag::ReportYoungClaim("gc_end");
+    // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
+    MarkFaceSnap::Report("gc_end");
     NoTracedDiag::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool

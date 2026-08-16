@@ -17,6 +17,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/RegionLifeDiag.h"
@@ -389,7 +390,7 @@ void RecordClaimLedger(uintptr_t obj, uint8_t source, uint32_t gc)
     g_claimLedgerInsertFail.fetch_add(1, std::memory_order_relaxed);
 }
 
-uint8_t LookupClaimLedger(uintptr_t obj, uint32_t& gc)
+uint8_t LookupClaimLedger(uintptr_t obj, uint32_t& gc, bool countMiss = true)
 {
     gc = 0;
     if (obj == 0) {
@@ -407,7 +408,9 @@ uint8_t LookupClaimLedger(uintptr_t obj, uint32_t& gc)
             return static_cast<uint8_t>((packed >> 48) & 0x3ULL);
         }
     }
-    g_claimLedgerLookupMiss.fetch_add(1, std::memory_order_relaxed);
+    if (countMiss) {
+        g_claimLedgerLookupMiss.fetch_add(1, std::memory_order_relaxed);
+    }
     return MARK_SOURCE_UNKNOWN;
 }
 
@@ -1015,6 +1018,16 @@ void DumpZero(const char* tag, const ZeroRow& row)
     if (WhoZeroOn() && row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
         RegionLifeDiag::DumpJoinForTarget(row.tgt, tag);
     }
+    // holdercapture: the CAS-null target is the object the collector decided was dead.
+    // Its pre-free mark face says whether anything ever marked it.
+    if (MarkFaceSnap::Enabled()) {
+        if (row.tgt != 0) {
+            MarkFaceSnap::DumpJoinForAddr(row.tgt, "casnull_tgt");
+        }
+        if (row.holderObj != 0) {
+            MarkFaceSnap::DumpJoinForAddr(row.holderObj, "casnull_holder");
+        }
+    }
     if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
         DumpEdgeJoin(row.slot, row.holderObj, row.tgt, tag);
     }
@@ -1289,6 +1302,59 @@ bool Enabled()
 bool YoungClaimEnabled()
 {
     return YoungClaimOn();
+}
+
+// holdercapture: read the two youngclaim ledgers for one object without printing.
+// Callers freeze the verdict at snapshot time, because both ledgers can be
+// overwritten before a crash handler ever runs — and an overwritten ledger reads
+// exactly like "this object was never claimed".
+uint8_t LookupMarkOrigin(uintptr_t obj, uint32_t* claimGc, uint8_t* majorSkip, uint32_t* majorGc,
+                         uint8_t* hasRef, uint8_t* nonYoungRef)
+{
+    if (claimGc != nullptr) {
+        *claimGc = 0;
+    }
+    if (majorSkip != nullptr) {
+        *majorSkip = 0;
+    }
+    if (majorGc != nullptr) {
+        *majorGc = 0;
+    }
+    if (hasRef != nullptr) {
+        *hasRef = 0xff;
+    }
+    if (nonYoungRef != nullptr) {
+        *nonYoungRef = 0xff;
+    }
+    if (!YoungClaimOn() || obj == 0) {
+        return MARK_SOURCE_UNKNOWN;
+    }
+    uint32_t gc = 0;
+    // countMiss=false: this is a bulk sweep over freed objects, and folding its
+    // misses into g_claimLedgerLookupMiss would destroy that counter's meaning.
+    uint8_t source = LookupClaimLedger(obj, gc, false);
+    if (claimGc != nullptr) {
+        *claimGc = gc;
+    }
+    MajorSkipMeta meta;
+    if (LookupMajorSkipLedger(obj, meta)) {
+        if (majorSkip != nullptr) {
+            *majorSkip = 1;
+        }
+        if (majorGc != nullptr) {
+            *majorGc = meta.gc;
+        }
+        if (hasRef != nullptr) {
+            *hasRef = meta.hasRef;
+        }
+        if (nonYoungRef != nullptr) {
+            *nonYoungRef = meta.nonYoungRef;
+        }
+        if (source == MARK_SOURCE_UNKNOWN) {
+            source = meta.source;
+        }
+    }
+    return source;
 }
 
 ScopedMajorMarkTask::ScopedMajorMarkTask()
@@ -2187,6 +2253,13 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
             WriteLine(hline, static_cast<size_t>(hn));
         }
         DumpEdgeJoin(slotBytes, r13, 0, "crash_holder");
+        // holdercapture: the line above reads the face *now*; if the region was already
+        // freed it answers 0 for a reason unrelated to marking. This one replays what the
+        // face said at the last instant before that free.
+        MarkFaceSnap::DumpJoinForAddr(r13, "crash_holder");
+        if (slotBytes != 0) {
+            MarkFaceSnap::DumpJoinForAddr(slotBytes, "crash_slot");
+        }
     }
     // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.
     unsigned fieldsAlive = (endVal != 0 || cursorVal != 0) ? 1U : 0U;
