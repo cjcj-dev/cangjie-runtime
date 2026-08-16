@@ -6518,11 +6518,17 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                          rememberedSlots.size(), concRemset.size(), remsetVec.size());
                     // concreffix: conc_new is the only observable a mutator can leave behind in
                     // this window, so it decides whether the window did anything at all. The
-                    // VLOG above needs REPORT; mirror it on the always-on channel next to the
-                    // other per-minor [GCV2] lines so it survives a REPORT-off measurement run.
-                    LOG(RTLOG_ERROR,
-                        "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                        rememberedSlots.size(), concRemset.size(), remsetVec.size());
+                    // VLOG above needs REPORT, which would perturb the timings being measured;
+                    // mirror it on the gated channel instead. Being inside an opt-in branch is
+                    // not a reason to leave it unconditional: the branch condition can change
+                    // later, while a log level never lowers itself back.
+                    static const bool concProductOn =
+                        DiagGate::LegacyOrToken("MRT_GCV2_REFFIX_WALK", "reffixwalk");
+                    if (concProductOn) {
+                        LOG(RTLOG_ERROR,
+                            "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                            rememberedSlots.size(), concRemset.size(), remsetVec.size());
+                    }
                 }
                 if (!useParallel) {
                     size_t taken = 0;
