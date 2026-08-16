@@ -7,8 +7,10 @@
 #include "Heap/Verify/FwdInflight.h"
 
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
+#include <thread>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -22,6 +24,41 @@ bool EnvIsOne(const char* name)
 {
     const char* v = std::getenv(name);
     return v != nullptr && std::strcmp(v, "1") == 0;
+}
+
+size_t EnvSize(const char* name, size_t fallback)
+{
+    const char* v = std::getenv(name);
+    if (v == nullptr || *v == '\0') {
+        return fallback;
+    }
+    char* end = nullptr;
+    unsigned long long parsed = std::strtoull(v, &end, 10);
+    if (end == v || *end != '\0') {
+        return fallback;
+    }
+    return static_cast<size_t>(parsed);
+}
+
+// Negative arm for the arena drain. A retire edge can only be seen to wait for a reader if a
+// reader is still there when it runs, and on a well-behaved run there may be none -- in which
+// case "hits=0" says nothing about the drain. This widens the publication window by holding it
+// open on a sampled fraction of lookups, so the arm that is supposed to report non-zero can be
+// made to report non-zero. Sampled, not blanket: RouteObject runs millions of times per cycle
+// and a blanket delay would change the schedule being measured rather than lengthen one window
+// inside it.
+//   MRT_GCV2_FWDINFLIGHT_HOLD_US=N     microseconds to hold (0 = off, the default)
+//   MRT_GCV2_FWDINFLIGHT_HOLD_EVERY=M  hold on every Mth armed scope (default 1)
+size_t HoldUs()
+{
+    static const size_t v = EnvSize("MRT_GCV2_FWDINFLIGHT_HOLD_US", 0);
+    return v;
+}
+
+size_t HoldEvery()
+{
+    static const size_t v = EnvSize("MRT_GCV2_FWDINFLIGHT_HOLD_EVERY", 1);
+    return v;
 }
 
 constexpr size_t kSiteCount = static_cast<size_t>(Site::SITE_COUNT);
@@ -55,6 +92,29 @@ std::atomic<size_t> g_hits[kRetireCount];
 std::atomic<size_t> g_hitsBySite[kSiteCount];
 std::atomic<size_t> g_injectSeen{ 0 };
 std::atomic<size_t> g_globalInflight{ 0 };
+std::atomic<size_t> g_holdSeq{ 0 };
+std::atomic<size_t> g_holds{ 0 };
+
+// A scan can only ever find a reader on a DIFFERENT thread: a thread inside RouteObject is
+// not simultaneously executing a retire edge. So "hits=0" has two readings that the headline
+// number cannot tell apart -- the readers and the retires genuinely never overlapped in time,
+// or they were always the same thread and could not have overlapped by construction. These
+// two histograms separate them: if the thread slots that publish and the thread slots that
+// retire are the same single slot, hits=0 is arithmetic, not evidence about the schedule.
+constexpr size_t kRosterSlots = 8;
+std::atomic<size_t> g_pubByThread[kRosterSlots];
+std::atomic<size_t> g_retireByThread[kRosterSlots];
+// Which thread actually got held. The hold sampler counts lookups globally, so a run can
+// spend all its holds on the retiring thread -- where a hold can never produce a hit -- and
+// look like a negative arm that fired when it did not.
+std::atomic<size_t> g_holdByThread[kRosterSlots];
+
+void NoteThread(std::atomic<size_t>* histogram, size_t idx)
+{
+    if (idx < kRosterSlots) {
+        histogram[idx].fetch_add(1, std::memory_order_relaxed);
+    }
+}
 std::atomic<size_t> g_logged{ 0 };
 std::atomic<bool> g_atexit{ false };
 
@@ -164,6 +224,7 @@ Scope::Scope(const RegionInfo* region, Site site) : armed(false)
         return;
     }
     EnsureAtexit();
+    NoteThread(g_pubByThread, idx);
     g_published[static_cast<size_t>(site)].fetch_add(1, std::memory_order_relaxed);
     g_slots[idx].site.store(static_cast<uint32_t>(site), std::memory_order_relaxed);
     g_slots[idx].region.store(region, std::memory_order_release);
@@ -175,6 +236,17 @@ Scope::~Scope()
     if (!armed) {
         return;
     }
+    // Hold before un-publishing: the thread is still inside RouteObject with its liveInfo0
+    // local live, so this lengthens the real exposure, not just the bookkeeping.
+    const size_t holdUs = HoldUs();
+    if (holdUs != 0) {
+        const size_t every = HoldEvery();
+        if (every <= 1 || (g_holdSeq.fetch_add(1, std::memory_order_relaxed) % every) == 0) {
+            g_holds.fetch_add(1, std::memory_order_relaxed);
+            NoteThread(g_holdByThread, ThreadSlot());
+            std::this_thread::sleep_for(std::chrono::microseconds(holdUs));
+        }
+    }
     g_slots[ThreadSlot()].region.store(nullptr, std::memory_order_release);
 }
 
@@ -184,6 +256,7 @@ void NoteRetireRegion(const RegionInfo* region, Retire retire)
         return;
     }
     EnsureAtexit();
+    NoteThread(g_retireByThread, ThreadSlot());
     const size_t r = static_cast<size_t>(retire);
     g_retires[r].fetch_add(1, std::memory_order_relaxed);
 
@@ -242,6 +315,7 @@ void NoteRetireGlobal(uintptr_t rangeStart, size_t rangeSize, Retire retire)
         return;
     }
     EnsureAtexit();
+    NoteThread(g_retireByThread, ThreadSlot());
     const size_t r = static_cast<size_t>(retire);
     g_retires[r].fetch_add(1, std::memory_order_relaxed);
 
@@ -283,10 +357,12 @@ void DumpSummary()
         g_retires[static_cast<size_t>(Retire::TAKE_GARBAGE)].load(std::memory_order_relaxed);
     LOG(RTLOG_ERROR,
         "[GCV2][fwdinflight] SUMMARY inject=%u hits=%zu retires=%zu per_region_retires=%zu "
-        "injected_seen=%zu global_inflight=%zu published_with_region=%zu published_lookup=%zu "
+        "injected_seen=%zu global_inflight=%zu holds=%zu hold_us=%zu hold_every=%zu "
+        "published_with_region=%zu published_lookup=%zu "
         "hits_with_region=%zu hits_lookup=%zu slot_overflow=%zu threads=%zu",
         static_cast<unsigned>(InjectOn()), hitTotal, retireTotal, perRegionRetires,
         g_injectSeen.load(std::memory_order_relaxed), g_globalInflight.load(std::memory_order_relaxed),
+        g_holds.load(std::memory_order_relaxed), HoldUs(), HoldEvery(),
         g_published[static_cast<size_t>(Site::ROUTE_WITH_REGION)].load(std::memory_order_relaxed),
         g_published[static_cast<size_t>(Site::ROUTE_LOOKUP)].load(std::memory_order_relaxed),
         g_hitsBySite[static_cast<size_t>(Site::ROUTE_WITH_REGION)].load(std::memory_order_relaxed),
@@ -300,6 +376,16 @@ void DumpSummary()
         }
         LOG(RTLOG_ERROR, "[GCV2][fwdinflight] retire=%s events=%zu hits=%zu",
             RetireName(static_cast<Retire>(i)), rr, hh);
+    }
+    for (size_t i = 0; i < kRosterSlots; ++i) {
+        size_t pub = g_pubByThread[i].load(std::memory_order_relaxed);
+        size_t ret = g_retireByThread[i].load(std::memory_order_relaxed);
+        size_t held = g_holdByThread[i].load(std::memory_order_relaxed);
+        if (pub == 0 && ret == 0 && held == 0) {
+            continue;
+        }
+        LOG(RTLOG_ERROR, "[GCV2][fwdinflight] thread_slot=%zu published=%zu retired=%zu held=%zu", i,
+            pub, ret, held);
     }
 }
 

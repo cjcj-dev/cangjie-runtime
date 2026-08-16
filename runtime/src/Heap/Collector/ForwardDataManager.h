@@ -13,10 +13,16 @@
 #if defined(__linux__) || defined(hongmeng) || defined(__APPLE__)
 #include <sys/mman.h>
 #endif
+#include <atomic>
+#include <cstdlib>
+#include <cstring>
+#include <mutex>
+
 #include "Base/Log.h"
 #include "Base/LogFile.h"
 #include "Base/MemUtils.h"
 #include "Base/SysCall.h"
+#include "Heap/Verify/FwdInflight.h"
 #include "LiveInfo.h"
 
 #ifdef _WIN64
@@ -174,8 +180,147 @@ public:
         return static_cast<uint16_t>((currentTagID + TAG_ID_COUNT - 1) % TAG_ID_COUNT);
     }
 
-    void SetTagID(uint16_t id) { currentTagID = id; }
+    // The ring rotates here: `id` is about to start receiving LiveInfo and bitmap
+    // allocations, so a deferred release still owed on that slot has to land first. This is
+    // the backstop that makes the grace period safe no matter how few phase transitions the
+    // cycle happened to contain -- with the gate off it is a no-op.
+    void SetTagID(uint16_t id)
+    {
+        FlushGraceSlot(id);
+        currentTagID = id;
+    }
 
+    // fwdgrace -------------------------------------------------------------------------
+    //
+    // ZGC drains readers off a from-page before the page goes away: ZForwarding::detach_page
+    // (zForwarding.cpp:171-181) is `while (_ref_count.load_acquire() != 0) _ref_lock.wait();`
+    // and only then free_page. Our arena release did no draining at all.
+    // ClearPreviousForwardData nulls the region liveInfo fields and then madvises the range,
+    // and the comment there calls that a "Structural guarantee: no region field may still
+    // address the range about to be madvise'd."
+    //
+    // Nulling a field is not a drain. AdmitForRoute (RegionInfo.h:1494) copies liveInfo0 into
+    // a local before it uses it; nulling the field afterwards does not reach that local, and
+    // the thread holding it goes on to read a range that MADV_DONTNEED has turned back into
+    // zero pages. Same for the bitmap the LiveInfo points at.
+    //
+    // The wait used here is the one this repo already has, not a new one: RegionInfo::
+    // AdvanceCompactRouteTableGracePeriod (RegionInfo.h:1822-1843) retires a detached
+    // CompactRouteTable and frees it only after two completed phase transitions, on the
+    // stated premise that a phase transition is a mutator grace period. The arena is retired
+    // the same way and off the same edge (TracingCollector::TransitionToGCPhase). Only the
+    // madvise is deferred -- the nulling stays where it was, because that is what stops NEW
+    // readers from entering while the grace period covers the ones already inside.
+    //
+    // Bound, honestly stated: this is a grace period, not ZGC's blocking drain. It covers a
+    // reader that a completed mutator phase transition covers. A reader that outlives two
+    // transitions is not covered, and neither is a thread that does not take part in the
+    // mutator handshake at all. Route B (a real _ref_count/_ref_lock pair on the arena) is
+    // what closes that; this closes the part the repo already knows how to close.
+    //
+    // Gate: MRT_GCV2_FWDDATA_GRACE=1, default off. Off, ClearPreviousForwardData runs the
+    // byte-for-byte previous sequence and none of the state below is ever touched.
+    static bool GraceEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_FWDDATA_GRACE");
+            return v != nullptr && std::strcmp(v, "1") == 0;
+        }();
+        return on;
+    }
+
+    // One completed phase transition. Called from the same two sites that advance the
+    // compact-route-table grace period, so the two cannot drift apart.
+    static void AdvanceGracePeriod()
+    {
+        if (!GraceEnabled()) {
+            return;
+        }
+        GetForwardDataManager().AdvanceGracePeriodImpl();
+    }
+
+private:
+    void RetireGraceSlot(uint16_t slot)
+    {
+        std::lock_guard<std::mutex> lock(graceMutex);
+        graceRetired.fetch_add(1, std::memory_order_relaxed);
+        if (gracePending[slot]) {
+            // Keep the earlier deadline. Minor GCs retire the same slot over and over
+            // (only a major flips the tag), and refreshing the generation on each of them
+            // would let a steady stream of minors postpone the release indefinitely -- a
+            // wait that never ends is not a wait, it is a leak.
+            return;
+        }
+        gracePending[slot] = true;
+        gracePendingGeneration[slot] = graceGeneration.load(std::memory_order_relaxed);
+    }
+
+    void AdvanceGracePeriodImpl()
+    {
+        uint16_t ready[TAG_ID_COUNT];
+        size_t readyCount = 0;
+        {
+            std::lock_guard<std::mutex> lock(graceMutex);
+            const uint64_t generation = graceGeneration.load(std::memory_order_relaxed) + 1;
+            graceGeneration.store(generation, std::memory_order_relaxed);
+            for (uint16_t i = 0; i < TAG_ID_COUNT; ++i) {
+                // Two completed transitions, exactly as RegionInfo.h:1832: a retire that
+                // raced the boundary is then assigned to either side without endangering
+                // a reader.
+                if (gracePending[i] && (generation - gracePendingGeneration[i]) >= 2) {
+                    gracePending[i] = false;
+                    ready[readyCount] = i;
+                    ++readyCount;
+                }
+            }
+        }
+        for (size_t i = 0; i < readyCount; ++i) {
+            ReleaseSlotNow(ready[i], /*forced=*/false);
+        }
+    }
+
+    void FlushGraceSlot(uint16_t slot)
+    {
+        if (!GraceEnabled()) {
+            return;
+        }
+        bool owed = false;
+        {
+            std::lock_guard<std::mutex> lock(graceMutex);
+            if (gracePending[slot]) {
+                gracePending[slot] = false;
+                owed = true;
+            }
+        }
+        if (owed) {
+            ReleaseSlotNow(slot, /*forced=*/true);
+        }
+    }
+
+    void ReleaseSlotNow(uint16_t slot, bool forced)
+    {
+        ForwardDataSpace& space = liveInfoData[slot];
+        // Counted at the instant the memory actually goes away. That is the point of moving
+        // the call: with the gate on this is the deferred instant, so a non-zero count here
+        // says the wait did not outlast the readers, and a zero count says it did (or that
+        // there were none -- which is why the run needs its control arm).
+        FwdInflight::NoteRetireGlobal(space.GetStartAddress(), space.GetSize(),
+                                      FwdInflight::Retire::ARENA_RELEASE);
+        space.ReleaseMemory();
+        size_t released = graceReleased.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (forced) {
+            graceForced.fetch_add(1, std::memory_order_relaxed);
+        }
+        VLOG(REPORT,
+             "[GCV2][fwdgrace] release slot=%u forced=%u generation=%llu retired=%zu released=%zu "
+             "forced_total=%zu",
+             static_cast<unsigned>(slot), static_cast<unsigned>(forced),
+             static_cast<unsigned long long>(graceGeneration.load(std::memory_order_relaxed)),
+             graceRetired.load(std::memory_order_relaxed), released,
+             graceForced.load(std::memory_order_relaxed));
+    }
+
+public:
     // Recycle the slot that just left the one-generation window (same timing as N=2).
     void UnbindPreviousLiveInfo() { liveInfoData[GetPreviousTagID()].UnbindPreviousLiveInfo(); }
 
@@ -198,6 +343,20 @@ private:
     uintptr_t forwardDataStart = 0;
     size_t forwardDataSize = 0;
     uint16_t currentTagID = 0; // propagate from collector.
+
+    // fwdgrace state. Reached only when the gate is on; the retire/advance/flush edges all
+    // early-return before touching it otherwise. Mutex rather than lock-free because every
+    // edge is a phase transition or a GC-thread step -- the compact-route-table retire list
+    // it mirrors takes a mutex on the same edges (RegionInfo.h:2611-2632).
+    std::mutex graceMutex;
+    // Written only under graceMutex; atomic because ReleaseSlotNow logs it from outside the
+    // lock and a torn/racy plain read there would be a data race for a log line.
+    std::atomic<uint64_t> graceGeneration{ 0 };
+    bool gracePending[TAG_ID_COUNT] = {};
+    uint64_t gracePendingGeneration[TAG_ID_COUNT] = {};
+    std::atomic<size_t> graceRetired{ 0 };
+    std::atomic<size_t> graceReleased{ 0 };
+    std::atomic<size_t> graceForced{ 0 };
 };
 } // namespace MapleRuntime
 #endif // MRT_FORWARD_DATA_MANAGER_H
