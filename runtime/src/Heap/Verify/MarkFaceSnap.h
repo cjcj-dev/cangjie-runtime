@@ -52,6 +52,13 @@ void NoteRegionFree(RegionInfo* region, uint16_t path);
 // for the crash handler only — a live-path caller would pay it on every hit.
 void DumpJoinForAddr(uintptr_t addr, const char* tag, bool deepScan = false);
 
+// Crash-time sweep over a set of candidate addresses (si_addr and the live
+// registers). One pass over the row table tests all of them at once, so the cost
+// does not multiply by the number of candidates. Prints a line per hit plus a
+// census line, and never depends on any candidate being a plausible object —
+// youngclaim's join produced 0 rows precisely because it required one.
+void NoteCrashSweep(const uintptr_t* addrs, const char* const* names, size_t n);
+
 // Activity proof + periodic persistence. Called at each GC end and atexit, so a
 // timeout or SIGKILL cannot erase what was already observed.
 void Report(const char* point);

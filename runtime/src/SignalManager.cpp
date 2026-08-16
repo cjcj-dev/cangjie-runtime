@@ -38,6 +38,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/TlRawDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/HdrWhoDiag.h"
 #include "securec.h"
 #ifdef COV_SIGNALHANDLE
@@ -242,6 +243,20 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         uintptr_t r13 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R13]);
         HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
         HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
+        // holdercapture: unconditional sweep. The joins above all require the crash to
+        // look like a known signature (a plausible holder in r13); youngclaim returned
+        // 0 rows for exactly that reason. This one asks a weaker question of every live
+        // register — "was this address inside a region we freed, and what did its mark
+        // face say at that moment" — so a crash that matches no signature still leaves
+        // evidence.
+        {
+            const uintptr_t sweepAddrs[] = { reinterpret_cast<uintptr_t>(siAddr), rdi, rsi, rdx,
+                                             rcx, rax, rbx, r12, r13, r14, rbp };
+            const char* const sweepNames[] = { "si_addr", "rdi", "rsi", "rdx", "rcx", "rax",
+                                               "rbx", "r12", "r13", "r14", "rbp" };
+            MarkFaceSnap::NoteCrashSweep(sweepAddrs, sweepNames,
+                                         sizeof(sweepAddrs) / sizeof(sweepAddrs[0]));
+        }
 #endif
     }
 }

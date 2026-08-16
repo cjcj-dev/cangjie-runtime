@@ -548,6 +548,99 @@ void DumpJoinForAddr(uintptr_t addr, const char* tag, bool deepScan)
     Report("join_miss");
 }
 
+void NoteCrashSweep(const uintptr_t* addrs, const char* const* names, size_t n)
+{
+    if (!GateOn() || addrs == nullptr || names == nullptr || n == 0) {
+        return;
+    }
+    constexpr size_t kMaxCand = 16;
+    if (n > kMaxCand) {
+        n = kMaxCand;
+    }
+    const ObjRow* best[kMaxCand] = {};
+    uint8_t exact[kMaxCand] = {};
+    size_t hits = 0;
+
+    // Exact lookups first: cheap, and they are the answer whenever a register
+    // holds the object itself rather than a field inside it.
+    for (size_t c = 0; c < n; ++c) {
+        if (addrs[c] == 0) {
+            continue;
+        }
+        const ObjRow* row = LookupObjExact(addrs[c]);
+        if (row != nullptr) {
+            best[c] = row;
+            exact[c] = 1;
+        }
+    }
+    // One pass for every still-unresolved candidate. Interiors resolve here.
+    if (g_objs != nullptr && g_objCap != 0) {
+        for (size_t i = 0; i < g_objCap; ++i) {
+            const ObjRow& row = g_objs[i];
+            if (row.obj == 0 || row.size == 0) {
+                continue;
+            }
+            for (size_t c = 0; c < n; ++c) {
+                if (addrs[c] == 0 || exact[c] != 0) {
+                    continue;
+                }
+                if (addrs[c] >= row.obj && addrs[c] < row.obj + row.size) {
+                    if (best[c] == nullptr || row.freeSeq > best[c]->freeSeq) {
+                        best[c] = &row;
+                    }
+                }
+            }
+        }
+    }
+    for (size_t c = 0; c < n; ++c) {
+        if (addrs[c] == 0) {
+            continue;
+        }
+        g_joinTry.fetch_add(1, std::memory_order_relaxed);
+        if (best[c] != nullptr) {
+            ++hits;
+            if (exact[c] != 0) {
+                g_joinExact.fetch_add(1, std::memory_order_relaxed);
+            } else {
+                g_joinInterior.fetch_add(1, std::memory_order_relaxed);
+            }
+            DumpObjRow("crash_sweep", exact[c] != 0 ? "exact" : "interior", addrs[c], *best[c]);
+            continue;
+        }
+        const RegRow* reg = LookupRegCovering(addrs[c]);
+        if (reg != nullptr) {
+            ++hits;
+            g_joinRegion.fetch_add(1, std::memory_order_relaxed);
+            DumpRegRow("crash_sweep", "region_only", addrs[c], *reg);
+            continue;
+        }
+        g_joinMiss.fetch_add(1, std::memory_order_relaxed);
+    }
+    // Census line: candidates offered, and which name carried each hit. Without it,
+    // "no hit line" and "the sweep never ran" are the same observation.
+    char head[512];
+    int hn = sprintf_s(head, sizeof(head), "[GCV2][holdercap] crash_sweep census cand=%zu hits=%zu names=",
+                       n, hits);
+    if (hn > 0) {
+        size_t used = static_cast<size_t>(hn);
+        for (size_t c = 0; c < n && used + 24 < sizeof(head); ++c) {
+            const char* verdict = (best[c] != nullptr) ? "obj" : "-";
+            int an = sprintf_s(head + used, sizeof(head) - used, "%s%s=%s", c == 0 ? "" : ",",
+                               names[c] != nullptr ? names[c] : "?", verdict);
+            if (an <= 0) {
+                break;
+            }
+            used += static_cast<size_t>(an);
+        }
+        if (used + 2 < sizeof(head)) {
+            head[used++] = '\n';
+            head[used] = '\0';
+        }
+        WriteLine(head, used);
+    }
+    Report("crash_sweep");
+}
+
 void Report(const char* point)
 {
     if (!GateOn()) {
