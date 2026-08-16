@@ -936,6 +936,41 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
         } else {
             toObj = FindToVersion(fromObj);
+            // fwdgate: the forward arm above consumes a receipt (TryForwardObject only
+            // hands back a route after IsForwarded / IsCompacted, both published after
+            // the copy). This arm consumes the raw route, and RouteRegion publishes
+            // ROUTED before anything is copied (RegionManager.h:688), so FindToVersion
+            // can answer a geometric address whose tip is not written yet; a one-gen
+            // stale old tag can also route into a region that has since been freed or
+            // reused. What follows is not a comparison: HealSlot installs the value in
+            // a live holder's field, and Barrier::ReadReference / ReadWeakRef /
+            // ReadStruct / ReadStaticStruct return it to the mutator. That is the same
+            // "hole address written into a slot" family 1be34721 and 1c4bb160 closed on
+            // the resolve paths, and the same tip test FixOldTaggedRefField (:1620) and
+            // ResolveMinorReference (:2596, :2715) already apply.
+            //
+            // Rejecting is not a new outcome: every caller of this function already has
+            // a from fallback for toObj == nullptr, and the from is still a valid object
+            // here (ghosts live until Unbind). A dest that really was copied always
+            // carries its tip -- ForwardObjectExclusive copies and SetStateCode(NORMAL)
+            // before it publishes FORWARDED -- so no completed route is blocked. What is
+            // blocked is only the window before the copy lands, where the next barrier
+            // read routes again. to == from is the compact-in-place plan and keeps its
+            // old behaviour (same carve-out as Collector.cpp:648).
+            if (toObj != nullptr && toObj != fromObj && Heap::IsHeapAddress(toObj)) {
+                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(toObj));
+                if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion() ||
+                    !toObj->IsValidObject()) {
+                    static std::atomic<size_t> g_updateBadTipSkip{ 0 };
+                    size_t n = g_updateBadTipSkip.fetch_add(1, std::memory_order_relaxed);
+                    if (n < 16) {
+                        VLOG(REPORT,
+                             "[GCV2][update-badtip] holder=%p field=%p from=%p to=%p — keep from",
+                             obj, &field, fromObj, toObj);
+                    }
+                    return false;
+                }
+            }
         }
         if (toObj == nullptr) {
             return false;
