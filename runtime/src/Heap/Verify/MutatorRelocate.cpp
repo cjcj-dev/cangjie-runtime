@@ -25,12 +25,15 @@ bool EnvIsOne(const char* name)
 
 constexpr size_t kRetireCount = static_cast<size_t>(Retire::RETIRE_COUNT);
 constexpr size_t kFallbackCount = static_cast<size_t>(Fallback::FALLBACK_COUNT);
+constexpr size_t kRoleCount = static_cast<size_t>(Role::ROLE_COUNT);
 
 std::atomic<size_t> g_attempts{ 0 };
 std::atomic<size_t> g_retainOk{ 0 };
 std::atomic<size_t> g_alreadyForwarded{ 0 };
 std::atomic<size_t> g_selfCopies{ 0 };
 std::atomic<size_t> g_anyCopies{ 0 };
+std::atomic<size_t> g_anyCopiesByRole[kRoleCount];
+std::atomic<size_t> g_selfCopiesByRole[kRoleCount];
 std::atomic<size_t> g_selfCopyBytes{ 0 };
 std::atomic<size_t> g_fallbacks[kFallbackCount];
 
@@ -55,6 +58,20 @@ const char* RetireName(Retire retire)
             return "dispel_ghost";
         case Retire::TAKE_GARBAGE:
             return "take_garbage";
+        default:
+            return "unknown";
+    }
+}
+
+const char* RoleName(Role role)
+{
+    switch (role) {
+        case Role::MUTATOR:
+            return "mutator";
+        case Role::GC:
+            return "gc";
+        case Role::OTHER_RT:
+            return "other_rt";
         default:
             return "unknown";
     }
@@ -172,14 +189,22 @@ void EnterScope() { tl_inScope = true; }
 
 void LeaveScope() { tl_inScope = false; }
 
-void NoteSelfCopy(size_t bytes)
+void NoteSelfCopy(size_t bytes, Role role)
 {
     g_selfCopies.fetch_add(1, std::memory_order_relaxed);
     g_selfCopyBytes.fetch_add(bytes, std::memory_order_relaxed);
+    size_t idx = static_cast<size_t>(role);
+    if (idx < kRoleCount) {
+        g_selfCopiesByRole[idx].fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
-void NoteAnyCopy()
+void NoteAnyCopy(Role role)
 {
+    size_t idx = static_cast<size_t>(role);
+    if (idx < kRoleCount) {
+        g_anyCopiesByRole[idx].fetch_add(1, std::memory_order_relaxed);
+    }
     // Every ForwardObjectExclusive copy, whoever ran it. Without this, self_copies=0 is two
     // different findings wearing the same face: "the ported leg lost every race to a GC
     // worker" and "nothing was relocated at all in this run". any_copies separates them.
@@ -238,6 +263,17 @@ void DumpSummary()
         "[GCV2][mutreloc] WAITLEG wait_enter=%zu wait_receipt=%zu wait_giveup=%zu wait_fatal=%zu",
         g_waitEnter.load(std::memory_order_relaxed), g_waitReceipt.load(std::memory_order_relaxed),
         g_waitGiveUp.load(std::memory_order_relaxed), g_waitFatal.load(std::memory_order_relaxed));
+    // The claim mutator relocation actually makes is self=mutator > 0. Reported next to the
+    // per-role denominator so the share is visible rather than asserted.
+    for (size_t i = 0; i < kRoleCount; ++i) {
+        size_t any = g_anyCopiesByRole[i].load(std::memory_order_relaxed);
+        size_t self = g_selfCopiesByRole[i].load(std::memory_order_relaxed);
+        if (any == 0 && self == 0) {
+            continue;
+        }
+        LOG(RTLOG_ERROR, "[GCV2][mutreloc] role=%s any_copies=%zu self_copies=%zu",
+            RoleName(static_cast<Role>(i)), any, self);
+    }
     for (size_t i = 0; i < kFallbackCount; ++i) {
         size_t n = g_fallbacks[i].load(std::memory_order_relaxed);
         if (n == 0) {

@@ -102,11 +102,29 @@ void NoteAlreadyForwarded();
 bool InScope();
 void EnterScope();
 void LeaveScope();
+// Which kind of thread ran a copy. ThreadType (ThreadLocal.h:20) is
+// {CJ_PROCESSOR, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD}; IsRuntimeThread() is
+// >= GC_THREAD, so a mutator is exactly !IsRuntimeThread(), i.e. CJ_PROCESSOR.
+//
+// This exists because "the ported leg performed the copy" and "a MUTATOR performed the copy"
+// are different claims, and only the second one is what mutator relocation means. The first
+// round of measurement could only support the first: the control routed through
+// TryForwardObject, which is reachable from both mutator barriers and GC-side callers
+// (RegionManager.cpp:2586/2732, Heap.cpp:372), so the copies it counted had no attributed
+// thread role at all.
+enum class Role : uint32_t {
+    MUTATOR = 0,     // CJ_PROCESSOR -- the claim under test
+    GC = 1,          // GC_THREAD
+    OTHER_RT = 2,    // FP_THREAD / HOT_UPDATE_THREAD -- runtime, but not the collector
+    ROLE_COUNT = 3
+};
+
 // Called from WCollector::ForwardObjectExclusive, immediately after CopyObject, when InScope().
-void NoteSelfCopy(size_t bytes);
+void NoteSelfCopy(size_t bytes, Role role);
 // Called from the same place for every copy regardless of thread. Separates "the ported leg
-// lost every race" from "nothing was relocated in this run at all".
-void NoteAnyCopy();
+// lost every race" from "nothing was relocated in this run at all", and gives the denominator
+// the per-role self_copies counts are a share of.
+void NoteAnyCopy(Role role);
 
 // --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
 void NoteWaitEnter();   // entered WaitRoutedTipReady

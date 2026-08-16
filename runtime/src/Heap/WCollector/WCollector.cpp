@@ -9173,9 +9173,18 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
     // reach the same CopyObject with the flag clear and are not counted.
     if (MutatorRelocate::StatsOn()) {
-        MutatorRelocate::NoteAnyCopy();
+        // ThreadLocal.h:20 ThreadType {CJ_PROCESSOR, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD};
+        // IsRuntimeThread() is >= GC_THREAD, so !IsRuntimeThread() is exactly CJ_PROCESSOR --
+        // a mutator. Both predicates are thread-local reads (MutatorManager.cpp:70-84).
+        MutatorRelocate::Role role = MutatorRelocate::Role::MUTATOR;
+        if (IsGcThread()) {
+            role = MutatorRelocate::Role::GC;
+        } else if (IsRuntimeThread()) {
+            role = MutatorRelocate::Role::OTHER_RT;
+        }
+        MutatorRelocate::NoteAnyCopy(role);
         if (MutatorRelocate::InScope()) {
-            MutatorRelocate::NoteSelfCopy(size);
+            MutatorRelocate::NoteSelfCopy(size, role);
         }
     }
     toObj->SetStateCode(ObjectState::NORMAL);
