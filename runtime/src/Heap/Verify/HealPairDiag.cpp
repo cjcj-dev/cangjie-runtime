@@ -900,7 +900,7 @@ void DumpEdgeJoin(uintptr_t slot, uintptr_t holder, uintptr_t tgt, const char* t
             WriteLine(f, static_cast<size_t>(fn));
         }
     }
-    if (YoungClaimOn()) {
+        if (YoungClaimOn()) {
         int majorIdx = (lastMajorSkipMi >= 0) ? lastMajorSkipMi : lastMajorClaimMi;
         unsigned majorWasMarked = (lastMajorSkipMi >= 0) ? 1U : ((lastMajorClaimMi >= 0) ? 0U : 255U);
         uint32_t majorGc = 0;
@@ -917,14 +917,32 @@ void DumpEdgeJoin(uintptr_t slot, uintptr_t holder, uintptr_t tgt, const char* t
             joinedSource = major.source;
             joinedHasRef = major.hasRef;
             joinedNonYoungRef = major.nonYoungRef;
+        } else {
+            MajorSkipMeta skipMeta;
+            if (LookupMajorSkipLedger(holder, skipMeta)) {
+                majorWasMarked = 1;
+                majorGc = skipMeta.gc;
+                majorPhase = skipMeta.phase;
+                majorYoung = skipMeta.regionYoung;
+                joinedSource = skipMeta.source;
+                joinedHasRef = skipMeta.hasRef;
+                joinedNonYoungRef = skipMeta.nonYoungRef;
+            }
         }
         uint32_t claimGc = 0;
         uint16_t claimPhase = 0;
+        unsigned haveYoungClaim = lastYoungMi >= 0 ? 1U : 0U;
         if (lastYoungMi >= 0) {
             const MarkRow& claim = g_marks[static_cast<size_t>(lastYoungMi)];
             claimGc = claim.gcCount;
             claimPhase = claim.phase;
+        } else {
+            uint8_t claimSrc = LookupClaimLedger(holder, claimGc);
+            if (claimSrc == MARK_SOURCE_YOUNG) {
+                haveYoungClaim = 1;
+            }
         }
+        unsigned haveMajor = (majorIdx >= 0 || majorWasMarked == 1U) ? 1U : 0U;
         YoungClaimGcStats& majorStats = g_youngClaimByGc[majorGc & (kYoungClaimGcCap - 1)];
         size_t gcYoungClaim = majorStats.youngClaim.load(std::memory_order_relaxed);
         size_t gcWasMarked = majorStats.majorWasMarked.load(std::memory_order_relaxed);
@@ -952,8 +970,8 @@ void DumpEdgeJoin(uintptr_t slot, uintptr_t holder, uintptr_t tgt, const char* t
                            "joinedSource=%s(%u) hasRef=%u nonYoungRef=%u gctibHasSlot=%u "
                            "gcYoungClaim=%zu gcWasMarked=%zu gcJoinedYoung=%zu gcJoinedHasRef=%zu "
                            "gcJoinedNonYoungRef=%zu\n",
-                           tag != nullptr ? tag : "?", holder, slot, slotOffset, lastYoungMi >= 0 ? 1U : 0U,
-                           youngClaimHits, claimGc, static_cast<unsigned>(claimPhase), majorIdx >= 0 ? 1U : 0U,
+                            tag != nullptr ? tag : "?", holder, slot, slotOffset, haveYoungClaim,
+                            youngClaimHits, claimGc, static_cast<unsigned>(claimPhase), haveMajor,
                            majorHits, majorWasMarked, majorGc, static_cast<unsigned>(majorPhase),
                            static_cast<unsigned>(majorYoung), MarkSourceName(joinedSource),
                            static_cast<unsigned>(joinedSource), static_cast<unsigned>(joinedHasRef),
@@ -2168,6 +2186,7 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         if (hn > 0) {
             WriteLine(hline, static_cast<size_t>(hn));
         }
+        DumpEdgeJoin(slotBytes, r13, 0, "crash_holder");
     }
     // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.
     unsigned fieldsAlive = (endVal != 0 || cursorVal != 0) ? 1U : 0U;
