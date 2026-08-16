@@ -25,6 +25,15 @@ void MaybeMidCopyStall(size_t size);
 
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
 
+// edgemiss: non-zero heap-slot writes that install a large-region target (default off).
+// Gate: MRT_GCV2_EDGEMISS=1 or MRT_GCV2_WHOZERO=1. Remap-on-copy like zero ring.
+// barrierKind: 1=Idle 2=Enum 3=Trace 4=PostTrace 5=Preforward 6=Forward 7=STW 0=unknown
+void NoteEdgeWrite(const void* holder, const void* slot, uintptr_t oldRaw, uintptr_t newRaw,
+                   uint8_t barrierKind);
+
+// First-claim mark of an object (0→1). Used to place T2 against edge T1.
+void NoteFirstMark(const void* obj);
+
 // whozero: crash-time match of LexerImpl-style null Array* (rcx=0) against zero-write ring.
 // Gate: MRT_GCV2_WHOZERO=1 or MRT_GCV2_HEALPAIR / healpair token. Default off.
 void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx, uintptr_t r12);

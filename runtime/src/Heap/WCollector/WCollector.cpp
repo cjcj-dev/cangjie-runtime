@@ -883,6 +883,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
         HeldFreeDiag::NoteMark(obj);
     }
     if (!marked) {
+        HealPairDiag::NoteFirstMark(obj);
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }

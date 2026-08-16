@@ -11,6 +11,7 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
@@ -201,6 +202,38 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
     } else {
         NoteStoreFastPath();
+    }
+    // edgemiss: narrow log when installed target is large (default-off, self-gates).
+    if (ref != nullptr) {
+        uint8_t bk = 0;
+        switch (phase) {
+            case BarrierPhase::IDLE:
+                bk = 1;
+                break;
+            case BarrierPhase::ENUM:
+                bk = 2;
+                break;
+            case BarrierPhase::TRACE:
+                bk = 3;
+                break;
+            case BarrierPhase::POST_TRACE:
+                bk = 4;
+                break;
+            case BarrierPhase::PREFORWARD:
+                bk = 5;
+                break;
+            case BarrierPhase::FORWARD:
+                bk = 6;
+                break;
+            case BarrierPhase::STW:
+                bk = 7;
+                break;
+            default:
+                bk = 0;
+                break;
+        }
+        HealPairDiag::NoteEdgeWrite(obj, &field, raw(prev.GetFieldValue()),
+                                    raw(field.GetFieldValue()), bk);
     }
 }
 
