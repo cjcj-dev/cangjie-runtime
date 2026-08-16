@@ -58,7 +58,7 @@ constexpr zaddress to_zaddress(Uptr v) { return static_cast<zaddress>(v); }
 // proof, the site is a defect — report it, do not call safe().
 constexpr zaddress safe(zaddress_unsafe u) { return static_cast<zaddress>(raw(u)); }
 
-// uncolor_bits: strip isTagged/colour high bits → address bits only, still unsafe.
+// uncolor_bits: strip colour high bits → address bits only, still unsafe.
 // 凭什么: bit layout (ColourMask.h); does NOT run a barrier or check liveness.
 constexpr zaddress_unsafe uncolor_bits(zpointer p)
 {

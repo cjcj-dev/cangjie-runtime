@@ -28,7 +28,7 @@ constexpr size_t kSampleLimit = 8;
 constexpr size_t kDefaultTimeoutMs = 5000;
 constexpr size_t kWriterSiteCount = static_cast<size_t>(PlainWriterSite::Count);
 
-// Colour metadata = remap + young mark + old mark (not isTagged/tagID alone).
+// Colour metadata = remap + young mark + old mark.
 // TRUST_STATE_KILL_PLAN: plain = non-null address bits with all colour metadata zero.
 constexpr MAddress kColourMetaMask =
     static_cast<MAddress>(REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK);
@@ -75,7 +75,7 @@ struct CensusStats {
     size_t nullSlots = 0;
     size_t colouredSlots = 0;
     size_t plainSlots = 0;
-    size_t taggedPlainSlots = 0; // plain colour meta but isTagged=1 (rare; still counts as plain colour)
+    size_t taggedPlainSlots = 0;
     size_t samplesTaken = 0;
     std::array<void*, kSampleLimit> sampleSlots{};
     std::array<MAddress, kSampleLimit> sampleVals{};
@@ -402,9 +402,6 @@ void RunPlainCensus(const char* point, bool force)
                     return;
                 }
                 ++stats.plainSlots;
-                if (((val >> 48) & 1) != 0) {
-                    ++stats.taggedPlainSlots;
-                }
                 if (stats.samplesTaken < maxSamples) {
                     PushSample(stats, &field, val);
                 }

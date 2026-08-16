@@ -422,9 +422,9 @@ bool Collector::is_load_good_switched(RefField<>& ref, uint8_t site) const
         const uintptr_t mask = static_cast<uintptr_t>(::g_cjLoadBadMask);
         const uintptr_t colour = ColourPredicates::current_remapped(mask);
         // A payload the address bits accept; nothing dereferences it, both predicates are
-        // pure bit tests. TAGGED_BITS_MASK's low bit is isTagged; tagID stays 0.
+        // pure bit tests. Mid-evacuation is no longer a pointer bit; stale remap is load-bad.
         const uintptr_t payload = 0x0000700000001000ULL;
-        const uintptr_t taggedValue = payload | (uintptr_t(1) << 48) | colour;
+        const uintptr_t taggedValue = payload | (REMAP_COLOUR_MASK ^ colour);
         const uintptr_t plainValue = payload | colour;
         RefField<> taggedProbe(to_zpointer(static_cast<MAddress>(taggedValue)));
         RefField<> plainProbe(to_zpointer(static_cast<MAddress>(plainValue)));

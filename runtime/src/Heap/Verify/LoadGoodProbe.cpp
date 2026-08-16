@@ -44,7 +44,7 @@ struct FaceCounters {
     // Predicate A -- ZGC ZPointer::is_load_bad (zAddress.inline.hpp:627-629).
     std::atomic<uint64_t> maskBad;
     // Predicate A', the decomposition of A into the two families g_cjLoadBadMask unions.
-    std::atomic<uint64_t> taggedBits;   // mid-evacuation tag bits (TAGGED_BITS_MASK)
+    std::atomic<uint64_t> taggedBits;   // stale remap bits (was TAGGED_BITS_MASK)
     std::atomic<uint64_t> staleRemap;   // a remap colour other than the one handed out now
     std::atomic<uint64_t> plain;        // no metadata bits at all: (word >> 48) == 0
 
@@ -71,8 +71,8 @@ struct FaceCounters {
     // A x B -- the two predicates that both claim to mean "load bad".
     //
     // ZGC has one: is_load_bad(p) = untype(p) & ZPointerLoadBadMask (zAddress.inline.hpp:627).
-    // We have two, and they are not the same set. g_cjLoadBadMask includes TAGGED_BITS_MASK
-    // (ColourMask.h ComputeBadMasks), but Collector::is_load_good never consults it: it is
+    // We have two, and they are not the same set. g_cjLoadBadMask is the stale-remap
+    // bits (ColourMask.h ComputeBadMasks), but Collector::is_load_good never consults it: it is
     // !is_null && (raw & RemappedYoungMask) && (raw & RemappedOldMask) (Collector.h:159,
     // WCollector.h:212-221). So a mid-evacuation reference carrying the current remap colour
     // is load-bad by the mask and load-good by the predicate. maskbad_not_nlg counts exactly
@@ -324,7 +324,7 @@ void NoteRead(uint8_t face, uintptr_t word, bool ghost, bool loadGood)
     if (maskBad) {
         Bump(f.maskBad);
     }
-    if ((word & TAGGED_BITS_MASK) != 0) {
+    if ((word & (REMAP_COLOUR_MASK & mask)) != 0) {
         Bump(f.taggedBits);
     }
     if ((word & (REMAP_COLOUR_MASK & mask)) != 0) {

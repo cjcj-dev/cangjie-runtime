@@ -16,8 +16,8 @@
 
 #include <cstdint>
 
-// Tag-ID generation count for WCollector phase tags (RefField tagID field).
-// Default 2 preserves upstream N=2 behaviour; rebuild with -DMRT_TAG_ID_COUNT=N to widen.
+// Arena generation count for ForwardDataManager's LiveInfo ring. Not a pointer field.
+// Default 2; rebuild with -DMRT_TAG_ID_COUNT=N to widen the ring.
 #ifndef MRT_TAG_ID_COUNT
 #define MRT_TAG_ID_COUNT 2
 #endif
@@ -50,7 +50,6 @@ enum class ZGenerationId : uint8_t {
 };
 
 constexpr uint16_t TAG_ID_COUNT = static_cast<uint16_t>(MRT_TAG_ID_COUNT);
-// Bits needed for values in [0, TAG_ID_COUNT). Taken from RefField padding on 64-bit.
 constexpr unsigned TAG_ID_BITS =
     (TAG_ID_COUNT <= 2) ? 1u : (TAG_ID_COUNT <= 4) ? 2u : (TAG_ID_COUNT <= 8) ? 3u : 4u;
 
@@ -60,6 +59,9 @@ constexpr unsigned TAG_ID_BITS =
 // single-AND fast path: when 11 is current, a stale 10 or 01 differs by a missing bit, which AND
 // cannot observe (OpenJDK zAddress.hpp:95-128,168-176).
 //
+// Layout matches ZGC (zAddress.hpp:60-128): no isTagged, no tagID. "This page is being
+// relocated" lives on the region (GetRegionInfoAt / GetLiveInfo), not in the pointer.
+//
 // A generation relocate-start flip changes the accepted one-hot subset and republishes
 // g_cjLoadBadMask; see WCollector::flip_young_relocate_start/flip_old_relocate_start.
 constexpr unsigned REMAP_COLOUR_BITS = 4u;
@@ -68,11 +70,11 @@ constexpr unsigned REMAP_COLOUR_BITS = 4u;
 // state (OpenJDK zAddress.hpp:156-166, zAddress.cpp:120-146).
 constexpr unsigned MARKED_YOUNG_BITS = 2u;
 constexpr unsigned MARKED_OLD_BITS = 2u;
-// address:48 + isTagged:1 + tagID:1 + remapColour:4 + markedYoung:2 + markedOld:2
+// address:48 + remapColour:4 + markedYoung:2 + markedOld:2
 // + remembered:2 + spare padding == 64 (spare = TAG_ID_PADDING_BITS - REMEMBERED_BITS)
 constexpr unsigned TAG_ID_PADDING_BITS =
-    15u - TAG_ID_BITS - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
-constexpr unsigned REMAP_COLOUR_SHIFT = 48u + 1u + TAG_ID_BITS;
+    16u - REMAP_COLOUR_BITS - MARKED_YOUNG_BITS - MARKED_OLD_BITS;
+constexpr unsigned REMAP_COLOUR_SHIFT = 48u;
 constexpr uintptr_t ZPointerRemapped00 = uintptr_t(1) << REMAP_COLOUR_SHIFT;
 constexpr uintptr_t ZPointerRemapped01 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 1u);
 constexpr uintptr_t ZPointerRemapped10 = uintptr_t(1) << (REMAP_COLOUR_SHIFT + 2u);
@@ -124,21 +126,18 @@ constexpr uintptr_t FINALIZABLE_MASK = FINALIZABLE_0 | FINALIZABLE_1;
 // real behaviour change plus a two-half pin bump: g_cjMarkBadMask is an ABI atom shared with the
 // compiler). Reading this constant is how code asks "is the fifth family real yet?".
 constexpr bool kFinalizableWired = false;
-// Fail closed rather than silently overlapping tagID: at MRT_TAG_ID_COUNT=16 (TAG_ID_BITS=4)
-// the padding budget is 3 bits and Remembered+Finalizable want 4. That is a real mutual
-// exclusion between "widen tagID" and "wire the fifth family"; it must be a build error, not a
-// wrong bit layout discovered at run time.
 static_assert(REMEMBERED_BITS + FINALIZABLE_BITS <= TAG_ID_PADDING_BITS,
-              "Remembered+Finalizable exceed the RefField padding budget: widening tagID and "
-              "wiring the Finalizable family are mutually exclusive at this width");
+              "Remembered+Finalizable exceed the RefField padding budget");
 static_assert(FINALIZABLE_SHIFT + FINALIZABLE_BITS <= 64u, "Finalizable family runs off the word");
 
 // Store metadata = remap + MY + MO + Remembered (OpenJDK zAddress.hpp:194). Finalizable is
 // deliberately absent: see kFinalizableWired above.
 constexpr uintptr_t STORE_METADATA_MASK =
     REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK | REMEMBERED_MASK;
-// Tagged (mid-evacuation) needs the barrier whichever colour it carries.
-constexpr uintptr_t TAGGED_BITS_MASK = ((uintptr_t(1) << (1u + TAG_ID_BITS)) - 1u) << 48u;
+// Gone from the pointer (ZGC zAddress.hpp:60-128 has neither isTagged nor tagID).
+// Kept as 0 so existing `| TAGGED_BITS_MASK` sites stay well-formed and so the
+// layout self-check is `TAGGED_BITS_MASK == 0`.
+constexpr uintptr_t TAGGED_BITS_MASK = 0;
 
 // The epoch state the collector hands out, and the three bad masks derived from it.
 //
@@ -172,16 +171,15 @@ struct BadMasks {
 // Token-for-token transcription of WCollector::set_good_masks (WCollector.h:132-139 @ 6adf9dd0),
 // which itself mirrors ZGlobalsPointers::set_good_masks (OpenJDK zAddress.cpp:78-94).
 //
-// ⛔ Do NOT "clean this up" into the ZGC-looking Good ^ Metadata form. STORE_METADATA_MASK does
-// not contain TAGGED_BITS_MASK, so loadBad = LoadGood ^ LoadMetadata silently drops the tagged
-// term and every mid-evacuation reference becomes load-good. That rewrite is the single most
-// plausible-looking behaviour change on this whole surface, which is why MRT_GCV2_MASKEQUIV
-// exists and why the 32-cell static_assert in the probe compares against a literal copy.
+// OpenJDK ZGlobalsPointers::set_good_masks (zAddress.cpp:78-94):
+//   LoadBad = Remapped metadata bits that are not the current one-hot.
+// Mid-evacuation is no longer a pointer bit; relocate-start flips the accepted
+// remap colour and the reader finds out by testing the value it holds.
 constexpr BadMasks ComputeBadMasks(EpochColours e)
 {
     // :133  currentRemapColour = ZPointerRemappedYoungMask & ZPointerRemappedOldMask;
     const uintptr_t remapColour = e.remappedYoungMask & e.remappedOldMask;
-    // :134  g_cjLoadBadMask = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ currentRemapColour);
+    // loadBad = REMAP_COLOUR_MASK ^ currentRemapColour  (TAGGED_BITS_MASK is 0)
     const uintptr_t loadBad = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ remapColour);
     // :135  g_cjMarkBadMask = loadBad | (MARKED_YOUNG_MASK & ~currentMarkedYoung)
     //                                 | (MARKED_OLD_MASK & ~currentMarkedOld);

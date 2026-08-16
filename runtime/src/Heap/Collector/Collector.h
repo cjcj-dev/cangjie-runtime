@@ -137,7 +137,7 @@ public:
 
     // "Does this reference need the barrier before use?" -- the question every consumer of the
     // two predicates below is actually asking. Today a reference carries no colour unless it is
-    // being evacuated, so the answer is exactly IsTagged(); phase C of the colouring work
+    // being evacuated, so the answer was a pointer tag bit; phase C of the colouring work
     // (ops/design/G1_WRITE_BARRIER_DESIGN.md §3.6) makes it a mask test. Non-virtual and phase
     // independent: the encoding is a property of RefField, not of the collector's phase.
     // Phase C: the value now says whether it may be stale. A reference is good when it carries
@@ -161,15 +161,12 @@ public:
     // goodpred: the tree carries two definitions of load-good and they disagree.
     //
     // legacy (below, and what every barrier fast path has been running) accepts a reference whose
-    // remap bit is in both the young and the old accepted mask. GetAndTryTagRefField
-    // (WCollector.h:468-472) mints exactly such a value for a from-object -- isTagged=1 plus the
-    // *current* remap colour -- so a mid-evacuation reference passes and the barrier returns the
-    // from address without consulting the forwarding table.
+    // remap bit is in both the young and the old accepted mask.
     //
     // zgc is ColourPredicates::is_load_good, the transcription of OpenJDK
     // ZPointer::is_load_good (zAddress.inline.hpp:631-633): one AND against g_cjLoadBadMask,
-    // which ComputeBadMasks builds as TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ current), so the
-    // tagged term is in it and such a reference goes down the barrier slow path instead.
+    // which ComputeBadMasks builds as REMAP_COLOUR_MASK ^ current. A stale remap colour
+    // goes down the barrier slow path.
     //
     // Not the default: switching it changes how much traffic the six barriers push through
     // make_load_good. MRT_GCV2_ZGC_LOADGOOD=1 selects it; MRT_GCV2_LOADGOOD_AUDIT=1 evaluates

@@ -17,13 +17,9 @@
 //   zgc     ColourPredicates.h:116 has_address && !is_load_bad && is_remapped
 //             == OpenJDK ZPointer::is_load_good (zAddress.inline.hpp:631-633)
 //
-// They differ on exactly one construct that the collector mints itself:
-// GetAndTryTagRefField (WCollector.h:468-472) hands a from-object reference
-// isTagged=1 | currentTagID | currentRemapColour. currentRemapColour is a member of both
-// ZPointerRemappedYoungMask and ZPointerRemappedOldMask, so legacy answers good; the tagged
-// bits are in TAGGED_BITS_MASK, which ComputeBadMasks folds into g_cjLoadBadMask, so zgc
-// answers bad. Legacy therefore lets a mid-evacuation reference take the barrier fast path
-// and hands the mutator the from address.
+// They differ on a from-object reference that carries the current remap colour
+// (legacy answers good because both generation bits are set; zgc answers by the
+// published load-bad mask). Mid-evacuation is no longer a pointer bit.
 //
 // Mode is published once at library load and read on the barrier fast path.
 //   MRT_GCV2_ZGC_LOADGOOD=1    barriers use the ZGC definition (default off)

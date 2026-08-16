@@ -938,7 +938,7 @@ bool WCollector::TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& field, BaseO
                                        BaseObject*& toObj) const
 {
     RefField<> oldRef(field);
-    if (oldRef.IsTagged()) {
+    if (IsLoadBad(oldRef)) {
         fromObj = to_object(oldRef.GetTargetObject());
         if (forward) {
             toObj = const_cast<WCollector*>(this)->TryForwardObject(fromObj);
@@ -993,7 +993,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 {
     for (;;) {
         RefField<> oldRef(field);
-        if (!oldRef.IsTagged()) {
+        if (!IsLoadBad(oldRef)) {
             return false;
         }
         target = to_object(oldRef.GetTargetObject());
@@ -2174,7 +2174,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             },
             false);
         if (injectTarget != nullptr) {
-            RefField<> planted(injectTarget, 1, GetPreviousTagID());
+            RefField<> planted(injectTarget, REMAP_COLOUR_MASK ^ currentRemapColour);
             MAddress injectRootStorage = raw(planted.GetFieldValue());
             ObjectRef injectRoot{};
             *reinterpret_cast<MAddress*>(&injectRoot) = injectRootStorage;
@@ -6999,13 +6999,13 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
     auto recordRawRoot = [&inspectTarget](size_t category) {
         return RootVisitor([category, &inspectTarget](ObjectRef& root) {
             HeapSlot<> value(to_zpointer(raw(root.LoadPlain())));
-            uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
+            uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
             inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
         });
     };
     auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
         RefField<> value(field);
-        uint16_t tag = value.IsTagged() ? value.GetTagID() : std::numeric_limits<uint16_t>::max();
+        uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
         inspectTarget(category, &field, holder, to_object(value.GetTargetObject()), tag);
     };
 
