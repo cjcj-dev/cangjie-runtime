@@ -77,6 +77,11 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
+        if (UNLIKELY(ZgcSelfHealEnabled())) {
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::ForwardReadReference);
+            return loadGood;
+        }
         if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::ForwardReadReference)) {
             return loadGood;
         }
@@ -162,6 +167,11 @@ BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>&
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // Replaces the old "not old-tag" assertion with the colour-era self-heal invariant.
         DCHECK(theCollector.is_load_good(goodField));
+        if (UNLIKELY(ZgcSelfHealEnabled())) {
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::ForwardAtomicReadReference);
+            return loadGood;
+        }
         if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
                      HealSite::ForwardAtomicReadReference)) {
             DLOG(FBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);

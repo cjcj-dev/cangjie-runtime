@@ -20,6 +20,7 @@
 
 #include "Base/Log.h"
 #include "Common/ColourMask.h"
+#include "Common/ColourPredicates.h"
 #include "Common/TypeDef.h"
 #if defined(CANGJIE_TSAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
@@ -34,6 +35,19 @@ class WCollector;
 
 namespace HealPairDiag {
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site);
+}
+
+// Instrumentation for the ZBarrier::self_heal port below. Declared rather than
+// included for the same reason HealPairDiag is: this header sits under Heap/ in
+// the include graph, not above it. Full contract in Heap/Verify/ZgcSelfHealDiag.h.
+namespace ZgcSelfHealDiag {
+void CheckTransitionMonotonicity(zpointer oldPtr, zpointer healPtr);
+void NotePreconditions(bool ptrFastPath, bool healFastPath, zpointer healPtr);
+void NoteEnter();
+void NoteNullSkip();
+void NoteHealed(unsigned iterations);
+void NoteFastPathExit(unsigned iterations);
+void NoteRetry(unsigned iterations);
 }
 
 // Every heap/root healing write names its owning algorithm.  This is deliberately
@@ -117,11 +131,17 @@ enum class HealNull : uint8_t { Disallow, Allow };
 template<bool isAtomic>
 class HeapSlot;
 
+// observedOut: OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:92-107) needs the value the
+// CAS actually found, so it can re-apply the same heal value to it. Optional; nullptr leaves
+// every existing caller on the plain success/failure contract.
+// ⚠ It is written only when the CAS is reached -- the non-null-to-null guard below returns
+// before that, so a Disallow caller must not read it.
 template<bool isAtomic>
 inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
                      HealNull allowNull = HealNull::Disallow,
                      std::memory_order succOrder = std::memory_order_relaxed,
-                     std::memory_order failOrder = std::memory_order_relaxed);
+                     std::memory_order failOrder = std::memory_order_relaxed,
+                     zpointer* observedOut = nullptr);
 
 // COLOUR_WRITEBACK_AUDIT §六 判据 1：堆内非 null 写必须带色。定义在 RefField.inline.h /
 // BaseObject.cpp；默认关（MRT_GCV2_ASSERT_COLOURED_WRITES=1 打开）。
@@ -170,11 +190,12 @@ public:
 private:
     template<bool atomic>
     friend bool HealSlot(HeapSlot<atomic>&, zpointer, zpointer, HealSite, HealNull,
-                         std::memory_order, std::memory_order);
+                         std::memory_order, std::memory_order, zpointer*);
 
     bool CompareExchange(zpointer expectedValue, zpointer newValue,
                          std::memory_order succOrder = std::memory_order_relaxed,
-                         std::memory_order failOrder = std::memory_order_relaxed)
+                         std::memory_order failOrder = std::memory_order_relaxed,
+                         zpointer* observedOut = nullptr)
     {
         MAddress expectedRaw = raw(expectedValue);
         MAddress newRaw = raw(newValue);
@@ -183,9 +204,18 @@ private:
 #if defined(CANGJIE_TSAN_SUPPORT)
         // tsan will get expectedValue's address for us, just pass the real value
         auto ret = Sanitizer::TsanAtomicCompareExchange(&fieldVal, expectedRaw, newRaw, succOrder, failOrder);
+        if (observedOut != nullptr) {
+            *observedOut = to_zpointer(static_cast<MAddress>(ret));
+        }
         return (ret == expectedRaw);
 #else
-        return __atomic_compare_exchange(&fieldVal, &expectedRaw, &newRaw, false, succOrder, failOrder);
+        bool ok = __atomic_compare_exchange(&fieldVal, &expectedRaw, &newRaw, false, succOrder, failOrder);
+        // __atomic_compare_exchange overwrites expectedRaw with the observed word on failure and
+        // leaves it alone on success, which is exactly ZGC's prev_ptr.
+        if (observedOut != nullptr) {
+            *observedOut = to_zpointer(expectedRaw);
+        }
+        return ok;
 #endif
     }
 
@@ -315,17 +345,98 @@ private:
 // that destructive transition explicit.
 template<bool isAtomic>
 inline bool HealSlot(HeapSlot<isAtomic>& slot, zpointer expected, zpointer desired, HealSite site,
-                     HealNull allowNull, std::memory_order succOrder, std::memory_order failOrder)
+                     HealNull allowNull, std::memory_order succOrder, std::memory_order failOrder,
+                     zpointer* observedOut)
 {
     (void)site;
     if (allowNull == HealNull::Disallow && !is_null(expected) && is_null(desired)) {
         return false;
     }
-    bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder);
+    bool ok = slot.CompareExchange(expected, desired, succOrder, failOrder, observedOut);
     if (ok && is_null(desired)) {
         HealPairDiag::NoteZeroWrite(&slot, raw(expected), raw(desired), static_cast<uint16_t>(site));
     }
     return ok;
+}
+
+// MRT_GCV2_ZGC_SELFHEAL=1 routes the six read barriers through ZgcSelfHeal below instead of
+// their bounded kSelfHealAttempts loop. Default off; promoting it is a main-control ruling.
+// Read only on the barrier slow path (after is_load_good has already failed), so the
+// function-local static guard is not on any fast path.
+inline bool ZgcSelfHealEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_ZGC_SELFHEAL");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
+}
+
+// OpenJDK ZBarrier::self_heal, zBarrier.inline.hpp:72-110, transcribed.
+//
+// Two things it does that the bounded kSelfHealAttempts loop does not:
+//   * :89       assert_transition_monotonicity before every CAS attempt;
+//   * :103-107  on a lost CAS it re-applies the *same* heal value to the newly observed
+//               word, so a slot another barrier left on weaker (remapped or finalizable)
+//               metadata still gets upgraded. The bounded loop instead re-resolves from
+//               scratch and, once kSelfHealAttempts is spent, returns the payload without
+//               writing the slot at all -- which is how a slot can stay weak indefinitely.
+//
+// fastPath is the barrier's own ZBarrierFastPath, passed in rather than assumed: the tree
+// carries two definitions of load-good (Collector.h:161-182) and the exit test has to be
+// the one this caller would itself have accepted.
+//
+// The loop is unbounded, exactly as ZGC's is. ZGC terminates on colour monotonicity;
+// ColourMask.h:202-206 records the suspicion that our Forward-phase writers can re-tag the
+// same slot and break it. CheckTransitionMonotonicity is the instrument for that question,
+// which is why it counts rather than aborts (MRT_GCV2_ZGC_SELFHEAL_ABORT=1 makes it fatal).
+template<bool isAtomic, typename FastPath>
+inline void ZgcSelfHeal(HeapSlot<isAtomic>& slot, zpointer ptr, zpointer healPtr, FastPath fastPath,
+                        HealSite site, HealNull allowNull = HealNull::Disallow)
+{
+    // :73-79  Never heal with null since it interacts badly with reference processing.
+    // ZGC's guard is `is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)`; is_null_any
+    // tests the address bits rather than the whole word, and ColourPredicates::has_address
+    // (ColourPredicates.h:37-40) is that test.
+    if (allowNull == HealNull::Disallow && is_null(healPtr) &&
+        ColourPredicates::has_address(static_cast<uintptr_t>(raw(ptr)))) {
+        ZgcSelfHealDiag::NoteNullSkip();
+        return;
+    }
+
+    ZgcSelfHealDiag::NoteEnter();
+    // :82-87  assert_is_valid / assert(!fast_path(ptr)) / assert(fast_path(heal_ptr)) /
+    //         assert(ZPointer::is_remapped(heal_ptr))
+    ZgcSelfHealDiag::NotePreconditions(fastPath(ptr), fastPath(healPtr), healPtr);
+
+    // :89
+    for (unsigned iterations = 0;; ++iterations) {
+        ZgcSelfHealDiag::CheckTransitionMonotonicity(ptr, healPtr);
+
+        // :91-92  Heal.
+        // HealNull::Allow: the :73-79 guard above is ZGC's and has already been applied once
+        // at entry. Letting HealSlot re-apply its own version would short-circuit the CAS on a
+        // later iteration and leave observedOut unwritten.
+        zpointer prevPtr = zpointer::null;
+        if (HealSlot(slot, ptr, healPtr, site, HealNull::Allow, std::memory_order_relaxed,
+                     std::memory_order_relaxed, &prevPtr)) {
+            // :93-96  Success
+            ZgcSelfHealDiag::NoteHealed(iterations);
+            return;
+        }
+
+        if (fastPath(prevPtr)) {
+            // :98-101  Must not self heal
+            ZgcSelfHealDiag::NoteFastPathExit(iterations);
+            return;
+        }
+
+        // :103-107  The oop location was healed by another barrier, but still needs upgrading.
+        // Re-apply healing to make sure the oop is not left with weaker (remapped or
+        // finalizable) metadata bits than what this barrier tried to apply.
+        ZgcSelfHealDiag::NoteRetry(iterations);
+        ptr = prevPtr;
+    }
 }
 
 template<bool isAtomic = false>

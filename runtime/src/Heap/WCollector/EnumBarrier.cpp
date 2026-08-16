@@ -36,6 +36,11 @@ BaseObject* EnumBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (UNLIKELY(ZgcSelfHealEnabled())) {
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::EnumReadReference);
+            return loadGood;
+        }
         if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::EnumReadReference)) {
             return loadGood;
         }

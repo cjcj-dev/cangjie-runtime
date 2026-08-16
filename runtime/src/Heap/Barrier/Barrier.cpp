@@ -16,6 +16,7 @@
 #include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
+#include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
 #include "Heap/WCollector/IdleBarrier.h"
@@ -36,6 +37,39 @@
 
 namespace MapleRuntime {
 static_assert(!std::is_polymorphic<Barrier>::value, "Barrier must not regain virtual dispatch");
+
+namespace {
+// OpenJDK ZBarrierFastPath for the load barriers: literally the test every
+// ReadReference applies before it decides to heal at all (EnumBarrier.cpp:25,
+// TraceBarrier.cpp:37, ForwardBarrier.cpp:43, ...). Passing it to self_heal is
+// what makes ZGC's ":98-101 must not self heal" exit mean the same thing as the
+// caller's own fast path.
+class LoadGoodFastPath {
+public:
+    explicit LoadGoodFastPath(Collector& collector) : theCollector(collector) {}
+
+    bool operator()(zpointer value) const
+    {
+        RefField<> probe(value);
+        return is_null(probe.GetTargetObject()) || theCollector.is_load_good(probe);
+    }
+
+private:
+    Collector& theCollector;
+};
+} // namespace
+
+void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
+                                  HealSite site) const
+{
+    ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+}
+
+void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
+                                  HealSite site) const
+{
+    ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+}
 
 template<typename Function>
 decltype(auto) Barrier::DispatchPhase(BarrierPhase barrierPhase, const Barrier& barrier, Function&& function)
