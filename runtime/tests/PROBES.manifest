@@ -40,6 +40,7 @@ run_mutator_lock_liveness_probe.sh        manual     source-text structural chec
 run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
 run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
 run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
+run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
 
 stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
 stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
@@ -52,6 +53,7 @@ epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_hands
 threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
 typeinfo_reuse_harness.cpp                manual     harness for run_typeinfo_reuse_probe.sh
 typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose images for TypeInfo virtual-address reuse
+zgc_self_heal_loop_unit.cpp               manual     harness for run_zgc_self_heal_loop_probe.sh
 typeinfo_remove_negative.patch            manual     fault injection: remove both unload-path RemoveTypeInfosInRange calls for the negative runtime
 
 epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake
