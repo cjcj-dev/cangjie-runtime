@@ -2213,10 +2213,11 @@ public:
                 }
                 return std::atoi(v);
             }();
-            if (holdUs > 0 && before > 0) {
-                std::thread holder([region, holdUs]() {
+            const int holdCopy = holdUs;
+            if (holdCopy > 0 && before > 0) {
+                std::thread holder([region, holdCopy]() {
                     if (region->RetainForwarding()) {
-                        std::this_thread::sleep_for(std::chrono::microseconds(holdUs));
+                        std::this_thread::sleep_for(std::chrono::microseconds(holdCopy));
                         region->ReleaseForwarding();
                     }
                 });
