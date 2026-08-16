@@ -236,7 +236,13 @@ void DumpRegion(const char* tag, uintptr_t addr)
         alloc = region->GetRegionAllocPtr();
         end = region->GetRegionEnd();
         live = region->GetLiveByteCount();
-        marked = region->IsMarkedObject(reinterpret_cast<BaseObject*>(addr)) ? 1U : 0U;
+        if (region->IsYoungRegion()) {
+            MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+            marked = region->IsMarkedObject(view, reinterpret_cast<BaseObject*>(addr)) ? 1U : 0U;
+        } else {
+            MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+            marked = region->IsMarkedObject(view, reinterpret_cast<BaseObject*>(addr)) ? 1U : 0U;
+        }
     }
     char clearBuf[192];
     clearBuf[0] = '\0';

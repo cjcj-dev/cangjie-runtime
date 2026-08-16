@@ -113,10 +113,12 @@ bool RetainedWouldDrop(BaseObject* holder, RegionInfo* holderRegion)
     if (retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_EMPTY) {
         return true;
     }
+    MarkView<Generation::Old> view = holderRegion->GetMarkView<Generation::Old>();
     if (holderRegion->IsLargeRegion()) {
         LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
-        bool keep = retainedLiveInfo != nullptr ? retainedLiveInfo->IsSurvivedObject(0)
-                                                : holderRegion->IsSurvivedObject(0);
+        bool keep = retainedLiveInfo != nullptr
+            ? holderRegion->IsSurvivedObject(view, retainedLiveInfo, 0)
+            : holderRegion->IsSurvivedObject(view, 0);
         return !keep;
     }
     LiveInfo* retainedLiveInfo = holderRegion->GetRetainedLiveInfo();
@@ -124,7 +126,7 @@ bool RetainedWouldDrop(BaseObject* holder, RegionInfo* holderRegion)
         return false;
     }
     size_t holderOffset = holderRegion->GetAddressOffset(holderAddress);
-    return !retainedLiveInfo->IsSurvivedObject(holderOffset);
+    return !holderRegion->IsSurvivedObject(view, retainedLiveInfo, holderOffset);
 }
 
 bool IsWeakReferentSlot(BaseObject* holder, MAddress slot)
@@ -301,7 +303,8 @@ void CensusPrePinned(size_t minorRunIndex)
                 return;
             }
             ++g_c.holdersScanned;
-            const bool holderMarked = holderRegion->IsMarkedObject(holder);
+            MarkView<Generation::Old> holderView = holderRegion->GetMarkView<Generation::Old>();
+            const bool holderMarked = holderRegion->IsMarkedObject(holderView, holder);
             if (holderMarked) {
                 ++g_c.holderMarked;
             } else {
@@ -407,13 +410,18 @@ void CensusPostPinned(size_t minorRunIndex, size_t pinnedRecorded)
         BaseObject* holder = edge.second;
         RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
         TypeInfo* hTi = holder != nullptr && holder->IsValidObject() ? holder->GetTypeInfo() : nullptr;
+        unsigned holderMarked = 0;
+        if (holderRegion != nullptr) {
+            MarkView<Generation::Old> holderView = holderRegion->GetMarkView<Generation::Old>();
+            holderMarked = static_cast<unsigned>(holderRegion->IsMarkedObject(holderView, holder));
+        }
         VLOG(REPORT,
              "[GCV2][fysaudit][EDGE] class=D1R slot=%#zx holder=%p hType=%u hYoung=%u hMarked=%u "
              "hRegion=%p hName=%s inRemset=0 note=pinned_walk_did_not_recover",
              static_cast<size_t>(edge.first), holder,
              holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->GetRegionType()),
              holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsYoungRegion()),
-             holderRegion == nullptr ? 0u : static_cast<unsigned>(holderRegion->IsMarkedObject(holder)),
+             holderMarked,
              holderRegion, hTi == nullptr || hTi->GetName() == nullptr ? "?" : hTi->GetName());
     }
     g_procD1Recovered.fetch_add(recovered, std::memory_order_relaxed);

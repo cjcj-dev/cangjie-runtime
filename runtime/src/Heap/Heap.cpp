@@ -73,7 +73,7 @@ public:
 
     bool IsSurvivedObject(const BaseObject* obj) const override
     {
-        return RegionSpace::IsMarkedObject(obj) || RegionSpace::IsResurrectedObject(obj);
+        return RegionSpace::IsMarkedObject<Generation::Old>(obj) || RegionSpace::IsResurrectedObject(obj);
     }
 
     bool IsGcStarted() const override { return collectorResources.IsGcStarted(); }

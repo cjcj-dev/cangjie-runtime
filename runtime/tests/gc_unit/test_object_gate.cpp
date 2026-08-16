@@ -87,7 +87,8 @@ GC_TEST(ObjectGate, HeaderConsumersRejectFreeRegion)
     fx.region0->SetRegionType(RegionInfo::RegionType::FREE_REGION);
 
     GC_EXPECT_FALSE(MapleRuntime::PlausibleManagedObjectGate("gc_unit.free", fx.obj0));
-    GC_EXPECT_TRUE(fx.region0->MarkObject(fx.obj0));
+    GC_EXPECT_TRUE(fx.region0->MarkObject(
+        fx.region0->GetMarkView<Generation::Old>(), fx.obj0));
 
     SlotList slots;
     GC_EXPECT_FALSE(slots.ClearExtraContent(fx.obj0));

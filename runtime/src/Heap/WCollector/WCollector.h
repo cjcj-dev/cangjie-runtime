@@ -42,10 +42,11 @@ public:
     // if region is compacted, return false.
     bool RouteRegion(RegionInfo* region) { return theSpace.GetRegionManager().RouteRegion(region); }
 
+    template<Generation G>
     void PrepareForwardTable()
     {
         DLOG(FORWARD, "reset fwd table");
-        theSpace.PrepareFromSpace();
+        theSpace.PrepareFromSpace<G>();
 
         ForwardDataManager::GetForwardDataManager().ClearPreviousForwardData();
     }

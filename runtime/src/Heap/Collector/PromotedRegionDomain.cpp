@@ -25,9 +25,16 @@ namespace PromotedRegionDomain {
 namespace {
 
 struct Entry {
-    RegionInfo* region = nullptr;
-    RegisterPath path = RegisterPath::InPlace;
+    Entry(RegionInfo* regionIn, RegisterPath pathIn)
+        : region(regionIn), path(pathIn), youngView(regionIn->GetMarkView<Generation::Young>())
+    {}
+
+    RegionInfo* region;
+    RegisterPath path;
     bool discharged = false;
+    // Captured before in-place promotion clears the region's young ownership.
+    // The view remains a young-closure token; no Young view is minted from an old region.
+    MarkView<Generation::Young> youngView;
 };
 
 std::mutex g_mu;
@@ -81,17 +88,17 @@ const char* PathName(RegisterPath p)
 }
 
 // Match RecordPromotedCrossGenEdges liveness gate (RegionManager.cpp:266-289).
-bool UseLiveOnly(RegionInfo* region)
+bool UseLiveOnly(RegionInfo* region, MarkView<Generation::Young> view)
 {
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     return hasObjectLiveness && region->IsLiveCountAuthoritative();
 }
 
-bool ObjectSurvived(RegionInfo* region, BaseObject* object, bool hasObjectLiveness)
+bool ObjectSurvived(RegionInfo* region, MarkView<Generation::Young> view, BaseObject* object,
+                    bool hasObjectLiveness)
 {
     return hasObjectLiveness &&
-        region->IsSurvivedObject(region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
+        region->IsSurvivedObject(view, region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
 }
 
 size_t DischargedCountUnlocked()
@@ -173,21 +180,20 @@ bool FatalOnMismatch()
 // RecordPromotedCrossGenEdges. Discharge may run after demote when targets no longer
 // look young — set equivalence must use promote-time slots (ZGC flip-promote remset
 // also sees the page before age flip completes).
-void SnapshotDomainEdgesAtRegister(RegionInfo* region)
+void SnapshotDomainEdgesAtRegister(RegionInfo* region, MarkView<Generation::Young> view)
 {
     // Caller holds g_mu when ReconcileEnabled.
-    if (!ReconcileEnabled() || region == nullptr || region->IsSafeKnownEmpty()) {
+    if (!ReconcileEnabled() || region == nullptr || region->IsSafeKnownYoungEmpty(view)) {
         return;
     }
     static const bool skipOne = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_SKIP_ONE");
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
-        region->GetResurrectBitmap() != nullptr;
-    bool useLiveOnly = UseLiveOnly(region);
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool useLiveOnly = UseLiveOnly(region, view);
     region->VisitAllObjects([&](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
-        if (useLiveOnly && !ObjectSurvived(region, object, hasObjectLiveness)) {
+        if (useLiveOnly && !ObjectSurvived(region, view, object, hasObjectLiveness)) {
             return;
         }
         object->ForEachRefField([&](RefField<>& field) {
@@ -221,14 +227,11 @@ void Register(RegionInfo* region, RegisterPath path)
         g_registerDup.fetch_add(1, std::memory_order_relaxed);
         return;
     }
-    Entry e;
-    e.region = region;
-    e.path = path;
-    e.discharged = false;
+    Entry e(region, path);
     g_entries.push_back(e);
     g_registered.insert(region);
     // Promote-time domain edge snapshot for dual-run (before demote clears young).
-    SnapshotDomainEdgesAtRegister(region);
+    SnapshotDomainEdgesAtRegister(region, e.youngView);
     DLOG(REGION, "[PROMODOMAIN] register region=%p path=%s n=%zu", region, PathName(path), g_entries.size());
 }
 
@@ -321,13 +324,13 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             continue;
         }
         RegionInfo* region = e.region;
-        if (region->IsSafeKnownEmpty()) {
+        MarkView<Generation::Young> view = e.youngView;
+        if (region->IsSafeKnownYoungEmpty(view)) {
             e.discharged = true;
             continue;
         }
-        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap() != nullptr ||
-            region->GetResurrectBitmap() != nullptr;
-        bool useLiveOnly = UseLiveOnly(region);
+        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+        bool useLiveOnly = UseLiveOnly(region, view);
 
         // Product remset heal (ZGC remap_and_maybe_add_remset). Dual-run edge sets were
         // snapshotted at Register; here we still walk for Record + store-good colour.
@@ -335,7 +338,7 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             if (object == nullptr || !object->HasRefField()) {
                 return;
             }
-            if (useLiveOnly && !ObjectSurvived(region, object, hasObjectLiveness)) {
+            if (useLiveOnly && !ObjectSurvived(region, view, object, hasObjectLiveness)) {
                 return;
             }
             object->ForEachRefField([&](RefField<>& field) {

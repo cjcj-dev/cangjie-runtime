@@ -211,7 +211,8 @@ void CensusBeforeForward(const char* where)
                 return;
             }
             ++holders;
-            const bool holderMarked = holderRegion->IsMarkedObject(holder);
+            MarkView<Generation::Old> holderView = holderRegion->GetMarkView<Generation::Old>();
+            const bool holderMarked = holderRegion->IsMarkedObject(holderView, holder);
             const bool holderYoung = holderRegion->IsYoungRegion();
             holder->ForEachRefField([holderRegion, holderMarked, holderYoung, &slots](RefField<>& field) {
                 BaseObject* target = to_object(field.GetTargetObject());
@@ -262,21 +263,21 @@ void NoteCollectEnter(RegionInfo* region)
     if (region == nullptr) {
         return;
     }
-    const bool knownEmpty = region->IsKnownEmpty();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
     const bool auth = region->IsLiveCountAuthoritative();
     const uint64_t liveBytes = region->GetLiveByteCount();
     const bool young = region->IsYoungRegion();
     const bool large = region->IsLargeRegion();
     LiveInfo* liveInfo = region->GetLiveInfo();
     const bool liveinfoNull = liveInfo == nullptr;
-    const uint64_t snapEp = region->GetSnapshotEpoch();
+    const uint64_t snapEp = region->GetRouteMarkSnapshotEpoch();
     uint64_t faceEp = 0;
     bool epochStale = false;
     if (liveInfo != nullptr) {
-        faceEp = liveInfo->markEpoch;
+        faceEp = region->GetRouteMarkEpoch(liveInfo);
         epochStale = (faceEp != snapEp);
     }
-    RegionBitmap* mb = region->GetMarkBitmap();
+    RegionBitmap* mb = region->GetRouteMarkBitmap();
     const bool neverExamined = knownEmpty && mb == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart();
     if (knownEmpty) {
         g_enterKnownEmpty.fetch_add(1, std::memory_order_relaxed);
@@ -370,7 +371,7 @@ void NoteF3Join(RegionInfo* latestRegion, BaseObject* latest, const char* reason
     if (slots > 0) {
         g_f3LiveGt0.fetch_add(1, std::memory_order_relaxed);
     }
-    const bool knownEmpty = latestRegion->IsKnownEmpty();
+    const bool knownEmpty = latestRegion->IsRouteKnownEmpty();
     const bool auth = latestRegion->IsLiveCountAuthoritative();
     LiveInfo* liveInfo = latestRegion->GetLiveInfo();
     size_t slog = g_f3SampleLogged.fetch_add(1, std::memory_order_relaxed);

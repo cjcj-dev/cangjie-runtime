@@ -67,7 +67,8 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
     RegionInfo* targetRegion = fx.region1;
     targetRegion->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
     targetRegion->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
-    targetRegion->ResetMarkBit();
+    MarkView<Generation::Old> view = targetRegion->GetMarkView<Generation::Old>();
+    targetRegion->ResetMarkBit(view);
 
     GC_EXPECT_TRUE(bytes->IsPrimitiveArray());
     GC_EXPECT_FALSE(infos.array->HasRefField());
@@ -86,9 +87,9 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
         BaseObject* target = to_object(field.GetTargetObject());
         GC_EXPECT_TRUE(target == bytes);
         GC_EXPECT_TRUE(Collector::PlausibleManagedObjectGate("gc_unit.followedge", target));
-        if (!targetRegion->IsMarkedObject(target)) {
+        if (!targetRegion->IsMarkedObject(view, target)) {
             ++pushed;
-            GC_EXPECT_FALSE(targetRegion->MarkObject(target, target->GetSize()));
+            GC_EXPECT_FALSE(targetRegion->MarkObject(view, target, target->GetSize()));
         }
     };
 
@@ -101,6 +102,6 @@ GC_TEST(FollowEdge, HolderSlotToLargePrimitiveArrayIsTraced)
 
     GC_EXPECT_EQ(holderSlotVisits, 1u);
     GC_EXPECT_EQ(pushed, 1u);
-    GC_EXPECT_TRUE(targetRegion->IsMarkedObject(bytes));
+    GC_EXPECT_TRUE(targetRegion->IsMarkedObject(view, bytes));
     GC_EXPECT_EQ(targetContentVisits, 0u);
 }

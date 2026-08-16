@@ -152,8 +152,9 @@ void CollectNonYoungFieldSlots(std::unordered_set<MAddress>& fieldSlots, RemsetV
                              static_cast<unsigned int>(holderRegion->GetRegionType()),
                              static_cast<unsigned int>(holderRegion->GetYoungAge()),
                              static_cast<unsigned int>(holderRegion->GetRouteState()),
-                             holderRegion->GetMarkBitmap(),
-                             static_cast<unsigned int>(holderRegion->IsMarkedObject(holder)),
+                             holderRegion->GetMarkBitmap(holderRegion->GetMarkView<Generation::Old>()),
+                             static_cast<unsigned int>(holderRegion->IsMarkedObject(
+                                 holderRegion->GetMarkView<Generation::Old>(), holder)),
                              static_cast<unsigned int>(holderRegion->IsResurrectedObject(holder)),
                              reinterpret_cast<void*>(holderRegion->GetRegionStart()),
                              static_cast<size_t>(reinterpret_cast<MAddress>(holder) - holderRegion->GetRegionStart()),

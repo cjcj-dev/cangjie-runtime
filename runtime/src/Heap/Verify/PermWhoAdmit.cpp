@@ -124,7 +124,7 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to)
         g_fwdGarbage.fetch_add(1, std::memory_order_relaxed);
     }
     const bool liveZero = (region->GetLiveByteCount() == 0);
-    const bool knownEmpty = region->IsKnownEmpty();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
     if (liveZero) {
         g_fwdLiveZero.fetch_add(1, std::memory_order_relaxed);
     }
@@ -168,8 +168,8 @@ void NoteRoute(RegionInfo* region, BaseObject* from, BaseObject* to)
         n, static_cast<unsigned>(Heap::GetHeap().GetGCPhase()), region,
         static_cast<unsigned>(region->GetRegionType()), static_cast<unsigned>(region->IsGarbageRegion()),
         static_cast<unsigned>(region->IsGhostFromRegion()), fromOff, static_cast<unsigned>(fromFwd),
-        static_cast<unsigned>(ghost != nullptr && ghost->IsSurvivedObject(fromOff)),
-        static_cast<unsigned>(region->IsKnownEmpty()), region->GetLiveByteCount(), to,
+        static_cast<unsigned>(ghost != nullptr && region->IsRouteSurvivedObject(fromOff)),
+        static_cast<unsigned>(region->IsRouteKnownEmpty()), region->GetLiveByteCount(), to,
         toRegion != nullptr ? static_cast<unsigned>(toRegion->GetRegionType()) : 0xffu,
         toRegion != nullptr ? static_cast<unsigned>(toRegion->IsGarbageRegion()) : 0xffu,
         toRegion != nullptr ? static_cast<unsigned>(toRegion->IsFreeRegion()) : 0xffu);
@@ -187,7 +187,7 @@ void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome
     if (ghost == nullptr) {
         return;
     }
-    const size_t bitmapBytes = ghost->RecomputeBitmapLiveBytes();
+    const size_t bitmapBytes = region->RecomputeRouteBitmapLiveBytes(ghost);
     if (bitmapBytes == fromBytes) {
         return;
     }
@@ -210,7 +210,7 @@ void NoteRoutePlan(RegionInfo* region, size_t fromBytes, unsigned densifyOutcome
         n, region, region->GetRegionStart(), densifyOutcome, fromBytes, bitmapBytes,
         static_cast<ssize_t>(fromBytes) - static_cast<ssize_t>(bitmapBytes),
         static_cast<unsigned>(region->IsYoungRegion()), static_cast<unsigned>(region->IsSmallRegion()),
-        static_cast<unsigned>(region->IsKnownEmpty()));
+        static_cast<unsigned>(region->IsRouteKnownEmpty()));
 }
 
 void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjects)

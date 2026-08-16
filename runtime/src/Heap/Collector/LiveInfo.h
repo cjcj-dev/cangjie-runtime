@@ -20,6 +20,35 @@ constexpr size_t kBitsPerByte = 8;
 constexpr size_t kMarkedBytesPerBit = 8;
 constexpr size_t kBitsPerWord = sizeof(uint64_t) * kBitsPerByte;
 class RegionInfo;
+
+// The collector whose transitive closure owns a mark face.  This is deliberately
+// distinct from RegionInfo::_generation_id: major marking visits the whole heap,
+// including regions which are currently young.
+enum class Generation : uint8_t {
+    Young = 0,
+    Old = 1,
+};
+
+// A mark read is not representable without naming the closure which produced it.
+// Construction is restricted to RegionInfo so MarkView<Young> can reject an old
+// region at the minting boundary.  The two instantiations intentionally have no
+// conversion between them; runtime/tests/mark_generation_compile_probe.cpp keeps
+// that property under an always-run negative compile gate.
+template<Generation G>
+class MarkView {
+public:
+    RegionInfo* GetRegion() const { return region; }
+    uint64_t GetEpoch() const { return epoch; }
+
+private:
+    MarkView(RegionInfo* regionIn, uint64_t epochIn) : region(regionIn), epoch(epochIn) {}
+
+    RegionInfo* region;
+    uint64_t epoch;
+
+    friend class RegionInfo;
+};
+
 struct RegionBitmap {
     static constexpr uint8_t factor = 16;
     std::atomic<uint16_t> partLiveBytes[factor];
@@ -196,45 +225,80 @@ struct RegionBitmap {
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
-    // markepoch: ZGC ZLiveMap::_seqnum counterpart on this face.
-    // Stamped to RegionInfo::snapshotEpoch at bind; reader treats mismatch as unmarked.
-    // Design: ops/design/MARK_EPOCH_DISCIPLINE.md §4.1 (zLiveMap.inline.hpp:41-43,93-98).
-    uint64_t markEpoch = 0;
-    RegionBitmap* markBitmap = nullptr;
     RegionBitmap* resurrectBitmap = nullptr;
     RegionBitmap* enqueueBitmap = nullptr;
 
-    bool IsSurvivedObject(size_t offset) const
+    template<Generation G>
+    bool IsSurvivedObject(MarkView<G> view, size_t offset) const
     {
-        return (markBitmap != nullptr && markBitmap->IsMarked(offset)) ||
-            (resurrectBitmap != nullptr && resurrectBitmap->IsMarked(offset));
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr &&
+            reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsMarked(offset)) {
+            return true;
+        }
+        // Resurrection is a major/old decision.  A young closure is not complete
+        // for old/large objects and must not inherit an old resurrection verdict.
+        return G == Generation::Old && resurrectBitmap != nullptr &&
+            reinterpret_cast<MAddress>(resurrectBitmap) != TEMPORARY_PTR && resurrectBitmap->IsMarked(offset);
     }
 
-    size_t GetBitmapLiveBytes() const
+    template<Generation G>
+    size_t GetBitmapLiveBytes(MarkView<G> view) const
     {
-        return (markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
-            (resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
     }
 
-    size_t RecomputeBitmapLiveBytes() const
+    template<Generation G>
+    size_t RecomputeBitmapLiveBytes(MarkView<G> view) const
     {
-        return (markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
-            (resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
     }
 
 private:
+    struct MarkFace {
+        // ZGC ZLiveMap::_seqnum counterpart, now one per collector generation.
+        std::atomic<uint64_t> epoch{ 0 };
+        RegionBitmap* bitmap = nullptr;
+    };
+
+    MarkFace markFaces[2];
+
+    template<Generation G>
+    MarkFace& GetMarkFace()
+    {
+        return markFaces[static_cast<size_t>(G)];
+    }
+
+    template<Generation G>
+    const MarkFace& GetMarkFace() const
+    {
+        return markFaces[static_cast<size_t>(G)];
+    }
+
     // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
     // Anchor: ops/design/ROUTE_DOMAIN.md §2.
     friend class RegionInfo;
-    uint64_t GetPreLiveBytes(size_t offset, size_t regionSize)
+    template<Generation G>
+    uint64_t GetPreLiveBytes(MarkView<G> view, size_t offset, size_t regionSize)
     {
         RegionBitmap::PreMaskInfo maskInfo;
         RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
         uint64_t liveBytes = 0;
-        if (markBitmap != nullptr) {
+        MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
             liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
         }
-        if (resurrectBitmap != nullptr) {
+        if (G == Generation::Old && resurrectBitmap != nullptr) {
             liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
         }
         return liveBytes;

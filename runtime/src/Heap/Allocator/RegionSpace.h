@@ -161,14 +161,16 @@ public:
 
     BaseObject* RouteObject(BaseObject* fromObj) { return regionManager.RouteObject(fromObj); }
 
-    void PrepareFromSpace() { regionManager.PrepareFromRegionList(); }
+    template<Generation G>
+    void PrepareFromSpace() { regionManager.PrepareFromRegionList<G>(); }
 
     void ClearAllLiveInfo() { regionManager.ClearAllLiveInfo(); }
 
+    template<Generation G>
     void ForwardFromSpace(GCThreadPool* threadPool)
     {
         MRT_PHASE_TIMER("ForwardFromRegions");
-        regionManager.ForwardFromRegions(threadPool);
+        regionManager.ForwardFromRegions<G>(threadPool);
     }
 
     size_t CollectLargeGarbage() { return regionManager.CollectLargeGarbage(); }
@@ -202,20 +204,25 @@ public:
     static size_t AllocIntoCSetCount();
     static size_t AllocIntoCSetRetiredCount();
 
+    template<Generation G>
     static bool MarkObject(const BaseObject* obj)
     {
         // getsize7: no live callers (grep). Unsized GetSize hazard documented in GETSIZE_CALLSITES;
         // do not include Collector.h here (Allocator include path / cycle). Gate at call sites if revived.
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->MarkObject(obj);
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        return regionInfo->MarkObject(view, obj);
     }
 
+    template<Generation G>
     static bool IsMarkedObject(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        return regionInfo->IsMarkedObject(obj);
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        return regionInfo->IsMarkedObject(view, obj);
     }
 
+    template<Generation G>
     static bool ShouldEnqueue(const BaseObject* obj)
     {
         RegionInfo* regionInfo = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -227,7 +234,8 @@ public:
             return false;
         }
         size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
-        if (regionInfo->IsMarkedObject(offset)) {
+        MarkView<G> view = regionInfo->GetMarkView<G>();
+        if (regionInfo->IsMarkedObject(view, offset)) {
             return false;
         }
         return !regionInfo->EnqueueObject(obj, offset);

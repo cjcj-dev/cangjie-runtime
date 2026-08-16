@@ -409,7 +409,7 @@ void MarkWhyProbe::NoteMarkBitmapAlloc(RegionInfo* region, RegionBitmap* allocat
 
 bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, size_t offsetWrite, size_t objSize,
                                      size_t regionSizeArg, RegionBitmap* writeBm, bool markBitsReturnedAlreadyMarked,
-                                     const char* site)
+                                     const char* site, Generation generation)
 {
     // Both call sites discard the result ((void)... in RegionInfo.h:453,477), and this sits in the
     // marking hot path, so the disabled build must not pay for a bitmap read it will throw away.
@@ -437,7 +437,9 @@ bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, 
     bool offsetSame = (offsetWrite == offsetRecompute);
 
     LiveInfo* liveInfo = region->GetLiveInfo();
-    RegionBitmap* readBm = region->GetMarkBitmap();
+    RegionBitmap* readBm = generation == Generation::Young
+        ? region->GetMarkBitmap(region->GetMarkView<Generation::Young>())
+        : region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
     bool bmSame = (writeBm == readBm);
     if (!bmSame) {
         gBmMismatch.fetch_add(1, std::memory_order_relaxed);
@@ -464,7 +466,9 @@ bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, 
         gOffsetOob.fetch_add(1, std::memory_order_relaxed);
     }
 
-    bool markedNow = region->IsMarkedObject(offsetWrite);
+    bool markedNow = generation == Generation::Young
+        ? region->IsMarkedObject(region->GetMarkView<Generation::Young>(), offsetWrite)
+        : region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offsetWrite);
     // Direct bit read on writeBm (bypass GetMarkBitmap) to detect identity skew.
     bool markedOnWriteBm = false;
     if (writeBm != nullptr && bitIndex < bitCapacity) {

@@ -330,15 +330,16 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
                     size_t regionSize = static_cast<size_t>(regionEnd - regionStart);
                     if (totalSize > 0 && (totalSize % 8) == 0 && offset + totalSize <= regionSize) {
                         SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.live");
-                        bool already = reg->GetOrAllocMarkBitmap()->MarkBits(offset, totalSize, regionSize);
+                        MarkView<Generation::Young> view = reg->GetMarkView<Generation::Young>();
+                        bool already = reg->GetOrAllocMarkBitmap(view)->MarkBits(offset, totalSize, regionSize);
                         if (!already) {
                             reg->AddLiveByteCount(totalSize);
                         }
                         LiveInfo* ghost = reg->GetLiveInfo0ForProbe();
-                        if (ghost != nullptr && ghost->markBitmap != nullptr &&
-                            reinterpret_cast<uintptr_t>(ghost->markBitmap) != LiveInfo::TEMPORARY_PTR) {
+                        RegionBitmap* ghostBitmap = ghost == nullptr ? nullptr : reg->GetRouteMarkBitmap(ghost);
+                        if (ghost != nullptr && ghostBitmap != nullptr) {
                             SealCheck::NotePaint(reg, offset, totalSize, "RegionSpace::AllocBlack.ghost");
-                            (void)ghost->markBitmap->MarkBits(offset, totalSize, regionSize);
+                            (void)ghostBitmap->MarkBits(offset, totalSize, regionSize);
                         }
                         // grey-list so STW2 can force reachableVec + field scan
                         // (TraceYoungClosure claim-skips already-marked → would miss children).
@@ -502,7 +503,7 @@ void RegionSpace::FeedHungryBuffers()
     if (region != nullptr) {
         // The region is inserted in thread-local region list when allocated, we need to remove it from the list.
         regionManager.RemoveThreadLocalRegion(region);
-        regionManager.CollectRegion(region);
+        regionManager.CollectRegion<Generation::Old>(region);
     }
 }
 

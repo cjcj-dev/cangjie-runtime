@@ -66,9 +66,10 @@ uint64_t UnmarkedBytes(RegionInfo* region)
     }
     uint64_t bytes = 0;
     size_t start = region->GetRegionStart();
-    region->VisitAllObjects([region, start, &bytes](BaseObject* object) {
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+    region->VisitAllObjects([region, view, start, &bytes](BaseObject* object) {
         size_t offset = reinterpret_cast<MAddress>(object) - start;
-        if (!region->IsSurvivedObject(offset)) {
+        if (!region->IsSurvivedObject(view, offset)) {
             bytes += object->GetSize();
         }
     });

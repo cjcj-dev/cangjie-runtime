@@ -178,7 +178,11 @@ void CopyCollector::ForwardFromSpace()
              static_cast<unsigned>(copyPool != nullptr), workers, stats.fromSpaceSize, bytesPerWorker, maxWorkers,
              poolKind, static_cast<unsigned>(forceSerial), static_cast<unsigned>(workGate));
     }
-    space.ForwardFromSpace(copyPool);
+    if (gcReason == GC_REASON_YOUNG) {
+        space.ForwardFromSpace<Generation::Young>(copyPool);
+    } else {
+        space.ForwardFromSpace<Generation::Old>(copyPool);
+    }
     if (restoreActiveHelpers) {
         copyPool->SetMaxActiveThreadNum(previousActiveHelpers);
     }

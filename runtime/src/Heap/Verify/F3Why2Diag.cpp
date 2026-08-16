@@ -162,7 +162,8 @@ void CountMarks(RegionInfo* region, size_t& validOut, size_t& markedOut)
         return;
     }
     if (region == nullptr || region->IsLargeRegion()) {
-        if (region != nullptr && region->IsLargeRegion() && region->IsMarkedObject(static_cast<size_t>(0))) {
+        if (region != nullptr && region->IsLargeRegion() &&
+            region->IsRouteMarkedObject(static_cast<size_t>(0))) {
             markedOut = 1;
             validOut = 1;
         }
@@ -186,7 +187,7 @@ void CountMarks(RegionInfo* region, size_t& validOut, size_t& markedOut)
             break;
         }
         ++validOut;
-        if (region->IsMarkedObject(o)) {
+        if (region->IsRouteMarkedObject(o)) {
             ++markedOut;
         }
         pos += sz;
@@ -206,13 +207,13 @@ void NoteCollectEnter(RegionInfo* region)
     }
     (void)InsertRegion(region);
 
-    const bool knownEmpty = region->IsKnownEmpty();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
     const bool auth = region->IsLiveCountAuthoritative();
     const uint64_t liveBytes = region->GetLiveByteCount();
     const bool young = region->IsYoungRegion();
     const bool large = region->IsLargeRegion();
     const auto route = region->GetRouteState();
-    RegionBitmap* mb = region->GetMarkBitmap();
+    RegionBitmap* mb = region->GetRouteMarkBitmap();
     const bool neverExamined = knownEmpty && mb == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart();
 
     if (knownEmpty) {
@@ -291,7 +292,7 @@ void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
         g_f3RgJoinMiss.fetch_add(1, std::memory_order_relaxed);
     }
 
-    const bool knownEmpty = latestRegion->IsKnownEmpty();
+    const bool knownEmpty = latestRegion->IsRouteKnownEmpty();
     const bool auth = latestRegion->IsLiveCountAuthoritative();
     const uint64_t liveBytes = latestRegion->GetLiveByteCount();
     if (knownEmpty) {
@@ -316,7 +317,7 @@ void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
 
     int objMarked = -1;
     if (latest != nullptr && Heap::IsHeapAddress(latest)) {
-        objMarked = latestRegion->IsMarkedObject(latest) ? 1 : 0;
+        objMarked = latestRegion->IsRouteMarkedObject(latest) ? 1 : 0;
     }
 
     size_t slog = g_f3RgSampleLogged.fetch_add(1, std::memory_order_relaxed);
@@ -329,7 +330,8 @@ void NoteF3RegionGarbage(RegionInfo* latestRegion, BaseObject* latest)
                      static_cast<unsigned>(latestRegion->GetRegionType()),
                      static_cast<unsigned>(latestRegion->GetRouteState()),
                      static_cast<unsigned long long>(liveBytes), static_cast<unsigned>(auth),
-                     static_cast<unsigned>(knownEmpty), latestRegion->GetMarkBitmap(), validObjs, markedObjs, objMarked,
+                     static_cast<unsigned>(knownEmpty), latestRegion->GetRouteMarkBitmap(), validObjs, markedObjs,
+                     objMarked,
                      g_gcCount.load(std::memory_order_relaxed));
         std::fflush(stderr);
     }

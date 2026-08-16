@@ -540,7 +540,7 @@ void VerifyRegions::VerifyAfterYoungMark(RegionManager& manager, const Candidate
                 ++invalidObjects;
                 return;
             }
-            if (region->IsMarkedObject(object)) {
+            if (region->IsMarkedObject(region->GetMarkView<Generation::Young>(), object)) {
                 ++markedInRegion;
                 markedBytes += object->GetSize();
             }

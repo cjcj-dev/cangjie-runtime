@@ -134,10 +134,10 @@ Covering FindCoveringBackward(RegionInfo* region, size_t targetOffset)
         size_t candOff = targetOffset - back;
         BaseObject* cand = reinterpret_cast<BaseObject*>(regionStart + candOff);
         // Prefer mark bit at candidate start; also accept ghost survived.
-        bool marked = region->IsMarkedObject(candOff);
+        bool marked = region->IsRouteMarkedObject(candOff);
         if (!marked) {
             LiveInfo* g = region->GetLiveInfo0ForProbe();
-            if (g != nullptr && g->IsSurvivedObject(candOff)) {
+            if (g != nullptr && region->IsRouteSurvivedObject(candOff)) {
                 marked = true;
             }
         }
@@ -191,7 +191,7 @@ uintptr_t NextMarkedToAddr(RegionInfo* region, size_t fromOffset, size_t fromSiz
             cursor += 8;
             continue;
         }
-        if (region->IsMarkedObject(cand)) {
+        if (region->IsRouteMarkedObject(cand)) {
             uint64_t pre = region->GetPreLiveBytesInGhostRegionForProbe(cursor);
             return static_cast<uintptr_t>(region->GetRoutePlanAddr(pre));
         }
@@ -226,10 +226,10 @@ void NoteRoute(RegionInfo* region, BaseObject* fromObj, uint64_t preLiveBytes, u
     TypeInfo* selfTip = nullptr;
     size_t selfSize = 0;
     bool plausibleSelf = PlausibleStart(fromObj, selfTip, selfSize);
-    bool markedBit = (region != nullptr && fromObj != nullptr) ? region->IsMarkedObject(fromObj) : false;
+    bool markedBit = (region != nullptr && fromObj != nullptr) ? region->IsRouteMarkedObject(fromObj) : false;
     if (!markedBit && region != nullptr) {
         LiveInfo* g = region->GetLiveInfo0ForProbe();
-        if (g != nullptr && g->IsSurvivedObject(offset)) {
+        if (g != nullptr && region->IsRouteSurvivedObject(offset)) {
             markedBit = true; // survived via resurrect or ghost face
         }
     }
@@ -297,7 +297,7 @@ void NoteRoute(RegionInfo* region, BaseObject* fromObj, uint64_t preLiveBytes, u
         rtype = static_cast<unsigned>(region->GetRegionType());
         LiveInfo* g = region->GetLiveInfo0ForProbe();
         if (g != nullptr) {
-            ghostSurv = static_cast<unsigned>(g->IsSurvivedObject(offset));
+            ghostSurv = static_cast<unsigned>(region->IsRouteSurvivedObject(offset));
         }
     }
 

@@ -111,7 +111,10 @@ RegionAttrs DescribeRegion(BaseObject* object, const std::unordered_set<RegionIn
     a.to = region->IsToRegion();
     a.free = region->IsFreeRegion();
     a.garbage = region->IsGarbageRegion();
-    a.neverExamined = region->GetMarkBitmap() == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart();
+    RegionBitmap* decisionBitmap = region->IsYoungRegion()
+        ? region->GetMarkBitmap(region->GetMarkView<Generation::Young>())
+        : region->GetMarkBitmap(region->GetMarkView<Generation::Old>());
+    a.neverExamined = decisionBitmap == nullptr && region->GetRegionAllocPtr() > region->GetRegionStart();
     a.start = region->GetRegionStart();
     if (candidates != nullptr) {
         a.isCandidate = candidates->count(region) != 0;
