@@ -4625,18 +4625,26 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
 // Mutators run under TraceBarrier (InstallBarrier TRACE); final CLEAR_SATB is STW.
 bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                      std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                     MinorSlotSet& weakSlots, bool useBitmapLedger)
+                                     MinorSlotSet& weakSlots, bool useBitmapLedger,
+                                     YoungConcWindowStats* windowStats)
 {
     MRT_PHASE_TIMER("young.mark_satb");
     workStack.clear();
     constexpr uint64_t maxIterationTime = 120ULL * 1000 * 1000 * 1000;
     constexpr uint64_t maxIterationLoopNum = 1000;
-    auto visitSatbObj = [this, fullYoungScan, &workStack]() {
+    // portyoungconc: count what the window actually consumes. A retired SATB object that
+    // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
+    // is counted at the pop, not at the push -- the question this answers is "did the
+    // window do GC work", not "how many greys survived the filter".
+    auto visitSatbObj = [this, fullYoungScan, &workStack, windowStats]() {
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
         while (!remarkStack.empty()) {
             BaseObject* obj = remarkStack.back();
             remarkStack.pop_back();
+            if (windowStats != nullptr) {
+                ++windowStats->satbObjects;
+            }
             if (!Heap::IsHeapAddress(obj)) {
                 continue;
             }
@@ -4651,15 +4659,24 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     uint64_t iterationCnt = 0;
     uint64_t iterationStartTime = TimeUtil::NanoSeconds();
     do {
+        if (windowStats != nullptr) {
+            ++windowStats->satbIters;
+        }
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
             visitSatbObj();
+            if (windowStats != nullptr) {
+                ++windowStats->closureCalls;
+            }
             TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                               useBitmapLedger);
             return workStack.empty();
         }
         if (!workStack.empty()) {
+            if (windowStats != nullptr) {
+                ++windowStats->closureCalls;
+            }
             TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                               useBitmapLedger);
         }
@@ -7610,6 +7627,37 @@ void WCollector::DoYoungGarbageCollection()
         const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
+    // portyoungconc L2 (ZGC zGeneration.cpp:665-669 concurrent_mark = mark_roots + mark_follow;
+    // :855-884 pause_mark_start does colours/retire/seqnum/remset-flip and nothing else).
+    // Our STW1 paints the whole closure before releasing the world, so `mark` -- the largest
+    // young pillar -- never leaves the pause and the existing window only drains SATB.
+    // MRT_GCV2_YOUNG_CONC_FOLLOW=1 releases right after root enumeration instead, putting
+    // mark_closure / remset_rescan / mark_from_remset in the concurrent window. Requires
+    // YOUNG_CONC_MARK=1 because STW2 is where the resulting residue is resealed.
+    static const bool youngConcFollowRequested = []() {
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_FOLLOW");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
+    // portyoungconc L1 (ZGC zGeneration.cpp:550-555): mark_end() returning false leaves the
+    // safepoint and runs concurrent_mark_continue() = mark_follow() before re-entering.
+    // Ours logs NON_CONVERGED and evacuates anyway. =1 arms the re-entry edge; FORCE=<n>
+    // makes the first n mark-ends report "not converged" so the edge has a positive control
+    // (a re-entry that is never taken cannot be shown to work).
+    static const bool youngMarkEndReenter = []() {
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_REENTER");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    static const size_t youngMarkEndForceReenter = []() -> size_t {
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
+        if (v == nullptr) {
+            return 0;
+        }
+        long parsed = std::strtol(v, nullptr, 10);
+        return parsed > 0 ? static_cast<size_t>(parsed) : 0;
+    }();
+    YoungConcWindowStats concWindow;
+    uint64_t concWindowStartNs = 0;
     // markstw: reachableSlots is queried only with members of rememberedSlots in the
     // non-concurrent FYS path.  Keep the exact intersection instead of materialising
     // every reachable heap field.  Concurrent young marking is deliberately excluded:
@@ -7630,13 +7678,35 @@ void WCollector::DoYoungGarbageCollection()
     }
     g_minorLedgerCost.Reset();
     g_markInternalCost.Reset();
+    // portyoungconc L2: this is ZGC's boundary. Everything above is pause_mark_start
+    // (colour flip, retire, remset flip) plus root enumeration; everything below until
+    // STW2 is concurrent_mark(). Release here so mark_follow runs with mutators alive.
+    if (youngConcFollow && stw != nullptr) {
+        concWindow.markedAtEntry = reachableVec.size();
+        TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+        reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        stw.reset();
+        concWindowStartNs = TimeUtil::NanoSeconds();
+        VLOG(REPORT,
+             "[GCV2][youngconc] concurrent young mark start (FOLLOW: roots enumerated, closure concurrent) "
+             "roots_marked=%zu",
+             concWindow.markedAtEntry);
+    }
     {
         // minortime: ⑤ mark closure pass-1 (from roots)
         // concwin: keep this under STW so the STW1 snapshot is painted before mutators
         // resume. Prior order released the world first → FixMinor CAS-null of still-live
         // young Array elems (live0=0) → next TRACE WriteRefField(obj=nil, field=0x10).
         // ZGC shape: pause_mark_start marks the snapshot; concurrent_mark follows SATB.
+        // portyoungconc: that last sentence does not match ZGC -- pause_mark_start
+        // (zGeneration.cpp:855-884) marks nothing; mark_roots() is inside concurrent_mark().
+        // The STW placement here is a real failure record (live0=0 CAS-null), not the ZGC
+        // shape, so YOUNG_CONC_FOLLOW re-tries the ZGC order behind its own flag rather
+        // than changing this default.
         MRT_PHASE_TIMER("young.mark_closure");
+        if (youngConcFollow) {
+            ++concWindow.closureCalls;
+        }
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
@@ -7723,6 +7793,10 @@ void WCollector::DoYoungGarbageCollection()
     }
     {
         MRT_PHASE_TIMER("young.mark_from_remset");
+        if (youngConcFollow) {
+            ++concWindow.closureCalls;
+            concWindow.remsetSlots = remsetStats.consumed;
+        }
         TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                           useBitmapLedger, reachableSlotDomain);
     }
@@ -7777,20 +7851,38 @@ void WCollector::DoYoungGarbageCollection()
     if (youngConcMark && stw != nullptr) {
         // concwin: release only after the STW1 snapshot (roots + remset drain) is marked.
         // Mutators then run under TraceBarrier/SATB; STW2 still reseals + evacuates.
+        // Not reached under YOUNG_CONC_FOLLOW: that arm already released above.
+        concWindow.markedAtEntry = reachableVec.size();
         TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         stw.reset();
+        concWindowStartNs = TimeUtil::NanoSeconds();
         VLOG(REPORT, "[GCV2][youngconc] concurrent young mark start (mutators running; STW1 snapshot marked)");
     }
     if (youngConcMark) {
         // SATB termination while concurrent (major MarkSatbBuffer shape). Ends in CLEAR_SATB.
         CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots,
-                                         weakSlots, useBitmapLedger),
+                                         weakSlots, useBitmapLedger, &concWindow),
                      "young concurrent mark SATB not cleared");
+        // Window closes here: the next statement asks every mutator to stop. Read the pair
+        // (windowNs, MarkedInWindow) together -- duration alone proves nothing.
+        concWindow.markedAtExit = reachableVec.size();
+        if (concWindowStartNs != 0) {
+            concWindow.windowNs = TimeUtil::NanoSeconds() - concWindowStartNs;
+        }
         // STW2: freeze world for post-mark verify + evacuate (still STW today).
         // youngmiss2 §1①: sync CLEAR_SATB so every mutator HandleGCPhase flushes its current
         // satbNode into retiredNodes (GetRetiredObjects only pops retired — in-flight node is
         // otherwise invisible). Same shape as MarkSatbBuffer timeout STW.
+        // portyoungconc L1 (ZGC zGeneration.cpp:550-555):
+        //     while (!pause_mark_end()) { concurrent_mark_continue(); }
+        // pause_mark_end() is a safepoint that answers "did marking terminate"; false means
+        // leave the safepoint, run mark_follow() concurrently, and come back. Our STW2
+        // fixpoint is that safepoint body -- but today it logs NON_CONVERGED and evacuates
+        // anyway, i.e. it has no false branch. This loop supplies it.
+        constexpr size_t kMaxMarkEndReenters = 4;
+        bool markEndDone = false;
+        while (!markEndDone) {
         stw = std::make_unique<ScopedStopTheWorld>("young post-mark", true,
                                                    GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
         // youngmiss / youngconc M1: concurrent-window remset edges are NEW greys. Under FYS,
@@ -8059,12 +8151,43 @@ void WCollector::DoYoungGarbageCollection()
                  "alloc_black=%zu reachable=%zu converged=%d",
                  iters + 1, totalConcRemset, totalFieldExtra, allocBlackN, reachableVec.size(),
                  static_cast<int>(converged));
+            // ZGC mark_end(): true = terminated, fall through to relocate; false = go back to
+            // concurrent mark. FORCE_REENTER makes the first n ends answer false, so the edge
+            // has a positive control on a workload that converges in one pass every time --
+            // an untaken branch cannot be shown to work.
+            const bool forcedNotDone = concWindow.reenters < youngMarkEndForceReenter;
+            const bool wantReenter = (!converged || forcedNotDone) && youngMarkEndReenter &&
+                concWindow.reenters < kMaxMarkEndReenters;
+            markEndDone = !wantReenter;
             if (!converged) {
                 VLOG(REPORT,
                      "[GCV2][youngconc] stw2_fixpoint NON_CONVERGED max_iters=%zu reachable=%zu "
-                     "conc_remset_total=%zu field_extra_total=%zu alloc_black=%zu",
-                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra, allocBlackN);
+                     "conc_remset_total=%zu field_extra_total=%zu alloc_black=%zu reenter=%d",
+                     kMaxStw2Iters, reachableVec.size(), totalConcRemset, totalFieldExtra, allocBlackN,
+                     static_cast<int>(wantReenter));
             }
+            if (wantReenter) {
+                VLOG(REPORT,
+                     "[GCV2][youngconc] mark_end=false -> concurrent_mark_continue reenter=%zu forced=%d "
+                     "converged=%d reachable=%zu",
+                     concWindow.reenters + 1, static_cast<int>(forcedNotDone), static_cast<int>(converged),
+                     reachableVec.size());
+            }
+        }
+        if (!markEndDone) {
+            // concurrent_mark_continue() == mark_follow() only (zGeneration.cpp:689-692).
+            // Deliberately no PrepareTrace here: that is a mark-start action (it clears
+            // notRelocatableThisCycle), and re-running it would drop stamps the window set.
+            ++concWindow.reenters;
+            TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
+            stw.reset();
+            const uint64_t reenterStartNs = TimeUtil::NanoSeconds();
+            CHECK_DETAIL(MarkYoungSatbBuffer(workStack, fullYoungScan, reachableObjects, reachableVec,
+                                             reachableSlots, weakSlots, useBitmapLedger, &concWindow),
+                         "young concurrent mark continue SATB not cleared");
+            concWindow.windowNs += TimeUtil::NanoSeconds() - reenterStartNs;
+            concWindow.markedAtExit = reachableVec.size();
+        }
         }
         // Rebuild liveRememberedSlots after concurrent remset merge (stats/audit only;
         // EvacuateYoungRegions remset authority is consumedSlots — fysfixa 3f27f0c4).
@@ -8145,6 +8268,18 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     g_minorLedgerCost.Report();
+    // portyoungconc positive control. Emitted on EVERY minor, including the closed arm, so
+    // "no line" and "a line of zeros" are distinguishable. window_ns is the only field that
+    // a merely-existing window can raise; marked_in_window / satb_objects / closure_calls
+    // are GC work, and it is the work fields that decide whether the window is real.
+    VLOG(REPORT,
+         "[GCV2][youngconc][concwork] run=%zu conc=%d follow=%d window_ns=%llu marked_in_window=%zu "
+         "satb_objects=%zu satb_iters=%zu closure_calls=%zu remset_slots=%zu reenters=%zu "
+         "marked_at_entry=%zu reachable_total=%zu",
+         minorTotalRuns + 1, static_cast<int>(youngConcMark), static_cast<int>(youngConcFollow),
+         static_cast<unsigned long long>(concWindow.windowNs), concWindow.MarkedInWindow(),
+         concWindow.satbObjects, concWindow.satbIters, concWindow.closureCalls, concWindow.remsetSlots,
+         concWindow.reenters, concWindow.markedAtEntry, reachableVec.size());
     VLOG(REPORT, "[GCV2][setbitmap] use=%d reachable_n=%zu set_n=%zu fullYoung=%d youngConc=%d",
          static_cast<int>(useBitmapLedger), reachableVec.size(), reachableObjects.size(),
          static_cast<int>(fullYoungScan), static_cast<int>(youngConcMark));
