@@ -17,13 +17,20 @@ namespace MapleRuntime {
 // collapsed into SEGV_UNKNOWN; MAPERR/ACCERR remain the common SEGV codes.
 const char* SignalCodeName(int sig, int code)
 {
-    // SI_USER / SI_KERNEL apply across signals.
+    // SI_USER / SI_KERNEL apply across signals. SI_KERNEL, SI_SIGIO and SI_TKILL
+    // are Linux extensions and are absent on Darwin, so guard them the way the
+    // switches below already guard SEGV_BNDERR and BUS_MCEERR_AR. Where they are
+    // absent the caller falls through to the per-signal switch and its
+    // "<SIG>_UNKNOWN" default, which is the pre-existing behaviour for any code
+    // this function does not name.
     if (code == SI_USER) {
         return "SI_USER";
     }
+#ifdef SI_KERNEL
     if (code == SI_KERNEL) {
         return "SI_KERNEL";
     }
+#endif
     if (code == SI_QUEUE) {
         return "SI_QUEUE";
     }
@@ -36,12 +43,16 @@ const char* SignalCodeName(int sig, int code)
     if (code == SI_ASYNCIO) {
         return "SI_ASYNCIO";
     }
+#ifdef SI_SIGIO
     if (code == SI_SIGIO) {
         return "SI_SIGIO";
     }
+#endif
+#ifdef SI_TKILL
     if (code == SI_TKILL) {
         return "SI_TKILL";
     }
+#endif
 
     switch (sig) {
         case SIGSEGV:
