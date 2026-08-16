@@ -7,6 +7,7 @@
 #include "Heap/Collector/MarkPartialArray.h"
 
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 
 #include "Base/Log.h"
@@ -76,19 +77,33 @@ void NoteChunkPushed() { (void)g_chunksPushed.fetch_add(1, std::memory_order_rel
 void NoteChunkFollowed() { (void)g_chunksFollowed.fetch_add(1, std::memory_order_relaxed); }
 void NoteNotEncodable() { (void)g_notEncodable.fetch_add(1, std::memory_order_relaxed); }
 
+// MRT_GCV2_PARTIAL_ARRAY_REPORT=1 forces the counters out even when chunking
+// is off, so the control arm can show an actual zero instead of an absent
+// line -- "no output" would read the same whether the counters are zero or
+// the report itself never ran.
+bool ForceReport()
+{
+    static const bool on = EnvIsOne("MRT_GCV2_PARTIAL_ARRAY_REPORT");
+    return on;
+}
+
 void Report(const char* point)
 {
-    if (!Enabled()) {
+    if (!Enabled() && !ForceReport()) {
         return;
     }
-    LOG(RTLOG_ERROR,
-        "[GCV2][partial-array] point=%s arrays_split=%zu chunks_pushed=%zu chunks_followed=%zu "
-        "not_encodable=%zu min_length=%zu env=MRT_GCV2_PARTIAL_ARRAY=1",
-        point, static_cast<size_t>(g_arraysSplit.load(std::memory_order_relaxed)),
-        static_cast<size_t>(g_chunksPushed.load(std::memory_order_relaxed)),
-        static_cast<size_t>(g_chunksFollowed.load(std::memory_order_relaxed)),
-        static_cast<size_t>(g_notEncodable.load(std::memory_order_relaxed)),
-        MIN_LENGTH);
+    // fprintf+fflush, same reason as the f3-deadarm report in WCollector.cpp:280:
+    // the line has to survive on stderr even when VLOG is late or redirected.
+    std::fprintf(stderr,
+                 "[GCV2][partial-array] point=%s arrays_split=%zu chunks_pushed=%zu "
+                 "chunks_followed=%zu not_encodable=%zu min_length=%zu enabled=%d\n",
+                 point != nullptr ? point : "?",
+                 static_cast<size_t>(g_arraysSplit.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(g_chunksPushed.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(g_chunksFollowed.load(std::memory_order_relaxed)),
+                 static_cast<size_t>(g_notEncodable.load(std::memory_order_relaxed)),
+                 MIN_LENGTH, Enabled() ? 1 : 0);
+    std::fflush(stderr);
 }
 
 } // namespace MarkPartialArray
