@@ -116,6 +116,48 @@ struct ZeroRow {
     uint32_t seq;
 };
 
+// Page filter for whozero zero-slot remapping on copy (4KiB pages). Default unused until WHOZERO.
+constexpr size_t kZeroPageBits = 1u << 20; // 1M bits ~ 4 TiB @ 4KiB
+constexpr uintptr_t kZeroPageShift = 12;
+uint8_t g_zeroPageBits[kZeroPageBits / 8] = {};
+
+inline void MarkZeroPage(uintptr_t slot)
+{
+    if (slot == 0) {
+        return;
+    }
+    size_t bit = (slot >> kZeroPageShift) & (kZeroPageBits - 1);
+    g_zeroPageBits[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+}
+
+inline bool ZeroPageMarked(uintptr_t addr)
+{
+    if (addr == 0) {
+        return false;
+    }
+    size_t bit = (addr >> kZeroPageShift) & (kZeroPageBits - 1);
+    return (g_zeroPageBits[bit / 8] & static_cast<uint8_t>(1u << (bit % 8))) != 0;
+}
+
+inline bool ZeroRangeMaybeMarked(uintptr_t from, uintptr_t size)
+{
+    if (from == 0 || size == 0) {
+        return false;
+    }
+    uintptr_t end = from + size - 1;
+    uintptr_t p = from & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    uintptr_t pEnd = end & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    for (;;) {
+        if (ZeroPageMarked(p)) {
+            return true;
+        }
+        if (p >= pEnd) {
+            return false;
+        }
+        p += (uintptr_t(1) << kZeroPageShift);
+    }
+}
+
 struct InflightCopy {
     uintptr_t from;
     uintptr_t to;
@@ -131,6 +173,7 @@ std::atomic<size_t> g_copyTotal{ 0 };
 std::atomic<size_t> g_zeroTotal{ 0 };
 std::atomic<size_t> g_copyWrap{ 0 };
 std::atomic<size_t> g_zeroWrap{ 0 };
+std::atomic<size_t> g_zeroRemap{ 0 };
 thread_local InflightCopy g_inflight{};
 
 // slotwindow inflight=0: g_inflight is TLS. Crash dump runs on the mutator,
@@ -631,11 +674,14 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
 
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
 {
-    if (!GateOn()) {
+    // whozero needs the copy ring to reconcile HealSlot-null against post-move slot addrs.
+    if (!GateOn() && !WhoZeroOn()) {
         return;
     }
-    HealthOnce();
-    EnsureAtexit();
+    if (GateOn()) {
+        HealthOnce();
+        EnsureAtexit();
+    }
     uintptr_t from = reinterpret_cast<uintptr_t>(fromAddr);
     uintptr_t to = reinterpret_cast<uintptr_t>(toAddr);
     uint16_t phase = CurrentPhase();
@@ -684,6 +730,30 @@ void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t do
     row.phase = phase;
     row.done = static_cast<uint16_t>(done);
     row.seq = seq;
+    // Move-independent whozero: rewrite zero-ring slots that lived in the from-object.
+    // Page filter keeps this off the cold path for objects without prior null writes.
+    if (done != 0 && WhoZeroOn() && size > 0 && from != 0 && to != 0 &&
+        ZeroRangeMaybeMarked(from, static_cast<uintptr_t>(size))) {
+        uint32_t zn = static_cast<uint32_t>(
+            g_zeroTotal.load(std::memory_order_acquire) < kZeroCap ?
+                g_zeroTotal.load(std::memory_order_relaxed) : kZeroCap);
+        uint32_t znext = g_zeroNext.load(std::memory_order_acquire);
+        size_t ztot = g_zeroTotal.load(std::memory_order_acquire);
+        uint32_t zbase = (ztot < kZeroCap) ? 0 : (znext % kZeroCap);
+        uintptr_t f0 = from;
+        uintptr_t t0 = to;
+        uintptr_t sz = static_cast<uintptr_t>(size);
+        for (uint32_t zi = 0; zi < zn; ++zi) {
+            ZeroRow& zr = g_zeros[(zbase + zi) % kZeroCap];
+            uintptr_t s = zr.slot;
+            if (s >= f0 && s < f0 + sz) {
+                uintptr_t ns = t0 + (s - f0);
+                zr.slot = ns;
+                MarkZeroPage(ns);
+                g_zeroRemap.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
 }
 
 uint64_t MidCopyStallNs()
@@ -764,6 +834,9 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
     row.site = site;
     row.phase = CurrentPhase();
     row.seq = seq;
+    if (WhoZeroOn()) {
+        MarkZeroPage(row.slot);
+    }
     // whozero: rare-path log only (successful CAS to null). Cap keeps stderr bounded.
     if (WhoZeroOn() && seq <= 256) {
         char line[320];
@@ -827,9 +900,67 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
     uint32_t zeroNext = g_zeroNext.load(std::memory_order_acquire);
     size_t zeroTotal = g_zeroTotal.load(std::memory_order_acquire);
     uint32_t zeroBase = (zeroTotal < kZeroCap) ? 0 : (zeroNext % kZeroCap);
+
+    // Move-independent identity (口径丙+甲 hybrid):
+    // Collect every historical address of the crash-time slot/holder via the copy ring
+    // (from↔to remaps). Slot addresses that only differ by object relocation still hit.
+    constexpr size_t kHistCap = 64;
+    uintptr_t histSlot[kHistCap];
+    size_t histN = 0;
+    auto pushHist = [&](uintptr_t a) {
+        if (a == 0 || histN >= kHistCap) {
+            return;
+        }
+        for (size_t i = 0; i < histN; ++i) {
+            if (histSlot[i] == a) {
+                return;
+            }
+        }
+        histSlot[histN++] = a;
+    };
+    pushHist(slotBytes);
+    if (r13 != 0) {
+        pushHist(r13 + 0x28U);
+    }
+    uint32_t copyN = static_cast<uint32_t>(
+        g_copyTotal.load(std::memory_order_acquire) < kCopyCap ?
+            g_copyTotal.load(std::memory_order_relaxed) : kCopyCap);
+    uint32_t copyNext = g_copyNext.load(std::memory_order_acquire);
+    size_t copyTotal = g_copyTotal.load(std::memory_order_acquire);
+    uint32_t copyBase = (copyTotal < kCopyCap) ? 0 : (copyNext % kCopyCap);
+    // Iterate remaps: if a hist address lies in a completed copy's from/to range, add the twin.
+    for (unsigned round = 0; round < 8; ++round) {
+        size_t before = histN;
+        for (uint32_t ci = 0; ci < copyN; ++ci) {
+            const CopyRow& cr = g_copies[(copyBase + ci) % kCopyCap];
+            if (cr.done == 0 || cr.size == 0 || cr.from == 0 || cr.to == 0) {
+                continue;
+            }
+            uintptr_t f0 = cr.from;
+            uintptr_t t0 = cr.to;
+            uintptr_t sz = cr.size;
+            size_t nNow = histN;
+            for (size_t hi = 0; hi < nNow; ++hi) {
+                uintptr_t a = histSlot[hi];
+                if (a >= f0 && a < f0 + sz) {
+                    pushHist(t0 + (a - f0));
+                }
+                if (a >= t0 && a < t0 + sz) {
+                    pushHist(f0 + (a - t0));
+                }
+            }
+        }
+        if (histN == before) {
+            break;
+        }
+    }
+
     uint32_t exactHits = 0;
+    uint32_t moveHits = 0;
     uint32_t lastIdx = 0;
-    bool have = false;
+    uint32_t lastMoveIdx = 0;
+    bool haveExact = false;
+    bool haveMove = false;
     uint32_t hitSiteCounts[8] = {};
     const uint16_t trackSites[] = {
         static_cast<uint16_t>(HealSite::WCollectorMinorFixForwardNull),
@@ -847,7 +978,16 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         if (slotBytes != 0 && row.slot == slotBytes) {
             ++exactHits;
             lastIdx = idx;
-            have = true;
+            haveExact = true;
+        } else if (row.slot != 0) {
+            for (size_t hi = 0; hi < histN; ++hi) {
+                if (row.slot == histSlot[hi]) {
+                    ++moveHits;
+                    lastMoveIdx = idx;
+                    haveMove = true;
+                    break;
+                }
+            }
         }
         for (size_t s = 0; s < 8; ++s) {
             if (row.site == trackSites[s]) {
@@ -855,29 +995,35 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
             }
         }
     }
+    uint32_t anyHits = exactHits + moveHits;
 
-    char line[768];
+    char line[896];
     int n = sprintf_s(line, sizeof(line),
                       "[GCV2][whozero] crash q1=%s holder=%#zx holderInHeap=%u slotBytes=%#zx "
                       "rawBytes=%#zx end=%#zx cursor=%#zx f30=%#zx tip=%#zx rcx=%#zx rsi=%#zx "
-                      "rbx=%#zx r12=%#zx zeroTotal=%zu zeroWrap=%zu exactHits=%u "
+                      "rbx=%#zx r12=%#zx zeroTotal=%zu zeroWrap=%zu exactHits=%u moveHits=%u "
+                      "anyHits=%u histN=%zu copyTotal=%zu zeroRemap=%zu "
                       "siteFixNull=%u siteResolve=%u siteF3=%u siteRemset=%u siteRoot=%u "
                       "siteBaseCE=%u sitePreR=%u siteFwdR=%u\n",
                       q1, r13, holderInHeap, slotBytes, rawBytes, endVal, cursorVal, f30, tip,
                       rcx, rsi, rbx, r12, zeroTotal, g_zeroWrap.load(std::memory_order_relaxed),
-                      exactHits, hitSiteCounts[0], hitSiteCounts[1], hitSiteCounts[2],
-                      hitSiteCounts[3], hitSiteCounts[4], hitSiteCounts[5], hitSiteCounts[6],
-                      hitSiteCounts[7]);
+                      exactHits, moveHits, anyHits, histN, copyTotal,
+                      g_zeroRemap.load(std::memory_order_relaxed), hitSiteCounts[0],
+                      hitSiteCounts[1], hitSiteCounts[2], hitSiteCounts[3], hitSiteCounts[4],
+                      hitSiteCounts[5], hitSiteCounts[6], hitSiteCounts[7]);
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
-    if (have) {
+    if (haveExact) {
         DumpZero("whozeroExact", g_zeros[lastIdx]);
+    } else if (haveMove) {
+        DumpZero("whozeroMove", g_zeros[lastMoveIdx]);
     } else if (slotBytes != 0) {
-        char miss[192];
+        char miss[256];
         int mn = sprintf_s(miss, sizeof(miss),
-                           "[GCV2][whozero] exact_miss slot=%#zx (not in HealSlot-null ring)\n",
-                           slotBytes);
+                           "[GCV2][whozero] exact_miss slot=%#zx histN=%zu copyTotal=%zu "
+                           "(not in HealSlot-null ring under move-aware match)\n",
+                           slotBytes, histN, copyTotal);
         if (mn > 0) {
             WriteLine(miss, static_cast<size_t>(mn));
         }
