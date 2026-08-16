@@ -17,6 +17,9 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Verify/MarkFaceSnap.h"
+#include "Heap/Collector/GcStats.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
@@ -56,6 +59,38 @@ bool WhoZeroOn()
             return true;
         }
         return DiagGate::TokenOn("whozero");
+    }();
+    return on;
+}
+
+bool YoungClaimOn()
+{
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        if (EnvIsOne("MRT_GCV2_YOUNGCLAIM")) {
+            return true;
+        }
+        return DiagGate::TokenOn("youngclaim");
+    }();
+    return on;
+}
+
+// edgemiss: non-zero write ring for large targets + first-mark ring. Default off.
+bool EdgeMissOn()
+{
+    static const bool on = []() {
+        DiagGate::MaybeAnnounce();
+        if (EnvIsOne("MRT_GCV2_EDGEMISS")) {
+            return true;
+        }
+        if (EnvIsOne("MRT_GCV2_WHOZERO")) {
+            return true;
+        }
+        if (EnvIsOne("MRT_GCV2_YOUNGCLAIM")) {
+            return true;
+        }
+        return DiagGate::TokenOn("edgemiss") || DiagGate::TokenOn("whozero") ||
+            DiagGate::TokenOn("youngclaim");
     }();
     return on;
 }
@@ -207,6 +242,326 @@ std::atomic<size_t> g_copyWrap{ 0 };
 std::atomic<size_t> g_zeroWrap{ 0 };
 std::atomic<size_t> g_zeroRemap{ 0 };
 thread_local InflightCopy g_inflight{};
+
+// edgemiss rings (narrow: large target / first mark). Remap slots on copy.
+constexpr size_t kEdgeCap = 1u << 16; // larger: null→large only is sparse
+constexpr size_t kMarkCap = 1u << 16;
+struct EdgeRow {
+    uintptr_t slot = 0;
+    uintptr_t oldRaw = 0;
+    uintptr_t newRaw = 0;
+    uintptr_t tgt = 0;
+    uintptr_t holder = 0;
+    uintptr_t pc = 0;
+    uint32_t gcCount = 0;
+    uint32_t seq = 0;
+    uint16_t phase = 0;
+    uint8_t barrier = 0;
+    uint8_t satbOld = 0;
+    uint8_t satbNew = 0;
+    uint8_t large = 0;
+    uint8_t holderMarked = 0xff;
+    uint8_t holderYoung = 0xff;
+};
+struct MarkRow {
+    uintptr_t obj = 0;
+    uintptr_t start = 0;
+    uint32_t off = 0;
+    uint32_t gcCount = 0;
+    uint32_t seq = 0;
+    uint16_t phase = 0;
+    uint8_t kind = 0;
+    uint8_t source = 0;
+    uint8_t regionYoung = 0xff;
+    uint8_t wasMarked = 0xff;
+    uint8_t hasRef = 0xff;
+    uint8_t nonYoungRef = 0xff;
+};
+EdgeRow g_edges[kEdgeCap];
+MarkRow g_marks[kMarkCap];
+std::atomic<uint32_t> g_edgeNext{ 0 };
+std::atomic<uint32_t> g_markNext{ 0 };
+std::atomic<size_t> g_edgeTotal{ 0 };
+std::atomic<size_t> g_markTotal{ 0 };
+std::atomic<size_t> g_edgeWrap{ 0 };
+std::atomic<size_t> g_markWrap{ 0 };
+std::atomic<size_t> g_edgeRemap{ 0 };
+std::atomic<size_t> g_markRemap{ 0 };
+
+enum MarkEventKind : uint8_t {
+    MARK_EVENT_FIRST = 1,
+    MARK_EVENT_MAJOR_SKIP = 2,
+};
+
+enum MarkClaimSource : uint8_t {
+    MARK_SOURCE_UNKNOWN = 0,
+    MARK_SOURCE_YOUNG = 1,
+    MARK_SOURCE_MAJOR = 2,
+    MARK_SOURCE_OTHER = 3,
+};
+
+thread_local uint32_t g_majorMarkTaskDepth = 0;
+
+// Exact address->latest first-claim source ledger. One packed atomic is 32 MiB
+// at 4M entries; pages remain untouched while the default-off gate is closed.
+constexpr size_t kClaimLedgerCap = 1u << 22;
+constexpr size_t kClaimLedgerProbe = 64;
+constexpr uint64_t kClaimAddrMask = 0x0000ffffffffffffULL;
+std::atomic<uint64_t> g_claimLedger[kClaimLedgerCap];
+std::atomic<size_t> g_claimLedgerInsertFail{ 0 };
+std::atomic<size_t> g_claimLedgerLookupMiss{ 0 };
+
+// The mark ring is intentionally narrow and can wrap within one major.  Keep
+// the rare wasMarked=true event in a separate exact ledger so a later crash can
+// still distinguish "major skipped" from "no probe record".  Object pointers
+// are 8-byte aligned, so the low 48 address bits fit in 45 packed bits.
+constexpr size_t kMajorSkipLedgerCap = 1u << 18;
+constexpr size_t kMajorSkipLedgerProbe = 64;
+constexpr uint64_t kMajorSkipKeyMask = (1ULL << 45) - 1;
+std::atomic<uint64_t> g_majorSkipLedger[kMajorSkipLedgerCap];
+std::atomic<size_t> g_majorSkipLedgerInsertFail{ 0 };
+
+struct MajorSkipMeta {
+    uint32_t gc = 0;
+    uint16_t phase = 0;
+    uint8_t source = MARK_SOURCE_UNKNOWN;
+    uint8_t regionYoung = 0xff;
+    uint8_t hasRef = 0xff;
+    uint8_t nonYoungRef = 0xff;
+};
+
+struct YoungClaimGcStats {
+    std::atomic<size_t> youngClaim{ 0 };
+    std::atomic<size_t> majorClaim{ 0 };
+    std::atomic<size_t> majorWasMarked{ 0 };
+    std::atomic<size_t> majorWasMarkedYoung{ 0 };
+    std::atomic<size_t> joinedYoung{ 0 };
+    std::atomic<size_t> joinedHasRef{ 0 };
+    std::atomic<size_t> joinedNonYoungRef{ 0 };
+};
+constexpr size_t kYoungClaimGcCap = 1u << 12;
+YoungClaimGcStats g_youngClaimByGc[kYoungClaimGcCap];
+std::atomic<size_t> g_youngClaimTotal{ 0 };
+std::atomic<size_t> g_majorClaimTotal{ 0 };
+std::atomic<size_t> g_majorWasMarkedTotal{ 0 };
+std::atomic<size_t> g_majorWasMarkedYoungTotal{ 0 };
+std::atomic<size_t> g_majorJoinedYoungTotal{ 0 };
+std::atomic<size_t> g_majorJoinedHasRefTotal{ 0 };
+std::atomic<size_t> g_majorJoinedNonYoungRefTotal{ 0 };
+
+size_t ClaimLedgerIndex(uintptr_t obj)
+{
+    uint64_t x = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return static_cast<size_t>(x) & (kClaimLedgerCap - 1);
+}
+
+uint64_t PackClaim(uintptr_t obj, uint8_t source, uint32_t gc)
+{
+    return (static_cast<uint64_t>(obj) & kClaimAddrMask) |
+        ((static_cast<uint64_t>(source) & 0x3ULL) << 48) |
+        ((static_cast<uint64_t>(gc) & 0x3fffULL) << 50);
+}
+
+void RecordClaimLedger(uintptr_t obj, uint8_t source, uint32_t gc)
+{
+    if (obj == 0 || source == MARK_SOURCE_UNKNOWN) {
+        return;
+    }
+    const uint64_t packed = PackClaim(obj, source, gc);
+    const uint64_t addr = static_cast<uint64_t>(obj) & kClaimAddrMask;
+    size_t idx = ClaimLedgerIndex(obj);
+    for (size_t probe = 0; probe < kClaimLedgerProbe; ++probe) {
+        std::atomic<uint64_t>& cell = g_claimLedger[(idx + probe) & (kClaimLedgerCap - 1)];
+        uint64_t old = cell.load(std::memory_order_acquire);
+        if ((old & kClaimAddrMask) == addr && old != 0) {
+            cell.store(packed, std::memory_order_release);
+            return;
+        }
+        if (old == 0 && cell.compare_exchange_strong(old, packed, std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed)) {
+            return;
+        }
+    }
+    g_claimLedgerInsertFail.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint8_t LookupClaimLedger(uintptr_t obj, uint32_t& gc, bool countMiss = true)
+{
+    gc = 0;
+    if (obj == 0) {
+        return MARK_SOURCE_UNKNOWN;
+    }
+    const uint64_t addr = static_cast<uint64_t>(obj) & kClaimAddrMask;
+    size_t idx = ClaimLedgerIndex(obj);
+    for (size_t probe = 0; probe < kClaimLedgerProbe; ++probe) {
+        uint64_t packed = g_claimLedger[(idx + probe) & (kClaimLedgerCap - 1)].load(std::memory_order_acquire);
+        if (packed == 0) {
+            break;
+        }
+        if ((packed & kClaimAddrMask) == addr) {
+            gc = static_cast<uint32_t>((packed >> 50) & 0x3fffULL);
+            return static_cast<uint8_t>((packed >> 48) & 0x3ULL);
+        }
+    }
+    if (countMiss) {
+        g_claimLedgerLookupMiss.fetch_add(1, std::memory_order_relaxed);
+    }
+    return MARK_SOURCE_UNKNOWN;
+}
+
+size_t MajorSkipLedgerIndex(uintptr_t obj)
+{
+    uint64_t x = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    x ^= x >> 30;
+    x *= 0xbf58476d1ce4e5b9ULL;
+    x ^= x >> 27;
+    x *= 0x94d049bb133111ebULL;
+    x ^= x >> 31;
+    return static_cast<size_t>(x) & (kMajorSkipLedgerCap - 1);
+}
+
+uint64_t PackMajorSkip(uintptr_t obj, const MajorSkipMeta& meta)
+{
+    uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    return (key & kMajorSkipKeyMask) |
+        ((static_cast<uint64_t>(meta.source) & 0x3ULL) << 45) |
+        ((static_cast<uint64_t>(meta.gc) & 0x3ffULL) << 47) |
+        ((static_cast<uint64_t>(meta.phase) & 0xfULL) << 57) |
+        ((static_cast<uint64_t>(meta.regionYoung) & 0x1ULL) << 61) |
+        ((static_cast<uint64_t>(meta.hasRef) & 0x1ULL) << 62) |
+        ((static_cast<uint64_t>(meta.nonYoungRef) & 0x1ULL) << 63);
+}
+
+void RecordMajorSkipLedger(uintptr_t obj, const MajorSkipMeta& meta)
+{
+    if (obj == 0) {
+        return;
+    }
+    const uint64_t packed = PackMajorSkip(obj, meta);
+    const uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    size_t idx = MajorSkipLedgerIndex(obj);
+    for (size_t probe = 0; probe < kMajorSkipLedgerProbe; ++probe) {
+        std::atomic<uint64_t>& cell = g_majorSkipLedger[(idx + probe) & (kMajorSkipLedgerCap - 1)];
+        uint64_t old = cell.load(std::memory_order_acquire);
+        if ((old & kMajorSkipKeyMask) == key && old != 0) {
+            cell.store(packed, std::memory_order_release);
+            return;
+        }
+        if (old == 0 && cell.compare_exchange_strong(old, packed, std::memory_order_acq_rel,
+                                                     std::memory_order_relaxed)) {
+            return;
+        }
+    }
+    g_majorSkipLedgerInsertFail.fetch_add(1, std::memory_order_relaxed);
+}
+
+bool LookupMajorSkipLedger(uintptr_t obj, MajorSkipMeta& meta)
+{
+    if (obj == 0) {
+        return false;
+    }
+    const uint64_t key = (static_cast<uint64_t>(obj) & kClaimAddrMask) >> 3;
+    size_t idx = MajorSkipLedgerIndex(obj);
+    for (size_t probe = 0; probe < kMajorSkipLedgerProbe; ++probe) {
+        uint64_t packed =
+            g_majorSkipLedger[(idx + probe) & (kMajorSkipLedgerCap - 1)].load(std::memory_order_acquire);
+        if (packed == 0) {
+            break;
+        }
+        if ((packed & kMajorSkipKeyMask) == key) {
+            meta.source = static_cast<uint8_t>((packed >> 45) & 0x3ULL);
+            meta.gc = static_cast<uint32_t>((packed >> 47) & 0x3ffULL);
+            meta.phase = static_cast<uint16_t>((packed >> 57) & 0xfULL);
+            meta.regionYoung = static_cast<uint8_t>((packed >> 61) & 0x1ULL);
+            meta.hasRef = static_cast<uint8_t>((packed >> 62) & 0x1ULL);
+            meta.nonYoungRef = static_cast<uint8_t>((packed >> 63) & 0x1ULL);
+            return true;
+        }
+    }
+    return false;
+}
+
+const char* MarkSourceName(uint8_t source)
+{
+    switch (source) {
+        case MARK_SOURCE_YOUNG:
+            return "young";
+        case MARK_SOURCE_MAJOR:
+            return "major";
+        case MARK_SOURCE_OTHER:
+            return "other";
+        default:
+            return "unknown";
+    }
+}
+// Page filter for edge-slot remap (share zero-page style).
+uint8_t g_edgePageBits[kZeroPageBits / 8] = {};
+inline void MarkEdgePage(uintptr_t slot)
+{
+    if (slot == 0) {
+        return;
+    }
+    size_t bit = (slot >> kZeroPageShift) & (kZeroPageBits - 1);
+    g_edgePageBits[bit / 8] |= static_cast<uint8_t>(1u << (bit % 8));
+}
+inline bool EdgePageMarked(uintptr_t addr)
+{
+    if (addr == 0) {
+        return false;
+    }
+    size_t bit = (addr >> kZeroPageShift) & (kZeroPageBits - 1);
+    return (g_edgePageBits[bit / 8] & static_cast<uint8_t>(1u << (bit % 8))) != 0;
+}
+inline bool EdgeRangeMaybeMarked(uintptr_t from, uintptr_t size)
+{
+    if (from == 0 || size == 0) {
+        return false;
+    }
+    uintptr_t end = from + size - 1;
+    uintptr_t p = from & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    uintptr_t pEnd = end & ~((uintptr_t(1) << kZeroPageShift) - 1);
+    for (;;) {
+        if (EdgePageMarked(p)) {
+            return true;
+        }
+        if (p >= pEnd) {
+            return false;
+        }
+        p += (uintptr_t(1) << kZeroPageShift);
+    }
+}
+const char* BarrierName(uint8_t b)
+{
+    switch (b) {
+        case 1:
+            return "Idle";
+        case 2:
+            return "Enum";
+        case 3:
+            return "Trace";
+        case 4:
+            return "PostTrace";
+        case 5:
+            return "Preforward";
+        case 6:
+            return "Forward";
+        case 7:
+            return "STW";
+        default:
+            return "unknown";
+    }
+}
+bool PhaseSatbActive(uint16_t phase)
+{
+    return phase == static_cast<uint16_t>(GCPhase::GC_PHASE_ENUM) ||
+        phase == static_cast<uint16_t>(GCPhase::GC_PHASE_TRACE) ||
+        phase == static_cast<uint16_t>(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+}
 
 // slotwindow inflight=0: g_inflight is TLS. Crash dump runs on the mutator,
 // so it never sees the GC thread's mid-copy. This table is the cross-thread view.
@@ -375,6 +730,263 @@ void DumpCopy(const char* tag, const CopyRow& row)
     }
 }
 
+// Join edge-write (T1) + first-mark (T2) + regionlife free (T3) for a whozero slot/target.
+void DumpEdgeJoin(uintptr_t slot, uintptr_t holder, uintptr_t tgt, const char* tag)
+{
+    if (!EdgeMissOn()) {
+        return;
+    }
+    uint32_t en = static_cast<uint32_t>(
+        g_edgeTotal.load(std::memory_order_acquire) < kEdgeCap ?
+            g_edgeTotal.load(std::memory_order_relaxed) : kEdgeCap);
+    uint32_t enext = g_edgeNext.load(std::memory_order_acquire);
+    size_t etot = g_edgeTotal.load(std::memory_order_acquire);
+    uint32_t ebase = (etot < kEdgeCap) ? 0 : (enext % kEdgeCap);
+    int lastEi = -1;
+    uint32_t edgeHits = 0;
+    for (uint32_t i = 0; i < en; ++i) {
+        const EdgeRow& er = g_edges[(ebase + i) % kEdgeCap];
+        bool hit = (slot != 0 && er.slot == slot);
+        if (!hit && tgt != 0 && er.tgt == tgt && holder != 0 && er.holder == holder) {
+            hit = true;
+        }
+        if (hit) {
+            ++edgeHits;
+            lastEi = static_cast<int>((ebase + i) % kEdgeCap);
+        }
+    }
+    uint32_t mn = static_cast<uint32_t>(
+        g_markTotal.load(std::memory_order_acquire) < kMarkCap ?
+            g_markTotal.load(std::memory_order_relaxed) : kMarkCap);
+    uint32_t mnext = g_markNext.load(std::memory_order_acquire);
+    size_t mtot = g_markTotal.load(std::memory_order_acquire);
+    uint32_t mbase = (mtot < kMarkCap) ? 0 : (mnext % kMarkCap);
+    int lastMi = -1;
+    int lastYoungMi = -1;
+    int lastMajorClaimMi = -1;
+    int lastMajorSkipMi = -1;
+    uint32_t markHits = 0;
+    uint32_t youngClaimHits = 0;
+    uint32_t majorHits = 0;
+    if (holder != 0) {
+        for (uint32_t i = 0; i < mn; ++i) {
+            const MarkRow& mr = g_marks[(mbase + i) % kMarkCap];
+            if (mr.obj == holder) {
+                int idx = static_cast<int>((mbase + i) % kMarkCap);
+                if (mr.kind == MARK_EVENT_FIRST) {
+                    ++markHits;
+                    lastMi = idx;
+                    if (mr.source == MARK_SOURCE_YOUNG) {
+                        ++youngClaimHits;
+                        lastYoungMi = idx;
+                    } else if (mr.source == MARK_SOURCE_MAJOR) {
+                        ++majorHits;
+                        lastMajorClaimMi = idx;
+                    }
+                } else if (mr.kind == MARK_EVENT_MAJOR_SKIP) {
+                    ++majorHits;
+                    lastMajorSkipMi = idx;
+                }
+            }
+        }
+    }
+    uint32_t freeSeq = 0;
+    uint32_t freeLife = 0;
+    uint16_t freePath = 0;
+    uint16_t freePhase = 0;
+    uint32_t freeGc = 0;
+    uintptr_t freeStart = 0;
+    uintptr_t freeEnd = 0;
+    uint8_t freeKnown = 0;
+    uint64_t freeLive = 0;
+    uint8_t freeYoung = 0;
+    uint8_t freeNever = 0;
+    uint8_t freeAuth = 0;
+    uint8_t freeSame = 0;
+    uint32_t takeLife = 0;
+    unsigned haveFree = 0;
+    if (tgt != 0) {
+        haveFree = RegionLifeDiag::LookupLastFree(tgt, &freeSeq, &freeLife, &freePath, &freePhase, &freeGc, &freeStart,
+                                                  &freeEnd, &freeKnown, &freeLive, &freeYoung, &freeNever, &freeAuth,
+                                                  &freeSame, &takeLife)
+                       ? 1U
+                       : 0U;
+    }
+    unsigned verdict = 0;
+    const char* verdictName = "na";
+    if (lastEi < 0) {
+        verdict = 1;
+        verdictName = "jia_no_t1";
+    } else if (lastMi < 0) {
+        verdict = 4;
+        verdictName = "no_t2_mark";
+    } else {
+        const EdgeRow& er = g_edges[static_cast<size_t>(lastEi)];
+        const MarkRow& mr = g_marks[static_cast<size_t>(lastMi)];
+        if (er.holderMarked == 1) {
+            verdict = 2;
+            verdictName = "yi_post_mark";
+        } else if (er.gcCount < mr.gcCount) {
+            verdict = 3;
+            verdictName = "bing_pre_mark";
+        } else if (er.gcCount > mr.gcCount) {
+            verdict = 2;
+            verdictName = "yi_post_mark_gc";
+        } else if (er.phase < mr.phase) {
+            verdict = 3;
+            verdictName = "bing_pre_mark_phase";
+        } else if (er.phase > mr.phase) {
+            verdict = 2;
+            verdictName = "yi_post_mark_phase";
+        } else {
+            verdict = 2;
+            verdictName = "yi_same_phase_conc";
+        }
+    }
+    char line[768];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][edgemiss] join tag=%s slot=%#zx holder=%#zx tgt=%#zx "
+                      "haveT1=%u edgeHits=%u edgeTotal=%zu edgeRemap=%zu "
+                      "haveT2=%u markHits=%u markTotal=%zu "
+                      "haveT3=%u freePath=%u freePhase=%u freeGc=%u neverExam=%u sameLife=%u "
+                      "verdict=%s(%u)\n",
+                      tag != nullptr ? tag : "?", slot, holder, tgt, lastEi >= 0 ? 1U : 0U, edgeHits, etot,
+                      g_edgeRemap.load(std::memory_order_relaxed), lastMi >= 0 ? 1U : 0U, markHits, mtot, haveFree,
+                      static_cast<unsigned>(freePath), static_cast<unsigned>(freePhase), freeGc,
+                      static_cast<unsigned>(freeNever), static_cast<unsigned>(freeSame), verdictName, verdict);
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
+    if (lastEi >= 0) {
+        const EdgeRow& er = g_edges[static_cast<size_t>(lastEi)];
+        char e[640];
+        int en2 = sprintf_s(e, sizeof(e),
+                            "[GCV2][edgemiss] T1 write slot=%#zx tgt=%#zx holder=%#zx phase=%u gc=%u "
+                            "barrier=%s(%u) satbOld=%u satbNew=%u hMarked@w=%u hYoung=%u seq=%u pc=%#zx\n",
+                            er.slot, er.tgt, er.holder, static_cast<unsigned>(er.phase), er.gcCount,
+                            BarrierName(er.barrier), static_cast<unsigned>(er.barrier),
+                            static_cast<unsigned>(er.satbOld), static_cast<unsigned>(er.satbNew),
+                            static_cast<unsigned>(er.holderMarked), static_cast<unsigned>(er.holderYoung), er.seq,
+                            er.pc);
+        if (en2 > 0) {
+            WriteLine(e, static_cast<size_t>(en2));
+        }
+    } else {
+        char miss[256];
+        int mn2 = sprintf_s(miss, sizeof(miss),
+                            "[GCV2][edgemiss] T1_missing slot=%#zx tgt=%#zx edgeTotal=%zu "
+                            "(no barrier NoteEdgeWrite for large tgt; not proof of plain store alone)\n",
+                            slot, tgt, etot);
+        if (mn2 > 0) {
+            WriteLine(miss, static_cast<size_t>(mn2));
+        }
+    }
+    if (lastMi >= 0) {
+        const MarkRow& mr = g_marks[static_cast<size_t>(lastMi)];
+        char m[320];
+        int mn3 = sprintf_s(m, sizeof(m),
+                            "[GCV2][edgemiss] T2 mark obj=%#zx start=%#zx off=%u phase=%u gc=%u seq=%u "
+                            "source=%s(%u)\n",
+                            mr.obj, mr.start, mr.off, static_cast<unsigned>(mr.phase), mr.gcCount, mr.seq,
+                            MarkSourceName(mr.source), static_cast<unsigned>(mr.source));
+        if (mn3 > 0) {
+            WriteLine(m, static_cast<size_t>(mn3));
+        }
+    }
+    if (haveFree) {
+        char f[320];
+        int fn = sprintf_s(f, sizeof(f),
+                           "[GCV2][edgemiss] T3 free path=%u phase=%u gc=%u start=%#zx neverExam=%u sameLife=%u\n",
+                           static_cast<unsigned>(freePath), static_cast<unsigned>(freePhase), freeGc, freeStart,
+                           static_cast<unsigned>(freeNever), static_cast<unsigned>(freeSame));
+        if (fn > 0) {
+            WriteLine(f, static_cast<size_t>(fn));
+        }
+    }
+        if (YoungClaimOn()) {
+        int majorIdx = (lastMajorSkipMi >= 0) ? lastMajorSkipMi : lastMajorClaimMi;
+        unsigned majorWasMarked = (lastMajorSkipMi >= 0) ? 1U : ((lastMajorClaimMi >= 0) ? 0U : 255U);
+        uint32_t majorGc = 0;
+        uint16_t majorPhase = 0;
+        uint8_t majorYoung = 0xff;
+        uint8_t joinedSource = MARK_SOURCE_UNKNOWN;
+        uint8_t joinedHasRef = 0xff;
+        uint8_t joinedNonYoungRef = 0xff;
+        if (majorIdx >= 0) {
+            const MarkRow& major = g_marks[static_cast<size_t>(majorIdx)];
+            majorGc = major.gcCount;
+            majorPhase = major.phase;
+            majorYoung = major.regionYoung;
+            joinedSource = major.source;
+            joinedHasRef = major.hasRef;
+            joinedNonYoungRef = major.nonYoungRef;
+        } else {
+            MajorSkipMeta skipMeta;
+            if (LookupMajorSkipLedger(holder, skipMeta)) {
+                majorWasMarked = 1;
+                majorGc = skipMeta.gc;
+                majorPhase = skipMeta.phase;
+                majorYoung = skipMeta.regionYoung;
+                joinedSource = skipMeta.source;
+                joinedHasRef = skipMeta.hasRef;
+                joinedNonYoungRef = skipMeta.nonYoungRef;
+            }
+        }
+        uint32_t claimGc = 0;
+        uint16_t claimPhase = 0;
+        unsigned haveYoungClaim = lastYoungMi >= 0 ? 1U : 0U;
+        if (lastYoungMi >= 0) {
+            const MarkRow& claim = g_marks[static_cast<size_t>(lastYoungMi)];
+            claimGc = claim.gcCount;
+            claimPhase = claim.phase;
+        } else {
+            uint8_t claimSrc = LookupClaimLedger(holder, claimGc);
+            if (claimSrc == MARK_SOURCE_YOUNG) {
+                haveYoungClaim = 1;
+            }
+        }
+        unsigned haveMajor = (majorIdx >= 0 || majorWasMarked == 1U) ? 1U : 0U;
+        YoungClaimGcStats& majorStats = g_youngClaimByGc[majorGc & (kYoungClaimGcCap - 1)];
+        size_t gcYoungClaim = majorStats.youngClaim.load(std::memory_order_relaxed);
+        size_t gcWasMarked = majorStats.majorWasMarked.load(std::memory_order_relaxed);
+        size_t gcJoinedYoung = majorStats.joinedYoung.load(std::memory_order_relaxed);
+        size_t gcJoinedHasRef = majorStats.joinedHasRef.load(std::memory_order_relaxed);
+        size_t gcJoinedNonYoungRef = majorStats.joinedNonYoungRef.load(std::memory_order_relaxed);
+        uint8_t gctibHasSlot = 0xff;
+        uintptr_t slotOffset = (holder != 0 && slot >= holder) ? (slot - holder) : 0;
+        if (holder != 0 && slot != 0 && Heap::IsHeapAddress(holder)) {
+            BaseObject* holderObj = reinterpret_cast<BaseObject*>(holder);
+            if (Collector::PlausibleManagedObjectGate("youngclaim.gctib", holderObj)) {
+                gctibHasSlot = 0;
+                holderObj->ForEachRefField([slot, &gctibHasSlot](RefField<>& field) {
+                    if (reinterpret_cast<uintptr_t>(&field) == slot) {
+                        gctibHasSlot = 1;
+                    }
+                });
+            }
+        }
+        char join[1024];
+        int jn = sprintf_s(join, sizeof(join),
+                           "[GCV2][youngclaim] holder_join tag=%s holder=%#zx slot=%#zx slotOff=%#zx "
+                           "haveYoungClaim=%u youngClaimHits=%u claimGc=%u claimPhase=%u "
+                           "haveMajor=%u majorHits=%u wasMarked=%u majorGc=%u majorPhase=%u majorYoung=%u "
+                           "joinedSource=%s(%u) hasRef=%u nonYoungRef=%u gctibHasSlot=%u "
+                           "gcYoungClaim=%zu gcWasMarked=%zu gcJoinedYoung=%zu gcJoinedHasRef=%zu "
+                           "gcJoinedNonYoungRef=%zu\n",
+                            tag != nullptr ? tag : "?", holder, slot, slotOffset, haveYoungClaim,
+                            youngClaimHits, claimGc, static_cast<unsigned>(claimPhase), haveMajor,
+                           majorHits, majorWasMarked, majorGc, static_cast<unsigned>(majorPhase),
+                           static_cast<unsigned>(majorYoung), MarkSourceName(joinedSource),
+                           static_cast<unsigned>(joinedSource), static_cast<unsigned>(joinedHasRef),
+                           static_cast<unsigned>(joinedNonYoungRef), static_cast<unsigned>(gctibHasSlot),
+                           gcYoungClaim, gcWasMarked, gcJoinedYoung, gcJoinedHasRef, gcJoinedNonYoungRef);
+        if (jn > 0) {
+            WriteLine(join, static_cast<size_t>(jn));
+        }
+        ReportYoungClaim("edge_join");
+    }
+}
+
 void DumpZero(const char* tag, const ZeroRow& row)
 {
     char line[768];
@@ -405,6 +1017,22 @@ void DumpZero(const char* tag, const ZeroRow& row)
     // regionlife: last free of CAS-null target (same-life via lifeId anti-reuse).
     if (WhoZeroOn() && row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
         RegionLifeDiag::DumpJoinForTarget(row.tgt, tag);
+    }
+    // holdercapture: the CAS-null target is the object the collector decided was dead.
+    // Its pre-free mark face says whether anything ever marked it.
+    if (MarkFaceSnap::Enabled()) {
+        // "whozero*" tags are emitted from the crash handler; "heal_null" is the live
+        // write path and must not pay for the interior sweep.
+        const bool crashTime = (tag != nullptr && std::strncmp(tag, "whozero", 7) == 0);
+        if (row.tgt != 0) {
+            MarkFaceSnap::DumpJoinForAddr(row.tgt, "casnull_tgt", crashTime);
+        }
+        if (row.holderObj != 0) {
+            MarkFaceSnap::DumpJoinForAddr(row.holderObj, "casnull_holder", crashTime);
+        }
+    }
+    if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
+        DumpEdgeJoin(row.slot, row.holderObj, row.tgt, tag);
     }
 }
 
@@ -674,6 +1302,80 @@ bool Enabled()
     return GateOn();
 }
 
+bool YoungClaimEnabled()
+{
+    return YoungClaimOn();
+}
+
+// holdercapture: read the two youngclaim ledgers for one object without printing.
+// Callers freeze the verdict at snapshot time, because both ledgers can be
+// overwritten before a crash handler ever runs — and an overwritten ledger reads
+// exactly like "this object was never claimed".
+uint8_t LookupMarkOrigin(uintptr_t obj, uint32_t* claimGc, uint8_t* majorSkip, uint32_t* majorGc,
+                         uint8_t* hasRef, uint8_t* nonYoungRef)
+{
+    if (claimGc != nullptr) {
+        *claimGc = 0;
+    }
+    if (majorSkip != nullptr) {
+        *majorSkip = 0;
+    }
+    if (majorGc != nullptr) {
+        *majorGc = 0;
+    }
+    if (hasRef != nullptr) {
+        *hasRef = 0xff;
+    }
+    if (nonYoungRef != nullptr) {
+        *nonYoungRef = 0xff;
+    }
+    if (!YoungClaimOn() || obj == 0) {
+        return MARK_SOURCE_UNKNOWN;
+    }
+    uint32_t gc = 0;
+    // countMiss=false: this is a bulk sweep over freed objects, and folding its
+    // misses into g_claimLedgerLookupMiss would destroy that counter's meaning.
+    uint8_t source = LookupClaimLedger(obj, gc, false);
+    if (claimGc != nullptr) {
+        *claimGc = gc;
+    }
+    MajorSkipMeta meta;
+    if (LookupMajorSkipLedger(obj, meta)) {
+        if (majorSkip != nullptr) {
+            *majorSkip = 1;
+        }
+        if (majorGc != nullptr) {
+            *majorGc = meta.gc;
+        }
+        if (hasRef != nullptr) {
+            *hasRef = meta.hasRef;
+        }
+        if (nonYoungRef != nullptr) {
+            *nonYoungRef = meta.nonYoungRef;
+        }
+        if (source == MARK_SOURCE_UNKNOWN) {
+            source = meta.source;
+        }
+    }
+    return source;
+}
+
+ScopedMajorMarkTask::ScopedMajorMarkTask()
+{
+    active = YoungClaimOn();
+    if (active) {
+        ++g_majorMarkTaskDepth;
+    }
+}
+
+ScopedMajorMarkTask::~ScopedMajorMarkTask()
+{
+    if (active) {
+        CHECK_DETAIL(g_majorMarkTaskDepth > 0, "youngclaim major-task scope underflow");
+        --g_majorMarkTaskDepth;
+    }
+}
+
 void NoteRaw(const void* oldAddr, const void* newAddr, const void* slot, uint16_t site)
 {
     if (!GateOn()) {
@@ -727,8 +1429,8 @@ void NoteCollect(uintptr_t start, uintptr_t end, uint64_t liveBytes, uint32_t rt
 
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done)
 {
-    // whozero needs the copy ring to reconcile HealSlot-null against post-move slot addrs.
-    if (!GateOn() && !WhoZeroOn()) {
+    // whozero/edgemiss need the copy ring to reconcile rings against post-move slot addrs.
+    if (!GateOn() && !WhoZeroOn() && !EdgeMissOn()) {
         return;
     }
     if (GateOn()) {
@@ -804,6 +1506,50 @@ void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t do
                 zr.slot = ns;
                 MarkZeroPage(ns);
                 g_zeroRemap.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    // edgemiss: remap edge-ring slots + mark-ring objects that lived in from-object.
+    if (done != 0 && EdgeMissOn() && size > 0 && from != 0 && to != 0) {
+        uintptr_t f0 = from;
+        uintptr_t t0 = to;
+        uintptr_t sz = static_cast<uintptr_t>(size);
+        if (EdgeRangeMaybeMarked(from, sz)) {
+            uint32_t en = static_cast<uint32_t>(
+                g_edgeTotal.load(std::memory_order_acquire) < kEdgeCap ?
+                    g_edgeTotal.load(std::memory_order_relaxed) : kEdgeCap);
+            uint32_t enext = g_edgeNext.load(std::memory_order_acquire);
+            size_t etot = g_edgeTotal.load(std::memory_order_acquire);
+            uint32_t ebase = (etot < kEdgeCap) ? 0 : (enext % kEdgeCap);
+            for (uint32_t ei = 0; ei < en; ++ei) {
+                EdgeRow& er = g_edges[(ebase + ei) % kEdgeCap];
+                if (er.slot >= f0 && er.slot < f0 + sz) {
+                    er.slot = t0 + (er.slot - f0);
+                    MarkEdgePage(er.slot);
+                    g_edgeRemap.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (er.holder >= f0 && er.holder < f0 + sz) {
+                    er.holder = t0 + (er.holder - f0);
+                }
+            }
+        }
+        if (EdgeRangeMaybeMarked(from, sz)) {
+            uint32_t mn = static_cast<uint32_t>(
+                g_markTotal.load(std::memory_order_acquire) < kMarkCap ?
+                    g_markTotal.load(std::memory_order_relaxed) : kMarkCap);
+            uint32_t mnext = g_markNext.load(std::memory_order_acquire);
+            size_t mtot = g_markTotal.load(std::memory_order_acquire);
+            uint32_t mbase = (mtot < kMarkCap) ? 0 : (mnext % kMarkCap);
+            for (uint32_t mi = 0; mi < mn; ++mi) {
+                MarkRow& mr = g_marks[(mbase + mi) % kMarkCap];
+                if (mr.obj >= f0 && mr.obj < f0 + sz) {
+                    mr.obj = t0 + (mr.obj - f0);
+                    MarkEdgePage(mr.obj);
+                    if (mr.kind == MARK_EVENT_FIRST) {
+                        RecordClaimLedger(mr.obj, mr.source, mr.gcCount);
+                    }
+                    g_markRemap.fetch_add(1, std::memory_order_relaxed);
+                }
             }
         }
     }
@@ -1005,6 +1751,210 @@ void FillZeroTargetSnapshot(ZeroRow& row)
     }
 }
 
+void NoteEdgeWrite(const void* holder, const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint8_t barrierKind)
+{
+    if (!EdgeMissOn()) {
+        return;
+    }
+    uintptr_t tgt = newRaw & 0x0000ffffffffffffULL;
+    uintptr_t oldTgt = oldRaw & 0x0000ffffffffffffULL;
+    // Narrow: only null→large installs (edge establish). Avoid ring thrash on retargets.
+    if (oldTgt != 0 || tgt == 0 || Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(tgt)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(tgt));
+    if (reg == nullptr || !reg->IsLargeRegion()) {
+        return;
+    }
+    uint32_t seq = static_cast<uint32_t>(g_edgeTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_edgeNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kEdgeCap) {
+        g_edgeWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    EdgeRow& row = g_edges[slotIdx % kEdgeCap];
+    row.slot = reinterpret_cast<uintptr_t>(slot);
+    row.oldRaw = oldRaw;
+    row.newRaw = newRaw;
+    row.tgt = tgt;
+    row.holder = reinterpret_cast<uintptr_t>(holder);
+    row.pc = reinterpret_cast<uintptr_t>(__builtin_return_address(0));
+    row.gcCount = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    row.seq = seq;
+    row.phase = CurrentPhase();
+    row.barrier = barrierKind;
+    const bool satb = PhaseSatbActive(row.phase);
+    row.satbOld = (satb && ((oldRaw & 0x0000ffffffffffffULL) != 0)) ? 1 : 0;
+    row.satbNew = (satb && tgt != 0) ? 1 : 0;
+    row.large = 1;
+    row.holderMarked = 0xff;
+    row.holderYoung = 0xff;
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(row.holder));
+        if (hr != nullptr) {
+            row.holderYoung = hr->IsYoungRegion() ? 1 : 0;
+            BaseObject* hobj = reinterpret_cast<BaseObject*>(const_cast<void*>(holder));
+            if (Collector::PlausibleManagedObjectGate("edgemiss.holder", hobj)) {
+                // main@6dd6a7d0 replaced the view-less overload with MarkView-taking
+                // ones; this diagnostic has no generation of its own, so it reads the
+                // region's own route view (the same face CollectRegion consults).
+                row.holderMarked = hr->IsRouteMarkedObject(hobj) ? 1 : 0;
+            }
+        }
+    }
+    MarkEdgePage(row.slot);
+    if (seq <= 64) {
+        char line[512];
+        int n = sprintf_s(line, sizeof(line),
+                          "[GCV2][edgemiss] write n=%u slot=%#zx old=%#zx new=%#zx tgt=%#zx "
+                          "holder=%#zx phase=%u gc=%u barrier=%s(%u) satbOld=%u satbNew=%u "
+                          "hMarked=%u hYoung=%u pc=%#zx\n",
+                          seq, row.slot, static_cast<size_t>(oldRaw), static_cast<size_t>(newRaw), tgt,
+                          row.holder, static_cast<unsigned>(row.phase), row.gcCount, BarrierName(row.barrier),
+                          static_cast<unsigned>(row.barrier), static_cast<unsigned>(row.satbOld),
+                          static_cast<unsigned>(row.satbNew), static_cast<unsigned>(row.holderMarked),
+                          static_cast<unsigned>(row.holderYoung), row.pc);
+        if (n > 0) {
+            WriteLine(line, static_cast<size_t>(n));
+        }
+    }
+}
+
+void NoteFirstMark(const void* obj, bool youngClaim)
+{
+    if (!EdgeMissOn() || obj == nullptr) {
+        return;
+    }
+    // Narrow: only young holders matter for majoryoung join (avoid mark-ring thrash).
+    uintptr_t o = reinterpret_cast<uintptr_t>(obj);
+    if (Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(o)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(o));
+    if (reg == nullptr || !reg->IsYoungRegion()) {
+        return;
+    }
+    uint8_t source = MARK_SOURCE_OTHER;
+    if (youngClaim) {
+        source = MARK_SOURCE_YOUNG;
+    } else if (g_majorMarkTaskDepth != 0) {
+        source = MARK_SOURCE_MAJOR;
+    }
+    uint32_t seq = static_cast<uint32_t>(g_markTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_markNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kMarkCap) {
+        g_markWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    MarkRow& row = g_marks[slotIdx % kMarkCap];
+    row.obj = o;
+    row.start = reg->GetRegionStart();
+    row.off = static_cast<uint32_t>(reg->GetAddressOffset(static_cast<MAddress>(o)));
+    row.gcCount = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    row.seq = seq;
+    row.phase = CurrentPhase();
+    row.kind = MARK_EVENT_FIRST;
+    row.source = source;
+    row.regionYoung = 1;
+    row.wasMarked = 0;
+    row.hasRef = 0xff;
+    row.nonYoungRef = 0xff;
+    RecordClaimLedger(o, source, row.gcCount);
+    YoungClaimGcStats& stats = g_youngClaimByGc[row.gcCount & (kYoungClaimGcCap - 1)];
+    if (source == MARK_SOURCE_YOUNG) {
+        g_youngClaimTotal.fetch_add(1, std::memory_order_relaxed);
+        stats.youngClaim.fetch_add(1, std::memory_order_relaxed);
+    } else if (source == MARK_SOURCE_MAJOR) {
+        g_majorClaimTotal.fetch_add(1, std::memory_order_relaxed);
+        stats.majorClaim.fetch_add(1, std::memory_order_relaxed);
+    }
+    MarkEdgePage(o); // reuse page filter so copy remap only scans when needed
+}
+
+void NoteMajorWasMarked(const void* obj)
+{
+    if (!YoungClaimOn() || obj == nullptr) {
+        return;
+    }
+    uintptr_t o = reinterpret_cast<uintptr_t>(obj);
+    if (Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(o)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(o));
+    if (reg == nullptr) {
+        return;
+    }
+    const uint32_t gc = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    YoungClaimGcStats& stats = g_youngClaimByGc[gc & (kYoungClaimGcCap - 1)];
+    g_majorWasMarkedTotal.fetch_add(1, std::memory_order_relaxed);
+    stats.majorWasMarked.fetch_add(1, std::memory_order_relaxed);
+    const bool young = reg->IsYoungRegion();
+    if (young) {
+        g_majorWasMarkedYoungTotal.fetch_add(1, std::memory_order_relaxed);
+        stats.majorWasMarkedYoung.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    // A region may have been promoted in place after the young claim.  Its
+    // current generation is evidence to report, not a precondition for the
+    // address/source join.
+    uint32_t claimGc = 0;
+    uint8_t source = LookupClaimLedger(o, claimGc);
+    uint8_t hasRef = 0;
+    uint8_t nonYoungRef = 0;
+    if (source == MARK_SOURCE_YOUNG) {
+        g_majorJoinedYoungTotal.fetch_add(1, std::memory_order_relaxed);
+        stats.joinedYoung.fetch_add(1, std::memory_order_relaxed);
+        hasRef = reinterpret_cast<BaseObject*>(o)->HasRefField() ? 1 : 0;
+        if (hasRef != 0) {
+            g_majorJoinedHasRefTotal.fetch_add(1, std::memory_order_relaxed);
+            stats.joinedHasRef.fetch_add(1, std::memory_order_relaxed);
+            reinterpret_cast<BaseObject*>(o)->ForEachRefField([&nonYoungRef](RefField<>& field) {
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                RegionInfo* targetRegion =
+                    RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (targetRegion != nullptr && !targetRegion->IsYoungRegion()) {
+                    nonYoungRef = 1;
+                }
+            });
+            if (nonYoungRef != 0) {
+                g_majorJoinedNonYoungRefTotal.fetch_add(1, std::memory_order_relaxed);
+                stats.joinedNonYoungRef.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    MajorSkipMeta skipMeta;
+    skipMeta.gc = gc;
+    skipMeta.phase = CurrentPhase();
+    skipMeta.source = source;
+    skipMeta.regionYoung = young ? 1 : 0;
+    skipMeta.hasRef = hasRef;
+    skipMeta.nonYoungRef = nonYoungRef;
+    RecordMajorSkipLedger(o, skipMeta);
+
+    uint32_t seq = static_cast<uint32_t>(g_markTotal.fetch_add(1, std::memory_order_relaxed) + 1);
+    uint32_t slotIdx = g_markNext.fetch_add(1, std::memory_order_relaxed);
+    if (slotIdx >= kMarkCap) {
+        g_markWrap.fetch_add(1, std::memory_order_relaxed);
+    }
+    MarkRow& row = g_marks[slotIdx % kMarkCap];
+    row.obj = o;
+    row.start = reg->GetRegionStart();
+    row.off = static_cast<uint32_t>(reg->GetAddressOffset(static_cast<MAddress>(o)));
+    row.gcCount = gc;
+    row.seq = seq;
+    row.phase = skipMeta.phase;
+    row.kind = MARK_EVENT_MAJOR_SKIP;
+    row.source = source;
+    row.regionYoung = young ? 1 : 0;
+    row.wasMarked = 1;
+    row.hasRef = hasRef;
+    row.nonYoungRef = nonYoungRef;
+    MarkEdgePage(o);
+    (void)claimGc;
+}
+
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
 {
     (void)newRaw;
@@ -1057,6 +2007,9 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
         }
         if (row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
             RegionLifeDiag::DumpJoinForTarget(row.tgt, "heal_null");
+        }
+        if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
+            DumpEdgeJoin(row.slot, row.holderObj, row.tgt, "heal_null");
         }
     }
 }
@@ -1231,10 +2184,17 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastIdx].oldRaw);
         }
+        // notraced: was TraceObjectRefFields called for this holder?
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, g_zeros[lastIdx].holderObj);
+        }
     } else if (haveMove) {
         DumpZero("whozeroMove", g_zeros[lastMoveIdx]);
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastMoveIdx].oldRaw);
+        }
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, g_zeros[lastMoveIdx].holderObj);
         }
     } else if (slotBytes != 0) {
         char miss[256];
@@ -1248,6 +2208,9 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         // Still report reject-ring emptiness even without a whozero tgt.
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, 0);
+        }
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, 0);
         }
     }
     // Crash-time holder mark face (r13 = LexerImpl holder). Complements CAS-null snapshot.
@@ -1294,6 +2257,14 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
                            crashHGarb, crashHAuth, crashHNever);
         if (hn > 0) {
             WriteLine(hline, static_cast<size_t>(hn));
+        }
+        DumpEdgeJoin(slotBytes, r13, 0, "crash_holder");
+        // holdercapture: the line above reads the face *now*; if the region was already
+        // freed it answers 0 for a reason unrelated to marking. This one replays what the
+        // face said at the last instant before that free.
+        MarkFaceSnap::DumpJoinForAddr(r13, "crash_holder", true);
+        if (slotBytes != 0) {
+            MarkFaceSnap::DumpJoinForAddr(slotBytes, "crash_slot", true);
         }
     }
     // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.
@@ -1674,6 +2645,47 @@ void NoteCrashRegs(uintptr_t rdi, uintptr_t rax, uintptr_t r12, uintptr_t r14, u
     }
 
     JoinCopyAndZero(r14);
+}
+
+void ReportYoungClaim(const char* point)
+{
+    if (!YoungClaimOn()) {
+        return;
+    }
+    uint32_t gc = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+    YoungClaimGcStats& stats = g_youngClaimByGc[gc & (kYoungClaimGcCap - 1)];
+    char line[896];
+    int n = sprintf_s(line, sizeof(line),
+                      "[GCV2][youngclaim] health point=%s gc=%u "
+                      "wasMarkedTotal=%zu wasMarkedYoungTotal=%zu youngClaimTotal=%zu majorClaimTotal=%zu "
+                      "joinedYoungTotal=%zu joinedHasRefTotal=%zu joinedNonYoungRefTotal=%zu "
+                      "gcWasMarked=%zu gcWasMarkedYoung=%zu gcYoungClaim=%zu gcMajorClaim=%zu "
+                      "gcJoinedYoung=%zu gcJoinedHasRef=%zu gcJoinedNonYoungRef=%zu "
+                      "markTotal=%zu markWrap=%zu markRemap=%zu ledgerInsertFail=%zu ledgerLookupMiss=%zu "
+                      "env=MRT_GCV2_YOUNGCLAIM=1\n",
+                      point != nullptr ? point : "?", gc,
+                      g_majorWasMarkedTotal.load(std::memory_order_relaxed),
+                      g_majorWasMarkedYoungTotal.load(std::memory_order_relaxed),
+                      g_youngClaimTotal.load(std::memory_order_relaxed),
+                      g_majorClaimTotal.load(std::memory_order_relaxed),
+                      g_majorJoinedYoungTotal.load(std::memory_order_relaxed),
+                      g_majorJoinedHasRefTotal.load(std::memory_order_relaxed),
+                      g_majorJoinedNonYoungRefTotal.load(std::memory_order_relaxed),
+                      stats.majorWasMarked.load(std::memory_order_relaxed),
+                      stats.majorWasMarkedYoung.load(std::memory_order_relaxed),
+                      stats.youngClaim.load(std::memory_order_relaxed),
+                      stats.majorClaim.load(std::memory_order_relaxed),
+                      stats.joinedYoung.load(std::memory_order_relaxed),
+                      stats.joinedHasRef.load(std::memory_order_relaxed),
+                      stats.joinedNonYoungRef.load(std::memory_order_relaxed),
+                      g_markTotal.load(std::memory_order_relaxed),
+                      g_markWrap.load(std::memory_order_relaxed),
+                      g_markRemap.load(std::memory_order_relaxed),
+                      g_claimLedgerInsertFail.load(std::memory_order_relaxed),
+                      g_claimLedgerLookupMiss.load(std::memory_order_relaxed));
+    if (n > 0) {
+        WriteLine(line, static_cast<size_t>(n));
+    }
 }
 
 void Report(const char* point)

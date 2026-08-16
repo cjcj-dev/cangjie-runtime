@@ -562,6 +562,9 @@ private:
     using MinorSlotSet = std::unordered_set<MAddress>;
     using MinorInteriorBaseMap = std::unordered_map<MAddress, BaseObject*>;
 
+    bool MarkObjectImpl(BaseObject* obj, bool youngClaim) const;
+    bool MarkYoungObject(BaseObject* obj) const { return MarkObjectImpl(obj, true); }
+
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;
     BaseObject* ResolveMinorReference(RefField<>& field) const;

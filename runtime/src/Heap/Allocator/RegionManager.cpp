@@ -1088,6 +1088,9 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
     RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
+    // holdercapture: large regions above the release threshold never reach CollectRegion,
+    // so the snapshot has to be taken on this path too or the face is lost unrecorded.
+    MarkFaceSnap::NoteRegionFree(region, RegionLifeDiag::PATH_RELEASE_LARGE);
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
@@ -1706,6 +1709,29 @@ size_t RegionManager::CollectLargeGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
+        // holdercapture: sample the face here, BEFORE the predicate below decides.
+        //
+        // Sampling early is necessary but NOT sufficient, and the earlier version of this
+        // comment claimed otherwise. Through one view the two predicates are ordered, not
+        // equal: for a large region IsMarkedObject(view,0) is GetMarkedRegionFlag(view)==1
+        // while IsSurvivedObject(view,0) is that OR isResurrected, so marked implies
+        // survived. Every region this loop releases failed !IsSurvivedObject(view,0) and
+        // therefore reads marked==0 through that same view - one line earlier just as
+        // surely as at the top of ReleaseRegion. Moving the sample moves the zero; it does
+        // not remove it.
+        //
+        // What is actually measurable is disagreement between faces. GetMarkedRegionFlag
+        // returns 0 from its first line when the view's epoch is not the region's current
+        // one (RegionInfo.h), so a region marked under one epoch can read dead under the
+        // epoch this decision binds. MarkFaceSnap therefore records the predicate's own
+        // view AND the route view side by side, plus whether the route view's epoch gate
+        // was even open - without that last column, "the faces agree" and "the second face
+        // was unreadable" are the same observation.
+        //
+        // The mark bit read through the view below is a control, not the finding: it must
+        // be 0 on every released region, and if it ever is not, the reading of this
+        // predicate is wrong and the rest of the measurement is void.
+        MarkFaceSnap::NoteBeforeReleaseDecision(region);
         // for large region, the offset of obj is 0
         MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         if (!region->IsSurvivedObject(view, 0)) {
