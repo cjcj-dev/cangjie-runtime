@@ -165,6 +165,14 @@ struct RegRow {
     uint8_t survivedSameView = 0xff;
     uint64_t viewEpoch = 0;
     uint64_t routeEpoch = 0;
+    // Which face carried the mark, as data rather than as an assumption. The young face
+    // is only readable on a young region (GetMarkView<Young> CHECKs otherwise), so 0xff
+    // here means "not asked", never "not marked".
+    uint8_t markedOldFace = 0xff;
+    uint8_t markedYoungFace = 0xff;
+    uint64_t youngEpoch = 0;
+    uint8_t routeGenYoung = 0xff;
+    uint8_t routeEpochLive = 0xff; // 0 = route's epoch gate is shut, so markedRoute is 0 by construction
 };
 
 constexpr size_t kRegCap = 1u << 15;
@@ -217,6 +225,9 @@ std::atomic<size_t> g_preEpochSplit{ 0 };     // released AND the two views disa
 std::atomic<size_t> g_preRetained{ 0 };
 std::atomic<size_t> g_preRetMarkedRoute{ 0 };
 std::atomic<size_t> g_preRetMarkedSame{ 0 };
+// Released regions whose route-view epoch gate was shut. markedRoute is 0 for these by
+// construction, so they must be excluded before a zero numerator is read as agreement.
+std::atomic<size_t> g_preRelRouteEpochDead{ 0 };
 
 // Positive control. A run in which nothing crashes produces joinTry=0, and a broken
 // join path produces joinTry=0 as well. The self-test separates them by joining an
@@ -404,7 +415,8 @@ void DumpRegRow(const char* tag, const char* kind, uintptr_t addr, const RegRow&
                       "walked=%u markedN=%u survivedN=%u trunc=%u live=%llu young=%u knownEmpty=%u "
                       "neverExam=%u auth=%u rtype=%u freeSeq=%u freeGc=%u freePhase=%u path=%u "
                       "markedSameView=%u survivedSameView=%u markedRoute=%u viewEpoch=%llu "
-                      "routeEpoch=%llu\n",
+                      "routeEpoch=%llu markedOldFace=%u markedYoungFace=%u youngEpoch=%llu "
+                      "routeGenYoung=%u routeEpochLive=%u\n",
                       tag != nullptr ? tag : "join", kind, addr, row.start, row.end, row.allocPtr,
                       static_cast<unsigned>(row.large), static_cast<unsigned>(row.largeIsMarked),
                       static_cast<unsigned>(row.mbNull), static_cast<unsigned>(row.rbNull),
@@ -420,7 +432,12 @@ void DumpRegRow(const char* tag, const char* kind, uintptr_t addr, const RegRow&
                       static_cast<unsigned>(row.survivedSameView),
                       static_cast<unsigned>(row.markedRoute),
                       static_cast<unsigned long long>(row.viewEpoch),
-                      static_cast<unsigned long long>(row.routeEpoch));
+                      static_cast<unsigned long long>(row.routeEpoch),
+                      static_cast<unsigned>(row.markedOldFace),
+                      static_cast<unsigned>(row.markedYoungFace),
+                      static_cast<unsigned long long>(row.youngEpoch),
+                      static_cast<unsigned>(row.routeGenYoung),
+                      static_cast<unsigned>(row.routeEpochLive));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
@@ -538,7 +555,10 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
     reg.large = large ? 1 : 0;
     reg.mbNull = (mb == nullptr) ? 1 : 0;
     reg.rbNull = (rb == nullptr) ? 1 : 0;
-    // face B is the only mark face a large region has; read it as such, never the bitmap.
+    // A large region's mark state is a single flag rather than a bitmap, but it is
+    // per-generation: the flag is scoped by MarkView<G>'s epoch, so "the" face is a
+    // function of which view you bind. (Before the generational split there was only
+    // one, and the comment that used to sit here still said so.)
     reg.largeIsMarked = large ? (ReadMarked(region, 0, path) ? 1 : 0) : 0xff;
     if (path == RegionLifeDiag::PATH_PRE_RELEASE_DECISION && large) {
         MarkView<Generation::Old> pview = region->GetMarkView<Generation::Old>();
@@ -547,6 +567,24 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
         reg.markedRoute = region->IsRouteMarkedObject(static_cast<size_t>(0)) ? 1 : 0;
         reg.viewEpoch = pview.GetEpoch();
         reg.routeEpoch = MarkEpochOf(region);
+        reg.markedOldFace = reg.markedSameView;
+        // GetMarkView<Young> CHECKs !IsYoungRegion() and aborts, so the young face is
+        // only legible when the region actually is young. 0xff means "not asked".
+        if (region->IsYoungRegion()) {
+            MarkView<Generation::Young> yview = region->GetMarkView<Generation::Young>();
+            reg.markedYoungFace = region->IsMarkedObject(yview, static_cast<size_t>(0)) ? 1 : 0;
+            reg.youngEpoch = yview.GetEpoch();
+        }
+        // Does the route read's epoch gate even open? GetMarkedRegionFlag returns 0 from
+        // its first line when the view's epoch is not the region's current one, so a
+        // markedRoute of 0 taken under a closed gate says nothing about the mark bit.
+        // Without this column "the two faces agree" and "the second face was never
+        // readable" are the same observation.
+        reg.routeGenYoung = region->GetRouteMarkGeneration() == Generation::Young ? 1 : 0;
+        const uint64_t routeLive = reg.routeGenYoung == 1
+                                       ? region->GetMarkSnapshotEpoch<Generation::Young>()
+                                       : region->GetMarkSnapshotEpoch<Generation::Old>();
+        reg.routeEpochLive = (reg.routeEpoch == routeLive) ? 1 : 0;
     }
     reg.young = region->IsYoungRegion() ? 1 : 0;
     reg.knownEmpty = knownEmpty ? 1 : 0;
@@ -643,6 +681,10 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
             }
             if (reg.viewEpoch != reg.routeEpoch) {
                 g_preEpochSplit.fetch_add(1, std::memory_order_relaxed);
+            }
+            // The false negative to rule out before calling a zero "the faces agree".
+            if (reg.routeEpochLive == 0) {
+                g_preRelRouteEpochDead.fetch_add(1, std::memory_order_relaxed);
             }
         } else {
             g_preRetained.fetch_add(1, std::memory_order_relaxed);
@@ -856,7 +898,8 @@ void Report(const char* point)
     int prn = sprintf_s(pre, sizeof(pre),
                         "[GCV2][holdercap] predecision point=%s largeSampled=%zu released=%zu "
                         "releasedMarkedSameView=%zu releasedMarkedRoute=%zu releasedEpochSplit=%zu "
-                        "retained=%zu retainedMarkedSameView=%zu retainedMarkedRoute=%zu\n",
+                        "retained=%zu retainedMarkedSameView=%zu retainedMarkedRoute=%zu "
+                        "releasedRouteEpochDead=%zu\n",
                         point != nullptr ? point : "?", g_preLarge.load(std::memory_order_relaxed),
                         g_preReleased.load(std::memory_order_relaxed),
                         g_preRelMarkedSame.load(std::memory_order_relaxed),
@@ -864,7 +907,8 @@ void Report(const char* point)
                         g_preEpochSplit.load(std::memory_order_relaxed),
                         g_preRetained.load(std::memory_order_relaxed),
                         g_preRetMarkedSame.load(std::memory_order_relaxed),
-                        g_preRetMarkedRoute.load(std::memory_order_relaxed));
+                        g_preRetMarkedRoute.load(std::memory_order_relaxed),
+                        g_preRelRouteEpochDead.load(std::memory_order_relaxed));
     if (prn > 0) {
         WriteLine(pre, static_cast<size_t>(prn));
     }
