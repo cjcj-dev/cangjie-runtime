@@ -12,6 +12,7 @@
 #include <unistd.h>
 
 #include "Common/ColourMask.h"
+#include "Common/ColourPredicates.h"
 #include "Heap/Verify/DiagGate.h"
 #include "securec.h"
 
@@ -80,6 +81,22 @@ struct FaceCounters {
     std::atomic<uint64_t> maskbadNotNlg;   // ZGC mask says bad, our predicate says good
     std::atomic<uint64_t> nlgNotMaskbad;   // our predicate says bad, mask says good (plain)
     std::atomic<uint64_t> neitherAB;
+
+    // P x Z -- the two is_load_good implementations that exist in this tree, each asked
+    // about the same word, neither of them re-implemented here.
+    //
+    //   P = Collector::is_load_good (Collector.h:159) -- what the six barrier fast paths run.
+    //   Z = ColourPredicates::is_load_good (ColourPredicates.h:116) -- the ZGC transcription,
+    //       has_address && !is_load_bad && is_remapped. Zero product callers today.
+    //
+    // zbad_pgood is the cell that decides the fix: production admits the reference and hands
+    // back the from address, while the ZGC-shaped predicate would have sent it down the slow
+    // path. If it is non-empty, changing the definition is a real behaviour change with a
+    // measured population. If it is empty, the definition is not what is wrong.
+    std::atomic<uint64_t> zgoodPgood;
+    std::atomic<uint64_t> zbadPgood;
+    std::atomic<uint64_t> zgoodPbad;
+    std::atomic<uint64_t> zbadPbad;
 
     // The other two published masks, on the same word. The load mask covers only part of
     // the colour space; a word can be load-good and still mark-bad or store-bad.
@@ -181,7 +198,8 @@ void ReportFace(const char* point, uint8_t face)
                         "[GCV2][loadgood] point=%s face=%s load_mask=%#zx mark_mask=%#zx "
                         "store_mask=%#zx maskbad_and_nlg=%zu maskbad_not_nlg=%zu "
                         "nlg_not_maskbad=%zu neither_ab=%zu mark_bad=%zu store_bad=%zu "
-                        "loadgood_markbad=%zu loadgood_storebad=%zu\n",
+                        "loadgood_markbad=%zu loadgood_storebad=%zu "
+                        "zgood_pgood=%zu zbad_pgood=%zu zgood_pbad=%zu zbad_pbad=%zu\n",
                         point == nullptr ? "?" : point, FaceName(face),
                         static_cast<size_t>(::g_cjLoadBadMask), static_cast<size_t>(::g_cjMarkBadMask),
                         static_cast<size_t>(::g_cjStoreBadMask),
@@ -192,7 +210,11 @@ void ReportFace(const char* point, uint8_t face)
                         static_cast<size_t>(f.markBad.load(std::memory_order_relaxed)),
                         static_cast<size_t>(f.storeBad.load(std::memory_order_relaxed)),
                         static_cast<size_t>(f.loadGoodMarkBad.load(std::memory_order_relaxed)),
-                        static_cast<size_t>(f.loadGoodStoreBad.load(std::memory_order_relaxed)));
+                        static_cast<size_t>(f.loadGoodStoreBad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.zgoodPgood.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.zbadPgood.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.zgoodPbad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.zbadPbad.load(std::memory_order_relaxed)));
     if (abn > 0) {
         WriteLine(ab, static_cast<size_t>(abn));
     }
@@ -333,6 +355,19 @@ void NoteRead(uint8_t face, uintptr_t word, bool ghost, bool loadGood)
         Bump(f.nlgNotMaskbad);
     } else {
         Bump(f.neitherAB);
+    }
+
+    // P x Z. Z is called, not re-derived: any divergence has to come from the two
+    // definitions, not from a third copy written here.
+    const bool zGood = ColourPredicates::is_load_good(word, mask);
+    if (zGood && loadGood) {
+        Bump(f.zgoodPgood);
+    } else if (!zGood && loadGood) {
+        Bump(f.zbadPgood);
+    } else if (zGood) {
+        Bump(f.zgoodPbad);
+    } else {
+        Bump(f.zbadPbad);
     }
 
     // The rest of the colour space, on the same word.
