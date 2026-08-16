@@ -1021,11 +1021,14 @@ void DumpZero(const char* tag, const ZeroRow& row)
     // holdercapture: the CAS-null target is the object the collector decided was dead.
     // Its pre-free mark face says whether anything ever marked it.
     if (MarkFaceSnap::Enabled()) {
+        // "whozero*" tags are emitted from the crash handler; "heal_null" is the live
+        // write path and must not pay for the interior sweep.
+        const bool crashTime = (tag != nullptr && std::strncmp(tag, "whozero", 7) == 0);
         if (row.tgt != 0) {
-            MarkFaceSnap::DumpJoinForAddr(row.tgt, "casnull_tgt");
+            MarkFaceSnap::DumpJoinForAddr(row.tgt, "casnull_tgt", crashTime);
         }
         if (row.holderObj != 0) {
-            MarkFaceSnap::DumpJoinForAddr(row.holderObj, "casnull_holder");
+            MarkFaceSnap::DumpJoinForAddr(row.holderObj, "casnull_holder", crashTime);
         }
     }
     if (EdgeMissOn() && row.myBranch == 2 && row.tgt != 0) {
@@ -2256,9 +2259,9 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         // holdercapture: the line above reads the face *now*; if the region was already
         // freed it answers 0 for a reason unrelated to marking. This one replays what the
         // face said at the last instant before that free.
-        MarkFaceSnap::DumpJoinForAddr(r13, "crash_holder");
+        MarkFaceSnap::DumpJoinForAddr(r13, "crash_holder", true);
         if (slotBytes != 0) {
-            MarkFaceSnap::DumpJoinForAddr(slotBytes, "crash_slot");
+            MarkFaceSnap::DumpJoinForAddr(slotBytes, "crash_slot", true);
         }
     }
     // Not whole-object ClearUnits: end/cursor should stay small non-zero Int64s if only bytes died.

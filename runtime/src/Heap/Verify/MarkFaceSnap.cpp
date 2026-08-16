@@ -508,7 +508,7 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
     }
 }
 
-void DumpJoinForAddr(uintptr_t addr, const char* tag)
+void DumpJoinForAddr(uintptr_t addr, const char* tag, bool deepScan)
 {
     if (!GateOn() || addr == 0) {
         return;
@@ -521,7 +521,7 @@ void DumpJoinForAddr(uintptr_t addr, const char* tag)
         Report("join_exact");
         return;
     }
-    const ObjRow* cover = LookupObjCovering(addr);
+    const ObjRow* cover = deepScan ? LookupObjCovering(addr) : nullptr;
     if (cover != nullptr) {
         g_joinInterior.fetch_add(1, std::memory_order_relaxed);
         DumpObjRow(tag, "interior", addr, *cover);

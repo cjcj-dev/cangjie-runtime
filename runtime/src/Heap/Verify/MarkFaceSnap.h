@@ -46,7 +46,11 @@ void NoteRegionFree(RegionInfo* region, uint16_t path);
 
 // Join an address (crash holder, CAS-null target, ...) against the snapshots.
 // Prints exactly one line: exact object hit, interior hit, region-only hit, or miss.
-void DumpJoinForAddr(uintptr_t addr, const char* tag);
+//
+// deepScan sweeps every row to resolve an interior address (a field, a RawArray+8)
+// onto the object that contains it. That is a full pass over the row table, so it is
+// for the crash handler only — a live-path caller would pay it on every hit.
+void DumpJoinForAddr(uintptr_t addr, const char* tag, bool deepScan = false);
 
 // Activity proof + periodic persistence. Called at each GC end and atexit, so a
 // timeout or SIGKILL cannot erase what was already observed.
