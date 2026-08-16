@@ -108,12 +108,26 @@ struct CopyRow {
     uint32_t seq;
 };
 
+// noforward: site-52/42 CAS-null snapshot of the *target* (oldRaw peel) + holder gen.
+// classKind: 1=甲 unmarked 2=乙 free|garbage 3=丙 marked no fwd 4=丁 not in cset/ghost 0=n/a
 struct ZeroRow {
     uintptr_t slot;
     uintptr_t oldRaw;
     uint16_t site;
     uint16_t phase;
     uint32_t seq;
+    uintptr_t tgt;
+    uint32_t fwdWord;
+    uint8_t rtype;
+    uint8_t routeState;
+    uint8_t freeR;
+    uint8_t garbR;
+    uint8_t youngR;
+    uint8_t ghostR;
+    uint8_t marked;
+    uint8_t live0;
+    uint8_t holderYoung;
+    uint8_t classKind;
 };
 
 // Page filter for whozero zero-slot remapping on copy (4KiB pages). Default unused until WHOZERO.
@@ -345,11 +359,19 @@ void DumpCopy(const char* tag, const CopyRow& row)
 
 void DumpZero(const char* tag, const ZeroRow& row)
 {
-    char line[384];
+    char line[640];
     int n = sprintf_s(line, sizeof(line),
-                      "[GCV2][slotwindow] %s slot=%#zx old=%#zx site=%u phase=%u seq=%u\n",
+                      "[GCV2][slotwindow] %s slot=%#zx old=%#zx site=%u phase=%u seq=%u "
+                      "tgt=%#zx rtype=%u rs=%u free=%u garb=%u young=%u ghost=%u "
+                      "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u\n",
                       tag, row.slot, row.oldRaw, static_cast<unsigned>(row.site),
-                      static_cast<unsigned>(row.phase), row.seq);
+                      static_cast<unsigned>(row.phase), row.seq, row.tgt,
+                      static_cast<unsigned>(row.rtype), static_cast<unsigned>(row.routeState),
+                      static_cast<unsigned>(row.freeR), static_cast<unsigned>(row.garbR),
+                      static_cast<unsigned>(row.youngR), static_cast<unsigned>(row.ghostR),
+                      static_cast<unsigned>(row.marked), static_cast<unsigned>(row.live0),
+                      row.fwdWord, static_cast<unsigned>(row.holderYoung),
+                      static_cast<unsigned>(row.classKind));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
@@ -813,6 +835,71 @@ void MaybeMidCopyStall(size_t size)
     TimeUtil::SleepForNano(ns);
 }
 
+void FillZeroTargetSnapshot(ZeroRow& row)
+{
+    row.tgt = 0;
+    row.fwdWord = 0;
+    row.rtype = 0xff;
+    row.routeState = 0xff;
+    row.freeR = 0;
+    row.garbR = 0;
+    row.youngR = 0xff;
+    row.ghostR = 0;
+    row.marked = 0xff;
+    row.live0 = 0xff;
+    row.holderYoung = 0xff;
+    row.classKind = 0;
+    if (!WhoZeroOn()) {
+        return;
+    }
+    // Peel colour bits (low 48 on our heap pointers).
+    uintptr_t tgt = row.oldRaw & 0x0000ffffffffffffULL;
+    row.tgt = tgt;
+    if (row.slot != 0 && Runtime::CurrentRef() != nullptr && Heap::IsHeapAddress(row.slot)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(row.slot));
+        if (hr != nullptr) {
+            row.holderYoung = hr->IsYoungRegion() ? 1 : 0;
+        }
+    }
+    if (tgt == 0 || Runtime::CurrentRef() == nullptr || !Heap::IsHeapAddress(tgt)) {
+        return;
+    }
+    RegionInfo* reg = RegionInfo::GetGhostFromRegionAt(static_cast<MAddress>(tgt));
+    if (reg == nullptr) {
+        reg = RegionInfo::TryGetRegionInfoAt(static_cast<MAddress>(tgt));
+    }
+    if (reg == nullptr) {
+        row.classKind = 4; // 丁: no region / not in cset view
+        return;
+    }
+    row.rtype = static_cast<uint8_t>(reg->GetRegionType());
+    row.routeState = static_cast<uint8_t>(reg->GetRouteState());
+    row.freeR = reg->IsFreeRegion() ? 1 : 0;
+    row.garbR = reg->IsGarbageRegion() ? 1 : 0;
+    row.youngR = reg->IsYoungRegion() ? 1 : 0;
+    row.ghostR = reg->IsGhostFromRegion() ? 1 : 0;
+    size_t off = reg->GetAddressOffset(static_cast<MAddress>(tgt));
+    LiveInfo* g0 = reg->GetLiveInfo0ForProbe();
+    row.live0 = (g0 != nullptr && g0->IsSurvivedObject(off)) ? 1 : 0;
+    BaseObject* obj = reinterpret_cast<BaseObject*>(tgt);
+    if (Collector::PlausibleManagedObjectGate("noforward.zero", obj)) {
+        row.marked = reg->IsMarkedObject(obj) ? 1 : 0;
+        row.fwdWord = static_cast<uint32_t>(obj->GetStateWord().GetObjectState().GetStateBits());
+    } else {
+        row.marked = 0;
+    }
+    // Classify why "no to-version" / null install (executor view).
+    if (row.freeR || row.garbR) {
+        row.classKind = 2; // 乙 recycled region
+    } else if (row.ghostR == 0 && row.site == static_cast<uint16_t>(HealSite::WCollectorMinorFixForwardNull)) {
+        row.classKind = 4; // 丁: fix moved a non-ghost / non-cset target
+    } else if (row.marked == 0 || row.live0 == 0) {
+        row.classKind = 1; // 甲 not marked / not in liveInfo0 ⇒ not evacuated
+    } else {
+        row.classKind = 3; // 丙 marked+live0 but still no to-version
+    }
+}
+
 void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_t site)
 {
     (void)newRaw;
@@ -834,16 +921,25 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
     row.site = site;
     row.phase = CurrentPhase();
     row.seq = seq;
+    FillZeroTargetSnapshot(row);
     if (WhoZeroOn()) {
         MarkZeroPage(row.slot);
     }
     // whozero: rare-path log only (successful CAS to null). Cap keeps stderr bounded.
     if (WhoZeroOn() && seq <= 256) {
-        char line[320];
+        char line[512];
         int n = sprintf_s(line, sizeof(line),
-                          "[GCV2][whozero] path=heal_null n=%u slot=%p old=%#zx site=%s(%u) phase=%u\n",
+                          "[GCV2][whozero] path=heal_null n=%u slot=%p old=%#zx site=%s(%u) "
+                          "phase=%u tgt=%#zx rtype=%u rs=%u free=%u garb=%u young=%u ghost=%u "
+                          "marked=%u live0=%u fwd=%#x holderYoung=%u class=%u\n",
                           seq, slot, static_cast<size_t>(oldRaw), SiteName(site),
-                          static_cast<unsigned>(site), static_cast<unsigned>(row.phase));
+                          static_cast<unsigned>(site), static_cast<unsigned>(row.phase), row.tgt,
+                          static_cast<unsigned>(row.rtype), static_cast<unsigned>(row.routeState),
+                          static_cast<unsigned>(row.freeR), static_cast<unsigned>(row.garbR),
+                          static_cast<unsigned>(row.youngR), static_cast<unsigned>(row.ghostR),
+                          static_cast<unsigned>(row.marked), static_cast<unsigned>(row.live0),
+                          row.fwdWord, static_cast<unsigned>(row.holderYoung),
+                          static_cast<unsigned>(row.classKind));
         if (n > 0) {
             WriteLine(line, static_cast<size_t>(n));
         }
