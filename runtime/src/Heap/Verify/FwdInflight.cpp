@@ -94,10 +94,11 @@ void EnsureAtexit()
 }
 
 // Count published readers matching `region`; nullptr means "count every reader in flight".
-size_t ScanSlots(const void* region, size_t* bySite)
+// Count published readers in [first, last). `region == nullptr` means "count every reader".
+size_t ScanRange(size_t first, size_t last, const void* region, size_t* bySite)
 {
     size_t hits = 0;
-    for (size_t i = 0; i < kSlotCount; ++i) {
+    for (size_t i = first; i < last; ++i) {
         const void* published = g_slots[i].region.load(std::memory_order_acquire);
         if (published == nullptr) {
             continue;
@@ -112,6 +113,18 @@ size_t ScanSlots(const void* region, size_t* bySite)
         }
     }
     return hits;
+}
+
+size_t ScanSlots(const void* region, size_t* bySite)
+{
+    // Only slots below the thread high-water mark can ever have been published, and the
+    // control's slots mirror them at kMaxThreads + idx. Scanning the full 2 * kMaxThreads on
+    // every retire edge would put millions of loads per GC on an instrument whose whole point
+    // is to observe the schedule rather than perturb it.
+    const size_t threads = g_nextThreadIdx.load(std::memory_order_relaxed);
+    const size_t highWater = (threads < kMaxThreads) ? threads : kMaxThreads;
+    return ScanRange(0, highWater, region, bySite) +
+        ScanRange(kMaxThreads, kMaxThreads + highWater, region, bySite);
 }
 
 } // namespace
@@ -141,6 +154,13 @@ Scope::Scope(const RegionInfo* region, Site site) : armed(false)
     size_t idx = ThreadSlot();
     if (idx >= kMaxThreads) {
         g_slotOverflow.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    // A nested lookup on the same thread must not take the slot from its caller: the inner
+    // scope's destructor would clear it and the caller's remaining window would go
+    // unpublished, which under-reports in exactly the direction that would make the defect
+    // look smaller. The outermost scope owns the slot, and its window covers the inner one.
+    if (g_slots[idx].region.load(std::memory_order_relaxed) != nullptr) {
         return;
     }
     EnsureAtexit();
