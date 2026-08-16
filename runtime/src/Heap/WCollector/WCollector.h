@@ -21,6 +21,7 @@
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/ToverFailDiag.h"
 #include "Heap/Verify/MutatorRelocate.h"
+#include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class ScopedStopTheWorld;
 
@@ -302,6 +303,15 @@ public:
         }
         if (tv) {
             ToverFailDiag::NoteRemapCall();
+        }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::Role funnelRole = MutatorRelocate::Role::MUTATOR;
+            if (IsGcThread()) {
+                funnelRole = MutatorRelocate::Role::GC;
+            } else if (IsRuntimeThread()) {
+                funnelRole = MutatorRelocate::Role::OTHER_RT;
+            }
+            MutatorRelocate::NoteFunnelCall(funnelRole);
         }
         if (!Heap::IsHeapAddress(obj)) {
             if (funnel) {

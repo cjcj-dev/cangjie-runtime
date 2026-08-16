@@ -34,6 +34,7 @@ std::atomic<size_t> g_selfCopies{ 0 };
 std::atomic<size_t> g_anyCopies{ 0 };
 std::atomic<size_t> g_anyCopiesByRole[kRoleCount];
 std::atomic<size_t> g_selfCopiesByRole[kRoleCount];
+std::atomic<size_t> g_funnelByRole[kRoleCount];
 std::atomic<size_t> g_selfCopyBytes{ 0 };
 std::atomic<size_t> g_fallbacks[kFallbackCount];
 
@@ -211,6 +212,15 @@ void NoteAnyCopy(Role role)
     g_anyCopies.fetch_add(1, std::memory_order_relaxed);
 }
 
+void NoteFunnelCall(Role role)
+{
+    EnsureAtexit();
+    size_t idx = static_cast<size_t>(role);
+    if (idx < kRoleCount) {
+        g_funnelByRole[idx].fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
 void NoteWaitEnter()
 {
     EnsureAtexit();
@@ -268,11 +278,12 @@ void DumpSummary()
     for (size_t i = 0; i < kRoleCount; ++i) {
         size_t any = g_anyCopiesByRole[i].load(std::memory_order_relaxed);
         size_t self = g_selfCopiesByRole[i].load(std::memory_order_relaxed);
-        if (any == 0 && self == 0) {
+        if (any == 0 && self == 0 && g_funnelByRole[i].load(std::memory_order_relaxed) == 0) {
             continue;
         }
-        LOG(RTLOG_ERROR, "[GCV2][mutreloc] role=%s any_copies=%zu self_copies=%zu",
-            RoleName(static_cast<Role>(i)), any, self);
+        LOG(RTLOG_ERROR, "[GCV2][mutreloc] role=%s any_copies=%zu self_copies=%zu funnel_calls=%zu",
+            RoleName(static_cast<Role>(i)), any, self,
+            g_funnelByRole[i].load(std::memory_order_relaxed));
     }
     for (size_t i = 0; i < kFallbackCount; ++i) {
         size_t n = g_fallbacks[i].load(std::memory_order_relaxed);

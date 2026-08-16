@@ -126,6 +126,16 @@ void NoteSelfCopy(size_t bytes, Role role);
 // the per-role self_copies counts are a share of.
 void NoteAnyCopy(Role role);
 
+// Every entry into WCollector::relocate_or_remap_object, bucketed by role.
+//
+// This is the control for the role predicate itself. "role=mutator is absent from the copy
+// census" has two readings -- no mutator ever relocated, or IsGcThread/IsRuntimeThread are
+// not discriminating here -- and they call for opposite conclusions. The remap funnel is
+// entered from make_load_good inside the six barriers, which user code runs, so a working
+// predicate has to produce a non-zero mutator count here. If this census is also gc-only,
+// the copy census says nothing about roles and must not be read as if it did.
+void NoteFunnelCall(Role role);
+
 // --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
 void NoteWaitEnter();   // entered WaitRoutedTipReady
 void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
