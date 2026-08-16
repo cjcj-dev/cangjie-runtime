@@ -242,12 +242,19 @@ bool InjectPlainHeapWriteOnce()
     }
 
     bool injected = false;
+    // concreffix: the slot must currently CARRY COLOUR, otherwise "install plain" writes back the
+    // value that is already there and the census sees no delta -- a positive control that verifies
+    // nothing while still printing POSITIVE_CONTROL. Observed in the field: the first eligible slot
+    // was already colourless, so old == plain and the injected/non-injected plainHeapRefSlots
+    // distributions were identical. Skipping already-plain slots is what makes this a real control;
+    // the skip count is reported so a MISSED verdict says which reason it was.
+    size_t skippedAlreadyPlain = 0;
     Heap::GetHeap().ForEachObj(
-        [&injected](BaseObject* obj) {
+        [&injected, &skippedAlreadyPlain](BaseObject* obj) {
             if (injected || obj == nullptr || !obj->HasRefField()) {
                 return;
             }
-            obj->ForEachRefField([&injected, obj](RefField<>& field) {
+            obj->ForEachRefField([&injected, &skippedAlreadyPlain, obj](RefField<>& field) {
                 if (injected) {
                     return;
                 }
@@ -255,6 +262,12 @@ bool InjectPlainHeapWriteOnce()
                 MAddress oldRaw = raw(oldZ);
                 MAddress addr = oldRaw & kAddressBitsMask;
                 if (addr == 0) {
+                    return;
+                }
+                // Same predicate the census counts with, so an injected slot is guaranteed to move
+                // a slot out of `coloured` and into `plainHeapRefSlots`.
+                if ((oldRaw & kColourMetaMask) == 0) {
+                    ++skippedAlreadyPlain;
                     return;
                 }
                 // Install plain = address bits only (zero colour metadata + zero tag).
@@ -287,10 +300,15 @@ bool InjectPlainHeapWriteOnce()
                     g_injectState.slot = &field;
                     g_injectState.saved = oldZ;
                     g_injectState.active = true;
+                    // delta!=0 is the evidence the write changed the slot; a control that prints
+                    // old == plain proved nothing and must not read as a pass.
                     std::fprintf(stderr,
                                  "[GCV2][plain][inject] POSITIVE_CONTROL holder=%p slot=%p "
-                                 "old=%#zx plain=%#zx leave_until_census_restore\n",
-                                 obj, &field, static_cast<size_t>(oldRaw), static_cast<size_t>(plainRaw));
+                                 "old=%#zx plain=%#zx delta=%#zx colour_cleared=%u "
+                                 "skipped_already_plain=%zu leave_until_census_restore\n",
+                                 obj, &field, static_cast<size_t>(oldRaw), static_cast<size_t>(plainRaw),
+                                 static_cast<size_t>(oldRaw ^ plainRaw),
+                                 static_cast<unsigned>((oldRaw & kColourMetaMask) != 0), skippedAlreadyPlain);
                     injected = true;
                 }
             });
@@ -298,7 +316,13 @@ bool InjectPlainHeapWriteOnce()
         false);
 
     if (!injected) {
-        std::fprintf(stderr, "[GCV2][plain][inject] POSITIVE_CONTROL_MISSED no non-null heap slot found\n");
+        // Say which reason: no eligible slot at all, or every candidate was already colourless.
+        // The second case means the heap genuinely holds no coloured slot at this point, which is
+        // itself the answer the census is being asked for -- not a broken apparatus.
+        std::fprintf(stderr,
+                     "[GCV2][plain][inject] POSITIVE_CONTROL_MISSED no coloured non-null heap slot "
+                     "found skipped_already_plain=%zu\n",
+                     skippedAlreadyPlain);
     }
     return injected;
 }

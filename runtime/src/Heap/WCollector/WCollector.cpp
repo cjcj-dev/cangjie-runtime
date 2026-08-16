@@ -6093,10 +6093,21 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // Start() once — heap ForwardObject → RouteRegion → CompactRegion could memset free-tail
         // while a root still named that from (leave-alone → reclaim → GetSize UAF).
         // Phase 1: root families only (grant-before-route + parallel root Fix).
-        FixMinorRootSlotsParallel(pool);
-        pool->Start();
-        pool->WaitFinish();
+        // concreffix: split the two phases on the structured channel. ZGC keeps root fix in
+        // pause_relocate_start but has no centralized field-walk at all — slots heal through the
+        // load barrier. So phase 1 is work a self-healing barrier would still owe, and phase 2 is
+        // the part it would remove. Timing them apart is the only way to size that trade.
+        {
+            MRT_PHASE_TIMER("young.ref_fix_bulk_roots");
+            FixMinorRootSlotsParallel(pool);
+            pool->Start();
+            pool->WaitFinish();
+        }
         // Phase 2: export/extern preforward + heap/remset Fix (same pool, after roots).
+        // The timer below closes right after WaitFinish; it covers the two preforward tasks as
+        // well, because they are queued into the same pool run and cannot be timed apart.
+        {
+        MRT_PHASE_TIMER("young.ref_fix_bulk_heap");
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
 
@@ -6138,12 +6149,24 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         pool->Start();
         pool->WaitFinish();
+        }
 
         const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
         CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                      "T-D ghost dispel during parallel ref_fix window entry=%zu exit=%zu "
                      "(plain InGhostFromRegion read assumes phase isolation)",
                      dispelAtEntry, dispelAtExit);
+        // concreffix: population of the centralized walk — the denominator for "how much work
+        // would a self-healing barrier remove". It must not use REPORT (that would perturb the
+        // very timings being measured), but it must not be always-on either: unconditional
+        // RTLOG_ERROR would put one ERROR line per minor on the product path. Gate it like the
+        // other GC instruments (ebceaf91 precedent); nObj/nSlot/heapWorkers are pre-existing
+        // loop bounds, so the disabled path costs one cached bool test.
+        static const bool walkPopOn = DiagGate::LegacyOrToken("MRT_GCV2_REFFIX_WALK", "reffixwalk");
+        if (walkPopOn) {
+            LOG(RTLOG_ERROR, "[GCV2][reffix][walk] nObj=%zu nSlot=%zu heapWorkers=%d", nObj, nSlot,
+                heapWorkers);
+        }
 
         size_t active = 0;
         std::string takenStr;
@@ -6456,16 +6479,22 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 // from-faces (ZGC load-barrier). GC does NOT concurrent-forward or concurrent
                 // field-walk here — both raced (ForEachBitmapWord rdi=0 / TypeInfo+8 MAPERR;
                 // O2 NEW 11/20 after forward_only). Slot fix + residual ForwardFromSpace stay STW.
-                stw->reset();
-                VLOG(REPORT,
-                     "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
-                     "mode=mutator_self_heal",
-                     reachableVec.size(), remsetVec.size());
-                // Brief yield so mutators actually run; without this the re-STW can re-enter
-                // before any mutator progress (still correct, but no concurrent work done).
-                sched_yield();
-                *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
-                                                            GCPhase::GC_PHASE_PREFORWARD);
+                // concreffix: the released window is the entire product of this flag, so time it
+                // on the structured channel. The record can only be emitted from inside this
+                // branch, which makes it the positive control that the flag took effect.
+                {
+                    MRT_PHASE_TIMER("young.ref_fix_conc_window");
+                    stw->reset();
+                    VLOG(REPORT,
+                         "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
+                         "mode=mutator_self_heal",
+                         reachableVec.size(), remsetVec.size());
+                    // Brief yield so mutators actually run; without this the re-STW can re-enter
+                    // before any mutator progress (still correct, but no concurrent work done).
+                    sched_yield();
+                    *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
+                                                                GCPhase::GC_PHASE_PREFORWARD);
+                }
                 VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
 
                 // STW slot fix after concurrent forward (roots may have been dirtied by mutators).
@@ -6487,6 +6516,13 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     VLOG(REPORT,
                          "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
                          rememberedSlots.size(), concRemset.size(), remsetVec.size());
+                    // concreffix: conc_new is the only observable a mutator can leave behind in
+                    // this window, so it decides whether the window did anything at all. The
+                    // VLOG above needs REPORT; mirror it on the always-on channel next to the
+                    // other per-minor [GCV2] lines so it survives a REPORT-off measurement run.
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                        rememberedSlots.size(), concRemset.size(), remsetVec.size());
                 }
                 if (!useParallel) {
                     size_t taken = 0;
