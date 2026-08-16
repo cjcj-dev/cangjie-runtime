@@ -2718,6 +2718,66 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     return nullptr;
 }
 
+// rootgate positive control (default off: MRT_GCV2_ROOTGATE_ACCOUNT=1 or MRT_GCV2_DIAG=rootgate).
+// The liveness gate added to the load-good arm of ResolveMinorReference(RootSlot&) below is
+// only allowed to claim it fixes something if it can be shown to refuse something. Counting
+// every refusal here is what makes "0" reportable as "this gate never fired on this workload"
+// instead of being read as "the defect is fixed". The gate itself is unconditional product
+// code; only the accounting is gated, so the arm cannot be silently disabled by the env.
+static std::atomic<size_t> g_rootGateRefused{ 0 };
+static std::atomic<size_t> g_rootGateNoRegion{ 0 };
+static std::atomic<size_t> g_rootGateFreeOrGarbage{ 0 };
+static std::atomic<size_t> g_rootGateBadTip{ 0 };
+static std::atomic<bool> g_rootGateAtexit{ false };
+
+static void DumpRootGateSummary()
+{
+    LOG(RTLOG_ERROR,
+        "[GCV2][rootgate] SUMMARY refused=%zu no_region=%zu free_or_garbage=%zu bad_tip=%zu "
+        "(load-good arm of ResolveMinorReference(RootSlot&); 0 = gate never fired on this workload)",
+        g_rootGateRefused.load(std::memory_order_relaxed), g_rootGateNoRegion.load(std::memory_order_relaxed),
+        g_rootGateFreeOrGarbage.load(std::memory_order_relaxed), g_rootGateBadTip.load(std::memory_order_relaxed));
+}
+
+static bool RootGateAccountOn()
+{
+    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_ROOTGATE_ACCOUNT", "rootgate");
+    return on;
+}
+
+static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObject* to, RegionInfo* toRegion)
+{
+    if (!RootGateAccountOn()) {
+        return;
+    }
+    bool expected = false;
+    if (g_rootGateAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        (void)std::atexit([]() { DumpRootGateSummary(); });
+    }
+    if (toRegion == nullptr) {
+        g_rootGateNoRegion.fetch_add(1, std::memory_order_relaxed);
+    } else if (toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
+        g_rootGateFreeOrGarbage.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_rootGateBadTip.fetch_add(1, std::memory_order_relaxed);
+    }
+    size_t n = g_rootGateRefused.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 16) {
+        VLOG(REPORT,
+             "[GCV2][rootgate] refuse root=%p from=%p to=%p toRegion=%p free=%u garbage=%u validTip=%u "
+             "— would have installed a non-live to-address into a root slot",
+             static_cast<const void*>(&root), from, to, toRegion,
+             static_cast<unsigned>(toRegion != nullptr && toRegion->IsFreeRegion()),
+             static_cast<unsigned>(toRegion != nullptr && toRegion->IsGarbageRegion()),
+             static_cast<unsigned>(to != nullptr && to->IsValidObject()));
+    }
+    // The workloads this runs under die on SIGSEGV, which skips atexit. Emit at every power
+    // of two so the count survives the crash it is meant to explain.
+    if ((n & (n - 1)) == 0) {
+        DumpRootGateSummary();
+    }
+}
+
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
 {
     zaddress_unsafe observed = root.LoadPlain();
@@ -2746,9 +2806,26 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
             BaseObject* to = FindToVersion(object);
+            // satbfix parity. Three arms resolve a from-object to a to-address and install it;
+            // this was the only one without the liveness gate:
+            //   RefField<>& overload, load-good arm  :2641-2644  — has it, and its comment
+            //       names the failure: "a RECENT_FULL hole address must not be written into
+            //       the slot" (same invalid_object family as F3 rtype=2).
+            //   this overload, old-tag arm           :2758-2761  — has it.
+            //   this overload, load-good arm         (here)      — had only IsHeapAddress.
+            // Not a design trade-off: this arm writes a *root* slot, so an unchecked
+            // to-address is committed before VisitMinorRoots' PlausibleManagedObjectGate
+            // (:2933) ever inspects the value, and that gate is a tip check which cannot see
+            // free/garbage region state anyway. Refusal falls through to `return object;`,
+            // which is exactly what both sibling arms do.
             if (to != nullptr && Heap::IsHeapAddress(to)) {
-                HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
-                return to;
+                RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+                if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+                    to->IsValidObject()) {
+                    HealRoot(root, from_object(to), HealSite::WCollectorResolveRootLoadGoodForward);
+                    return to;
+                }
+                NoteRootGateRefusal(root, object, to, toRegion);
             }
         }
         return object;
