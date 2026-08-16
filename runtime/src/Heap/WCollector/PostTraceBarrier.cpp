@@ -37,6 +37,11 @@ BaseObject* PostTraceBarrier::ReadReference(BaseObject* obj, RefField<false>& fi
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being
         // overwritten; on failure, reload and apply the barrier to the newer value.
+        if (UNLIKELY(ZgcSelfHealEnabled())) {
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::PostTraceReadReference);
+            return loadGood;
+        }
         if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(), HealSite::PostTraceReadReference)) {
             DLOG(BARRIER, "heal obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);
             return loadGood;
@@ -186,6 +191,11 @@ BaseObject* PostTraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true
         }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         DCHECK(theCollector.is_load_good(goodField));
+        if (UNLIKELY(ZgcSelfHealEnabled())) {
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::PostTraceAtomicReadReference);
+            return loadGood;
+        }
         if (HealSlot(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
                      HealSite::PostTraceAtomicReadReference)) {
             DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), loadGood);

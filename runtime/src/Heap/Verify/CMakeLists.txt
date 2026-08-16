@@ -54,6 +54,7 @@ set(SRC_LIST
     "EnumPushDiag.cpp"
     "StackRootSlotAttest.cpp"
     "LoadGoodProbe.cpp"
+    "ZgcSelfHealDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
