@@ -1090,6 +1090,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
+    RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
     size_t res = region->GetRegionSize();
     size_t num = region->GetUnitCount();
     size_t unitIndex = region->GetUnitIdx();
@@ -1674,6 +1675,7 @@ size_t RegionManager::CollectPinnedGarbage()
             auto fixToObj = [](BaseObject* obj) { ReleaseNativeResource(obj); };
             del->VisitAllObjects(fixToObj);
 
+            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_PINNED_GARBAGE);
             garbageSize += CollectRegion(del);
             continue;
         } else {
@@ -1701,6 +1703,7 @@ size_t RegionManager::CollectLargeGarbage()
             if (del->GetRegionSize() > RegionInfo::LARGE_OBJECT_RELEASE_THRESHOLD) {
                 garbageSize += ReleaseRegion(del);
             } else {
+                RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_LARGE_GARBAGE);
                 garbageSize += CollectRegion(del);
             }
         } else {
@@ -2494,6 +2497,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             region->SetYoungRegionFlag(0);
             region->SetYoungAge(0);
         }
+        RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion(region);
         return;
     }
@@ -2849,6 +2853,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             (void)validAfterReset;
             (void)validAfterInv;
         }
+        RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_AFTER_COPY);
         CollectRegion(region);
     }
 }
