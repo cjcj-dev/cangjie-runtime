@@ -11,6 +11,7 @@ set(SRC_LIST
     "CollectorProxy.cpp"
     "CollectorResources.cpp"
     "TracingCollector.cpp"
+    "MarkPartialArray.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
     "CopyCollector.cpp"

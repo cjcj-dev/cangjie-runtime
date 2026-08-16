@@ -354,6 +354,13 @@ public:
     {
         Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
     }
+    // Follow one partial-array chunk popped off the work stack. Ported from
+    // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
+    // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
+    virtual void FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
+    }
     virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
     {
         Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");
