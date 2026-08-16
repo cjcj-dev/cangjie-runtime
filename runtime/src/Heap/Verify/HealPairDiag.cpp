@@ -17,6 +17,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
@@ -1225,10 +1226,17 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastIdx].oldRaw);
         }
+        // notraced: was TraceObjectRefFields called for this holder?
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, g_zeros[lastIdx].holderObj);
+        }
     } else if (haveMove) {
         DumpZero("whozeroMove", g_zeros[lastMoveIdx]);
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastMoveIdx].oldRaw);
+        }
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, g_zeros[lastMoveIdx].holderObj);
         }
     } else if (slotBytes != 0) {
         char miss[256];
@@ -1242,6 +1250,9 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
         // Still report reject-ring emptiness even without a whozero tgt.
         if (GateDropDiag::Enabled()) {
             GateDropDiag::NoteCrashJoin(r13, slotBytes, 0);
+        }
+        if (NoTracedDiag::Enabled()) {
+            NoTracedDiag::NoteCrashJoin(r13, 0);
         }
     }
     // Crash-time holder mark face (r13 = LexerImpl holder). Complements CAS-null snapshot.
