@@ -6996,14 +6996,14 @@ void WCollector::ValidateMinorReferences(const char* point, const std::vector<Ba
             pending.push_back(target);
         }
     };
-    auto recordRawRoot = [&inspectTarget](size_t category) {
-        return RootVisitor([category, &inspectTarget](ObjectRef& root) {
+    auto recordRawRoot = [this, &inspectTarget](size_t category) {
+        return RootVisitor([this, category, &inspectTarget](ObjectRef& root) {
             HeapSlot<> value(to_zpointer(raw(root.LoadPlain())));
             uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
             inspectTarget(category, &root, nullptr, to_object(value.GetTargetObject()), tag);
         });
     };
-    auto recordField = [&inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
+    auto recordField = [this, &inspectTarget](size_t category, BaseObject* holder, RefField<>& field) {
         RefField<> value(field);
         uint16_t tag = IsLoadBad(value) ? 1 : std::numeric_limits<uint16_t>::max();
         inspectTarget(category, &field, holder, to_object(value.GetTargetObject()), tag);
