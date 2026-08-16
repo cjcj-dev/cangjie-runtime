@@ -15,6 +15,7 @@
 #include "Allocator/RegionSpace.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Common/Runtime.h"
 #include "Mutator/MutatorManager.h"
 #include "Mutator/SatbBuffer.h"
@@ -39,6 +40,9 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     const bool stall = HealPairDiag::Enabled() && HealPairDiag::MidCopyStallNs() > 0 && size > 8;
     // NoteCopy self-gates (healpair OR whozero); always invoke so whozero can see moves.
     HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 0);
+    if (UNLIKELY(NoTracedDiag::Enabled())) {
+        NoTracedDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 0);
+    }
     if (stall) {
         // Tip first so WaitRoutedTipReady / relocate_or_remap can admit the to-address
         // while high offsets are still the reservation zero. Default-off (COPYSTALL_NS).
@@ -55,6 +59,9 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
     HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
+    if (UNLIKELY(NoTracedDiag::Enabled())) {
+        NoTracedDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
+    }
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)

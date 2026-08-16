@@ -64,6 +64,7 @@
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/GateDropDiag.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -1317,6 +1318,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
 
 void WCollector::TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
 {
+    if (UNLIKELY(NoTracedDiag::Enabled())) {
+        NoTracedDiag::NoteTrace(obj);
+    }
     auto visitor = [this, obj, &workStack](RefField<>& field) { TraceRefField(obj, field, workStack); };
     TypeInfo* typeInfo = obj->GetTypeInfo();
     if (!typeInfo->HasRefField()) {
