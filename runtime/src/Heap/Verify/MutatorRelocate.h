@@ -83,6 +83,9 @@ bool Enabled();
 bool DrainEnabled();
 // Counters on. True whenever either half is on, or standalone via MRT_GCV2_MUTRELOC_STATS=1.
 bool StatsOn();
+// Positive control (MRT_GCV2_MUTRELOC_INJECT=1). See MutatorRelocate.cpp for what it forces
+// and why attempts=0 on its own cannot be read as either success or failure.
+bool InjectOn();
 
 // --- relocate leg ---------------------------------------------------------------------
 void NoteAttempt();
@@ -101,6 +104,9 @@ void EnterScope();
 void LeaveScope();
 // Called from WCollector::ForwardObjectExclusive, immediately after CopyObject, when InScope().
 void NoteSelfCopy(size_t bytes);
+// Called from the same place for every copy regardless of thread. Separates "the ported leg
+// lost every race" from "nothing was relocated in this run at all".
+void NoteAnyCopy();
 
 // --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
 void NoteWaitEnter();   // entered WaitRoutedTipReady

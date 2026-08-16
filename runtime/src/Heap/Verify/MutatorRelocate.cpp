@@ -30,6 +30,7 @@ std::atomic<size_t> g_attempts{ 0 };
 std::atomic<size_t> g_retainOk{ 0 };
 std::atomic<size_t> g_alreadyForwarded{ 0 };
 std::atomic<size_t> g_selfCopies{ 0 };
+std::atomic<size_t> g_anyCopies{ 0 };
 std::atomic<size_t> g_selfCopyBytes{ 0 };
 std::atomic<size_t> g_fallbacks[kFallbackCount];
 
@@ -86,10 +87,34 @@ void EnsureAtexit()
 bool Enabled()
 {
     static const bool on = []() {
+        // Register the summary here, not only from the Note* helpers. The first arm run had
+        // every counter at zero and therefore printed nothing at all, which reads exactly like
+        // "the instrument is not in the binary" -- the one reading it must not be able to make.
+        EnsureAtexit();
         if (EnvIsOne("MRT_GCV2_MUTATOR_RELOCATE")) {
             return true;
         }
         return DiagGate::TokenOn("mutreloc");
+    }();
+    return on;
+}
+
+bool InjectOn()
+{
+    // Positive control on the SAME binary. The mutator remap funnel is workload-dependent:
+    // on a workload whose barrier traffic never reaches a ghost-from region, attempts=0 is
+    // consistent with "wired correctly and never needed" AND with "not wired at all". Inject
+    // routes TryForwardObject -- the pre-existing path that already retains, copies and
+    // releases, and which does run -- through TryMutatorRelocate, so retain, the copy under
+    // scope, and the attribution in ForwardObjectExclusive all have to fire. With inject on,
+    // self_copies must exceed 0; with it off it must be 0 unless the funnel itself fired.
+    // Inject changes which function performs the copy, not what the copy does.
+    static const bool on = []() {
+        EnsureAtexit();
+        if (EnvIsOne("MRT_GCV2_MUTRELOC_INJECT")) {
+            return true;
+        }
+        return DiagGate::TokenOn("mutrelocinject");
     }();
     return on;
 }
@@ -101,6 +126,7 @@ bool DrainEnabled()
     // that state underneath it. So enabling the leg enables the drain, never the other way
     // round. Standalone drain is offered so the drain's own cost is measurable.
     static const bool on = []() {
+        EnsureAtexit();
         if (EnvIsOne("MRT_GCV2_MUTRELOC_DRAIN")) {
             return true;
         }
@@ -112,6 +138,7 @@ bool DrainEnabled()
 bool StatsOn()
 {
     static const bool on = []() {
+        EnsureAtexit();
         if (EnvIsOne("MRT_GCV2_MUTRELOC_STATS")) {
             return true;
         }
@@ -149,6 +176,14 @@ void NoteSelfCopy(size_t bytes)
 {
     g_selfCopies.fetch_add(1, std::memory_order_relaxed);
     g_selfCopyBytes.fetch_add(bytes, std::memory_order_relaxed);
+}
+
+void NoteAnyCopy()
+{
+    // Every ForwardObjectExclusive copy, whoever ran it. Without this, self_copies=0 is two
+    // different findings wearing the same face: "the ported leg lost every race to a GC
+    // worker" and "nothing was relocated at all in this run". any_copies separates them.
+    g_anyCopies.fetch_add(1, std::memory_order_relaxed);
 }
 
 void NoteWaitEnter()
@@ -193,11 +228,12 @@ void DumpSummary()
     // gated on StatsOn() and therefore counted in both arms.
     LOG(RTLOG_ERROR,
         "[GCV2][mutreloc] SUMMARY relocate=%u drain=%u attempts=%zu retain_ok=%zu "
-        "self_copies=%zu self_copy_bytes=%zu already_forwarded=%zu",
+        "self_copies=%zu self_copy_bytes=%zu already_forwarded=%zu any_copies=%zu inject=%u",
         static_cast<unsigned>(Enabled()), static_cast<unsigned>(DrainEnabled()),
         g_attempts.load(std::memory_order_relaxed), g_retainOk.load(std::memory_order_relaxed),
         g_selfCopies.load(std::memory_order_relaxed), g_selfCopyBytes.load(std::memory_order_relaxed),
-        g_alreadyForwarded.load(std::memory_order_relaxed));
+        g_alreadyForwarded.load(std::memory_order_relaxed), g_anyCopies.load(std::memory_order_relaxed),
+        static_cast<unsigned>(InjectOn()));
     LOG(RTLOG_ERROR,
         "[GCV2][mutreloc] WAITLEG wait_enter=%zu wait_receipt=%zu wait_giveup=%zu wait_fatal=%zu",
         g_waitEnter.load(std::memory_order_relaxed), g_waitReceipt.load(std::memory_order_relaxed),

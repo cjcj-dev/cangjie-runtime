@@ -9092,6 +9092,19 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     }
 
     if (fwdTable.RouteRegion(region)) {
+        // portmutreloc positive control (MRT_GCV2_MUTRELOC_INJECT=1). The loop below already
+        // is retain / copy / release -- it is where the ported leg's three pieces came from.
+        // Routing it through TryMutatorRelocate once makes those pieces execute on a path this
+        // workload actually reaches, so retain, the scoped copy and the attribution in
+        // ForwardObjectExclusive are all exercised and self_copies must come out non-zero.
+        // On refusal it falls straight into the unchanged loop, so behaviour is unchanged
+        // apart from which frame ran the copy.
+        if (MutatorRelocate::InjectOn()) {
+            BaseObject* injected = TryMutatorRelocate(obj, region);
+            if (injected != nullptr) {
+                return injected;
+            }
+        }
         // secondclass ①: GetRoute is geometric plan; wait FORWARDED or read-lock
         // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
         for (;;) {
@@ -9159,8 +9172,11 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
     // reach the same CopyObject with the flag clear and are not counted.
-    if (MutatorRelocate::InScope()) {
-        MutatorRelocate::NoteSelfCopy(size);
+    if (MutatorRelocate::StatsOn()) {
+        MutatorRelocate::NoteAnyCopy();
+        if (MutatorRelocate::InScope()) {
+            MutatorRelocate::NoteSelfCopy(size);
+        }
     }
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
