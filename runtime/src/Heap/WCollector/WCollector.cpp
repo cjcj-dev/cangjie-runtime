@@ -883,6 +883,11 @@ bool WCollector::IsUnmovableFromObject(BaseObject* obj) const
 
 bool WCollector::MarkObject(BaseObject* obj) const
 {
+    return MarkObjectImpl(obj, false);
+}
+
+bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
+{
     // markfloor: work stack may hold RawArray+8 interiors (tip word = length, e.g. 0x200).
     // Return true ⇒ ConcurrentMarkingWork treats as already-marked and skips HasRefField.
     if (!Collector::PlausibleManagedObjectGate("WCollector::MarkObject", obj)) {
@@ -904,7 +909,7 @@ bool WCollector::MarkObject(BaseObject* obj) const
         HeldFreeDiag::NoteMark(obj);
     }
     if (!marked) {
-        HealPairDiag::NoteFirstMark(obj);
+        HealPairDiag::NoteFirstMark(obj, youngClaim);
         DLOG(TRACE, "mark obj %p<%p>(%zu) in region %p(%u)@%#zx, live %zu", obj, obj->GetTypeInfo(), objectSize,
              region, region->GetRegionType(), region->GetRegionStart(), region->GetLiveByteCount());
     }
@@ -3365,7 +3370,7 @@ public:
 
             if (useBitmapLedger) {
                 if (isYoung) {
-                    bool wasMarked = collector->MarkObject(object);
+                    bool wasMarked = collector->MarkYoungObject(object);
                     if (wasMarked) {
                         // ghostroute: residual unmarked young only (no FYS re-push of marked).
                         EatArmDiag::NoteWasMarkedSkipFields(object);
@@ -3416,7 +3421,7 @@ public:
                 }
             } else {
                 if (isYoung) {
-                    bool wasMarked = collector->MarkObject(object);
+                    bool wasMarked = collector->MarkYoungObject(object);
                     if (wasMarked) {
                         EatArmDiag::NoteWasMarkedSkipFields(object);
                         if (object->HasRefField() && !object->IsWeakRef()) {
@@ -3816,7 +3821,7 @@ private:
 
         if (shared.useBitmapLedger) {
             if (isYoung) {
-                bool wasMarked = collector->MarkObject(object);
+                bool wasMarked = collector->MarkYoungObject(object);
                 if (wasMarked) {
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
@@ -3841,7 +3846,7 @@ private:
             }
         } else {
             if (isYoung) {
-                bool wasMarked = collector->MarkObject(object);
+                bool wasMarked = collector->MarkYoungObject(object);
                 if (wasMarked) {
                     EatArmDiag::NoteWasMarkedSkipFields(object);
                     if (object->HasRefField() && !object->IsWeakRef()) {
@@ -4048,10 +4053,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 bool wasMarked = false;
                 if (markCostMode == 1) {
                     uint64_t t0 = TimeUtil::NanoSeconds();
-                    wasMarked = MarkObject(object);
+                    wasMarked = MarkYoungObject(object);
                     g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
                 } else {
-                    wasMarked = MarkObject(object);
+                    wasMarked = MarkYoungObject(object);
                 }
                 if (wasMarked) {
                     if (markCostMode != 0) {
@@ -4145,10 +4150,10 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             if (isYoung) {
                 if (markCostMode == 1) {
                     uint64_t t0 = TimeUtil::NanoSeconds();
-                    (void)MarkObject(object);
+                    (void)MarkYoungObject(object);
                     g_markInternalCost.markBitmapNs += TimeUtil::NanoSeconds() - t0;
                 } else {
-                    (void)MarkObject(object);
+                    (void)MarkYoungObject(object);
                 }
                 if (markCostMode != 0) {
                     ++g_markInternalCost.claimYoungN;

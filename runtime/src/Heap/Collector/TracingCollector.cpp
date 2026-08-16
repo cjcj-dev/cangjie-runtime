@@ -14,6 +14,8 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Verify/EnumPushDiag.h"
+#include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
@@ -290,6 +292,9 @@ public:
     // run concurrent marking task.
     void Execute(size_t) override
     {
+        // One task-wide origin scope lets the existing 0->1 hook identify a
+        // major claim without adding work to the common !wasMarked branch.
+        HealPairDiag::ScopedMajorMarkTask majorMarkTask;
         size_t nNewlyMarked = 0;
         // loop until work stack empty.
         for (;;) {
@@ -319,6 +324,8 @@ public:
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
+            } else if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
+                HealPairDiag::NoteMajorWasMarked(obj);
             }
             // try to fork new task if needed.
             if (threadPool != nullptr) {
@@ -1030,6 +1037,10 @@ void TracingCollector::PreGarbageCollection(bool isConcurrent)
 
 void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
 {
+    // Periodic persistence: timeout/ABRT/SIGKILL cannot erase counters from
+    // completed GC cycles. Both probes self-gate and remain default off.
+    HealPairDiag::ReportYoungClaim("gc_end");
+    NoTracedDiag::Report("gc_end");
     ReportSkippedStackMapCounts();
     // release pages in PagePool
     TransitionToGCPhase(GCPhase::GC_PHASE_RECLAIM_SATB_NODE, true);
