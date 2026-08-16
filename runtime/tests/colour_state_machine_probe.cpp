@@ -441,9 +441,9 @@ constexpr bool ModelAgreesWithLiveMasks()
     for (unsigned ei = 0; ei < kEpochCount; ++ei) {
         const ModelEpoch e = ModelEpochAt(ei);
         const BadMasks m = ComputeBadMasks(EpochColoursOf(e));
-        for (unsigned k = 0; k < 2u * kColourCount; ++k) {
-            const Colour p = (k < kColourCount) ? ColourAt(k) : ColourAtTagged(k - kColourCount);
-            if (p.fin != 0u || p.ghost != 0u || p.shadow != 0u) {
+        for (unsigned k = 0; k < kColourCount; ++k) {
+            const Colour p = ColourAt(k);
+            if (p.fin != 0u || p.ghost != 0u || p.shadow != 0u || p.tagged != 0u) {
                 continue;
             }
             const uintptr_t w = EncodeWord(p);
