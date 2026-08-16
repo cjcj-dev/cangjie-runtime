@@ -174,6 +174,19 @@ std::atomic<size_t> g_joinMiss{ 0 };
 std::atomic<bool> g_healthOnce{ false };
 std::atomic<bool> g_atexitOnce{ false };
 
+// Positive control. A run in which nothing crashes produces joinTry=0, and a broken
+// join path produces joinTry=0 as well. The self-test separates them by joining an
+// address the instrument itself recorded (must hit exact), that address+8 (must hit
+// interior), and an address no region ever covered (must miss).
+std::atomic<uintptr_t> g_selfTestObj{ 0 };
+std::atomic<bool> g_selfTestDone{ false };
+
+bool SelfTestOn()
+{
+    static const bool on = []() { return EnvIsOne("MRT_GCV2_HOLDERCAP_SELFTEST"); }();
+    return on;
+}
+
 // Single-threaded init is not guaranteed; the first caller wins and the rest spin
 // until the pointer is published. Diagnostic path only.
 std::atomic<int> g_initState{ 0 }; // 0 = untouched, 1 = building, 2 = ready
@@ -491,6 +504,9 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
                 ++survivedN;
             }
             InsertObj(row);
+            if (SelfTestOn() && row.size > 8 && g_selfTestObj.load(std::memory_order_relaxed) == 0) {
+                g_selfTestObj.store(addr, std::memory_order_relaxed);
+            }
         });
         g_objWalked.fetch_add(walked, std::memory_order_relaxed);
         if (truncated) {
@@ -645,6 +661,22 @@ void Report(const char* point)
 {
     if (!GateOn()) {
         return;
+    }
+    if (SelfTestOn() && point != nullptr && std::strcmp(point, "gc_end") == 0) {
+        uintptr_t probe = g_selfTestObj.load(std::memory_order_relaxed);
+        bool expected = false;
+        if (probe != 0 && g_selfTestDone.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+            char banner[192];
+            int bn = sprintf_s(banner, sizeof(banner),
+                               "[GCV2][holdercap] selftest begin probe=%#zx (expect exact, interior, miss)\n",
+                               probe);
+            if (bn > 0) {
+                WriteLine(banner, static_cast<size_t>(bn));
+            }
+            DumpJoinForAddr(probe, "selftest_exact", true);
+            DumpJoinForAddr(probe + 8, "selftest_interior", true);
+            DumpJoinForAddr(static_cast<uintptr_t>(0xdead0000ULL), "selftest_miss", true);
+        }
     }
     char line[512];
     int n = sprintf_s(line, sizeof(line),
