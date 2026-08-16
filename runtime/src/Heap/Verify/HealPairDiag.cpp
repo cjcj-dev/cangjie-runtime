@@ -1794,7 +1794,10 @@ void NoteEdgeWrite(const void* holder, const void* slot, uintptr_t oldRaw, uintp
             row.holderYoung = hr->IsYoungRegion() ? 1 : 0;
             BaseObject* hobj = reinterpret_cast<BaseObject*>(const_cast<void*>(holder));
             if (Collector::PlausibleManagedObjectGate("edgemiss.holder", hobj)) {
-                row.holderMarked = hr->IsMarkedObject(hobj) ? 1 : 0;
+                // main@6dd6a7d0 replaced the view-less overload with MarkView-taking
+                // ones; this diagnostic has no generation of its own, so it reads the
+                // region's own route view (the same face CollectRegion consults).
+                row.holderMarked = hr->IsRouteMarkedObject(hobj) ? 1 : 0;
             }
         }
     }
