@@ -34,6 +34,7 @@
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
 #include "Heap/Collector/ForwardDataManager.h"
+#include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/ManagedObjectGate.h"
@@ -1881,6 +1882,9 @@ public:
         SetMarkFaceSealed(false);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
         metadata.liveInfo0 = metadata.liveInfo;
+        // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain after
+        // detach (count 0) is refused; that is the ABA answer.
+        ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         SetRouteMarkGeneration(G);
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
@@ -2117,72 +2121,102 @@ public:
         }
     }
 
-    // only from-region should be locked.
-    bool TryLockReadFromRegion()
+    // ZForwarding::retain_page (zForwarding.cpp:86-108). Three-state: 0 refuses,
+    // <0 waits for done then refuses, >0 CAS +1.
+    bool RetainForwarding()
     {
-        if (metadata.rwLock.TryLockRead()) {
-            if (IsFromRegion() || IsLoneFromRegion()) {
-                return true;
-            } else {
-                metadata.rwLock.UnlockRead();
-            }
-        }
-        return false;
+        return ZForwardingLife::retain_page(metadata.fwdRefCount, metadata.fwdDone);
     }
 
-    void UnlockReadFromRegion() { metadata.rwLock.UnlockRead(); }
+    void ReleaseForwarding() { ZForwardingLife::release_page(metadata.fwdRefCount); }
+
+    // Copy path: only a from-region has payload a mutator may copy out of.
+    bool TryLockReadFromRegion()
+    {
+        if (!(IsFromRegion() || IsLoneFromRegion())) {
+            return false;
+        }
+        return RetainForwarding();
+    }
+
+    void UnlockReadFromRegion() { ReleaseForwarding(); }
+
+    // RAII retain_page / release_page. ok() is false when the page is already
+    // released or claimed — the late reader must not touch from-side state.
+    class RetainScope {
+    public:
+        explicit RetainScope(RegionInfo* region) : region(nullptr)
+        {
+            if (region != nullptr && region->RetainForwarding()) {
+                this->region = region;
+            }
+        }
+        ~RetainScope()
+        {
+            if (region != nullptr) {
+                region->ReleaseForwarding();
+            }
+        }
+        bool ok() const { return region != nullptr; }
+
+        RetainScope(const RetainScope&) = delete;
+        RetainScope& operator=(const RetainScope&) = delete;
+        RetainScope(RetainScope&&) = delete;
+        RetainScope& operator=(RetainScope&&) = delete;
+
+    private:
+        RegionInfo* region;
+    };
+
+    bool ClaimForwarding() { return ZForwardingLife::claim(metadata.fwdClaimed); }
+
+    void MarkForwardingDone() { ZForwardingLife::mark_done(metadata.fwdDone); }
+
+    bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { metadata.rwLock.UnlockWrite(); }
 
-    // portmutreloc: ZForwarding::detach_page (zForwarding.cpp:171-181) --
-    //
-    //     ZPage* ZForwarding::detach_page() {
-    //       if (_ref_count.load_acquire() != 0) {
-    //         ZLocker<ZConditionLock> locker(&_ref_lock);
-    //         while (_ref_count.load_acquire() != 0) { _ref_lock.wait(); }
-    //       }
-    //       return _page;
-    //     }
-    //
-    // ZGC will not hand the from-page back to the allocator while a reader is still inside it.
-    // TryLockReadFromRegion above is already our retain_page (many concurrent read holders,
-    // each one visible in RwLock::lockCount) and UnlockReadFromRegion is release_page -- what
-    // was missing is this third piece, the wait. RwLock::LockWrite spins until lockCount
-    // reaches 0, so it is the same wait; holding it across the retire body additionally keeps
-    // new readers out, which ZGC gets for free from retain_page failing once the count is 0.
-    //
-    // Scoped rather than a bare lock/unlock pair on purpose: the drain has to still be held
-    // when the state is actually destroyed (FreeCompactRouteTable, ClearUnits), otherwise a
-    // reader admitted in the gap is in exactly the position the drain was added to rule out.
-    //
-    // Default off. The gate is MutatorRelocate::DrainEnabled(), which is implied by the
-    // mutator-relocate leg because that leg is the one that makes a mutator read from-side
-    // payload for the length of a copy.
+    // ZForwarding in_place_relocation_claim_page + detach_page (zForwarding.cpp:110-181).
+    // Invert the count (n → -n) so new retainers refuse, wait until -1 (every reader
+    // has released), then the retire body runs exclusive. Destructor publishes done
+    // and drops the construction token to 0. Always on.
     class DrainScope {
     public:
         DrainScope(RegionInfo* region, MutatorRelocate::Retire site) : region(nullptr)
         {
-            if (region == nullptr || !MutatorRelocate::DrainEnabled()) {
+            if (region == nullptr) {
+                return;
+            }
+            int32_t before = region->metadata.fwdRefCount.load(std::memory_order_acquire);
+            if (before == 0) {
+                return;
+            }
+            uint64_t start = TimeUtil::NanoSeconds();
+            if (!region->ClaimForwarding()) {
+                // Another retire already claimed. Wait until that one published 0.
+                ZForwardingLife::detach_page(region->metadata.fwdRefCount);
+                uint64_t spun = TimeUtil::NanoSeconds() - start;
+                MutatorRelocate::NoteDrain(site, spun, true);
                 return;
             }
             this->region = region;
-            // Cost of the drain is the headline risk of turning it on, so measure it here
-            // rather than infer it: contended means at least one reader had to be waited out.
-            uint64_t start = TimeUtil::NanoSeconds();
-            bool contended = !region->metadata.rwLock.TryLockWrite();
-            if (contended) {
-                region->LockWriteRegion();
+            if (before > 0) {
+                ZForwardingLife::in_place_relocation_claim_page(region->metadata.fwdRefCount);
             }
             uint64_t spun = TimeUtil::NanoSeconds() - start;
-            MutatorRelocate::NoteDrain(site, spun, contended);
+            MutatorRelocate::NoteDrain(site, spun, before != 1);
         }
 
         ~DrainScope()
         {
-            if (region != nullptr) {
-                region->UnlockWriteRegion();
+            if (region == nullptr) {
+                return;
+            }
+            region->MarkForwardingDone();
+            if (region->metadata.fwdRefCount.load(std::memory_order_acquire) != 0) {
+                ZForwardingLife::release_page(region->metadata.fwdRefCount);
             }
         }
 
@@ -2851,6 +2885,12 @@ private:
         // thread while reclaim threads read it. Same reason notRelocatableThisCycle and
         // markFaceSealed are plain bytes.
         uint8_t routeDestHold = 0;
+        // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
+        // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
+        // stays 8-aligned. sizeof(UnitInfo) stays 200.
+        std::atomic<bool> fwdClaimed{ false };
+        std::atomic<bool> fwdDone{ false };
+        std::atomic<int32_t> fwdRefCount{ 0 };
         // holderlive (F2): owned copy of the retained mark bits (mark | resurrect). Null unless
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
@@ -3105,6 +3145,7 @@ private:
         SetUnitRole(UnitRole::FREE_UNITS);
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
+        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;

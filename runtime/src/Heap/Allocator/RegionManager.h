@@ -636,6 +636,12 @@ public:
     // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
     BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
+        // ZForwarding::retain_page before any from-side load (zRelocate.cpp:393).
+        // A refused retain is a late reader: the page is claimed or already 0.
+        RegionInfo::RetainScope retain(fromRegionInfo);
+        if (!retain.ok()) {
+            return nullptr;
+        }
         // fwdinflight: AdmitForRoute reads the from object's tip and the ghost mark bitmap,
         // and GetRoute reads liveInfo0 geometry. Publish for the whole span so a retire edge
         // can see it. Default off; no control-flow effect.
@@ -660,6 +666,10 @@ public:
             return nullptr;
         }
 
+        RegionInfo::RetainScope retain(fromRegionInfo);
+        if (!retain.ok()) {
+            return nullptr;
+        }
         // fwdinflight: see the sibling overload. Publication starts once the ghost lookup has
         // named a region -- before that there is nothing to protect.
         FwdInflight::Scope inflight(fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP);

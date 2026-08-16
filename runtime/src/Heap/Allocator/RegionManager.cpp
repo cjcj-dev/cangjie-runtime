@@ -2847,6 +2847,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // permhit: last point at which a real receipt must already be tip-valid.
         PermhitReceiptAudit(region, "publish");
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
+        // zRelocate.cpp:1152 — last act after every object on the page is relocated.
+        region->MarkForwardingDone();
         // livesame ORDER + ZGC reset_livemap (zForwarding.cpp:71-74): one publish for
         // live bytes + mark face (ResetLiveMapAfterForward).
         {

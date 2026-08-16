@@ -40,19 +40,9 @@ void ForwardDataManager::ClearPreviousForwardData()
     RegionSpace& regionSpace = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
     regionSpace.GetRegionManager().NullLiveInfoFieldsInRange(rangeStart, rangeSize);
     TagReuseProbe::ScanBeforeRelease(rangeStart, rangeSize, prev, liveStart, livePos, bmStart, bmPos);
-    // fwdgrace: hand the range to the two-transition grace period instead of madvising it
-    // here. Only the madvise moves -- the nulling above already ran, which is what keeps new
-    // readers out; the wait is for the ones already holding a liveInfo0 local. See the
-    // ForwardDataManager::GraceEnabled comment block for why nulling is not a drain and why
-    // this reuses AdvanceCompactRouteTableGracePeriod's clock rather than a new one.
-    if (GraceEnabled()) {
-        RetireGraceSlot(prev);
-        return;
-    }
-    // fwdinflight: the "structural guarantee" above is that no region FIELD still addresses
-    // this range. That is not a drain -- AdmitForRoute (RegionInfo.h:1494) loads liveInfo0
-    // into a local before using it, and nulling the field afterwards does not reach that
-    // local. Count readers in flight anywhere at the instant of release. Default off.
+    // ZForwardingLife has already drained every from-region that could still hold a
+    // liveInfo0 local into this range (DrainScope on dispel / take-garbage). A late
+    // RouteObject is refused at retain_page (count == 0) and never loads the pointer.
     FwdInflight::NoteRetireGlobal(rangeStart, rangeSize, FwdInflight::Retire::ARENA_RELEASE);
     space.ReleaseMemory();
 }
