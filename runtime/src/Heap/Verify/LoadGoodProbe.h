@@ -57,6 +57,18 @@ void NoteNull(uint8_t face);
 //               probe records exactly what production would have decided.
 void NoteRead(uint8_t face, uintptr_t word, bool ghost, bool loadGood);
 
+// Raw before/after pairs, sampled (ring, capped). Two rings, asked by two questions:
+//
+//   bad   -- the loaded word tested load-bad, and what stripping it produced. Separates
+//            "the colour already knew" (situation 1) from "the colour was fine and the
+//            address is still wrong" (situation 2).
+//   route -- a read whose production predicate said ghost, and what FindLatestVersion
+//            returned for it. delta = resolved - stripped, in bytes, signed.
+//            This is the only place the geometric route's answer is visible next to
+//            its input; see the note on GetRoute/preLiveBytes in the report.
+void NoteBadSample(uint8_t face, uintptr_t word, uintptr_t stripped);
+void NoteRouteSample(uint8_t face, uintptr_t word, uintptr_t stripped, uintptr_t resolved);
+
 // Prints every bucket for both faces. Idempotent in the sense that it may be called
 // repeatedly; each call prints the running totals. Called at gc_end and from the crash
 // path so a SIGSEGV or ABRT cannot erase what was already observed.

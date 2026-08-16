@@ -85,6 +85,22 @@ struct Samples {
 };
 Samples g_sample[kFaceCount];
 
+// Before/after rings. Capped and lossy on purpose: the question is "what do these look
+// like", not "how many are there" -- the counts above already answer that.
+constexpr size_t kPairCap = 24;
+struct PairRing {
+    std::atomic<uint64_t> n;
+    std::atomic<uint64_t> word[kPairCap];
+    std::atomic<uint64_t> stripped[kPairCap];
+    std::atomic<uint64_t> resolved[kPairCap];
+};
+PairRing g_badRing[kFaceCount];
+PairRing g_routeRing[kFaceCount];
+// route ring summary over every event, not just the sampled ones.
+std::atomic<uint64_t> g_routeMoved[kFaceCount];   // resolved != stripped
+std::atomic<uint64_t> g_routeSame[kFaceCount];    // resolved == stripped
+std::atomic<uint64_t> g_routeNull[kFaceCount];    // resolved == 0
+
 void WriteLine(const char* buf, size_t len)
 {
     if (buf != nullptr && len > 0) {
@@ -132,6 +148,42 @@ void ReportFace(const char* point, uint8_t face)
         static_cast<size_t>(f.hiBits.load(std::memory_order_relaxed)));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
+    }
+
+    char sum[256];
+    int sn2 = sprintf_s(sum, sizeof(sum),
+                        "[GCV2][loadgood] point=%s face=%s route_moved=%zu route_same=%zu "
+                        "route_null=%zu bad_pairs=%zu route_pairs=%zu\n",
+                        point == nullptr ? "?" : point, FaceName(face),
+                        static_cast<size_t>(g_routeMoved[face].load(std::memory_order_relaxed)),
+                        static_cast<size_t>(g_routeSame[face].load(std::memory_order_relaxed)),
+                        static_cast<size_t>(g_routeNull[face].load(std::memory_order_relaxed)),
+                        static_cast<size_t>(g_badRing[face].n.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(g_routeRing[face].n.load(std::memory_order_relaxed)));
+    if (sn2 > 0) {
+        WriteLine(sum, static_cast<size_t>(sn2));
+    }
+    for (int which = 0; which < 2; ++which) {
+        PairRing& ring = which == 0 ? g_badRing[face] : g_routeRing[face];
+        const char* tag = which == 0 ? "bad" : "route";
+        const uint64_t rn = ring.n.load(std::memory_order_relaxed);
+        const uint64_t rshown = rn < kPairCap ? rn : kPairCap;
+        for (uint64_t i = 0; i < rshown; ++i) {
+            const uint64_t w = ring.word[i].load(std::memory_order_relaxed);
+            const uint64_t s = ring.stripped[i].load(std::memory_order_relaxed);
+            const uint64_t r = ring.resolved[i].load(std::memory_order_relaxed);
+            const long long delta = static_cast<long long>(r) - static_cast<long long>(s);
+            char row[256];
+            int rn2 = sprintf_s(row, sizeof(row),
+                                "[GCV2][loadgood] point=%s face=%s %s#%zu word=%#zx "
+                                "stripped=%#zx resolved=%#zx delta=%lld\n",
+                                point == nullptr ? "?" : point, FaceName(face), tag,
+                                static_cast<size_t>(i), static_cast<size_t>(w),
+                                static_cast<size_t>(s), static_cast<size_t>(r), delta);
+            if (rn2 > 0) {
+                WriteLine(row, static_cast<size_t>(rn2));
+            }
+        }
     }
 
     const uint64_t sn = g_sample[face].n.load(std::memory_order_relaxed);
@@ -241,6 +293,39 @@ void NoteRead(uint8_t face, uintptr_t word, bool ghost, bool loadGood)
         if (((word & ~mask) & mask) == 0) {
             Bump(f.synthCtrlGood);
         }
+    }
+}
+
+void NoteBadSample(uint8_t face, uintptr_t word, uintptr_t stripped)
+{
+    if (!g_enabled || face >= kFaceCount) {
+        return;
+    }
+    const uint64_t idx = g_badRing[face].n.fetch_add(1, std::memory_order_relaxed);
+    if (idx < kPairCap) {
+        g_badRing[face].word[idx].store(static_cast<uint64_t>(word), std::memory_order_relaxed);
+        g_badRing[face].stripped[idx].store(static_cast<uint64_t>(stripped), std::memory_order_relaxed);
+        g_badRing[face].resolved[idx].store(static_cast<uint64_t>(stripped), std::memory_order_relaxed);
+    }
+}
+
+void NoteRouteSample(uint8_t face, uintptr_t word, uintptr_t stripped, uintptr_t resolved)
+{
+    if (!g_enabled || face >= kFaceCount) {
+        return;
+    }
+    if (resolved == 0) {
+        Bump(g_routeNull[face]);
+    } else if (resolved != stripped) {
+        Bump(g_routeMoved[face]);
+    } else {
+        Bump(g_routeSame[face]);
+    }
+    const uint64_t idx = g_routeRing[face].n.fetch_add(1, std::memory_order_relaxed);
+    if (idx < kPairCap) {
+        g_routeRing[face].word[idx].store(static_cast<uint64_t>(word), std::memory_order_relaxed);
+        g_routeRing[face].stripped[idx].store(static_cast<uint64_t>(stripped), std::memory_order_relaxed);
+        g_routeRing[face].resolved[idx].store(static_cast<uint64_t>(resolved), std::memory_order_relaxed);
     }
 }
 

@@ -397,9 +397,19 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
     if (UNLIKELY(LoadGoodProbe::Enabled())) {
         LoadGoodProbe::NoteRead(LoadGoodProbe::kFaceRoot, raw(observed), ghost,
                                 theCollector.is_load_good(observedBits));
+        if ((raw(observed) & ::g_cjLoadBadMask) != 0) {
+            LoadGoodProbe::NoteBadSample(LoadGoodProbe::kFaceRoot, raw(observed),
+                                         reinterpret_cast<uintptr_t>(target));
+        }
     }
     if (ghost) {
+        BaseObject* before = target;
         target = theCollector.FindLatestVersion(target);
+        if (UNLIKELY(LoadGoodProbe::Enabled())) {
+            LoadGoodProbe::NoteRouteSample(LoadGoodProbe::kFaceRoot, raw(observed),
+                                           reinterpret_cast<uintptr_t>(before),
+                                           reinterpret_cast<uintptr_t>(target));
+        }
     }
     return target;
 }

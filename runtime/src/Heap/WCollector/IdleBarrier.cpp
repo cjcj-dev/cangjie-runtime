@@ -40,6 +40,10 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
                                        theCollector.IsGhostFromObject(oldTarget);
                 LoadGoodProbe::NoteRead(LoadGoodProbe::kFaceHeap, rawWord, heapGhost,
                                         theCollector.is_load_good(oldField));
+                if ((rawWord & ::g_cjLoadBadMask) != 0) {
+                    LoadGoodProbe::NoteBadSample(LoadGoodProbe::kFaceHeap, rawWord,
+                                                 reinterpret_cast<uintptr_t>(oldTarget));
+                }
             }
         }
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
