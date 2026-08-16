@@ -2064,7 +2064,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     size_t workersScheduled = 0;
 
     if (!useParallel) {
-        VLOG(REPORT, "[F3][parallel] fallback=serial pool_unavailable");
+        // Keep the "fallback=serial pool_unavailable" literal for the case it actually names:
+        // REMSET_OPTION1_SPEC_0805 §positive-control greps that exact string.
+        VLOG(REPORT, "[F3][parallel] fallback=serial %s",
+             threadPool == nullptr ? "pool_unavailable" : "force_serial");
         // Six root families serial (same order as before).
         {
             RootAccount acc;
@@ -3048,6 +3051,20 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 // (TracingCollector.cpp ConcurrentMarkingWork). Claim = MarkObject atomic bit;
 // per-worker reachableVec/slots/weaks merged after pool barrier. Env:
 // MRT_GCV2_MARKPAR_WORKERS / FORCE_SERIAL / INJECT_DISPEL / STRIPED.
+//
+// Flag coupling, as merged (b27351e8) — read this before measuring:
+//   MRT_GCV2_MARKPAR_WORKERS carries two unrelated meanings at once.
+//     presence  = the opt-in switch for ANY parallel young marking (markparoff 58ee51e7)
+//     value     = a cap on worker count; default is pool capacity and the env can only
+//                 lower it (want < workers), so WORKERS=<big> is a no-op as a value.
+//   MRT_GCV2_MARKPAR_STRIPED=1 selects the striped path, but the test is nested under
+//   useParallel, so STRIPED=1 ALONE IS A NO-OP — both must be set:
+//     MRT_GCV2_MARKPAR_WORKERS=<n> MRT_GCV2_MARKPAR_STRIPED=1
+//   This coupling was not designed. 58ee51e7 (WORKERS gate) and 1ced7b2f (striped path)
+//   were written on branches that did not contain each other; both touched this decision
+//   point, the merge was textually clean, and the nesting is the artifact. zstripe's
+//   1.143x was measured on 1ced7b2f, where STRIPED=1 alone did reach the striped path.
+//   Also note WORKERS=1 opts in and then falls back to serial (workers==1 apparatus).
 // Port of fix/markpar@3f869baa onto setbitmap ledger (reachableVec + useBitmapLedger).
 namespace {
 // MarkStack::size() counts buffers (64 objs each), not objects. Major uses 16/8 for
@@ -4439,10 +4456,26 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
-    const bool useParallel = threadPool != nullptr && std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr &&
-                             !forceSerialEnv && !forceSerialForCost;
+    const bool workersEnvSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
+    const bool useParallel = threadPool != nullptr && workersEnvSet && !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
-        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
+        // Report the reason that actually decided it, in the same short-circuit order as
+        // useParallel above. It used to print pool_unavailable unconditionally, which sent
+        // readers to inspect the thread pool when the real cause was an unset env var.
+        const char* reason = "pool_unavailable";
+        if (threadPool == nullptr) {
+            reason = "pool_unavailable";
+        } else if (!workersEnvSet) {
+            reason = "workers_unset";
+        } else if (forceSerialEnv) {
+            reason = "force_serial";
+        } else {
+            reason = "mark_cost";
+        }
+        // STRIPED=1 alone never reaches the striped path: it is nested under useParallel,
+        // so MRT_GCV2_MARKPAR_WORKERS must be set too. Say so where the reader is looking.
+        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s striped_requested=%d%s", reason, stripedEnv,
+             (stripedEnv && !workersEnvSet) ? " striped_ignored=1 need=MRT_GCV2_MARKPAR_WORKERS" : "");
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                                 useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
@@ -6402,7 +6435,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                          g_minorRefCasFail.load(std::memory_order_relaxed));
                 }
             } else if (!useParallel) {
-                VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial pool_unavailable");
+                VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial %s",
+                     threadPool == nullptr ? "pool_unavailable" : "force_serial");
                 // pass1 roots already done; only heap+remset+pass2 roots remain.
                 // Mirror serial fixForwardedReferences but roots again (same as before).
                 fixForwardedReferencesSerial();
