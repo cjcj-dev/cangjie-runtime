@@ -221,34 +221,30 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
         const ucontext_t& uctx = *static_cast<const ucontext_t*>(context);
 #if defined(__x86_64__) && !defined(__APPLE__)
         uintptr_t rbx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBX]);
-#else
-        uintptr_t rbx = 0;
-#endif
-        EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
-#if defined(__x86_64__) && !defined(__APPLE__)
         uintptr_t rdi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDI]);
         uintptr_t rax = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RAX]);
         uintptr_t r12 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R12]);
         uintptr_t r14 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R14]);
         uintptr_t rbp = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RBP]);
-        TlRawDiag::NoteCrashRdi(rdi);
-        StartWhoDiag::NoteCrash();
-        WhoPushDiag::NoteCrashRdi(rdi);
-        HealPairDiag::NoteCrashRdi(rdi);
-        HdrWhoDiag::NoteCrashRdi(rdi);
-        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
         uintptr_t rcx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RCX]);
         uintptr_t rdx = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RDX]);
         uintptr_t rsi = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_RSI]);
         uintptr_t r13 = static_cast<uintptr_t>(uctx.uc_mcontext.gregs[REG_R13]);
-        HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
-        HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
-        // holdercapture: unconditional sweep. The joins above all require the crash to
-        // look like a known signature (a plausible holder in r13); youngclaim returned
-        // 0 rows for exactly that reason. This one asks a weaker question of every live
-        // register — "was this address inside a region we freed, and what did its mark
-        // face say at that moment" — so a crash that matches no signature still leaves
-        // evidence.
+        // holdercapture runs FIRST, deliberately.
+        //
+        // This handler is a sequence of probes with no isolation between them: the first
+        // one that faults or trips a fatal check takes every probe after it down. That is
+        // not hypothetical — MAIN n10 died here with
+        //   "F GetUnitIdxAt OOB addr=... ra1=NoTracedDiag::NoteCrashJoin
+        //    ra2=HealPairDiag::NoteCrashWhoZero"
+        // on a SIGSEGV whose r13 was not a heap address, and everything downstream of
+        // NoteCrashWhoZero was simply never reached. Ordering is the only isolation
+        // available here, so the reading this lane exists to take goes before the probes
+        // that are known to abort.
+        //
+        // The question it asks is also weaker than the others on purpose: not "does this
+        // look like a known crash signature" but "was this address inside a region we
+        // freed, and what did that region's mark face say at the moment of the free".
         {
             const uintptr_t sweepAddrs[] = { reinterpret_cast<uintptr_t>(siAddr), rdi, rsi, rdx,
                                              rcx, rax, rbx, r12, r13, r14, rbp };
@@ -257,6 +253,19 @@ void EmitCrashRec(int sig, const siginfo_t* info, void* context, uintptr_t sigPc
             MarkFaceSnap::NoteCrashSweep(sweepAddrs, sweepNames,
                                          sizeof(sweepAddrs) / sizeof(sweepAddrs[0]));
         }
+#else
+        uintptr_t rbx = 0;
+#endif
+        EmitParamzeroCrashProbe(sigRbp, rbx, sigPc);
+#if defined(__x86_64__) && !defined(__APPLE__)
+        TlRawDiag::NoteCrashRdi(rdi);
+        StartWhoDiag::NoteCrash();
+        WhoPushDiag::NoteCrashRdi(rdi);
+        HealPairDiag::NoteCrashRdi(rdi);
+        HdrWhoDiag::NoteCrashRdi(rdi);
+        HealPairDiag::NoteCrashRegs(rdi, rax, r12, r14, rbp);
+        HeldFreeDiag::NoteCrashRegs(rax, rbx, rcx, rdx, rsi, rdi, r12, r14, rbp);
+        HealPairDiag::NoteCrashWhoZero(r13, rcx, rsi, rbx, r12);
 #endif
     }
 }
