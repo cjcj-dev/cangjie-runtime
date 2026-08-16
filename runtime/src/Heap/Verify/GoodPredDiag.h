@@ -62,6 +62,17 @@ extern bool g_applyZgc; // in kAudit: return the zgc answer rather than the lega
 // Out-of-line: only reached in kAudit.
 bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site);
 
+// One-shot self-test, armed by MRT_GCV2_LOADGOOD_SELFTEST=1 and run on the first switched
+// call. It hands the *product* virtuals a synthetic tagged-with-current-colour word and the
+// same word without the tagged bits, and prints both answers from both definitions.
+//
+// It exists because the disagreement is rare: a run that reports diverge=0 has two readings --
+// the two definitions agree on this data, or nothing selected between them. The self-test
+// separates those without waiting for the workload to produce the construct.
+bool SelfTestPending();
+void ReportSelfTest(uintptr_t taggedValue, bool taggedLegacy, bool taggedZgc, uintptr_t plainValue,
+                    bool plainLegacy, bool plainZgc);
+
 void Report(const char* why);
 
 } // namespace GoodPredDiag

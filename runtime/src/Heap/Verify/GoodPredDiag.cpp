@@ -163,6 +163,33 @@ bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site)
     return g_applyZgc ? zgc : legacy;
 }
 
+bool SelfTestPending()
+{
+    static const bool armed = EnvIsOne("MRT_GCV2_LOADGOOD_SELFTEST");
+    if (!armed) {
+        return false;
+    }
+    static std::atomic<bool> done{ false };
+    bool expected = false;
+    return done.compare_exchange_strong(expected, true, std::memory_order_relaxed);
+}
+
+void ReportSelfTest(uintptr_t taggedValue, bool taggedLegacy, bool taggedZgc, uintptr_t plainValue,
+                    bool plainLegacy, bool plainZgc)
+{
+    // Expected: the tagged probe splits the two definitions, the plain probe does not.
+    const bool pass = taggedLegacy && !taggedZgc && plainLegacy && plainZgc;
+    std::fprintf(stderr,
+                 "[GCV2][goodpred][selftest] verdict=%s "
+                 "tagged_value=%#lx tagged_legacy=%u tagged_zgc=%u "
+                 "plain_value=%#lx plain_legacy=%u plain_zgc=%u load_bad_mask=%#lx\n",
+                 pass ? "SPLIT" : "NO_SPLIT", static_cast<unsigned long>(taggedValue),
+                 static_cast<unsigned>(taggedLegacy ? 1 : 0), static_cast<unsigned>(taggedZgc ? 1 : 0),
+                 static_cast<unsigned long>(plainValue), static_cast<unsigned>(plainLegacy ? 1 : 0),
+                 static_cast<unsigned>(plainZgc ? 1 : 0), static_cast<unsigned long>(::g_cjLoadBadMask));
+    std::fflush(stderr);
+}
+
 void Report(const char* why) { ReportRaw(why); }
 
 } // namespace GoodPredDiag
