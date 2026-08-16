@@ -1527,7 +1527,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             // the list move, not this. Count readers still inside a route lookup on it.
             FwdInflight::NoteRetireRegion(head, FwdInflight::Retire::TAKE_GARBAGE);
             auto idx = head->GetUnitIdx();
-            RegionInfo::ClearUnits(idx, num);
+            {
+                // portmutreloc: ZForwarding::detach_page before the page goes back to the
+                // allocator. ClearUnits zeroes the payload a retained reader may still be
+                // copying out of, so the drain has to enclose it. Scoped tight: it ends
+                // before InitRegion, which re-initialises the metadata the lock lives in.
+                // The wipe is of the payload (GetUnitAddress(idx)), not of the UnitInfo
+                // array, so the lock itself survives the body.
+                RegionInfo::DrainScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
+                RegionInfo::ClearUnits(idx, num);
+            }
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             return RegionInfo::InitRegion(idx, num, type);
         } else {

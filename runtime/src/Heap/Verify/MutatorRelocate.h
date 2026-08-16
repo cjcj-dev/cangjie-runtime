@@ -1,0 +1,119 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+#ifndef MRT_MUTATOR_RELOCATE_H
+#define MRT_MUTATOR_RELOCATE_H
+
+#include <cstddef>
+#include <cstdint>
+
+namespace MapleRuntime {
+class RegionInfo;
+
+// portmutreloc: port of ZRelocate::relocate_object (zRelocate.cpp:382-410) -- the mutator
+// relocates the object on its own thread instead of waiting for a GC worker -- together with
+// the from-page pin that path depends on (ZForwarding::retain_page / release_page /
+// detach_page, zForwarding.cpp:86-108 / :134-169 / :171-181).
+//
+// What ZGC does, and what we did instead:
+//
+//   ZRelocate::relocate_object(forwarding, from_addr):
+//       to = forwarding->find(from_addr, &cursor);      // pure table lookup
+//       if (to) return to;                              // already relocated
+//       if (forwarding->retain_page(&_queue)) {         // pin the FROM page
+//           to = relocate_object_inner(...);            // *** copies it itself ***
+//           forwarding->release_page();
+//           if (to) return to;
+//           _queue.add_and_wait(forwarding);            // only now wait for a worker
+//       }
+//       return forward_object(forwarding, from_addr);
+//
+// WCollector::relocate_or_remap_object (WCollector.h) reaches the same point -- a route
+// exists, the object is not FORWARDED yet -- and has no "copy it yourself" leg at all. It
+// either hands the mutator the *from* pointer back (the `!IsLockedState()` arm) or spins in
+// WaitRoutedTipReady for up to kMaxSpins=4096 and then takes a FATAL (WCollector.cpp:8816,
+// :8885). This unit adds the missing leg, behind a gate.
+//
+// The two halves are separately observable because they answer different questions:
+//
+//   MRT_GCV2_MUTATOR_RELOCATE=1   Turn the relocate leg on. Implies the drain below, because
+//                                 a mutator copying out of a from-region while
+//                                 DispelGhostFromRegion / ClearUnits retires it underneath is
+//                                 exactly the hazard retain_page exists to prevent.
+//   MRT_GCV2_MUTRELOC_DRAIN=1     The pin's drain half only (detach_page), with no mutator
+//                                 relocation. Lets the drain be measured on its own.
+//   MRT_GCV2_MUTRELOC_STATS=1     Counters only, no behaviour change. This is what makes the
+//                                 off-arm readable: the wait-leg counters are gated on this
+//                                 rather than on the feature, so "how often did we fall into
+//                                 the 4096-spin wait" is measurable with the feature OFF and
+//                                 the two arms can be compared. A feature-gated counter would
+//                                 read 0 in the off arm for the trivial reason.
+//
+// The pin is NOT a new mechanism. RegionInfo::metadata.rwLock already is ZGC's _ref_count and
+// _ref_lock in one object: a read lock is a retain (many holders, each visible in lockCount),
+// and RwLock::LockWrite spins until lockCount reaches 0 -- that is detach_page's "wait until
+// released". TryLockReadFromRegion (RegionInfo.h:2115) is the retain and is already used as
+// one by TryForwardObject (WCollector.cpp:9012). The piece we were missing is the third one:
+// no retire edge waits for readers. DispelGhostFromRegion is an unconditional bit-flip loop
+// and TakeRegion's garbage reuse calls ClearUnits with no lock held at all.
+namespace MutatorRelocate {
+
+// Which retire edge drained. Mirrors FwdInflight::Retire, which measured the same edges.
+enum class Retire : uint32_t {
+    DISPEL_GHOST = 0, // RegionInfo::DispelGhostFromRegion
+    TAKE_GARBAGE = 1, // RegionManager::TakeRegion garbage reuse, around ClearUnits
+    RETIRE_COUNT = 2
+};
+
+// Why the mutator did not end up relocating. Reported per reason so a zero self_copy count
+// says which leg swallowed it rather than just "it did not happen".
+enum class Fallback : uint32_t {
+    RETAIN_FAILED = 0, // TryLockReadFromRegion refused: write-locked, or no longer a from-region
+    COPY_FAILED = 1,   // ForwardObjectImpl returned null (no route / gate rejected)
+    PHASE = 2,         // not in PREFORWARD/FORWARD, so ForwardObjectImpl's CHECK would fire
+    FALLBACK_COUNT = 3
+};
+
+// Relocate leg on. Implies DrainEnabled().
+bool Enabled();
+// Drain half on (implied by Enabled(), or standalone via MRT_GCV2_MUTRELOC_DRAIN=1).
+bool DrainEnabled();
+// Counters on. True whenever either half is on, or standalone via MRT_GCV2_MUTRELOC_STATS=1.
+bool StatsOn();
+
+// --- relocate leg ---------------------------------------------------------------------
+void NoteAttempt();
+void NoteRetainOk();
+void NoteFallback(Fallback why);
+// The mutator found the object already FORWARDED after retaining. Counted apart from
+// self_copy: it means the leg ran but someone else had done the work.
+void NoteAlreadyForwarded();
+
+// Set for the duration of one mutator relocate attempt on this thread. ForwardObjectExclusive
+// consults it so the copy is attributed to the thread that actually ran CopyObject -- the
+// headline number. Without this, a count taken at the call site could not tell "this mutator
+// copied the object" from "this mutator observed a copy a GC worker had already made".
+bool InScope();
+void EnterScope();
+void LeaveScope();
+// Called from WCollector::ForwardObjectExclusive, immediately after CopyObject, when InScope().
+void NoteSelfCopy(size_t bytes);
+
+// --- the leg we are trying to displace, counted in BOTH arms (gate: StatsOn) ------------
+void NoteWaitEnter();   // entered WaitRoutedTipReady
+void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
+void NoteWaitReceipt(); // left it with a to-version
+void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL -- the 4096-spin FATAL leg
+
+// --- pin / drain ------------------------------------------------------------------------
+void NoteDrain(Retire site, uint64_t spunNanos, bool contended);
+
+void DumpSummary();
+
+} // namespace MutatorRelocate
+} // namespace MapleRuntime
+
+#endif // MRT_MUTATOR_RELOCATE_H
