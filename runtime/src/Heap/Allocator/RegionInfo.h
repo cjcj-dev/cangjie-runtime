@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -2202,6 +2203,26 @@ public:
                 return;
             }
             this->region = region;
+            // Forced collision: hold a retainer on another thread so claim_page
+            // must wait. Default off. Proves detach waits rather than racing a
+            // recycled table (task §六③).
+            static const int holdUs = []() {
+                const char* v = std::getenv("MRT_GCV2_ZLIFE_INJECT_HOLD_US");
+                if (v == nullptr || *v == '\0') {
+                    return 0;
+                }
+                return std::atoi(v);
+            }();
+            if (holdUs > 0 && before > 0) {
+                std::thread holder([region, holdUs]() {
+                    if (region->RetainForwarding()) {
+                        std::this_thread::sleep_for(std::chrono::microseconds(holdUs));
+                        region->ReleaseForwarding();
+                    }
+                });
+                holder.detach();
+                std::this_thread::sleep_for(std::chrono::microseconds(200));
+            }
             if (before > 0) {
                 ZForwardingLife::in_place_relocation_claim_page(region->metadata.fwdRefCount);
             }
