@@ -148,6 +148,23 @@ struct RegRow {
     uint8_t auth = 0;
     uint8_t rtype = 0;
     uint8_t truncated = 0;
+    // Face-disagreement columns. Moving the sample earlier does not by itself make the
+    // numerator reachable: for a large region IsMarkedObject(view,0) is
+    // GetMarkedRegionFlag(view)==1 and IsSurvivedObject(view,0) is that OR isResurrected,
+    // so marked implies survived. Every region the collector releases fails
+    // !IsSurvivedObject(view,0), hence reads marked==0 through that same view - before
+    // the predicate exactly as after it.
+    //
+    // What can be non-zero is a disagreement between faces. GetMarkedRegionFlag returns 0
+    // outright when view.GetEpoch() != GetMarkSnapshotEpoch<G>() (RegionInfo.h:882-884),
+    // and the predicate's GetMarkView<Old> need not carry the same epoch as the region's
+    // route view. So record both reads plus the epochs, and let survivedSameView==0 select
+    // the regions that were actually released.
+    uint8_t markedSameView = 0xff; // predicate's view; must be 0 when survivedSameView==0
+    uint8_t markedRoute = 0xff;    // route view; a 1 here on a released region is the bug
+    uint8_t survivedSameView = 0xff;
+    uint64_t viewEpoch = 0;
+    uint64_t routeEpoch = 0;
 };
 
 constexpr size_t kRegCap = 1u << 15;
@@ -175,6 +192,31 @@ std::atomic<size_t> g_joinRegion{ 0 };
 std::atomic<size_t> g_joinMiss{ 0 };
 std::atomic<bool> g_healthOnce{ false };
 std::atomic<bool> g_atexitOnce{ false };
+
+// Per-path tallies. markedInFreed above is a single global that pools every path, and
+// a numerator without its own denominator is not a population claim: "0 marked" reads
+// the same whether nothing was marked or nothing was sampled. These split both halves
+// by path so PATH_PRE_RELEASE_DECISION and PATH_LARGE_GARBAGE can be compared at all.
+constexpr size_t kPathCap = 16;
+std::atomic<size_t> g_pathRegs[kPathCap];
+std::atomic<size_t> g_pathMarkedRegs[kPathCap];
+std::atomic<size_t> g_pathObjs[kPathCap];
+std::atomic<size_t> g_pathMarkedObjs[kPathCap];
+
+// The four cells the verdict actually turns on, over large regions sampled at the
+// pre-decision point. "Released" means the predicate that follows found the region not
+// survived, which is survivedSameView==0 - no second call into RegionManager needed.
+std::atomic<size_t> g_preLarge{ 0 };          // denominator: large regions sampled
+std::atomic<size_t> g_preReleased{ 0 };       // of those, the ones the predicate then freed
+std::atomic<size_t> g_preRelMarkedSame{ 0 };  // released AND marked via predicate's view (must be 0)
+std::atomic<size_t> g_preRelMarkedRoute{ 0 }; // released AND marked via route view (the bug signature)
+std::atomic<size_t> g_preEpochSplit{ 0 };     // released AND the two views disagree on epoch
+// Positive control for the numerator's own expression. releasedMarkedRoute==0 is only a
+// result if IsRouteMarkedObject can return 1 at all at this call site; if both of these
+// were 0 the reported zero would be a dead probe, not a measurement.
+std::atomic<size_t> g_preRetained{ 0 };
+std::atomic<size_t> g_preRetMarkedRoute{ 0 };
+std::atomic<size_t> g_preRetMarkedSame{ 0 };
 
 // Positive control. A run in which nothing crashes produces joinTry=0, and a broken
 // join path produces joinTry=0 as well. The self-test separates them by joining an
@@ -360,7 +402,9 @@ void DumpRegRow(const char* tag, const char* kind, uintptr_t addr, const RegRow&
                       "[GCV2][holdercap] %s %s addr=%#zx start=%#zx end=%#zx allocPtr=%#zx "
                       "large=%u largeIsMarked=%u mbNull=%u rbNull=%u markEpoch=%llu snapEpoch=%llu "
                       "walked=%u markedN=%u survivedN=%u trunc=%u live=%llu young=%u knownEmpty=%u "
-                      "neverExam=%u auth=%u rtype=%u freeSeq=%u freeGc=%u freePhase=%u path=%u\n",
+                      "neverExam=%u auth=%u rtype=%u freeSeq=%u freeGc=%u freePhase=%u path=%u "
+                      "markedSameView=%u survivedSameView=%u markedRoute=%u viewEpoch=%llu "
+                      "routeEpoch=%llu\n",
                       tag != nullptr ? tag : "join", kind, addr, row.start, row.end, row.allocPtr,
                       static_cast<unsigned>(row.large), static_cast<unsigned>(row.largeIsMarked),
                       static_cast<unsigned>(row.mbNull), static_cast<unsigned>(row.rbNull),
@@ -371,10 +415,58 @@ void DumpRegRow(const char* tag, const char* kind, uintptr_t addr, const RegRow&
                       static_cast<unsigned>(row.young), static_cast<unsigned>(row.knownEmpty),
                       static_cast<unsigned>(row.neverExam), static_cast<unsigned>(row.auth),
                       static_cast<unsigned>(row.rtype), row.freeSeq, row.gc,
-                      static_cast<unsigned>(row.phase), static_cast<unsigned>(row.path));
+                      static_cast<unsigned>(row.phase), static_cast<unsigned>(row.path),
+                      static_cast<unsigned>(row.markedSameView),
+                      static_cast<unsigned>(row.survivedSameView),
+                      static_cast<unsigned>(row.markedRoute),
+                      static_cast<unsigned long long>(row.viewEpoch),
+                      static_cast<unsigned long long>(row.routeEpoch));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
     }
+}
+
+// Which view the face is read through is load-bearing, not a style choice.
+// GetMarkedRegionFlag(view) returns 0 outright when view.GetEpoch() is not the
+// region's current mark-snapshot epoch (RegionInfo.h:882-884), so a sample taken
+// through the wrong view answers 0 for a reason that has nothing to do with what the
+// collectors left in the bit - which is exactly the constructive zero this instrument
+// exists to remove.
+//
+// CollectLargeGarbage binds GetMarkView<Generation::Old>() and asks
+// IsSurvivedObject(view, 0) (RegionManager.cpp:1725-1726). The pre-decision sample
+// must therefore bind that same view, or the 1s and 0s it reports are about a
+// different bit than the one the release decision is made on. Every other path is
+// reached from CollectRegion, which consults the region's route view, so those keep
+// reading the route face.
+bool ReadMarked(RegionInfo* region, size_t offset, uint16_t path)
+{
+    if (path == RegionLifeDiag::PATH_PRE_RELEASE_DECISION) {
+        return region->IsMarkedObject(region->GetMarkView<Generation::Old>(), offset);
+    }
+    return region->IsRouteMarkedObject(offset);
+}
+
+bool ReadSurvived(RegionInfo* region, size_t offset, uint16_t path)
+{
+    if (path == RegionLifeDiag::PATH_PRE_RELEASE_DECISION) {
+        return region->IsSurvivedObject(region->GetMarkView<Generation::Old>(), offset);
+    }
+    return region->IsRouteSurvivedObject(offset);
+}
+
+// LiveInfo::markEpoch became a per-generation MarkFace epoch on main@6dd6a7d0. Same
+// generation choice as ReadMarked, for the same reason: the epoch reported next to a
+// sample has to be the epoch that sample was taken under.
+// LiveInfo::GetMarkFace is private; the region's route view carries the same face
+// epoch (RegionInfo.h GetRouteMarkView reads face->GetMarkFace<G>().epoch) through
+// public API, so the diagnostic reads it there rather than widening a product type.
+uint64_t MarkEpochOf(RegionInfo* region)
+{
+    if (region->GetRouteMarkGeneration() == Generation::Young) {
+        return region->GetRouteMarkView<Generation::Young>().GetEpoch();
+    }
+    return region->GetRouteMarkView<Generation::Old>().GetEpoch();
 }
 
 uint16_t CurrentPhase()
@@ -418,13 +510,13 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
     EnsureAtexit();
 
     const bool large = region->IsLargeRegion();
-    const bool knownEmpty = region->IsKnownEmpty();
-    RegionBitmap* mb = region->GetMarkBitmap();
+    const bool knownEmpty = region->IsRouteKnownEmpty();
+    RegionBitmap* mb = region->GetRouteMarkBitmap();
     RegionBitmap* rb = region->GetResurrectBitmap();
     LiveInfo* live = region->GetLiveInfo();
     const uint64_t snapEpoch = region->GetSnapshotEpoch();
-    const uint64_t markEpoch = live != nullptr ? live->markEpoch : 0;
-    const bool epochStale = live != nullptr && live->markEpoch != snapEpoch;
+    const uint64_t markEpoch = MarkEpochOf(region);
+    const bool epochStale = live != nullptr && markEpoch != snapEpoch;
     const bool neverExam = knownEmpty && mb == nullptr && region->GetRegionAllocPtr() > start;
 
     uint32_t freeSeq = static_cast<uint32_t>(g_regTotal.fetch_add(1, std::memory_order_relaxed) + 1);
@@ -447,7 +539,15 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
     reg.mbNull = (mb == nullptr) ? 1 : 0;
     reg.rbNull = (rb == nullptr) ? 1 : 0;
     // face B is the only mark face a large region has; read it as such, never the bitmap.
-    reg.largeIsMarked = large ? (region->IsMarkedObject(static_cast<size_t>(0)) ? 1 : 0) : 0xff;
+    reg.largeIsMarked = large ? (ReadMarked(region, 0, path) ? 1 : 0) : 0xff;
+    if (path == RegionLifeDiag::PATH_PRE_RELEASE_DECISION && large) {
+        MarkView<Generation::Old> pview = region->GetMarkView<Generation::Old>();
+        reg.markedSameView = region->IsMarkedObject(pview, static_cast<size_t>(0)) ? 1 : 0;
+        reg.survivedSameView = region->IsSurvivedObject(pview, static_cast<size_t>(0)) ? 1 : 0;
+        reg.markedRoute = region->IsRouteMarkedObject(static_cast<size_t>(0)) ? 1 : 0;
+        reg.viewEpoch = pview.GetEpoch();
+        reg.routeEpoch = MarkEpochOf(region);
+    }
     reg.young = region->IsYoungRegion() ? 1 : 0;
     reg.knownEmpty = knownEmpty ? 1 : 0;
     reg.neverExam = neverExam ? 1 : 0;
@@ -484,8 +584,8 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
             row.phase = reg.phase;
             row.path = reg.path;
             row.face = face;
-            row.marked = region->IsMarkedObject(offset) ? 1 : 0;
-            row.survived = region->IsSurvivedObject(offset) ? 1 : 0;
+            row.marked = ReadMarked(region, offset, reg.path) ? 1 : 0;
+            row.survived = ReadSurvived(region, offset, reg.path) ? 1 : 0;
             row.young = reg.young;
             row.large = reg.large;
             row.mbNull = reg.mbNull;
@@ -531,9 +631,48 @@ void NoteRegionFree(RegionInfo* region, uint16_t path)
         reg.truncated = truncated ? 1 : 0;
     }
 
-    // Bounded sample so the log carries shape without drowning the recipe.
-    if (freeSeq <= 32 || (freeSeq & (freeSeq - 1)) == 0 || reg.markedN > 0) {
-        DumpRegRow("free", reg.markedN > 0 ? "region_marked_live" : "region", start, reg);
+    if (path == RegionLifeDiag::PATH_PRE_RELEASE_DECISION && large) {
+        g_preLarge.fetch_add(1, std::memory_order_relaxed);
+        if (reg.survivedSameView == 0) {
+            g_preReleased.fetch_add(1, std::memory_order_relaxed);
+            if (reg.markedSameView == 1) {
+                g_preRelMarkedSame.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (reg.markedRoute == 1) {
+                g_preRelMarkedRoute.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (reg.viewEpoch != reg.routeEpoch) {
+                g_preEpochSplit.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else {
+            g_preRetained.fetch_add(1, std::memory_order_relaxed);
+            if (reg.markedRoute == 1) {
+                g_preRetMarkedRoute.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (reg.markedSameView == 1) {
+                g_preRetMarkedSame.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+
+    // Per-path denominator. Counted for every call, not only the dumped ones.
+    if (path < kPathCap) {
+        g_pathRegs[path].fetch_add(1, std::memory_order_relaxed);
+        g_pathObjs[path].fetch_add(reg.walked, std::memory_order_relaxed);
+        g_pathMarkedObjs[path].fetch_add(reg.markedN, std::memory_order_relaxed);
+        if (reg.markedN > 0) {
+            g_pathMarkedRegs[path].fetch_add(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Bounded sample so the log carries shape without drowning the recipe. A released
+    // region whose route view still says marked is never sampled away - that row is the
+    // whole point of the instrument.
+    const bool faceSplit = reg.survivedSameView == 0 && reg.markedRoute == 1;
+    if (freeSeq <= 32 || (freeSeq & (freeSeq - 1)) == 0 || reg.markedN > 0 || faceSplit) {
+        const char* kind = faceSplit ? "region_released_route_marked"
+                                     : (reg.markedN > 0 ? "region_marked_live" : "region");
+        DumpRegRow("free", kind, start, reg);
     }
 }
 
@@ -708,6 +847,46 @@ void Report(const char* point)
                       g_objCap);
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
+    }
+
+    // The verdict line. preReleased is the denominator that matters: a zero numerator
+    // over a zero denominator is what the previous round reported, so both are printed
+    // side by side and neither can be quoted without the other.
+    char pre[320];
+    int prn = sprintf_s(pre, sizeof(pre),
+                        "[GCV2][holdercap] predecision point=%s largeSampled=%zu released=%zu "
+                        "releasedMarkedSameView=%zu releasedMarkedRoute=%zu releasedEpochSplit=%zu "
+                        "retained=%zu retainedMarkedSameView=%zu retainedMarkedRoute=%zu\n",
+                        point != nullptr ? point : "?", g_preLarge.load(std::memory_order_relaxed),
+                        g_preReleased.load(std::memory_order_relaxed),
+                        g_preRelMarkedSame.load(std::memory_order_relaxed),
+                        g_preRelMarkedRoute.load(std::memory_order_relaxed),
+                        g_preEpochSplit.load(std::memory_order_relaxed),
+                        g_preRetained.load(std::memory_order_relaxed),
+                        g_preRetMarkedSame.load(std::memory_order_relaxed),
+                        g_preRetMarkedRoute.load(std::memory_order_relaxed));
+    if (prn > 0) {
+        WriteLine(pre, static_cast<size_t>(prn));
+    }
+
+    // One line per path that saw traffic. A path with regs=0 is omitted rather than
+    // printed as zero, so "absent" and "sampled nothing" stay distinguishable.
+    for (size_t p = 0; p < kPathCap; ++p) {
+        size_t regs = g_pathRegs[p].load(std::memory_order_relaxed);
+        if (regs == 0) {
+            continue;
+        }
+        char pl[256];
+        int pn = sprintf_s(pl, sizeof(pl),
+                           "[GCV2][holdercap] pathdist point=%s path=%zu regs=%zu markedRegs=%zu "
+                           "objs=%zu markedObjs=%zu\n",
+                           point != nullptr ? point : "?", p, regs,
+                           g_pathMarkedRegs[p].load(std::memory_order_relaxed),
+                           g_pathObjs[p].load(std::memory_order_relaxed),
+                           g_pathMarkedObjs[p].load(std::memory_order_relaxed));
+        if (pn > 0) {
+            WriteLine(pl, static_cast<size_t>(pn));
+        }
     }
 }
 
