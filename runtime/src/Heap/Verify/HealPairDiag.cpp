@@ -16,6 +16,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
@@ -374,6 +375,10 @@ void DumpZero(const char* tag, const ZeroRow& row)
                       static_cast<unsigned>(row.classKind));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
+    }
+    // regionlife: last free of CAS-null target (same-life via lifeId anti-reuse).
+    if (WhoZeroOn() && row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
+        RegionLifeDiag::DumpJoinForTarget(row.tgt, tag);
     }
 }
 
@@ -942,6 +947,9 @@ void NoteZeroWrite(const void* slot, uintptr_t oldRaw, uintptr_t newRaw, uint16_
                           static_cast<unsigned>(row.classKind));
         if (n > 0) {
             WriteLine(line, static_cast<size_t>(n));
+        }
+        if (row.tgt != 0 && (row.freeR || row.garbR || row.classKind == 2)) {
+            RegionLifeDiag::DumpJoinForTarget(row.tgt, "heal_null");
         }
     }
 }

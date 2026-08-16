@@ -28,6 +28,7 @@
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
 #include "Heap/Verify/PinFireDiag.h"
@@ -242,6 +243,7 @@ public:
         if (region != nullptr) {
             // the region was not needed after all, hand it back the same way
             // RegionSpace::FeedHungryBuffers() does (RegionSpace.cpp:302-306).
+            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_UNUSED_PINNED);
             (void)CollectRegion(region);
         }
 
@@ -354,6 +356,11 @@ public:
         // emptylive: epoch-split size-walk on knownEmpty (gate MRT_GCV2_EMPTYLIVE).
         EmptyLiveDiag::NoteCollectEnter(region);
         GarbRegionDiag::NoteCollectEnter(region);
+        // regionlife: free-edge accounting (default off; also via WHOZERO).
+        {
+            uint16_t freePath = RegionLifeDiag::TakeNextFreePath();
+            RegionLifeDiag::NoteFree(region, freePath);
+        }
         HealPairDiag::NoteCollect(region->GetRegionStart(), region->GetRegionEnd(),
                                  region->GetLiveByteCount(),
                                  static_cast<uint32_t>(region->GetRegionType()),

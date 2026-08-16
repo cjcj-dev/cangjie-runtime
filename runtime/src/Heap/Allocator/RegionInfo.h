@@ -43,6 +43,7 @@
 #include "Heap/Verify/NullRouteCaller.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/HeldFreeDiag.h"
+#include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
@@ -2702,6 +2703,7 @@ private:
     {
         InitRegionInfo(nUnit, uClass);
         TlRawDiag::NoteInitRegion(this);
+        RegionLifeDiag::NoteTake(this);
 
         // initialize region's subordinate units.
 
