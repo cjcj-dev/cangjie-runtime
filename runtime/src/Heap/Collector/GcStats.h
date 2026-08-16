@@ -22,6 +22,15 @@ namespace MapleRuntime {
 // statistics for previous gc.
 class GCStats {
 public:
+    enum class YoungHeuThrottleDecision : uint8_t {
+        REFRESHED,
+        DISABLED,
+        NO_COLLECTION_SET,
+        DEFERRAL_ALREADY_USED,
+        OLD_PRESSURE_HIGH,
+        WITHIN_EXISTING_HEU_WINDOW,
+    };
+
     GCStats() = default;
     ~GCStats() = default;
 
@@ -44,6 +53,19 @@ public:
     {
         prevGcFinishTime.store(timestamp, std::memory_order_release);
     }
+
+    YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
+                                                 size_t promotedBytes, size_t candidateBytes,
+                                                 size_t maxCapacity, uint64_t durationNs,
+                                                 uint64_t heuMinIntervalNs, bool deferralEnabled);
+
+    void RecordMajorGCFinish(uint64_t timestamp)
+    {
+        youngHeuDeferralUsed = false;
+        SetPrevGCFinishTime(timestamp);
+    }
+
+    static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
     static std::atomic<uint64_t> prevGcStartTime;
     static std::atomic<uint64_t> prevGcFinishTime;
@@ -70,10 +92,21 @@ public:
     size_t collectedBytes;
     size_t collectedObjects;
 
+    // Young collection-set bytes and marked bytes that survive the minor. All
+    // candidate survivors are promoted by the current evacuation policy.
+    size_t youngCandidateBytes;
+    size_t youngPromotedBytes;
+
     double garbageRatio;
     double collectionRate; // bytes per nano-second
 
     std::atomic<size_t> heapThreshold{ 0 };
+
+private:
+    // A minor may extend the HEU finish-time throttle once after a major. A
+    // second consecutive minor must leave the clock alone so a major cannot be
+    // starved by a stream of young collections.
+    bool youngHeuDeferralUsed = false;
 };
 extern std::atomic<size_t> g_gcCount;
 extern std::atomic<uint64_t> g_gcTotalTimeUs;
