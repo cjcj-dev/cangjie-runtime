@@ -49,6 +49,8 @@
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDestHold.h"
 #include "Heap/Verify/FwdInflight.h"
+#include "Heap/Verify/MutatorRelocate.h"
+#include "Base/TimeUtils.h"
 #include "Heap/Verify/RouteDom.h"
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/TlRawDiag.h"
@@ -1948,6 +1950,10 @@ public:
         // ZForwarding::detach_page (zForwarding.cpp:171-181), blocks until _ref_count is zero.
         // Count what we would be invalidating. Default off; never blocks.
         FwdInflight::NoteRetireRegion(this, FwdInflight::Retire::DISPEL_GHOST);
+        // portmutreloc: and this is the wait FwdInflight was measuring the absence of. Held
+        // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
+        // run while a retained reader is inside the route lookup or a mutator copy.
+        DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
@@ -2129,6 +2135,65 @@ public:
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { metadata.rwLock.UnlockWrite(); }
+
+    // portmutreloc: ZForwarding::detach_page (zForwarding.cpp:171-181) --
+    //
+    //     ZPage* ZForwarding::detach_page() {
+    //       if (_ref_count.load_acquire() != 0) {
+    //         ZLocker<ZConditionLock> locker(&_ref_lock);
+    //         while (_ref_count.load_acquire() != 0) { _ref_lock.wait(); }
+    //       }
+    //       return _page;
+    //     }
+    //
+    // ZGC will not hand the from-page back to the allocator while a reader is still inside it.
+    // TryLockReadFromRegion above is already our retain_page (many concurrent read holders,
+    // each one visible in RwLock::lockCount) and UnlockReadFromRegion is release_page -- what
+    // was missing is this third piece, the wait. RwLock::LockWrite spins until lockCount
+    // reaches 0, so it is the same wait; holding it across the retire body additionally keeps
+    // new readers out, which ZGC gets for free from retain_page failing once the count is 0.
+    //
+    // Scoped rather than a bare lock/unlock pair on purpose: the drain has to still be held
+    // when the state is actually destroyed (FreeCompactRouteTable, ClearUnits), otherwise a
+    // reader admitted in the gap is in exactly the position the drain was added to rule out.
+    //
+    // Default off. The gate is MutatorRelocate::DrainEnabled(), which is implied by the
+    // mutator-relocate leg because that leg is the one that makes a mutator read from-side
+    // payload for the length of a copy.
+    class DrainScope {
+    public:
+        DrainScope(RegionInfo* region, MutatorRelocate::Retire site) : region(nullptr)
+        {
+            if (region == nullptr || !MutatorRelocate::DrainEnabled()) {
+                return;
+            }
+            this->region = region;
+            // Cost of the drain is the headline risk of turning it on, so measure it here
+            // rather than infer it: contended means at least one reader had to be waited out.
+            uint64_t start = TimeUtil::NanoSeconds();
+            bool contended = !region->metadata.rwLock.TryLockWrite();
+            if (contended) {
+                region->LockWriteRegion();
+            }
+            uint64_t spun = TimeUtil::NanoSeconds() - start;
+            MutatorRelocate::NoteDrain(site, spun, contended);
+        }
+
+        ~DrainScope()
+        {
+            if (region != nullptr) {
+                region->UnlockWriteRegion();
+            }
+        }
+
+        DrainScope(const DrainScope&) = delete;
+        DrainScope& operator=(const DrainScope&) = delete;
+        DrainScope(DrainScope&&) = delete;
+        DrainScope& operator=(DrainScope&&) = delete;
+
+    private:
+        RegionInfo* region;
+    };
 
     // These interfaces are used to make sure the writing operations of value in C++ Bit Field will be atomic.
     void SetUnitRole(UnitRole role)

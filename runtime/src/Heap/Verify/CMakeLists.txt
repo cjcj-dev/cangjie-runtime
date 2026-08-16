@@ -29,6 +29,7 @@ set(SRC_LIST
     "RouteDom.cpp"
     "RouteDestHold.cpp"
     "FwdInflight.cpp"
+    "MutatorRelocate.cpp"
     "SealCheck.cpp"
     "F3Why2Diag.cpp"
     "EmptyLiveDiag.cpp"

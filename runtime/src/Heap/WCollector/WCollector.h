@@ -20,6 +20,8 @@
 #include "Collector/CopyCollector.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/ToverFailDiag.h"
+#include "Heap/Verify/MutatorRelocate.h"
+#include "Mutator/MutatorManager.h"
 namespace MapleRuntime {
 class ScopedStopTheWorld;
 
@@ -324,6 +326,15 @@ public:
         if (tv) {
             ToverFailDiag::NoteRemapCall();
         }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::Role funnelRole = MutatorRelocate::Role::MUTATOR;
+            if (IsGcThread()) {
+                funnelRole = MutatorRelocate::Role::GC;
+            } else if (IsRuntimeThread()) {
+                funnelRole = MutatorRelocate::Role::OTHER_RT;
+            }
+            MutatorRelocate::NoteFunnelCall(funnelRole);
+        }
         if (!Heap::IsHeapAddress(obj)) {
             if (funnel) {
                 nonHeapCount.fetch_add(1, std::memory_order_relaxed);
@@ -373,20 +384,47 @@ public:
                 }
                 return to;
             }
-        } else if (!obj->GetObjectState().IsLockedState()) {
-            if (funnel) {
-                routeNullCount.fetch_add(1, std::memory_order_relaxed);
+        } else {
+            // portmutreloc: this is the branch ZRelocate::relocate_object reaches when find()
+            // came back null (zRelocate.cpp:386-406) -- a route exists, no to-version has been
+            // installed yet -- and it is where ZGC stops deferring to a worker:
+            //
+            //     if (forwarding->retain_page(&_queue)) {
+            //         to_addr = relocate_object_inner(forwarding, safe(from_addr), &cursor);
+            //         forwarding->release_page();
+            //         if (!is_null(to_addr)) return to_addr;
+            //         _queue.add_and_wait(forwarding);
+            //     }
+            //
+            // Everything below was the "else" of that: hand the mutator the *from* pointer
+            // back when no copy has started, otherwise spin in WaitRoutedTipReady up to
+            // kMaxSpins=4096 and FATAL. Both legs are kept -- this is an added first choice,
+            // not a replacement.
+            BaseObject* self = TryMutatorRelocate(obj, forwarding);
+            if (self != nullptr) {
+                return self;
             }
-            if (tv) {
-                ToverFailDiag::NoteRemapRouteNull();
+            if (!obj->GetObjectState().IsLockedState()) {
+                if (funnel) {
+                    routeNullCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (tv) {
+                    ToverFailDiag::NoteRemapRouteNull();
+                }
+                return obj;
             }
-            return obj;
         }
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }
         if (tv) {
             ToverFailDiag::NoteRemapWait(); // 丙 entry
+        }
+        // Gated on StatsOn(), not on the feature: this is the leg the port exists to displace,
+        // so it must be counted with the feature OFF too or the on-arm has nothing to be
+        // compared against.
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitEnter();
         }
         return WaitRoutedTipReady(obj, to, forwarding);
     }
@@ -462,6 +500,12 @@ protected:
 
     // waitfwd: spin until from is FORWARDED (or region COMPACTED); else return from.
     BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const;
+
+    // portmutreloc: ZRelocate::relocate_object's middle leg (zRelocate.cpp:391-406) --
+    // retain the from-region, relocate the object on this thread, release. Returns the
+    // to-version, or nullptr when the caller should fall through to the pre-existing legs
+    // (retain refused, wrong phase, or no route). Default off.
+    BaseObject* TryMutatorRelocate(BaseObject* from, RegionInfo* forwarding) const;
 
     bool TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject*& target) const override;
 

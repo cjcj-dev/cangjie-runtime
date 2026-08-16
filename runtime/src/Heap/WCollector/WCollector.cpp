@@ -9066,6 +9066,12 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         if (diagOn) {
             giveUpCount.fetch_add(1, std::memory_order_relaxed);
         }
+        // portmutreloc: the 4096-spin FATAL leg. Counted, never removed -- the port adds a
+        // first choice ahead of this wait, it does not take the fallback away. If mutator
+        // relocation is worth anything, this is the number that drops.
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitFatal();
+        }
         RegionInfo::RouteState rs =
             forwarding != nullptr ? forwarding->GetRouteState() : RegionInfo::RouteState::NORMAL;
         GCPhase phase = GetGCPhase();
@@ -9141,6 +9147,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 if (tv) {
                     ToverFailDiag::NoteRemapWaitTip();
                 }
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::NoteWaitReceipt();
+                }
                 return again; // receipt after object FORWARDED
             }
             // Published FORWARDED without a tip-valid to = permanent hole (not mid-copy).
@@ -9157,6 +9166,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 if (tv) {
                     ToverFailDiag::NoteRemapWaitTip();
                 }
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::NoteWaitReceipt();
+                }
                 return again;
             }
             return permanentHole(
@@ -9170,6 +9182,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (tv) {
                 ToverFailDiag::NoteRemapWaitGiveUp();
             }
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitGiveUp();
+            }
             return from;
         }
         sched_yield();
@@ -9182,6 +9197,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             if (tv) {
                 ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
             }
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitGiveUp();
+            }
             return from;
         }
     }
@@ -9192,7 +9210,75 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     if (tv) {
         ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
     }
+    if (MutatorRelocate::StatsOn()) {
+        MutatorRelocate::NoteWaitGiveUp();
+    }
     return from;
+}
+
+// portmutreloc: ZRelocate::relocate_object's retain/copy/release leg (zRelocate.cpp:391-406).
+//
+// The three pieces map one-to-one onto machinery that already exists here:
+//
+//   forwarding->retain_page(&_queue)   ->  RegionInfo::TryLockReadFromRegion()
+//   relocate_object_inner(...)         ->  ForwardObjectImpl(obj, forwarding), whose
+//                                          ForwardObjectExclusive does RouteObject (= ZGC's
+//                                          alloc_object_for_relocation, except our
+//                                          to-address is pre-planned so it cannot fail for
+//                                          want of memory), CopyObject (= object_copy_disjoint)
+//                                          and UnlockObject(FORWARDED) (= forwarding->insert)
+//   forwarding->release_page()         ->  RegionInfo::UnlockReadFromRegion()
+//
+// TryForwardObject (below) already composes exactly these three, which is why this is a reuse
+// and not a second implementation. What was missing was a caller on the mutator's remap
+// funnel: relocate_or_remap_object never had this leg, so a mutator that arrived before the
+// copy either got the from pointer back or waited for a worker.
+//
+// nullptr means "fall through to the legs that were already there". Never a hard failure:
+// every refusal here is a state the old code handled anyway.
+BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwarding) const
+{
+    if (!MutatorRelocate::Enabled()) {
+        return nullptr;
+    }
+    MutatorRelocate::NoteAttempt();
+    // ForwardObjectImpl opens with CHECK(phase == PREFORWARD || FORWARD). relocate_or_remap
+    // is reachable from barriers in other phases, so screen here rather than trip that CHECK.
+    GCPhase phase = GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::PHASE);
+        return nullptr;
+    }
+    // retain_page. A try-lock, so a losing mutator falls back instead of blocking -- ZGC's
+    // retain_page also gives up (returns false) when the page is claimed or released.
+    if (!forwarding->TryLockReadFromRegion()) {
+        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::RETAIN_FAILED);
+        return nullptr;
+    }
+    MutatorRelocate::NoteRetainOk();
+    // The scope is what lets ForwardObjectExclusive attribute the copy to this thread. Counting
+    // at this call site instead would conflate "this mutator copied the object" with "this
+    // mutator retained and then found a worker had already copied it" -- and only the first of
+    // those is evidence that the ported leg does anything.
+    const bool wasForwarded = obj->IsForwarded();
+    MutatorRelocate::EnterScope();
+    BaseObject* toVersion = const_cast<WCollector*>(this)->ForwardObjectImpl(obj, forwarding);
+    MutatorRelocate::LeaveScope();
+    forwarding->UnlockReadFromRegion(); // release_page
+    if (wasForwarded) {
+        MutatorRelocate::NoteAlreadyForwarded();
+    }
+    if (toVersion == nullptr) {
+        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::COPY_FAILED);
+        return nullptr;
+    }
+    if (toVersion == obj) {
+        // ForwardObjectImpl resolved to the from address: not a relocation. Let the old legs
+        // decide what to hand back rather than short-circuiting them with an unmoved pointer.
+        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::COPY_FAILED);
+        return nullptr;
+    }
+    return toVersion;
 }
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
@@ -9254,6 +9340,19 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     }
 
     if (fwdTable.RouteRegion(region)) {
+        // portmutreloc positive control (MRT_GCV2_MUTRELOC_INJECT=1). The loop below already
+        // is retain / copy / release -- it is where the ported leg's three pieces came from.
+        // Routing it through TryMutatorRelocate once makes those pieces execute on a path this
+        // workload actually reaches, so retain, the scoped copy and the attribution in
+        // ForwardObjectExclusive are all exercised and self_copies must come out non-zero.
+        // On refusal it falls straight into the unchanged loop, so behaviour is unchanged
+        // apart from which frame ran the copy.
+        if (MutatorRelocate::InjectOn()) {
+            BaseObject* injected = TryMutatorRelocate(obj, region);
+            if (injected != nullptr) {
+                return injected;
+            }
+        }
         // secondclass ①: GetRoute is geometric plan; wait FORWARDED or read-lock
         // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
         for (;;) {
@@ -9317,6 +9416,25 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
+    // portmutreloc: the copy just happened on this thread. InScope() is set only by
+    // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
+    // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
+    // reach the same CopyObject with the flag clear and are not counted.
+    if (MutatorRelocate::StatsOn()) {
+        // ThreadLocal.h:20 ThreadType {CJ_PROCESSOR, GC_THREAD, FP_THREAD, HOT_UPDATE_THREAD};
+        // IsRuntimeThread() is >= GC_THREAD, so !IsRuntimeThread() is exactly CJ_PROCESSOR --
+        // a mutator. Both predicates are thread-local reads (MutatorManager.cpp:70-84).
+        MutatorRelocate::Role role = MutatorRelocate::Role::MUTATOR;
+        if (IsGcThread()) {
+            role = MutatorRelocate::Role::GC;
+        } else if (IsRuntimeThread()) {
+            role = MutatorRelocate::Role::OTHER_RT;
+        }
+        MutatorRelocate::NoteAnyCopy(role);
+        if (MutatorRelocate::InScope()) {
+            MutatorRelocate::NoteSelfCopy(size, role);
+        }
+    }
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
