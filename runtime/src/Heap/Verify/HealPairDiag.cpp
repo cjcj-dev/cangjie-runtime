@@ -16,6 +16,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "ObjectModel/MClass.h"
@@ -1220,8 +1221,15 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
     }
     if (haveExact) {
         DumpZero("whozeroExact", g_zeros[lastIdx]);
+        // gatedrop: join CAS-null target against TraceRefField reject ring.
+        if (GateDropDiag::Enabled()) {
+            GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastIdx].oldRaw);
+        }
     } else if (haveMove) {
         DumpZero("whozeroMove", g_zeros[lastMoveIdx]);
+        if (GateDropDiag::Enabled()) {
+            GateDropDiag::NoteCrashJoin(r13, slotBytes, g_zeros[lastMoveIdx].oldRaw);
+        }
     } else if (slotBytes != 0) {
         char miss[256];
         int mn = sprintf_s(miss, sizeof(miss),
@@ -1230,6 +1238,10 @@ void NoteCrashWhoZero(uintptr_t r13, uintptr_t rcx, uintptr_t rsi, uintptr_t rbx
                            slotBytes, histN, copyTotal);
         if (mn > 0) {
             WriteLine(miss, static_cast<size_t>(mn));
+        }
+        // Still report reject-ring emptiness even without a whozero tgt.
+        if (GateDropDiag::Enabled()) {
+            GateDropDiag::NoteCrashJoin(r13, slotBytes, 0);
         }
     }
     // Crash-time holder mark face (r13 = LexerImpl holder). Complements CAS-null snapshot.
