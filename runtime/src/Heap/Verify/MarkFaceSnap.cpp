@@ -6,6 +6,8 @@
 
 #include "Heap/Verify/MarkFaceSnap.h"
 
+#include "Heap/Verify/RegionLifeDiag.h"  // PATH_PRE_RELEASE_DECISION
+
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -388,6 +390,17 @@ uint16_t CurrentPhase()
 bool Enabled()
 {
     return GateOn();
+}
+
+// The pre-decision sample. Everything the free-path snapshot records is still true
+// here; what differs is only that CollectLargeGarbage has not yet asked whether the
+// region survives, so metadata.isMarked has not been forced to 0 by our own gate.
+// Recorded under its own path so the two are never pooled: a row from here answers
+// "was it marked", a row from NoteRegionFree answers "was it marked after we
+// established it was not", which is a question with one possible answer.
+void NoteBeforeReleaseDecision(RegionInfo* region)
+{
+    NoteRegionFree(region, RegionLifeDiag::PATH_PRE_RELEASE_DECISION);
 }
 
 void NoteRegionFree(RegionInfo* region, uint16_t path)

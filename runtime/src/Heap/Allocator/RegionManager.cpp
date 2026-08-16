@@ -1709,6 +1709,18 @@ size_t RegionManager::CollectLargeGarbage()
     size_t garbageSize = 0;
     RegionInfo* region = oldLargeRegionList.GetHeadRegion();
     while (region != nullptr) {
+        // holdercapture: sample the face here, BEFORE the predicate below decides.
+        //
+        // The earlier snapshot sat at the top of ReleaseRegion, which the caller only
+        // reaches once !IsSurvivedObject(0) already holds. For a large region
+        // IsMarkedObject(0) and IsSurvivedObject(0) read the same metadata.isMarked, so
+        // markedAtFree could never come back 1 - not because nothing was ever marked, but
+        // because the gate we had already passed guarantees the bit is 0. That produced
+        // 1017/1017 identical rows and a markedInFreed=0 that is 0/0, not 0/N.
+        //
+        // Reading it one line earlier is the whole fix: here the bit still carries
+        // whatever the collectors left in it.
+        MarkFaceSnap::NoteBeforeReleaseDecision(region);
         // for large region, the offset of obj is 0
         MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         if (!region->IsSurvivedObject(view, 0)) {

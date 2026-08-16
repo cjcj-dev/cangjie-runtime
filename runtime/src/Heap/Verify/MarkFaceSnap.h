@@ -44,6 +44,16 @@ bool Enabled();
 // path uses RegionLifeDiag::FreePath codes.
 void NoteRegionFree(RegionInfo* region, uint16_t path);
 
+// Sample the mark face BEFORE CollectLargeGarbage evaluates its release predicate.
+//
+// NoteRegionFree runs from ReleaseRegion, which is only reached once
+// !IsSurvivedObject(0) already holds. A large region has one mark face, so
+// IsMarkedObject(0) and IsSurvivedObject(0) read the same metadata.isMarked bit:
+// past that gate the bit is 0 by construction, which is why the first run produced
+// 1017/1017 identical rows and a markedInFreed=0 that is 0/0 rather than 0/N.
+// Called one line earlier the bit still says what the collectors left in it.
+void NoteBeforeReleaseDecision(RegionInfo* region);
+
 // Join an address (crash holder, CAS-null target, ...) against the snapshots.
 // Prints exactly one line: exact object hit, interior hit, region-only hit, or miss.
 //

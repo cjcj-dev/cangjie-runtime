@@ -22,6 +22,10 @@ enum FreePath : uint16_t {
     PATH_RELEASE_LARGE = 5,     // ReleaseRegion (large threshold)
     PATH_UNUSED_PINNED = 6,     // AllocPinned unused region handback
     PATH_OTHER = 7,
+    // Sampled before CollectLargeGarbage evaluates !IsSurvivedObject(0), so it is the
+    // only path whose mark bit is not already constrained to 0 by our own gate. Kept
+    // distinct from PATH_LARGE_GARBAGE precisely so the two never get pooled.
+    PATH_PRE_RELEASE_DECISION = 8,
 };
 
 bool Enabled();
