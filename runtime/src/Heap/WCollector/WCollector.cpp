@@ -6156,11 +6156,17 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                      "T-D ghost dispel during parallel ref_fix window entry=%zu exit=%zu "
                      "(plain InGhostFromRegion read assumes phase isolation)",
                      dispelAtEntry, dispelAtExit);
-        // concreffix: population of the centralized walk, on the always-on channel so the
-        // "how much work would a self-healing barrier remove" question has a denominator
-        // without turning REPORT on (which would perturb the very timings being measured).
-        LOG(RTLOG_ERROR, "[GCV2][reffix][walk] nObj=%zu nSlot=%zu heapWorkers=%d", nObj, nSlot,
-            heapWorkers);
+        // concreffix: population of the centralized walk — the denominator for "how much work
+        // would a self-healing barrier remove". It must not use REPORT (that would perturb the
+        // very timings being measured), but it must not be always-on either: unconditional
+        // RTLOG_ERROR would put one ERROR line per minor on the product path. Gate it like the
+        // other GC instruments (ebceaf91 precedent); nObj/nSlot/heapWorkers are pre-existing
+        // loop bounds, so the disabled path costs one cached bool test.
+        static const bool walkPopOn = DiagGate::LegacyOrToken("MRT_GCV2_REFFIX_WALK", "reffixwalk");
+        if (walkPopOn) {
+            LOG(RTLOG_ERROR, "[GCV2][reffix][walk] nObj=%zu nSlot=%zu heapWorkers=%d", nObj, nSlot,
+                heapWorkers);
+        }
 
         size_t active = 0;
         std::string takenStr;
