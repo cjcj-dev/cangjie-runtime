@@ -2431,6 +2431,9 @@ void WCollector::Preforward()
     {
         ScopedLightSync scopedLightSync("Preforward", true, GCPhase::GC_PHASE_PREFORWARD);
         RegionInfo::AdvanceCompactRouteTableGracePeriod();
+        // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
+        // period has to be advanced alongside the route-table one or the two drift apart.
+        ForwardDataManager::AdvanceGracePeriod();
         // This collector relocates both generations in one full-GC relocation set. Match the two
         // generation relocate-start flips while mutators are stopped, before any root is forwarded.
         flip_young_relocate_start();
