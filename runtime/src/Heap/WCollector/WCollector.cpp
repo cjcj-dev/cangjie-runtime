@@ -7579,6 +7579,13 @@ void WCollector::DoYoungGarbageCollection()
         // (3) quiet = no new greys this iter (work empty, no field extra, reachableVec stable)
         {
             MRT_PHASE_TIMER("young.stw2_fixpoint");
+            // STW2 slimming: the STW1 snapshot has already had every reachable field
+            // scanned by TraceYoungClosure.  Keep a cursor at that sealed prefix and
+            // only revisit holders added after the concurrent window.  Mutator y2y
+            // writes are covered by the existing per-AllocBuffer dirty-holder face;
+            // merging it under STW2 is the incremental replacement for rescanning the
+            // whole reachableVec on every fixpoint iteration.
+            size_t fieldScanCursor = reachableVec.size();
             size_t totalConcRemset = 0;
             {
                 MinorSlotSet concurrentRemset;
@@ -7741,14 +7748,25 @@ void WCollector::DoYoungGarbageCollection()
                                           weakSlots, useBitmapLedger);
                     }
                 }
-                // youngmiss2 §1③: concurrent young→young stores are not in remset (old→young only).
-                // Rescan fields of every object already in reachableVec and push unmarked young.
+                // youngmiss2 §1③: old→young remset does not contain concurrent y2y
+                // stores.  The write barrier already records their holder objects in
+                // y2yDirtyHolders.  Scan those holders plus the reachableVec suffix
+                // added after STW1, rather than the sealed STW1 prefix.
                 size_t fieldExtraN = 0;
                 {
+                    WorkStack fieldHolders = NewWorkStack();
+                    theAllocator.VisitAllocBuffers(
+                        [&fieldHolders](AllocBuffer& buffer) { buffer.MergeY2yDirtyHolders(fieldHolders); });
+                    const size_t incrementalEnd = reachableVec.size();
+                    for (size_t i = fieldScanCursor; i < incrementalEnd; ++i) {
+                        fieldHolders.push_back(reachableVec[i]);
+                    }
+                    fieldScanCursor = incrementalEnd;
+
                     WorkStack fieldExtra = NewWorkStack();
-                    const size_t nHolders = reachableVec.size();
-                    for (size_t i = 0; i < nHolders; ++i) {
-                        BaseObject* object = reachableVec[i];
+                    while (!fieldHolders.empty()) {
+                        BaseObject* object = fieldHolders.back();
+                        fieldHolders.pop_back();
                         if (object == nullptr || !Heap::IsHeapAddress(object)) {
                             continue;
                         }
