@@ -37,6 +37,7 @@ set(SRC_LIST
     "FlipPromoDiag.cpp"
     "O2ORemsetDiag.cpp"
     "ToverFailDiag.cpp"
+    "GoodPredDiag.cpp"
     "OffpastDiag.cpp"
     "TlRawDiag.cpp"
     "StartWhoDiag.cpp"
