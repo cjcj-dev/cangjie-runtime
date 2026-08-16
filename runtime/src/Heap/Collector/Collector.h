@@ -16,8 +16,10 @@
 #include <set>
 #include <vector>
 
+#include "Base/Macros.h"
 #include "GcRequest.h"
 #include "GcStats.h"
+#include "Heap/Verify/GoodPredDiag.h"
 #include "Heap/Verify/ToverFailDiag.h"
 
 namespace MapleRuntime {
@@ -156,10 +158,38 @@ public:
     virtual bool is_young_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_young_load_good"); }
     virtual bool is_old_load_good(RefField<>&) const { AbortUnimplemented("Collector::is_old_load_good"); }
 
+    // goodpred: the tree carries two definitions of load-good and they disagree.
+    //
+    // legacy (below, and what every barrier fast path has been running) accepts a reference whose
+    // remap bit is in both the young and the old accepted mask. GetAndTryTagRefField
+    // (WCollector.h:468-472) mints exactly such a value for a from-object -- isTagged=1 plus the
+    // *current* remap colour -- so a mid-evacuation reference passes and the barrier returns the
+    // from address without consulting the forwarding table.
+    //
+    // zgc is ColourPredicates::is_load_good, the transcription of OpenJDK
+    // ZPointer::is_load_good (zAddress.inline.hpp:631-633): one AND against g_cjLoadBadMask,
+    // which ComputeBadMasks builds as TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ current), so the
+    // tagged term is in it and such a reference goes down the barrier slow path instead.
+    //
+    // Not the default: switching it changes how much traffic the six barriers push through
+    // make_load_good. MRT_GCV2_ZGC_LOADGOOD=1 selects it; MRT_GCV2_LOADGOOD_AUDIT=1 evaluates
+    // both and censuses the disagreement without changing the answer.
+    //
+    // is_mark_good/is_store_good below are unaffected by the choice: both already require
+    // (value & g_cjMarkBadMask)==0, g_cjMarkBadMask is a superset of g_cjLoadBadMask, and under
+    // that precondition the two definitions are provably equal (the only remap bit a value may
+    // carry is the current one, which is what both then test for).
     bool is_load_good(RefField<>& ref) const
     {
-        return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
+        if (LIKELY(GoodPredDiag::g_mode == GoodPredDiag::kLegacy)) {
+            return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
+        }
+        return is_load_good_switched(ref);
     }
+
+    // Out-of-line so the default path keeps one load and one branch. Reached only when
+    // MRT_GCV2_ZGC_LOADGOOD or MRT_GCV2_LOADGOOD_AUDIT is set.
+    bool is_load_good_switched(RefField<>& ref) const;
 
     virtual ZGenerationId remap_generation(RefField<>&) const
     {

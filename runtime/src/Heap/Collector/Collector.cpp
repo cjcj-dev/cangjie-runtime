@@ -16,6 +16,7 @@
 #include "Base/LogFile.h"
 #include "Collector/GcStats.h"
 #include "Common/BaseObject.h"
+#include "Common/ColourPredicates.h"
 #include "Common/StateWord.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/ManagedObjectGate.h"
@@ -411,6 +412,19 @@ void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
                 static_cast<size_t>(wStore));
         }
     }
+}
+
+// goodpred: only reached when MRT_GCV2_ZGC_LOADGOOD or MRT_GCV2_LOADGOOD_AUDIT is set;
+// Collector::is_load_good keeps the legacy expression inline for the default mode.
+bool Collector::is_load_good_switched(RefField<>& ref) const
+{
+    const uintptr_t value = static_cast<uintptr_t>(raw(ref.GetFieldValue()));
+    const bool zgc = ColourPredicates::is_load_good(value, static_cast<uintptr_t>(::g_cjLoadBadMask));
+    if (GoodPredDiag::g_mode == GoodPredDiag::kZgc) {
+        return zgc;
+    }
+    const bool legacy = !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
+    return GoodPredDiag::NoteAudit(value, legacy, zgc);
 }
 
 bool Collector::MarkGoodHeapGate(const char* site, BaseObject* target)
