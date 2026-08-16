@@ -33,23 +33,39 @@ compiler=${CXX:-c++}
     -L"${rtlib}" -lcangjie-runtime -Wl,-rpath,"${rtlib}" \
     -o "${build_dir}/zgc_self_heal_loop_unit"
 
-out="${build_dir}/out.txt"
-# The gate must be set before load: ZgcSelfHealDiag caches it in a static initialiser.
-MRT_GCV2_ZGC_SELFHEAL=1 LD_LIBRARY_PATH="${rtlib}:${LD_LIBRARY_PATH:-}" \
-    "${build_dir}/zgc_self_heal_loop_unit" > "${out}" 2>&1 || true
-cat "${out}"
-
 rc=0
-grep -q "ZGC_SELF_HEAL_LOOP_UNIT PASS" "${out}" || { echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL assertions"; rc=1; }
-# The arm counts are the judgement: a run where retry and fastpath_exit stay 0 has not
-# tested the two things this port adds, however green the assertions look.
-census=$(grep "zgcselfheal\]\[census\] why=unit" "${out}" || true)
-if [[ -z "${census}" ]]; then
-    echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL no census line"
-    rc=1
-else
-    for expect in "enter=3" "null_skip=1" "healed=2" "fastpath_exit=1" "retry=2" "iter_max=2"; do
-        grep -q " ${expect} " <<<"${census} " || { echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL census missing ${expect}"; rc=1; }
+
+# The gate must be set before load: ZgcSelfHealDiag caches it in a static initialiser.
+run_mode() {
+    local mode="$1" why="$2" out="$3"; shift 3
+    MRT_GCV2_ZGC_SELFHEAL=1 LD_LIBRARY_PATH="${rtlib}:${LD_LIBRARY_PATH:-}" \
+        "${build_dir}/zgc_self_heal_loop_unit" ${mode} > "${out}" 2>&1 || true
+    cat "${out}"
+    grep -q "ZGC_SELF_HEAL_LOOP_UNIT PASS" "${out}" \
+        || { echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL assertions (${why})"; rc=1; }
+    # The arm counts are the judgement: a run where retry / fastpath_exit / spin_alarm
+    # stay 0 has not tested what this port adds, however green the assertions look.
+    local census
+    census=$(grep "zgcselfheal\]\[census\] why=${why}" "${out}" || true)
+    if [[ -z "${census}" ]]; then
+        echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL no census line (${why})"
+        rc=1
+        return
+    fi
+    local expect
+    for expect in "$@"; do
+        grep -q " ${expect} " <<<"${census} " \
+            || { echo "ZGC_SELF_HEAL_LOOP_UNIT FAIL census missing ${expect} (${why})"; rc=1; }
     done
-fi
+}
+
+# :91-96 / :98-101 / :103-107 / :73-79
+run_mode "" unit "${build_dir}/out.txt" \
+    "enter=3" "null_skip=1" "healed=2" "fastpath_exit=1" "retry=2" "iter_max=2" "spin_alarm=0"
+
+# Livelock sentinel: it must fire, and the loop must still converge afterwards.
+# Separate process so the four-figure retry count cannot bury the arm counts above.
+run_mode spin unit-spin "${build_dir}/out-spin.txt" \
+    "enter=1" "healed=1" "retry=1024" "iter_max=1024" "spin_alarm=1"
+
 exit "${rc}"

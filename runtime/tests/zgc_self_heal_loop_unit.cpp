@@ -23,6 +23,7 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <cstring>
 
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "ObjectModel/RefField.h"
@@ -130,25 +131,72 @@ void CaseNullHealRefused()
     Expect("null heal -> refused", word, kPtr);
 }
 
+// A fast path that never accepts anything and installs a *fresh* word every time it is
+// asked. That is the shape of the case the loop has no defence against: a competing
+// write that is not an upgrade, arriving faster than the heal can land.
+class NeverConvergesFastPath {
+public:
+    NeverConvergesFastPath(MAddress* word, unsigned budget) : word(word), budget(budget) {}
+
+    bool operator()(zpointer value)
+    {
+        const MAddress observed = static_cast<MAddress>(raw(value));
+        if (budget > 0 && observed == *word) {
+            ++served;
+            *word = kOther1 + static_cast<MAddress>(served) * 0x1000ULL;
+            --budget;
+        }
+        return false;
+    }
+
+private:
+    MAddress* word;
+    unsigned budget;
+    unsigned served = 0;
+};
+
+// The livelock sentinel (ZgcSelfHealDiag kSpinAlarmIterations). ⛔ Not a ZGC arm:
+// ZGC has no spin assert because the state is unreachable there. Budget is exactly
+// the alarm threshold, so the alarm must fire once and the heal must still land
+// afterwards -- the sentinel reports, it does not break the loop.
+void CaseSpinAlarm(unsigned threshold)
+{
+    MAddress word = kOther1;
+    MapleRuntime::ZgcSelfHeal(HeapSlotAt<false>(&word), MapleRuntime::to_zpointer(kPtr),
+                              MapleRuntime::to_zpointer(kHeal),
+                              NeverConvergesFastPath(&word, threshold),
+                              HealSite::TraceReadReference);
+    Expect("spin alarm -> loop survives", word, kHeal);
+}
+
 } // namespace
 
-int main()
+int main(int argc, char** argv)
 {
     if (!MapleRuntime::ZgcSelfHealEnabled()) {
         std::printf("FAIL MRT_GCV2_ZGC_SELFHEAL is not 1; the runner must set it before load\n");
         return 1;
     }
 
-    CaseUncontended();
-    CaseLostCasThenUpgrade();
-    CaseFastPathExit();
-    CaseNullHealRefused();
+    // Two modes, separate processes: the spin case moves retry by four figures and would
+    // bury the arm counts the default mode exists to pin down.
+    const bool spinMode = argc > 1 && std::strcmp(argv[1], "spin") == 0;
 
-    // Expected census: enter=3 null_skip=1 healed=2 fastpath_exit=1 retry=2 iter_max=2.
-    // The runner greps it; the arm counts are the whole point of the probe.
-    MapleRuntime::ZgcSelfHealDiag::Report("unit");
+    if (spinMode) {
+        CaseSpinAlarm(1024);
+        // Expected census: enter=1 healed=1 retry=1024 iter_max=1024 spin_alarm=1.
+        MapleRuntime::ZgcSelfHealDiag::Report("unit-spin");
+    } else {
+        CaseUncontended();
+        CaseLostCasThenUpgrade();
+        CaseFastPathExit();
+        CaseNullHealRefused();
+        // Expected census: enter=3 null_skip=1 healed=2 fastpath_exit=1 retry=2 iter_max=2
+        // spin_alarm=0. The runner greps it; the arm counts are the point of the probe.
+        MapleRuntime::ZgcSelfHealDiag::Report("unit");
+    }
 
-    std::printf("ZGC_SELF_HEAL_LOOP_UNIT %s failures=%u\n", g_failures == 0 ? "PASS" : "FAIL",
-                g_failures);
+    std::printf("ZGC_SELF_HEAL_LOOP_UNIT %s failures=%u mode=%s\n",
+                g_failures == 0 ? "PASS" : "FAIL", g_failures, spinMode ? "spin" : "default");
     return g_failures == 0 ? 0 : 1;
 }

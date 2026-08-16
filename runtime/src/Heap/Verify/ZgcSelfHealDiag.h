@@ -55,6 +55,14 @@ void NoteHealed(unsigned iterations);
 void NoteFastPathExit(unsigned iterations);
 // zBarrier.inline.hpp:103-107 upgrade retry. This is the counter the bounded
 // loop can never move: it gives up instead of re-applying the heal value.
+//
+// Also carries the livelock sentinel: every 1024 turns of one self-heal it
+// counts a spin_alarm and samples a line. ⛔ It never breaks the loop, never
+// falls back to the bounded one, and aborts only under
+// MRT_GCV2_ZGC_SELFHEAL_ABORT=1 -- giving up would replace ZGC's convergence
+// semantics with a different algorithm. ZGC has no such sentinel because on its
+// side the state is unreachable; here the premise it relies on is not
+// established, so the alarm is the evidence that it failed.
 void NoteRetry(unsigned iterations);
 
 void Report(const char* why);
