@@ -42,6 +42,23 @@ std::atomic<uint64_t> g_monoFinalizable{ 0 };
 std::atomic<uint64_t> g_monoChecks{ 0 };
 std::atomic<uint64_t> g_monoSampleLogged{ 0 };
 
+// Livelock sentinel. ZGC has no counterpart, and deliberately so: its unbounded loop
+// is proved to terminate by the metadata lattice, and assert_transition_monotonicity
+// is the thing that guards that proof. On our side the proof's premise is not
+// established -- ColourMask.h:202-206 records that Forward-phase writers can re-tag a
+// slot, and ColourPredicates.h:23-25 records that plain HeapSlot values still exist,
+// either of which is a competing write that is not an upgrade.
+//
+// So the loop needs something that can *see* the premise fail. It reports and keeps
+// going: giving up, or falling back to the bounded loop, would swap ZGC's convergence
+// semantics for a different algorithm, and then this is no longer that port. The alarm
+// is the product -- it turns "the livelock surface was never falsified" into "the
+// livelock surface was observed and its count is N".
+constexpr uint64_t kSpinAlarmIterations = 1024;
+constexpr uint64_t kSpinSampleCap = 8;
+std::atomic<uint64_t> g_spinAlarm{ 0 };
+std::atomic<uint64_t> g_spinSampleLogged{ 0 };
+
 constexpr uint64_t kMonoSampleCap = 32;
 
 bool ReadFlag(const char* name)
@@ -64,13 +81,13 @@ void DumpCensusRaw(const char* why)
     std::fprintf(stderr,
                  "[GCV2][zgcselfheal][census] why=%s armed=%d "
                  "enter=%llu null_skip=%llu healed=%llu fastpath_exit=%llu retry=%llu "
-                 "cas_fail=%llu iter_max=%llu "
+                 "cas_fail=%llu iter_max=%llu spin_alarm=%llu "
                  "pre_ptr_fastpath=%llu pre_heal_not_fastpath=%llu pre_heal_not_remapped=%llu "
                  "mono_checks=%llu mono_load_good=%llu mono_mark_good=%llu mono_store_good=%llu "
                  "mono_marked_young=%llu mono_marked_old=%llu mono_finalizable=%llu\n",
                  why == nullptr ? "?" : why, Enabled() ? 1 : 0, ZSH_LD(g_enter), ZSH_LD(g_nullSkip),
                  ZSH_LD(g_healed), ZSH_LD(g_fastPathExit), ZSH_LD(g_retry),
-                 ZSH_LD(g_fastPathExit) + ZSH_LD(g_retry), ZSH_LD(g_iterMax),
+                 ZSH_LD(g_fastPathExit) + ZSH_LD(g_retry), ZSH_LD(g_iterMax), ZSH_LD(g_spinAlarm),
                  ZSH_LD(g_preIsFastPath), ZSH_LD(g_preHealNotGood), ZSH_LD(g_preHealNotRemapped),
                  ZSH_LD(g_monoChecks), ZSH_LD(g_monoLoadGood), ZSH_LD(g_monoMarkGood),
                  ZSH_LD(g_monoStoreGood), ZSH_LD(g_monoMarkedYoung), ZSH_LD(g_monoMarkedOld),
@@ -138,6 +155,27 @@ void NoteIterations(unsigned iterations)
     uint64_t want = static_cast<uint64_t>(iterations);
     uint64_t seen = g_iterMax.load(std::memory_order_relaxed);
     while (want > seen && !g_iterMax.compare_exchange_weak(seen, want, std::memory_order_relaxed)) {
+    }
+}
+
+// Fires every kSpinAlarmIterations turns of the same self-heal, so a real livelock
+// keeps producing evidence instead of one line and then silence. The counter is
+// uncapped (it carries the magnitude); only the stderr samples are capped.
+// ⛔ It never breaks the loop -- see kSpinAlarmIterations above.
+void NoteSpinAlarm(uint64_t spun)
+{
+    g_spinAlarm.fetch_add(1, std::memory_order_relaxed);
+    if (g_spinSampleLogged.fetch_add(1, std::memory_order_relaxed) < kSpinSampleCap) {
+        std::fprintf(stderr,
+                     "[GCV2][zgcselfheal][spin] iterations=%llu -- self_heal has not converged; "
+                     "a competing write is not an upgrade (ColourMask.h:202-206)\n",
+                     static_cast<unsigned long long>(spun));
+        std::fflush(stderr);
+    }
+    if (AbortOnViolation()) {
+        // Same explicit opt-in as a monotonicity violation. ⛔ Not ZGC parity: ZGC has
+        // no spin assert, because on its side this state is unreachable.
+        std::abort();
     }
 }
 
@@ -317,7 +355,11 @@ void NoteRetry(unsigned iterations)
         return;
     }
     g_retry.fetch_add(1, std::memory_order_relaxed);
+    const uint64_t spun = static_cast<uint64_t>(iterations) + 1u;
     NoteIterations(iterations + 1);
+    if (spun % kSpinAlarmIterations == 0) {
+        NoteSpinAlarm(spun);
+    }
 }
 
 } // namespace ZgcSelfHealDiag
