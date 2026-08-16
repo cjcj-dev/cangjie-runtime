@@ -6093,10 +6093,21 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // Start() once — heap ForwardObject → RouteRegion → CompactRegion could memset free-tail
         // while a root still named that from (leave-alone → reclaim → GetSize UAF).
         // Phase 1: root families only (grant-before-route + parallel root Fix).
-        FixMinorRootSlotsParallel(pool);
-        pool->Start();
-        pool->WaitFinish();
+        // concreffix: split the two phases on the structured channel. ZGC keeps root fix in
+        // pause_relocate_start but has no centralized field-walk at all — slots heal through the
+        // load barrier. So phase 1 is work a self-healing barrier would still owe, and phase 2 is
+        // the part it would remove. Timing them apart is the only way to size that trade.
+        {
+            MRT_PHASE_TIMER("young.ref_fix_bulk_roots");
+            FixMinorRootSlotsParallel(pool);
+            pool->Start();
+            pool->WaitFinish();
+        }
         // Phase 2: export/extern preforward + heap/remset Fix (same pool, after roots).
+        // The timer below closes right after WaitFinish; it covers the two preforward tasks as
+        // well, because they are queued into the same pool run and cannot be timed apart.
+        {
+        MRT_PHASE_TIMER("young.ref_fix_bulk_heap");
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardDiscoveredExternObjects(); }));
         pool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
 
@@ -6138,12 +6149,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         pool->Start();
         pool->WaitFinish();
+        }
 
         const size_t dispelAtExit = RegionInfo::GetDispelGhostCount();
         CHECK_DETAIL(dispelAtExit == dispelAtEntry,
                      "T-D ghost dispel during parallel ref_fix window entry=%zu exit=%zu "
                      "(plain InGhostFromRegion read assumes phase isolation)",
                      dispelAtEntry, dispelAtExit);
+        // concreffix: population of the centralized walk, on the always-on channel so the
+        // "how much work would a self-healing barrier remove" question has a denominator
+        // without turning REPORT on (which would perturb the very timings being measured).
+        LOG(RTLOG_ERROR, "[GCV2][reffix][walk] nObj=%zu nSlot=%zu heapWorkers=%d", nObj, nSlot,
+            heapWorkers);
 
         size_t active = 0;
         std::string takenStr;
