@@ -4459,17 +4459,20 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     const bool workersEnvSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
     const bool useParallel = threadPool != nullptr && workersEnvSet && !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
-        // Report the reason that actually decided it, in the same short-circuit order as
-        // useParallel above. It used to print pool_unavailable unconditionally, which sent
-        // readers to inspect the thread pool when the real cause was an unset env var.
-        const char* reason = "pool_unavailable";
+        // It used to print pool_unavailable unconditionally, which sent readers to inspect
+        // the thread pool when the real cause was an unset env var. Report the cause the
+        // operator can act on, most deliberate first -- NOT useParallel's && order, which
+        // would answer "workers_unset" to someone who just asked for FORCE_SERIAL=1:
+        //   pool_unavailable  environmental, nothing to set
+        //   force_serial      operator asked for serial outright
+        //   mark_cost         operator turned on the markperf probe, which implies serial
+        //   workers_unset     the default state -- nobody opted in
+        const char* reason = "workers_unset";
         if (threadPool == nullptr) {
             reason = "pool_unavailable";
-        } else if (!workersEnvSet) {
-            reason = "workers_unset";
         } else if (forceSerialEnv) {
             reason = "force_serial";
-        } else {
+        } else if (forceSerialForCost) {
             reason = "mark_cost";
         }
         // STRIPED=1 alone never reaches the striped path: it is nested under useParallel,
