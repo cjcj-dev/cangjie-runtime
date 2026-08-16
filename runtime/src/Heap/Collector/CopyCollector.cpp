@@ -37,9 +37,8 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
     uintptr_t from = reinterpret_cast<uintptr_t>(&fromObj);
     uintptr_t to = reinterpret_cast<uintptr_t>(&toObj);
     const bool stall = HealPairDiag::Enabled() && HealPairDiag::MidCopyStallNs() > 0 && size > 8;
-    if (HealPairDiag::Enabled()) {
-        HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 0);
-    }
+    // NoteCopy self-gates (healpair OR whozero); always invoke so whozero can see moves.
+    HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 0);
     if (stall) {
         // Tip first so WaitRoutedTipReady / relocate_or_remap can admit the to-address
         // while high offsets are still the reservation zero. Default-off (COPYSTALL_NS).
@@ -55,9 +54,7 @@ void CopyCollector::CopyObject(const BaseObject& fromObj, BaseObject& toObj, siz
 #if defined(CANGJIE_TSAN_SUPPORT)
     Sanitizer::TsanFixShadow(reinterpret_cast<void*>(from), reinterpret_cast<void*>(to), size);
 #endif
-    if (HealPairDiag::Enabled()) {
-        HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
-    }
+    HealPairDiag::NoteCopy(reinterpret_cast<const void*>(from), reinterpret_cast<const void*>(to), size, 1);
 }
 
 void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
