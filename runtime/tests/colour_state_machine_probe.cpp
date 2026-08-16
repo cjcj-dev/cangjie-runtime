@@ -89,12 +89,11 @@ constexpr BadMasks WitnessBadMasks(EpochColours e)
     return BadMasks{
         e.remappedYoungMask & e.remappedOldMask,
 #ifdef MRT_C4TABLE_INJECT_FORMULA
-        // Positive control: the "tidy" rewrite this comparison exists to catch. Good ^ Metadata
-        // looks more like ZGC (zAddress.cpp:85) but STORE_METADATA_MASK carries no tagged bits,
-        // so every mid-evacuation reference silently becomes load-good.
-        (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)),
+        // Positive control: flip a remap bit so the witness disagrees with ComputeBadMasks.
+        // (Used to drop TAGGED_BITS_MASK; that term is now 0, so dropping it is a no-op.)
+        (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)) ^ ZPointerRemapped00,
 #else
-        TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)), // TAGGED_BITS_MASK == 0
+        TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)),
 #endif
         0, 0
     };
