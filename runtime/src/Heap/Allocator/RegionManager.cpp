@@ -2499,9 +2499,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             }
         }
         if (youngRegion) {
-            // No live objects → no out-edges; still demote so young-count stays honest.
-            region->SetYoungRegionFlag(0);
-            region->SetYoungAge(0);
+            // No live objects → no out-edges; still retire the young face so a
+            // later reuse cannot inherit this cycle's young marks as old marks.
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+            (void)region->PromoteYoungRegion(promotionView);
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion<G>(region);
@@ -2834,8 +2835,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 if (promotedRecords != 0) {
                     g_promotedCrossGenEdgeCount.fetch_add(promotedRecords, std::memory_order_relaxed);
                 }
-                region->SetYoungRegionFlag(0);
-                region->SetYoungAge(0);
+                MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+                (void)region->PromoteYoungRegion(promotionView);
             } else if (O2ORemsetDiag::Enabled()) {
                 // Pre-scrub census: remset bits still at from-addresses (Transfer moved to to).
                 size_t remsetInFrom = 0;
