@@ -41,13 +41,26 @@ enum Mode : uint8_t {
     kAudit = 2,  // both definitions evaluated + censused; answer follows kApply below
 };
 
+// Which caller asked. Only the first two can diverge: is_mark_good/is_store_good reach the
+// predicate having already required (value & g_cjMarkBadMask) == 0, and g_cjMarkBadMask is a
+// superset of g_cjLoadBadMask, so the only remap bit such a value may carry is the current one
+// -- which is exactly what both definitions then test for. Counting them in one total hides a
+// zero denominator behind tens of millions of reads that were never at risk.
+enum Site : uint8_t {
+    kSiteBarrier = 0,      // the six barrier fast paths
+    kSiteMakeLoadGood = 1, // Collector::make_load_good
+    kSiteMarkGood = 2,
+    kSiteStoreGood = 3,
+    kSiteCount = 4,
+};
+
 // Definition, not just declaration, lives in GoodPredDiag.cpp; both are dynamically
 // initialised at load time, before any mutator or collector thread exists.
 extern uint8_t g_mode;
 extern bool g_applyZgc; // in kAudit: return the zgc answer rather than the legacy one
 
 // Out-of-line: only reached in kAudit.
-bool NoteAudit(uintptr_t value, bool legacy, bool zgc);
+bool NoteAudit(uintptr_t value, bool legacy, bool zgc, uint8_t site);
 
 void Report(const char* why);
 

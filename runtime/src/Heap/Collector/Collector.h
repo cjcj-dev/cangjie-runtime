@@ -179,17 +179,24 @@ public:
     // (value & g_cjMarkBadMask)==0, g_cjMarkBadMask is a superset of g_cjLoadBadMask, and under
     // that precondition the two definitions are provably equal (the only remap bit a value may
     // carry is the current one, which is what both then test for).
-    bool is_load_good(RefField<>& ref) const
+    bool is_load_good(RefField<>& ref) const { return is_load_good_at(ref, GoodPredDiag::kSiteBarrier); }
+
+    // Which caller asked. The audit needs it because the answer can only differ at
+    // kSiteBarrier and kSiteMakeLoadGood: the two other sites reach here having already
+    // required (value & g_cjMarkBadMask) == 0, and under that precondition the two
+    // definitions are equal, so counting them would inflate the denominator with reads
+    // that cannot diverge.
+    bool is_load_good_at(RefField<>& ref, uint8_t site) const
     {
         if (LIKELY(GoodPredDiag::g_mode == GoodPredDiag::kLegacy)) {
             return !is_null(ref.GetTargetObject()) && is_young_load_good(ref) && is_old_load_good(ref);
         }
-        return is_load_good_switched(ref);
+        return is_load_good_switched(ref, site);
     }
 
     // Out-of-line so the default path keeps one load and one branch. Reached only when
     // MRT_GCV2_ZGC_LOADGOOD or MRT_GCV2_LOADGOOD_AUDIT is set.
-    bool is_load_good_switched(RefField<>& ref) const;
+    bool is_load_good_switched(RefField<>& ref, uint8_t site) const;
 
     virtual ZGenerationId remap_generation(RefField<>&) const
     {
@@ -209,7 +216,7 @@ public:
     {
         // 凭什么 to_object: GetTargetObject 已剥色；null 或 load-good 可直接用。
         BaseObject* target = to_object(ref.GetTargetObject());
-        if (target == nullptr || is_load_good(ref)) {
+        if (target == nullptr || is_load_good_at(ref, GoodPredDiag::kSiteMakeLoadGood)) {
             return target;
         }
         ToverFailDiag::NoteMlgEnter();
@@ -236,7 +243,8 @@ public:
     bool is_mark_good(RefField<>& ref) const
     {
         zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) && is_load_good(ref);
+        return (raw(v) & ::g_cjMarkBadMask) == 0 && !is_null(v) &&
+            is_load_good_at(ref, GoodPredDiag::kSiteMarkGood);
     }
 
     // OpenJDK ZPointer::is_store_good (zAddress.inline.hpp:679-684): store-good includes
@@ -244,7 +252,8 @@ public:
     bool is_store_good(RefField<>& ref) const
     {
         zpointer v = ref.GetFieldValue();
-        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) && is_load_good(ref);
+        return (raw(v) & ::g_cjStoreBadMask) == 0 && !is_null(v) &&
+            is_load_good_at(ref, GoodPredDiag::kSiteStoreGood);
     }
 
     bool is_store_bad(RefField<>& ref) const
