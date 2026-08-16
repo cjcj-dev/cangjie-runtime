@@ -184,7 +184,9 @@ int main(int argc, char** argv)
 
     if (spinMode) {
         CaseSpinAlarm(1024);
-        // Expected census: enter=1 healed=1 retry=1024 iter_max=1024 spin_alarm=1.
+        // Expected census: enter=1 healed=1 retry=1025 iter_max=1025 spin_alarm=1.
+        // 1025 because the competing write lands when the fast path is asked about the
+        // prev value, i.e. after that iteration's CAS already read the slot.
         MapleRuntime::ZgcSelfHealDiag::Report("unit-spin");
     } else {
         CaseUncontended();

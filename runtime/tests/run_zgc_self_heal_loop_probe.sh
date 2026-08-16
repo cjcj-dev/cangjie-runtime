@@ -65,7 +65,11 @@ run_mode "" unit "${build_dir}/out.txt" \
 
 # Livelock sentinel: it must fire, and the loop must still converge afterwards.
 # Separate process so the four-figure retry count cannot bury the arm counts above.
+#
+# 1025, not 1024: the competing write happens when the fast path is asked about the
+# prev value, i.e. after that iteration's CAS has already read the slot. So the last
+# bump costs one more lost CAS before the retry with the settled value lands.
 run_mode spin unit-spin "${build_dir}/out-spin.txt" \
-    "enter=1" "healed=1" "retry=1024" "iter_max=1024" "spin_alarm=1"
+    "enter=1" "healed=1" "retry=1025" "iter_max=1025" "spin_alarm=1"
 
 exit "${rc}"
