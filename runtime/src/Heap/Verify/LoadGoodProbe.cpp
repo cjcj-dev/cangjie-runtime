@@ -67,6 +67,32 @@ struct FaceCounters {
     std::atomic<uint64_t> ghostNotNlg;
     std::atomic<uint64_t> neitherNlgNorGhost;
 
+    // A x B -- the two predicates that both claim to mean "load bad".
+    //
+    // ZGC has one: is_load_bad(p) = untype(p) & ZPointerLoadBadMask (zAddress.inline.hpp:627).
+    // We have two, and they are not the same set. g_cjLoadBadMask includes TAGGED_BITS_MASK
+    // (ColourMask.h ComputeBadMasks), but Collector::is_load_good never consults it: it is
+    // !is_null && (raw & RemappedYoungMask) && (raw & RemappedOldMask) (Collector.h:159,
+    // WCollector.h:212-221). So a mid-evacuation reference carrying the current remap colour
+    // is load-bad by the mask and load-good by the predicate. maskbad_not_nlg counts exactly
+    // that population -- the references the six barrier fast paths hand back untouched.
+    std::atomic<uint64_t> maskbadAndNlg;
+    std::atomic<uint64_t> maskbadNotNlg;   // ZGC mask says bad, our predicate says good
+    std::atomic<uint64_t> nlgNotMaskbad;   // our predicate says bad, mask says good (plain)
+    std::atomic<uint64_t> neitherAB;
+
+    // The other two published masks, on the same word. The load mask covers only part of
+    // the colour space; a word can be load-good and still mark-bad or store-bad.
+    std::atomic<uint64_t> markBad;
+    std::atomic<uint64_t> storeBad;
+    std::atomic<uint64_t> loadGoodMarkBad;   // load says fine, mark does not
+    std::atomic<uint64_t> loadGoodStoreBad;
+
+    // Per-bit census of bits 48..63, over every non-null read and over the load-bad subset.
+    // A boolean "bad colour" hides which family the bits belong to; this does not.
+    std::atomic<uint64_t> bitAll[16];
+    std::atomic<uint64_t> bitBad[16];
+
     // Instrument health.
     std::atomic<uint64_t> maskZero;      // g_cjLoadBadMask was 0 at observation time
     std::atomic<uint64_t> synthBad;      // positive control, see NoteRead
@@ -148,6 +174,49 @@ void ReportFace(const char* point, uint8_t face)
         static_cast<size_t>(f.hiBits.load(std::memory_order_relaxed)));
     if (n > 0) {
         WriteLine(line, static_cast<size_t>(n));
+    }
+
+    char ab[512];
+    int abn = sprintf_s(ab, sizeof(ab),
+                        "[GCV2][loadgood] point=%s face=%s load_mask=%#zx mark_mask=%#zx "
+                        "store_mask=%#zx maskbad_and_nlg=%zu maskbad_not_nlg=%zu "
+                        "nlg_not_maskbad=%zu neither_ab=%zu mark_bad=%zu store_bad=%zu "
+                        "loadgood_markbad=%zu loadgood_storebad=%zu\n",
+                        point == nullptr ? "?" : point, FaceName(face),
+                        static_cast<size_t>(::g_cjLoadBadMask), static_cast<size_t>(::g_cjMarkBadMask),
+                        static_cast<size_t>(::g_cjStoreBadMask),
+                        static_cast<size_t>(f.maskbadAndNlg.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.maskbadNotNlg.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.nlgNotMaskbad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.neitherAB.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.markBad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.storeBad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.loadGoodMarkBad.load(std::memory_order_relaxed)),
+                        static_cast<size_t>(f.loadGoodStoreBad.load(std::memory_order_relaxed)));
+    if (abn > 0) {
+        WriteLine(ab, static_cast<size_t>(abn));
+    }
+    {
+        char hist[640];
+        int off = sprintf_s(hist, sizeof(hist), "[GCV2][loadgood] point=%s face=%s bitcensus",
+                            point == nullptr ? "?" : point, FaceName(face));
+        for (unsigned b = 0; b < 16u && off > 0; ++b) {
+            const uint64_t all = f.bitAll[b].load(std::memory_order_relaxed);
+            const uint64_t bad = f.bitBad[b].load(std::memory_order_relaxed);
+            if (all == 0) {
+                continue;
+            }
+            int n2 = sprintf_s(hist + off, sizeof(hist) - static_cast<size_t>(off),
+                               " b%u=%zu/%zu", 48u + b, static_cast<size_t>(all),
+                               static_cast<size_t>(bad));
+            off = n2 > 0 ? off + n2 : -1;
+        }
+        if (off > 0) {
+            int n3 = sprintf_s(hist + off, sizeof(hist) - static_cast<size_t>(off), "\n");
+            if (n3 > 0) {
+                WriteLine(hist, static_cast<size_t>(off + n3));
+            }
+        }
     }
 
     char sum[256];
@@ -253,6 +322,42 @@ void NoteRead(uint8_t face, uintptr_t word, bool ghost, bool loadGood)
     }
     if (ghost) {
         Bump(f.ghost);
+    }
+
+    // A x B. maskbad_not_nlg is the leak: ZGC's predicate rejects it, ours admits it.
+    if (maskBad && !loadGood) {
+        Bump(f.maskbadAndNlg);
+    } else if (maskBad) {
+        Bump(f.maskbadNotNlg);
+    } else if (!loadGood) {
+        Bump(f.nlgNotMaskbad);
+    } else {
+        Bump(f.neitherAB);
+    }
+
+    // The rest of the colour space, on the same word.
+    const bool markBadNow = (word & ::g_cjMarkBadMask) != 0;
+    const bool storeBadNow = (word & ::g_cjStoreBadMask) != 0;
+    if (markBadNow) {
+        Bump(f.markBad);
+        if (!maskBad) {
+            Bump(f.loadGoodMarkBad);
+        }
+    }
+    if (storeBadNow) {
+        Bump(f.storeBad);
+        if (!maskBad) {
+            Bump(f.loadGoodStoreBad);
+        }
+    }
+
+    for (unsigned b = 0; b < 16u; ++b) {
+        if (((hi >> b) & 1u) != 0) {
+            Bump(f.bitAll[b]);
+            if (maskBad) {
+                Bump(f.bitBad[b]);
+            }
+        }
     }
 
     // A x C.
