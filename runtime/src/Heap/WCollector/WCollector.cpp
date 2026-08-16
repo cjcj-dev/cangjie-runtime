@@ -3199,6 +3199,9 @@ void DumpMinorScrubCountIfEnabled(const char* point)
 struct YoungMarkingShared {
     WCollector* collector = nullptr;
     GCThreadPool* pool = nullptr;
+    // Owned by DoYoungGarbageCollection and immutable for this STW closure;
+    // all workers may therefore query it while filling only their local slot vector.
+    const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
     bool fullYoungScan = false;
     bool useBitmapLedger = true;
     bool recordSlots = false;
@@ -3423,9 +3426,11 @@ public:
                 }
                 continue;
             }
-            object->ForEachRefField([&localSlots, &pushTarget, recordSlots](RefField<>& field) {
-                if (recordSlots) {
-                    localSlots.push_back(reinterpret_cast<MAddress>(&field));
+            object->ForEachRefField([this, &localSlots, &pushTarget, recordSlots](RefField<>& field) {
+                MAddress slot = reinterpret_cast<MAddress>(&field);
+                if (recordSlots &&
+                    (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
+                    localSlots.push_back(slot);
                 }
                 pushTarget(field);
             });
@@ -3459,6 +3464,8 @@ struct alignas(64) YoungStripedWorkerOutput {
 
 struct YoungStripedShared {
     WCollector* collector = nullptr;
+    // Same lifetime/read-only contract as YoungMarkingShared::reachableSlotDomain.
+    const std::unordered_set<MAddress>* reachableSlotDomain = nullptr;
     bool fullYoungScan = false;
     bool useBitmapLedger = true;
     bool recordSlots = false;
@@ -3823,8 +3830,10 @@ private:
             return;
         }
         object->ForEachRefField([this, &localSlots, &pushTarget](RefField<>& field) {
-            if (shared.recordSlots) {
-                localSlots.push_back(reinterpret_cast<MAddress>(&field));
+            MAddress slot = reinterpret_cast<MAddress>(&field);
+            if (shared.recordSlots &&
+                (shared.reachableSlotDomain == nullptr || shared.reachableSlotDomain->count(slot) != 0)) {
+                localSlots.push_back(slot);
             }
             pushTarget(field);
         });
@@ -4156,7 +4165,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
 
 void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                            std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                           MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool)
+                                           MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                           const MinorSlotSet* reachableSlotDomain)
 {
     // T-D ③: dispel frozen across parallel mark window (same as R2 reffix).
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
@@ -4186,7 +4196,7 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     // workers=1 apparatus: main only, no pool Start (markpar 0cd9df7c).
     if (workers == 1) {
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                useBitmapLedger);
+                                useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
              "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
              "reachable_n=%zu parallel=0",
@@ -4198,6 +4208,7 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     YoungMarkingShared shared;
     shared.collector = this;
     shared.pool = threadPool;
+    shared.reachableSlotDomain = reachableSlotDomain;
     shared.fullYoungScan = fullYoungScan;
     shared.useBitmapLedger = useBitmapLedger;
     shared.recordSlots = fullYoungScan;
@@ -4283,7 +4294,8 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
 
 void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                           std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                                          MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool)
+                                          MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
+                                          const MinorSlotSet* reachableSlotDomain)
 {
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
     {
@@ -4307,7 +4319,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     workers = std::max(workers, 1);
     if (workers == 1) {
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                useBitmapLedger);
+                                useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
              "[GCV2][markpar][striped] workers_active=1 workers_scheduled=1 stripes=1 stripe_shift=%zu "
              "objects_marked=[%zu] reachable_n=%zu parallel=0",
@@ -4318,6 +4330,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     const size_t stripeCount = MarkStripeCount(static_cast<size_t>(workers));
     YoungStripedShared shared;
     shared.collector = this;
+    shared.reachableSlotDomain = reachableSlotDomain;
     shared.fullYoungScan = fullYoungScan;
     shared.useBitmapLedger = useBitmapLedger;
     shared.recordSlots = fullYoungScan;
@@ -4415,12 +4428,8 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
-    // markstw: the remset-intersection ledger currently belongs to the serial path.
-    // Parallel paths keep per-worker slot sets and merge them later; forcing serial here
-    // preserves the exact domain filter rather than silently widening its semantics.
-    const bool forceSerialForSlotDomain = reachableSlotDomain != nullptr;
     const bool useParallel = threadPool != nullptr && std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr &&
-                             !forceSerialEnv && !forceSerialForCost && !forceSerialForSlotDomain;
+                             !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
         VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial pool_unavailable");
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
@@ -4433,11 +4442,11 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }
     if (stripedEnv) {
         TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                 useBitmapLedger, threadPool);
+                                 useBitmapLedger, threadPool, reachableSlotDomain);
         return;
     }
     TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                              useBitmapLedger, threadPool);
+                              useBitmapLedger, threadPool, reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as
