@@ -106,15 +106,19 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         size_t allocatedAfter = Heap::GetHeap().GetAllocatedSize();
         size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
         uint64_t heuMinInterval = g_gcRequests[GC_REASON_HEU].GetMinInterval();
+        // Default on; an exact 0 is the operational rollback for young HEU deferral.
+        const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
+        const bool minorDefersHeu =
+            minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
         GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
             finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity,
-            gcTimeNs, heuMinInterval);
+            gcTimeNs, heuMinInterval, minorDefersHeu);
         VLOG(REPORT,
-             "[GCV2][heu-loop] minor-finish action=%s allocated-after=%zu promoted=%zu "
+             "[GCV2][heu-loop] minor-finish action=%s enabled=%d allocated-after=%zu promoted=%zu "
              "candidate=%zu duration-ns=%llu HEU-min-interval-ns=%llu major-safety-limit=%zu",
-             GCStats::YoungHeuThrottleDecisionName(decision), allocatedAfter, gcStats.youngPromotedBytes,
-             gcStats.youngCandidateBytes, static_cast<unsigned long long>(gcTimeNs),
-             static_cast<unsigned long long>(heuMinInterval), maxCapacity / 2);
+             GCStats::YoungHeuThrottleDecisionName(decision), minorDefersHeu, allocatedAfter,
+             gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, static_cast<unsigned long long>(gcTimeNs),
+             static_cast<unsigned long long>(heuMinInterval), maxCapacity / 4);
     } else {
         gcStats.RecordMajorGCFinish(finishTime);
     }

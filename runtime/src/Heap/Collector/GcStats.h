@@ -24,6 +24,7 @@ class GCStats {
 public:
     enum class YoungHeuThrottleDecision : uint8_t {
         REFRESHED,
+        DISABLED,
         NO_COLLECTION_SET,
         DEFERRAL_ALREADY_USED,
         OLD_PRESSURE_HIGH,
@@ -56,7 +57,7 @@ public:
     YoungHeuThrottleDecision RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
                                                  size_t promotedBytes, size_t candidateBytes,
                                                  size_t maxCapacity, uint64_t durationNs,
-                                                 uint64_t heuMinIntervalNs);
+                                                 uint64_t heuMinIntervalNs, bool deferralEnabled);
 
     void RecordMajorGCFinish(uint64_t timestamp)
     {

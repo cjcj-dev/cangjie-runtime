@@ -70,15 +70,18 @@ void GCStats::Init()
 GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
                                                                size_t promotedBytes, size_t candidateBytes,
                                                                size_t maxCapacity, uint64_t durationNs,
-                                                               uint64_t heuMinIntervalNs)
+                                                               uint64_t heuMinIntervalNs, bool deferralEnabled)
 {
+    if (!deferralEnabled) {
+        return YoungHeuThrottleDecision::DISABLED;
+    }
     if (candidateBytes == 0) {
         return YoungHeuThrottleDecision::NO_COLLECTION_SET;
     }
 
-    // A copying major needs to preserve a to-space reserve. Do not defer it if
-    // another promotion wave of the size just observed would reach half heap.
-    const size_t majorSafetyLimit = maxCapacity / 2;
+    // Stay well inside the copying major's half-heap to-space reserve. The
+    // quarter-heap limit is the measured safe point for bounded deferral.
+    const size_t majorSafetyLimit = maxCapacity / 4;
     const bool oldPressureHigh = allocatedAfter >= majorSafetyLimit ||
         promotedBytes >= majorSafetyLimit - allocatedAfter;
     if (oldPressureHigh) {
@@ -104,6 +107,8 @@ const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decis
     switch (decision) {
         case YoungHeuThrottleDecision::REFRESHED:
             return "refreshed";
+        case YoungHeuThrottleDecision::DISABLED:
+            return "disabled";
         case YoungHeuThrottleDecision::NO_COLLECTION_SET:
             return "no-collection-set";
         case YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED:
