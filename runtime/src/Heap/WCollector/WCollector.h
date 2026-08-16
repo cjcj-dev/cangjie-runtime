@@ -28,6 +28,27 @@ class ScopedStopTheWorld;
 // Gate = MRT_GCV2_NULLSLOT (default off).
 void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 
+// portyoungconc: work accounting for the concurrent young mark window.
+// ZGC anchor: ZGenerationYoung::concurrent_mark() = mark_roots() + mark_follow()
+// (zGeneration.cpp:665-669) — everything a young collector does between
+// pause_mark_start and pause_mark_end runs with mutators alive.
+// Every field below counts GC work performed *while the world is running*, so the
+// closed arm (MRT_GCV2_YOUNG_CONC_MARK unset) reports all-zero by construction:
+// there is no window there. A non-zero windowNs with markedInWindow()==0 and
+// satbObjects==0 means the window exists but carries no marking work — report that,
+// do not read a duration as evidence of concurrency.
+struct YoungConcWindowStats {
+    uint64_t windowNs = 0;    // world-released → STW2 requested
+    size_t satbObjects = 0;   // objects popped out of SATB inside the window
+    size_t satbIters = 0;     // SATB termination loop iterations inside the window
+    size_t closureCalls = 0;  // TraceYoungClosure invocations inside the window
+    size_t markedAtEntry = 0; // reachableVec.size() at world-release
+    size_t markedAtExit = 0;  // reachableVec.size() at STW2 request
+    size_t remsetSlots = 0;   // remset slots consumed by the in-window rescan
+    size_t reenters = 0;      // ZGC pause_mark_end() == false → concurrent_mark_continue()
+    size_t MarkedInWindow() const { return markedAtExit >= markedAtEntry ? markedAtExit - markedAtEntry : 0; }
+};
+
 class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
@@ -609,7 +630,8 @@ private:
     // youngconc: drain SATB into TraceYoungClosure (major MarkSatbBuffer sibling; young-only filter).
     bool MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                              std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
-                             MinorSlotSet& weakSlots, bool useBitmapLedger);
+                             MinorSlotSet& weakSlots, bool useBitmapLedger,
+                             YoungConcWindowStats* windowStats = nullptr);
     friend class YoungMarkingWork;
     friend class YoungStripedMarkingWork;
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
