@@ -44,6 +44,7 @@ set(SRC_LIST
     "WhoPushDiag.cpp"
     "HeldFreeDiag.cpp"
     "RegionLifeDiag.cpp"
+    "GateDropDiag.cpp"
     "PinFireDiag.cpp"
     "YyEdgeDiag.cpp"
     "EnumPushDiag.cpp"

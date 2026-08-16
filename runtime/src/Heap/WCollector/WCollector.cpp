@@ -63,6 +63,7 @@
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -1235,10 +1236,17 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
         if (!Collector::MarkGoodHeapGate("TraceRefField", targetObj)) {
+            // gatedrop: reject arm only (default off). leave untraced.
+            if (UNLIKELY(GateDropDiag::Enabled())) {
+                GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_MARKGOOD);
+            }
             return;
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
         if (!Collector::PlausibleManagedObjectGate("TraceRefField", targetObj)) {
+            if (UNLIKELY(GateDropDiag::Enabled())) {
+                GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
+            }
             return;
         }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
@@ -1262,6 +1270,9 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         return;
     }
     if (!Collector::PlausibleManagedObjectGate("TraceRefField.slow", latest)) {
+        if (UNLIKELY(GateDropDiag::Enabled())) {
+            GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
+        }
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
