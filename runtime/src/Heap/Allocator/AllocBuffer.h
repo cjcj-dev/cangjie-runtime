@@ -9,6 +9,7 @@
 #define MRT_ALLOC_BUFFER_H
 
 #include <functional>
+#include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
 #include "RegionList.h"
@@ -27,6 +28,8 @@ public:
 
     MAddress Allocate(size_t size, AllocType allocType);
     RegionInfo* GetRegion() { return tlRegion; }
+    RegionList& GetTlRawPointerRegions() { return tlRawPointerRegions; }
+    RegionList& GetTlLargeRawPointerRegions() { return tlLargeRawPointerRegions; }
     RegionInfo* GetPreparedRegion() { return preparedRegion.load(std::memory_order_relaxed); }
     void SetRegion(RegionInfo* newRegion) { tlRegion = newRegion; }
     inline void ClearRegion()
@@ -62,6 +65,47 @@ public:
         stackRoots.clear();
     }
 
+    // youngconc: TRACE-window allocate-black greys (mutator-only push; GC merges at STW2).
+    // Paint alone makes MarkObject claim skip TraceYoungClosure → never reachableVec/fields.
+    void PushYoungAllocBlack(BaseObject* obj) { youngAllocBlack.emplace_back(obj); }
+
+    template<class WorkStack>
+    inline void MergeYoungAllocBlack(WorkStack& workStack)
+    {
+        if (youngAllocBlack.empty()) {
+            return;
+        }
+        for (BaseObject* obj : youngAllocBlack) {
+            workStack.push_back(obj);
+        }
+        youngAllocBlack.clear();
+    }
+
+    // h3seed2: young→young write dirties the *holder object* (not the field slot).
+    // Minor root enum merges these into the product work stack so FYS closure reaches
+    // ArrayList/HashMap containers without recording every y2y field in remset.
+    // Dedup per mutator: unique objects, not per-field writes (y2yN is millions).
+    void PushY2yDirtyHolder(BaseObject* obj)
+    {
+        if (obj != nullptr) {
+            y2yDirtyHolders.insert(obj);
+        }
+    }
+
+    template<class WorkStack>
+    inline void MergeY2yDirtyHolders(WorkStack& workStack)
+    {
+        if (y2yDirtyHolders.empty()) {
+            return;
+        }
+        for (BaseObject* obj : y2yDirtyHolders) {
+            workStack.push_back(obj);
+        }
+        y2yDirtyHolders.clear();
+    }
+
+    size_t Y2yDirtyHolderCount() const { return y2yDirtyHolders.size(); }
+
     void FlushRegion();
 
 private:
@@ -81,6 +125,10 @@ private:
     RegionList tlLargeRawPointerRegions;
     // Record stack roots in concurrent enum phase, waiting for GC to merge these roots
     std::list<BaseObject*> stackRoots;
+    // youngconc allocate-black greys (see PushYoungAllocBlack)
+    std::list<BaseObject*> youngAllocBlack;
+    // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
+    std::unordered_set<BaseObject*> y2yDirtyHolders;
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H
