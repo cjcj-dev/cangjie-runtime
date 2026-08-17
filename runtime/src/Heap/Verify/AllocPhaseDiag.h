@@ -59,11 +59,7 @@ inline NearEntry g_near[kNearCap] = {};
 
 inline bool Enabled()
 {
-    static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_NULLROUTE_DIAG");
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    return on;
+    return false;
 }
 
 inline const char* PhaseName(uint8_t p)
