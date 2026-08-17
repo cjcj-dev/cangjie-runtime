@@ -6714,13 +6714,27 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                  "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
                  reachableVec.size());
             {
+                // Intermediate (task §四): copy only. ForwardFromSpace also walks
+                // to-object fields and CollectRegion — both raced (si_addr=0x8,
+                // f019451c / survival_dense rc=139). Reclaim + remset stay in re-STW.
                 MRT_PHASE_TIMER("young.copy");
-                ForwardFromSpace();
+                for (BaseObject* object : reachableVec) {
+                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
+                        continue;
+                    }
+                    if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
+                        (void)ForwardObject(object);
+                    }
+                }
             }
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        {
+            MRT_PHASE_TIMER("young.copy_reclaim");
+            ForwardFromSpace();
+        }
         postEvacPoint("post-forward-pre-reclaim", true);
         {
             const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
