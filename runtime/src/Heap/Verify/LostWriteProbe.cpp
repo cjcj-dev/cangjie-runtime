@@ -21,6 +21,7 @@ struct Sample {
 };
 
 constexpr size_t kSampleCap = 8;
+constexpr uint32_t kTlsFlush = 4096;
 
 std::atomic<uint64_t> g_a{ 0 };
 std::atomic<uint64_t> g_b{ 0 };
@@ -38,6 +39,16 @@ Sample g_bS[kSampleCap];
 Sample g_cS[kSampleCap];
 
 std::atomic<bool> g_atexit{ false };
+
+thread_local uint32_t t_wr = 0;
+
+void FlushWr()
+{
+    if (t_wr != 0) {
+        g_wr.fetch_add(t_wr, std::memory_order_relaxed);
+        t_wr = 0;
+    }
+}
 
 void PushSample(std::atomic<uint32_t>& n, Sample* ring, uintptr_t obj, uintptr_t field, uint32_t phase)
 {
@@ -67,6 +78,7 @@ void DumpSamples(const char* kind, const Sample* ring, uint32_t n)
 
 void Dump(const char* point)
 {
+    FlushWr();
     std::fprintf(stderr,
                  "[LOSTWRITE] point=%s a=%llu b=%llu c=%llu wr=%llu resolve_null=%llu "
                  "tryfwd_null=%llu tryfwd_null_other=%llu\n",
@@ -96,21 +108,27 @@ void EnsureAtexit()
 
 void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
 {
-    EnsureAtexit();
-    g_wr.fetch_add(1, std::memory_order_relaxed);
+    if (++t_wr >= kTlsFlush) {
+        FlushWr();
+    }
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
         return;
     }
-    const uint32_t phase = static_cast<uint32_t>(collector.GetGCPhase());
+    const GCPhase phase = collector.GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        return;
+    }
+    EnsureAtexit();
+    const uint32_t phaseU = static_cast<uint32_t>(phase);
     const uintptr_t objU = reinterpret_cast<uintptr_t>(obj);
     const uintptr_t fieldU = reinterpret_cast<uintptr_t>(field);
     if (collector.IsGhostFromObject(obj)) {
         if (obj->IsForwarded()) {
             g_a.fetch_add(1, std::memory_order_relaxed);
-            PushSample(g_aN, g_aS, objU, fieldU, phase);
+            PushSample(g_aN, g_aS, objU, fieldU, phaseU);
         } else {
             g_b.fetch_add(1, std::memory_order_relaxed);
-            PushSample(g_bN, g_bS, objU, fieldU, phase);
+            PushSample(g_bN, g_bS, objU, fieldU, phaseU);
         }
         return;
     }
@@ -118,14 +136,13 @@ void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
         RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(objU);
         if (reg != nullptr && reg->IsRouteDestHeld()) {
             g_c.fetch_add(1, std::memory_order_relaxed);
-            PushSample(g_cN, g_cS, objU, fieldU, phase);
+            PushSample(g_cN, g_cS, objU, fieldU, phaseU);
         }
     }
 }
 
 void NoteResolveNull(BaseObject* from, bool movableGhost)
 {
-    EnsureAtexit();
     if (movableGhost && from != nullptr) {
         g_resolveNull.fetch_add(1, std::memory_order_relaxed);
     }
@@ -133,7 +150,6 @@ void NoteResolveNull(BaseObject* from, bool movableGhost)
 
 void NoteTryForwardNull(BaseObject* from, bool movableGhost)
 {
-    EnsureAtexit();
     if (movableGhost && from != nullptr) {
         g_tryfwdNullGhost.fetch_add(1, std::memory_order_relaxed);
     } else {
