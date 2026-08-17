@@ -6122,11 +6122,18 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return v != nullptr && std::strcmp(v, "0") == 0;
     }();
     const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
-    static const bool concRelocateOff = []() {
+    // Concurrent copy is opt-in, not default. REPORT-zpublish measured it drifting the
+    // survival_dense checksum 1 run in 5 (368685912892819 vs golden 368685940367600)
+    // while 4/5 were golden -- a silent wrong answer, which is worse than a missing
+    // optimisation. The publish-vs-compute split (this branch's main work) was necessary
+    // but is demonstrably not sufficient; ops/design/ROUTE_PUBLISH_VS_COMPUTE.md.
+    // MRT_GCV2_CONC_RELOCATE=1 turns it on -- that is the arm where role=mutator
+    // any_copies first became non-zero (2269) and noGhost fell 99.997% -> 99.773%.
+    static const bool concRelocateOn = []() {
         const char* v = std::getenv("MRT_GCV2_CONC_RELOCATE");
-        return v != nullptr && std::strcmp(v, "0") == 0;
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
-    const bool doConcRelocate = concRelocate && !concRelocateOff;
+    const bool doConcRelocate = concRelocate && concRelocateOn;
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
     };
