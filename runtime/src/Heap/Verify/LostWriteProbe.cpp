@@ -104,6 +104,11 @@ void EnsureAtexit()
     }
 }
 
+struct AtexitOnce {
+    AtexitOnce() { EnsureAtexit(); }
+};
+AtexitOnce g_atexitOnce;
+
 } // namespace
 
 void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
@@ -144,6 +149,7 @@ void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
 
 void NoteResolveNull(BaseObject* from, bool movableGhost)
 {
+    EnsureAtexit();
     if (movableGhost && from != nullptr) {
         g_resolveNull.fetch_add(1, std::memory_order_relaxed);
     }
@@ -151,6 +157,7 @@ void NoteResolveNull(BaseObject* from, bool movableGhost)
 
 void NoteTryForwardNull(BaseObject* from, bool movableGhost)
 {
+    EnsureAtexit();
     if (movableGhost && from != nullptr) {
         g_tryfwdNullGhost.fetch_add(1, std::memory_order_relaxed);
     } else {
