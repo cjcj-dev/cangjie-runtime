@@ -273,7 +273,10 @@ static uint32_t InitProcessorNum()
     unsigned int cpus = std::thread::hardware_concurrency();
     uint32_t defaultProcs = cpus != 0 ? static_cast<uint32_t>(cpus) : 8;
     auto env = CString(std::getenv("cjProcessorNum"));
-    if (env.Str() == nullptr) {
+    // ⛔ IsEmpty(), not Str() == nullptr: CString(nullptr) allocates an empty buffer, so
+    // Str() is never null (CString.cpp:27-35). The old guard never fired; the fall-through
+    // happened to give the same answer here because IsPosNumber("") is false.
+    if (env.IsEmpty()) {
         return defaultProcs;
     }
     CString s = env.RemoveBlankSpace();

@@ -183,7 +183,10 @@ static void WriteLogImpl(bool addPrefix, LogType type, const char* format, va_li
     LogFile::LogFileLock(type);
 #if defined(__OHOS__) && (__OHOS__ == 1)
     auto env = CString(std::getenv("MRT_REPORT"));
-    if (env.Str() == nullptr && type == LogType::REPORT) {
+    // ⛔ IsEmpty(), not Str() == nullptr (see CString.cpp:27-35). With the old guard this
+    // OHOS branch never ran, so an unset MRT_REPORT fell through to GetFile() == nullptr
+    // and printed "MRT_REPORT is not a valid path" for every REPORT line.
+    if (env.IsEmpty() && type == LogType::REPORT) {
         if (Logger::GetLogger().GetMinimumLogLevel() == RTLOG_INFO) {
             PRINT_INFO("%{public}s\n", buf);
         }
@@ -299,7 +302,11 @@ long GetEnv(const char* envName, long defaultValue)
 RTLogLevel InitLogLevel()
 {
     auto env = CString(std::getenv("MRT_LOG_LEVEL"));
-    if (env.Str() == nullptr) {
+    // ⛔ IsEmpty(), not Str() == nullptr (see CString.cpp:27-35). This is the site where the
+    // dead guard was observable: unset MRT_LOG_LEVEL reached the length check below, so every
+    // process emitted one spurious RTLOG_ERROR "Unsupported in MRT_LOG_LEVEL length" line.
+    // Measured: unset => 1 complaint, MRT_LOG_LEVEL=e => 0.
+    if (env.IsEmpty()) {
         return RTLOG_ERROR;
     }
 

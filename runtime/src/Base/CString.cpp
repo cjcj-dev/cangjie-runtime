@@ -24,6 +24,10 @@ CString::CString()
     length = 0;
 }
 
+// A null argument yields an *empty* CString, not a null one: the buffer is allocated and
+// Str() returns a valid pointer to "". Callers wrapping getenv() must therefore test
+// IsEmpty(), never Str() == nullptr -- three sites had the latter and none of their guards
+// ever fired (CjScheduler.cpp cjProcessorNum, LogFile.cpp MRT_REPORT and MRT_LOG_LEVEL).
 CString::CString(const char* initStr)
 {
     if (initStr == nullptr) {
