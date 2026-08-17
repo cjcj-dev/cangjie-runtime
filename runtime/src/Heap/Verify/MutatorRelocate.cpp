@@ -104,15 +104,15 @@ void EnsureAtexit()
 
 bool Enabled()
 {
+    // zconc: ZRelocate::relocate_object (zRelocate.cpp:382-410) is the product
+    // path once evacuate runs concurrent with mutators. The env/token only
+    // remains as an off-switch for rollback.
     static const bool on = []() {
-        // Register the summary here, not only from the Note* helpers. The first arm run had
-        // every counter at zero and therefore printed nothing at all, which reads exactly like
-        // "the instrument is not in the binary" -- the one reading it must not be able to make.
-        EnsureAtexit();
-        if (EnvIsOne("MRT_GCV2_MUTATOR_RELOCATE")) {
-            return true;
+        const char* v = std::getenv("MRT_GCV2_MUTATOR_RELOCATE");
+        if (v != nullptr && v[0] == '0' && v[1] == '\0') {
+            return false;
         }
-        return DiagGate::TokenOn("mutreloc");
+        return true;
     }();
     return on;
 }
@@ -140,7 +140,8 @@ bool InjectOn()
 bool DrainEnabled()
 {
     // Drain is unconditional (ZForwardingLife). This flag only turns the census
-    // on; it no longer gates the wait.
+    // on; it no longer gates the wait. Not implied by Enabled() — relocate is
+    // now the product path and must not dump counters on every exit.
     static const bool on = []() {
         EnsureAtexit();
         if (EnvIsOne("MRT_GCV2_MUTRELOC_STATS")) {
@@ -148,7 +149,7 @@ bool DrainEnabled()
         }
         return DiagGate::TokenOn("mutrelocstats") || DiagGate::TokenOn("mutrelocdrain");
     }();
-    return on || Enabled();
+    return on;
 }
 
 bool StatsOn()
@@ -160,7 +161,7 @@ bool StatsOn()
         }
         return DiagGate::TokenOn("mutrelocstats");
     }();
-    return on || Enabled() || DrainEnabled();
+    return on || DrainEnabled();
 }
 
 void NoteAttempt()
