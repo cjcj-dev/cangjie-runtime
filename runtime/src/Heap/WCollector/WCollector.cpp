@@ -8993,7 +8993,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
     // Bound mid-copy waits only while route is still in flight. Permanent publish-without-tip
     // is an invariant break (CHECK below), not a longer spin.
-    constexpr int kMaxSpins = 4096;
     auto permanentHole = [&](const char* reason, int spins, BaseObject* geometricTo) -> BaseObject* {
         if (diagOn) {
             giveUpCount.fetch_add(1, std::memory_order_relaxed);
@@ -9084,8 +9083,8 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 }
                 return again; // receipt after object FORWARDED
             }
-            // Published FORWARDED without a tip-valid to = permanent hole (not mid-copy).
-            return permanentHole("object_FORWARDED_tip_null", spins, again != nullptr ? again : to);
+            // Object flag without tip: ZGC add_and_wait still waits for page is_done().
+            // Hole only after the region publishes; mid-route keep spinning.
         }
         RegionInfo::RouteState rs = forwarding->GetRouteState();
         if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
