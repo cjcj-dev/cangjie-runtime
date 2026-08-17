@@ -69,8 +69,10 @@
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Common/ColourPredicates.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
+#include "UnwindStack/StackFrameCursor.h"
 #include "ObjectModel/RefField.inline.h"
 #include "TypeInfoManager.h"
 #include "Verify/VerifyRegions.h"
@@ -84,6 +86,86 @@ struct CopierRouteMint {
 };
 
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
+
+// Frame-colour census after relocate-start flip. Compile-time on; no MRT_GCV2_ env.
+static constexpr bool kFrameColourCensus = true;
+
+static void CensusFrameColoursAfterFlip(const char* site, uintptr_t prevRemap)
+{
+    if (!kFrameColourCensus) {
+        return;
+    }
+    const uintptr_t loadBad = ::g_cjLoadBadMask;
+    const uintptr_t curRemap = ColourPredicates::current_remapped(loadBad);
+    size_t nMut = 0;
+    size_t nManaged = 0;
+    size_t nSlot = 0;
+    size_t nOld = 0;
+    size_t nNew = 0;
+    size_t nPlainNull = 0;
+    size_t nOther = 0;
+    size_t oldD0 = 0;
+    size_t oldD1 = 0;
+    size_t oldD2 = 0;
+    size_t oldD3p = 0;
+    size_t maxOldDepth = 0;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        ++nMut;
+        if (!mutator.IsManagedContext()) {
+            return;
+        }
+        mutator.MutatorLock();
+        StackFrameCursor cursor(mutator.GetUnwindContext());
+        size_t depth = 0;
+        RootVisitor visitor = [&](ObjectRef& root) {
+            const uintptr_t value = raw(root.LoadPlain());
+            ++nSlot;
+            const uintptr_t remap = value & REMAP_COLOUR_MASK;
+            if (value == 0 || remap == 0) {
+                ++nPlainNull;
+            } else if (ColourPredicates::is_load_good(value, loadBad)) {
+                ++nNew;
+            } else if (prevRemap != 0 && remap == prevRemap) {
+                ++nOld;
+                if (depth <= 3) {
+                    ++oldD0;
+                } else if (depth <= 7) {
+                    ++oldD1;
+                } else if (depth <= 15) {
+                    ++oldD2;
+                } else {
+                    ++oldD3p;
+                }
+                if (depth > maxOldDepth) {
+                    maxOldDepth = depth;
+                }
+            } else {
+                ++nOther;
+            }
+        };
+        while (!cursor.Done()) {
+            const FrameInfo* frame = cursor.CurrentFrame();
+            const bool managed = frame != nullptr && frame->GetFrameType() == FrameType::MANAGED;
+            if (managed) {
+                ++nManaged;
+                ++depth;
+            }
+            cursor.ProcessOne(visitor, mutator);
+        }
+        mutator.MutatorUnlock();
+    });
+    static std::atomic<size_t> cycle{0};
+    const size_t n = cycle.fetch_add(1, std::memory_order_relaxed) + 1;
+    LOG(RTLOG_ERROR,
+        "[FRAMECOLOUR] site=%s cycle=%zu mut=%zu managedFrames=%zu slots=%zu "
+        "oldColour=%zu newColour=%zu plainNull=%zu other=%zu "
+        "prevRemap=%#lx curRemap=%#lx loadBad=%#lx "
+        "oldDepth[0-3]=%zu [4-7]=%zu [8-15]=%zu [16+]=%zu maxOldDepth=%zu stw=%d",
+        site, n, nMut, nManaged, nSlot, nOld, nNew, nPlainNull, nOther,
+        static_cast<unsigned long>(prevRemap), static_cast<unsigned long>(curRemap),
+        static_cast<unsigned long>(loadBad), oldD0, oldD1, oldD2, oldD3p, maxOldDepth,
+        MutatorManager::Instance().WorldStopped() ? 1 : 0);
+}
 
 namespace {
 bool VerifyStackRootPostconditionEnabled()
@@ -2442,6 +2524,9 @@ void WCollector::Preforward()
         // generation relocate-start flips while mutators are stopped, before any root is forwarded.
         flip_young_relocate_start();
         flip_old_relocate_start();
+        CensusFrameColoursAfterFlip("full",
+            (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) &
+                (ZPointerRemappedOldMask ^ REMAP_COLOUR_MASK));
     }
 
     GCThreadPool* threadPool = GetThreadPool();
@@ -6315,6 +6400,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // enter Relocate. Product path. MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back.
         if (doYoungFlip) {
             flip_young_relocate_start();
+            CensusFrameColoursAfterFlip("young",
+                (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) & ZPointerRemappedOldMask);
         }
 
         if (refFixCoveredDedup) {
