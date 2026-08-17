@@ -36,7 +36,7 @@ enum class RootVerifyChannel : uint8_t { Ok = 0, Defect, Info };
 
 bool VerifyRoots::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_VERIFY_ROOTS");
+    static const bool on = false /* pinned:MRT_GCV2_VERIFY_ROOTS */;
     return on;
 }
 

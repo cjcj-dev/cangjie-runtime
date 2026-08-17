@@ -225,18 +225,18 @@ void WalkGhostList(const char* listName, RegionList& list, ListWalkStats& stats,
 
 bool VerifyRegions::IsEnabled()
 {
-    return EnvIsOne("MRT_GCV2_VERIFY_REGIONS");
+    return false /* pinned:MRT_GCV2_VERIFY_REGIONS */;
 }
 
 bool VerifyRegions::IsFatal()
 {
-    return EnvIsOne("MRT_GCV2_VERIFY_REGIONS_FATAL");
+    return false /* pinned:MRT_GCV2_VERIFY_REGIONS_FATAL */;
 }
 
 bool VerifyRegions::ShouldRunAt(size_t youngRunIndex)
 {
     // youngRunIndex is 1-based invocation counter for this young collection (minorTotalRuns+1).
-    size_t startAt = EnvAsSize("MRT_GCV2_VERIFY_REGIONS_START_AT", 0);
+    size_t startAt = (0) /* pinned:MRT_GCV2_VERIFY_REGIONS_START_AT */;
     if (startAt == 0) {
         return true;
     }

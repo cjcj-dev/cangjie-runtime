@@ -391,7 +391,7 @@ public:
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
             static const bool probe = []() {
-                const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCRECLAIM_PROBE */;
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
             if (probe && region != nullptr && knownEmpty) {

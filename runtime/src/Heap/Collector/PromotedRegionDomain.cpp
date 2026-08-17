@@ -155,7 +155,7 @@ bool Enabled()
     // domainon: default ON. MRT_GCV2_PROMO_DOMAIN=0 disables; unset or any other value keeps on.
     // Old RecordPromotedCrossGenEdges still runs as shadow (not deleted this lane).
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PROMO_DOMAIN */;
         if (v == nullptr) {
             return true;
         }
@@ -166,13 +166,13 @@ bool Enabled()
 
 bool ReconcileEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_RECONCILE");
+    static const bool on = false /* pinned:MRT_GCV2_PROMO_DOMAIN_RECONCILE */;
     return on;
 }
 
 bool FatalOnMismatch()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_FATAL");
+    static const bool on = false /* pinned:MRT_GCV2_PROMO_DOMAIN_FATAL */;
     return on;
 }
 
@@ -186,7 +186,7 @@ void SnapshotDomainEdgesAtRegister(RegionInfo* region, MarkView<Generation::Youn
     if (!ReconcileEnabled() || region == nullptr || region->IsSafeKnownYoungEmpty(view)) {
         return;
     }
-    static const bool skipOne = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_SKIP_ONE");
+    static const bool skipOne = false /* pinned:MRT_GCV2_PROMO_DOMAIN_SKIP_ONE */;
     bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
     bool useLiveOnly = UseLiveOnly(region, view);
     region->VisitAllObjects([&](BaseObject* object) {
@@ -313,7 +313,7 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
         return 0;
     }
     g_dischargeCalls.fetch_add(1, std::memory_order_relaxed);
-    static const bool injectUndischarged = EnvIsOne("MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED");
+    static const bool injectUndischarged = false /* pinned:MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED */;
 
     auto t0 = std::chrono::steady_clock::now();
     size_t recorded = 0;
@@ -407,7 +407,7 @@ void ResetForNextMinor(size_t minorRunIndex)
         LOG(RTLOG_ERROR,
             "[PROMODOMAIN][INVARIANT] run=%zu registered=%zu discharged=%zu — not equal before reset",
             minorRunIndex, registered, discharged);
-        if (FatalOnMismatch() || !EnvIsOne("MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED")) {
+        if (FatalOnMismatch() || !false /* pinned:MRT_GCV2_PROMO_DOMAIN_INJECT_UNDISCHARGED */) {
             CHECK_DETAIL(registered == discharged,
                          "[PROMODOMAIN] registered==discharged failed run=%zu reg=%zu dis=%zu",
                          minorRunIndex, registered, discharged);

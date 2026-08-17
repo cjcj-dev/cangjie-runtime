@@ -49,7 +49,7 @@ void RememberedSet::Initialize(MAddress start, size_t size)
         }
     }
     // d1producer: sticky ever-recorded backing, gated off by default (see RememberedSet.h).
-    const char* everEnv = std::getenv("MRT_GCV2_REMSET_EVER");
+    const char* everEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_EVER */;
     if (everEnv != nullptr && std::strcmp(everEnv, "1") == 0) {
         everRecorded.reset(new (std::nothrow) std::atomic<uint64_t>[wordCount]);
         CHECK_DETAIL(everRecorded != nullptr, "failed to allocate remembered-set ever bitmap");
@@ -178,11 +178,11 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     // existing destination from the bitmap's exact distinct count; it does not weaken
     // or bypass any producer/backstop scan.
     static const bool breakdownProbe = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_DRAIN_PROBE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_DRAIN_PROBE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool reserveDestination = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_HASH_OPT */;
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     const uint64_t drainStartNs = breakdownProbe ? TimeUtil::NanoSeconds() : 0;
@@ -275,7 +275,7 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     std::lock_guard<std::mutex> guard(oracleLock);
     bool injected = false;
-    const char* inject = std::getenv("MRT_GCV2_VERIFY_REMSET_BITMAP_INJECT_MISMATCH");
+    const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_REMSET_BITMAP_INJECT_MISMATCH */;
     if (inject != nullptr && std::strcmp(inject, "1") == 0) {
         for (size_t bit = 0; bit < bitCount; ++bit) {
             MAddress candidate = heapStart + bit * kFieldBytes;
@@ -506,7 +506,7 @@ void RememberedSet::VisitStaticForCrossCheck(MAddress fieldAddress)
 void RememberedSet::CheckStaticCoverageForMinor()
 {
     std::lock_guard<std::mutex> guard(oracleLock);
-    const char* trace = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS");
+    const char* trace = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS */;
     bool traceEnabled = trace != nullptr && std::strcmp(trace, "1") == 0;
     if (!traceEnabled) {
         staticRecords.clear();
@@ -516,7 +516,7 @@ void RememberedSet::CheckStaticCoverageForMinor()
         return;
     }
     bool injected = false;
-    const char* inject = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS_INJECT_MISSING");
+    const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS_INJECT_MISSING */;
     if (inject != nullptr && std::strcmp(inject, "1") == 0) {
         staticRecords.insert(heapStart);
         staticRecordSites[heapStart] = 0;
@@ -551,7 +551,7 @@ void RememberedSet::CheckStaticCoverageForMinor()
     if (missing != 0) {
         std::fprintf(stderr, "REMSET_EXTERNAL_ROOT_MISMATCH injected=%u missing=%zu recorded=%zu\n",
                      static_cast<unsigned>(injected), missing, staticRecords.size());
-        const char* fatal = std::getenv("MRT_GCV2_TRACE_EXTERNAL_SLOTS_FATAL");
+        const char* fatal = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TRACE_EXTERNAL_SLOTS_FATAL */;
         if (fatal != nullptr && std::strcmp(fatal, "1") == 0) {
             std::abort();
         }

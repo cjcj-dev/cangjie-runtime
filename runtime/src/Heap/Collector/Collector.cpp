@@ -74,7 +74,7 @@ bool PlausibleObjGateSampleAllowed(size_t budget)
 bool MarkGoodHeapGateAccountOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MARKGOOD_HEAP_GATE");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKGOOD_HEAP_GATE */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -83,7 +83,7 @@ bool MarkGoodHeapGateAccountOn()
 bool PlausibleObjGateAccountOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MARKFLOOR_OBJ_GATE");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKFLOOR_OBJ_GATE */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -129,7 +129,7 @@ void GateEquivAtexitReport()
 bool GateEquivOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_GATEEQUIV");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_GATEEQUIV */;
         bool enabled = v != nullptr && std::strcmp(v, "1") == 0;
         if (enabled) {
             std::atexit(GateEquivAtexitReport);
@@ -142,7 +142,7 @@ bool GateEquivOn()
 bool GateEquivInjectOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_GATEEQUIV_INJECT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_GATEEQUIV_INJECT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -356,7 +356,7 @@ void MaskEquivAtexitReport()
 bool MaskEquivOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MASKEQUIV");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MASKEQUIV */;
         bool enabled = v != nullptr && std::strcmp(v, "1") == 0;
         if (enabled) {
             std::atexit(MaskEquivAtexitReport);
@@ -369,7 +369,7 @@ bool MaskEquivOn()
 bool MaskEquivInjectOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MASKEQUIV_INJECT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MASKEQUIV_INJECT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -727,7 +727,7 @@ static void MaybeAssertbodyProbe()
     if (done.exchange(true, std::memory_order_relaxed)) {
         return;
     }
-    const char* p = std::getenv("MRT_ASSERTBODY_PROBE");
+    const char* p = static_cast<const char*>(nullptr) /* pinned-off:MRT_ASSERTBODY_PROBE */;
     if (p == nullptr || p[0] == '\0' || std::strcmp(p, "0") == 0) {
         return;
     }

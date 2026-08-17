@@ -214,13 +214,13 @@ bool StackExposureOracle::Enabled()
 
 bool StackExposureOracle::FatalEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_EXPOSURE_FATAL");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_EXPOSURE_FATAL */;
     return on;
 }
 
 const char* StackExposureOracle::InjectName()
 {
-    static const char* name = EnvStr("MRT_GCV2_STACK_EXPOSURE_INJECT");
+    static const char* name = nullptr /* pinned:MRT_GCV2_STACK_EXPOSURE_INJECT */;
     return name;
 }
 

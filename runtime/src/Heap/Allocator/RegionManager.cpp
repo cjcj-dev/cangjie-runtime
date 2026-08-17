@@ -298,7 +298,7 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         return 0;
     }
     static const bool fysGapProbe = []() {
-        const char* value = std::getenv("MRT_GCV2_FYSGAP_PROBE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FYSGAP_PROBE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
@@ -404,7 +404,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     // gcscanoff blocking test: skip whole conservative pinned/old scan (default off).
     {
         static const bool skip = []() {
-            const char* v = std::getenv("MRT_GCV2_SKIP_PINNED_SCAN");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIP_PINNED_SCAN */;
             return v != nullptr && std::strcmp(v, "1") == 0;
         }();
         if (skip) {
@@ -442,7 +442,7 @@ size_t RegionManager::RecordPinnedCrossGenEdges()
     // does not change the remset. Default OFF — mutator-visible state is identical.
     // Env MRT_GCV2_PINNED_SCAN_PARALLEL=1.
     static const bool parallelEnv = []() {
-        const char* v = std::getenv("MRT_GCV2_PINNED_SCAN_PARALLEL");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PINNED_SCAN_PARALLEL */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     GCThreadPool* pool = parallelEnv ? Heap::GetHeap().GetCollectorResources().GetThreadPool() : nullptr;
@@ -960,7 +960,7 @@ namespace {
 bool ScrubCostMeterEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_SCRUB_COST");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SCRUB_COST */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -1452,14 +1452,14 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // barriers/remset still run. Unset must match product path bit-for-bit.
         // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
         static const bool disableMinor = []() {
-            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
+            const char* disableMinorEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DISABLE_MINOR */;
             return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
         }();
         if (disableMinor) {
             youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
         }
         static const bool jvmYoungTriggerOn = []() {
-            const char* jvmYoungTriggerEnv = std::getenv("MRT_GCV2_JVM_YOUNG_TRIGGER");
+            const char* jvmYoungTriggerEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_YOUNG_TRIGGER */;
             return jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
         }();
         const bool useJvmYoungTrigger = !disableMinor && jvmYoungTriggerOn;
@@ -2393,7 +2393,7 @@ namespace {
 bool PermhitReceiptOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_PERMHIT_RECEIPT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PERMHIT_RECEIPT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -2553,7 +2553,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
     // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
     static const bool forceInPlaceEnv = []() {
-        const char* v = std::getenv("MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool forceInPlace =
@@ -2808,7 +2808,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }
     {
         static const bool probe = []() {
-            const char* v = std::getenv("MRT_GCRECLAIM_PROBE");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCRECLAIM_PROBE */;
             return v != nullptr && std::strcmp(v, "1") == 0;
         }();
         if (probe && !region->IsLargeRegion()) {

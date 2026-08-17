@@ -410,17 +410,17 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
 {
     // Default off — HotSpot VerifyBeforeGC/VerifyAfterGC DIAGNOSTIC pattern.
     // force=true lets post-evac run without enabling the global pre-evacuate gate.
-    if (!force && !EnvEnabled("MRT_GCV2_VERIFY_HEAP")) {
+    if (!force && !false /* pinned:MRT_GCV2_VERIFY_HEAP */) {
         return;
     }
 
     static std::atomic<size_t> invokeCount{ 0 };
     size_t invoke = invokeCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    size_t startAt = EnvSizeT("MRT_GCV2_VERIFY_HEAP_START_AT", 0);
+    size_t startAt = (0) /* pinned:MRT_GCV2_VERIFY_HEAP_START_AT */;
     if (startAt != 0 && invoke < startAt) {
         return;
     }
-    size_t every = EnvSizeT("MRT_GCV2_VERIFY_HEAP_EVERY", 1);
+    size_t every = (1) /* pinned:MRT_GCV2_VERIFY_HEAP_EVERY */;
     if (every == 0) {
         every = 1;
     }
@@ -432,7 +432,7 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
         return;
     }
 
-    size_t maxFailures = EnvSizeT("MRT_GCV2_VERIFY_HEAP_MAX_FAILURES", kDefaultMaxFailures);
+    size_t maxFailures = (kDefaultMaxFailures) /* pinned:MRT_GCV2_VERIFY_HEAP_MAX_FAILURES */;
     if (maxFailures == 0) {
         maxFailures = kDefaultMaxFailures;
     }
@@ -519,7 +519,7 @@ void VerifyHeapObjects(const char* point, bool force, const std::unordered_set<B
         YyEdgeDiag::Report(point == nullptr ? "?" : point);
     }
 
-    if (EnvEnabled("MRT_GCV2_VERIFY_HEAP_FATAL") && stats.failures != 0) {
+    if (false /* pinned:MRT_GCV2_VERIFY_HEAP_FATAL */ && stats.failures != 0) {
         CHECK_DETAIL(false,
                      "heap object invariant H broken: point=%s failures=%zu objects=%zu H2_tipInHeap=%zu H3=%zu",
                      point == nullptr ? "?" : point, stats.failures, stats.objectsScanned, stats.h2TipInHeap,

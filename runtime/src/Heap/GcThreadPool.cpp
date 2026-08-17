@@ -64,7 +64,7 @@ static std::atomic<int> g_tsanPosCtrlDone{0};
 
 static void TsanPosCtrlMaybeRace(size_t workerId)
 {
-    const char* flag = std::getenv("MRT_GCV2_TSAN_POSCTRL");
+    const char* flag = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TSAN_POSCTRL */;
     if (flag == nullptr || flag[0] != '1') {
         return;
     }

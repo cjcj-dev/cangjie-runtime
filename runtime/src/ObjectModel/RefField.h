@@ -430,7 +430,7 @@ using RefField = HeapSlot<isAtomic>;
 inline bool StaticNullProbeEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_STATICNULL");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STATICNULL */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;

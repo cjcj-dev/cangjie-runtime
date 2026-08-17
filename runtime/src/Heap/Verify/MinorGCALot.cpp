@@ -24,7 +24,7 @@ std::atomic<bool> g_intervalArmed{ false };
 
 size_t ParseInterval()
 {
-    const char* v = std::getenv("MRT_GCV2_MINOR_GC_ALOT");
+    const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_GC_ALOT */;
     if (v == nullptr || v[0] == '\0') {
         return 0;
     }

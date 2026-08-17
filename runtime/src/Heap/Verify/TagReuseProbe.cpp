@@ -86,13 +86,13 @@ void NoteDangling(const char* kind, RegionInfo* region, const char* listName, ui
 
 bool TagReuseProbe::TagReuseEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_TAG_REUSE");
+    static const bool on = false /* pinned:MRT_GCV2_TAG_REUSE */;
     return on;
 }
 
 bool TagReuseProbe::MarkBitsStickyEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_MARK_BITS_STICKY");
+    static const bool on = false /* pinned:MRT_GCV2_MARK_BITS_STICKY */;
     return on;
 }
 

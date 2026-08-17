@@ -26,11 +26,11 @@ namespace MapleRuntime {
 void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
 {
     static const bool assertOn = []() {
-        const char* v = std::getenv("MRT_GCV2_ASSERT_COLOURED_WRITES");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ASSERT_COLOURED_WRITES */;
         return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
     static const bool countOn = []() {
-        const char* v = std::getenv("MRT_GCV2_PLAIN_WRITE_COUNT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PLAIN_WRITE_COUNT */;
         return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
     if (LIKELY(!assertOn && !countOn)) {

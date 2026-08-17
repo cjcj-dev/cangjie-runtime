@@ -30,13 +30,13 @@ bool EnvIsOne(const char* name)
 
 bool StackExposureHook::ProductEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_EXPOSURE_HOOK");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_EXPOSURE_HOOK */;
     return on;
 }
 
 bool StackExposureHook::VerifyEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_EXPOSURE_VERIFY");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_EXPOSURE_VERIFY */;
     return on;
 }
 

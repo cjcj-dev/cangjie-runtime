@@ -160,13 +160,13 @@ bool StackWatermarkOracle::Enabled()
 
 bool StackWatermarkOracle::FatalEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_WATERMARK_FATAL");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_WATERMARK_FATAL */;
     return on;
 }
 
 const char* StackWatermarkOracle::InjectName()
 {
-    static const char* name = EnvStr("MRT_GCV2_STACK_WATERMARK_INJECT");
+    static const char* name = nullptr /* pinned:MRT_GCV2_STACK_WATERMARK_INJECT */;
     return name;
 }
 

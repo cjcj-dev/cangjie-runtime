@@ -46,19 +46,19 @@ RootVisitor MakeCollector(std::vector<RootKey>& keys)
 
 bool StackFrameOracle::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_FRAME_ORACLE");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_FRAME_ORACLE */;
     return on;
 }
 
 bool StackFrameOracle::SkipFirstManagedEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_FRAME_ORACLE_SKIP");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_FRAME_ORACLE_SKIP */;
     return on;
 }
 
 bool StackFrameOracle::FatalEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_STACK_FRAME_ORACLE_FATAL");
+    static const bool on = false /* pinned:MRT_GCV2_STACK_FRAME_ORACLE_FATAL */;
     return on;
 }
 

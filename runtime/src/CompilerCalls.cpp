@@ -110,7 +110,7 @@ static bool TiStripProbeEnabled()
     if (state != 0) {
         return g_tiStripProbeOn;
     }
-    const char* env = std::getenv("MRT_GCV2_TISTRIP_PROBE");
+    const char* env = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TISTRIP_PROBE */;
     g_tiStripProbeOn = (env != nullptr && env[0] == '1' && env[1] == '\0');
     if (g_tiStripProbeOn) {
         std::atexit(TiStripProbeAtexit);

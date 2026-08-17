@@ -49,7 +49,7 @@ void GCStats::Init()
     garbageRatio = 0.0;
     collectionRate = 0.0;
 
-    const char* jvmIhopEnv = std::getenv("MRT_GCV2_JVM_IHOP");
+    const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
     const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
     size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
     if (useJvmIhop) {

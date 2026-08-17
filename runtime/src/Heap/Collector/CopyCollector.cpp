@@ -114,7 +114,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
         uint64_t heuMinInterval = g_gcRequests[GC_REASON_HEU].GetMinInterval();
         // Default on; an exact 0 is the operational rollback for young HEU deferral.
-        const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
+        const char* minorDefersHeuEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_DEFERS_HEU */;
         const bool minorDefersHeu =
             minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
         GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
@@ -147,10 +147,10 @@ void CopyCollector::ForwardFromSpace()
     int32_t previousActiveHelpers = 0;
     bool restoreActiveHelpers = false;
     if (gcReason == GC_REASON_YOUNG) {
-        const char* forceSerialEnv = std::getenv("MRT_GCV2_EVACPAR_FORCE_SERIAL");
+        const char* forceSerialEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_FORCE_SERIAL */;
         const bool forceSerial =
             forceSerialEnv != nullptr && std::strcmp(forceSerialEnv, "1") == 0;
-        const char* workGateEnv = std::getenv("MRT_GCV2_EVACPAR_WORK_GATE");
+        const char* workGateEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_WORK_GATE */;
         const bool workGate = workGateEnv != nullptr && std::strcmp(workGateEnv, "1") == 0;
         GCThreadPool* evacuationPool = collectorResources.GetEvacuationThreadPool();
         if (forceSerial) {

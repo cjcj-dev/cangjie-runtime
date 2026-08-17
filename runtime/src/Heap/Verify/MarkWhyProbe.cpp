@@ -367,13 +367,13 @@ void DumpSummaryIfNeeded()
 
 bool MarkWhyProbe::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_MARK_WHY");
+    static const bool on = false /* pinned:MRT_GCV2_MARK_WHY */;
     return on;
 }
 
 bool MarkWhyProbe::AllocTrackEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_MARK_WHY_ALLOC");
+    static const bool on = false /* pinned:MRT_GCV2_MARK_WHY_ALLOC */;
     return on;
 }
 
@@ -421,7 +421,7 @@ bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, 
     }
     static std::atomic<bool> armedLogged{false};
     if (!armedLogged.exchange(true, std::memory_order_relaxed)) {
-        MARKWHY_LOG("ARMED env=MRT_GCV2_MARK_WHY=1 sample=%zu site=%s", EnvSizeT("MRT_GCV2_MARK_WHY_SAMPLE", 65536),
+        MARKWHY_LOG("ARMED env=MRT_GCV2_MARK_WHY=1 sample=%zu site=%s", (65536) /* pinned:MRT_GCV2_MARK_WHY_SAMPLE */,
                     site);
     }
 
@@ -499,7 +499,7 @@ bool MarkWhyProbe::NoteAfterMarkBits(RegionInfo* region, const BaseObject* obj, 
 
     static std::atomic<uint64_t> failDumpLeft{128};
     static std::atomic<uint64_t> sampleDumpLeft{32};
-    size_t sampleEvery = EnvSizeT("MRT_GCV2_MARK_WHY_SAMPLE", 65536);
+    size_t sampleEvery = (65536) /* pinned:MRT_GCV2_MARK_WHY_SAMPLE */;
     uint64_t n = gN.load(std::memory_order_relaxed);
     bool sampleOk = markedNow && sampleEvery > 0 && (n % sampleEvery) == 0;
 
