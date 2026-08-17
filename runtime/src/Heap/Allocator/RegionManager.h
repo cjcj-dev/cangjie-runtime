@@ -20,6 +20,7 @@
 #include "Allocator.h"
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
+#include "RoutePublish.h"
 #include "Common/RunType.h"
 #include "FreeRegionManager.h"
 #include "Heap/Verify/FwdInflight.h"
@@ -43,6 +44,7 @@ class CopyCollector;
 class CompactCollector;
 class VerifyRegions;
 class TagReuseProbe;
+class WCollector;
 
 struct YoungCollectionStats {
     size_t candidateRegions = 0;
@@ -633,57 +635,58 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
-    // After RouteRegion succeeds, AdmitForRoute mints a ticket; miss names the out-of-domain arm.
-    BaseObject* RouteObject(BaseObject* fromObj, RegionInfo* fromRegionInfo)
+    static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        // ZForwarding::retain_page before any from-side load (zRelocate.cpp:393).
-        // A refused retain is a late reader: the page is claimed or already 0.
-        RegionInfo::RetainScope retain(fromRegionInfo);
-        if (!retain.ok()) {
-            return nullptr;
+        if (fromObj != nullptr && fromObj->IsForwarded()) {
+            return true;
         }
-        // fwdinflight: AdmitForRoute reads the from object's tip and the ghost mark bitmap,
-        // and GetRoute reads liveInfo0 geometry. Publish for the whole span so a retire edge
-        // can see it. Default off; no control-flow effect.
-        FwdInflight::Scope inflight(fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION);
-        if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
-            if (!ticket) {
-                return nullptr;
-            }
-            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
-            // permwho: classify the answer (default off, early return inside).
-            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
-            return to;
+        if (fromRegionInfo == nullptr) {
+            return false;
         }
-        return nullptr;
+        RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
+        return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
     }
 
-    BaseObject* RouteObject(BaseObject* fromObj)
+    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
+    {
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION) };
+    }
+
+    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
+    {
+        return PlanRouteLookup(fromObj);
+    }
+
+    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, StwRouteToken)
+    {
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION) };
+    }
+
+    RoutePlan PlanRoute(BaseObject* fromObj, StwRouteToken)
+    {
+        return PlanRouteLookup(fromObj);
+    }
+
+    PublishedRoute FindPublishedRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo)
+    {
+        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION);
+        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
+            return PublishedRoute{ nullptr };
+        }
+        return PublishedRoute{ to };
+    }
+
+    PublishedRoute FindPublishedRoute(BaseObject* fromObj)
     {
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
         if (fromRegionInfo == nullptr) {
-            return nullptr;
+            return PublishedRoute{ nullptr };
         }
-
-        RegionInfo::RetainScope retain(fromRegionInfo);
-        if (!retain.ok()) {
-            return nullptr;
+        BaseObject* to = ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP);
+        if (to == nullptr || !RouteIsPublished(fromObj, fromRegionInfo)) {
+            return PublishedRoute{ nullptr };
         }
-        // fwdinflight: see the sibling overload. Publication starts once the ghost lookup has
-        // named a region -- before that there is nothing to protect.
-        FwdInflight::Scope inflight(fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP);
-        // a from-object may be compacted or forwarded.
-        if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
-            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
-            if (!ticket) {
-                return nullptr;
-            }
-            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
-            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
-            return to;
-        }
-        return nullptr;
+        return PublishedRoute{ to };
     }
 
     bool RouteRegion(RegionInfo* fromRegionInfo)
@@ -875,6 +878,34 @@ public:
     }
 
 private:
+    RoutePlan PlanRouteLookup(BaseObject* fromObj)
+    {
+        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
+        if (fromRegionInfo == nullptr) {
+            return RoutePlan{ nullptr };
+        }
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP) };
+    }
+
+    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, FwdInflight::Site site)
+    {
+        RegionInfo::RetainScope retain(fromRegionInfo);
+        if (!retain.ok()) {
+            return nullptr;
+        }
+        FwdInflight::Scope inflight(fromRegionInfo, site);
+        if (RouteRegion(fromRegionInfo) || fromRegionInfo->IsCompacted()) {
+            OptionalRouteTicket ticket = fromRegionInfo->AdmitForRoute(fromObj);
+            if (!ticket) {
+                return nullptr;
+            }
+            BaseObject* to = fromRegionInfo->GetRoute(ticket.value());
+            PermWhoAdmit::NoteRoute(fromRegionInfo, fromObj, to);
+            return to;
+        }
+        return nullptr;
+    }
+
     RegionInfo* TakeReclaimableGarbageRegion(size_t* gatedBytes = nullptr)
     {
         std::lock_guard<std::mutex> lock(garbageRegionList.GetListMutex());
