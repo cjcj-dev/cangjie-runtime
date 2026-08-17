@@ -124,9 +124,20 @@ public:
         }
     }
 
+    StackMapRootCounts CountRootSlots() const
+    {
+        StackMapRootCounts counts;
+        counts.baseSlots = slotRoot.CountRootSlots();
+        counts.baseRegs = regRoot.CountRootSlots();
+        StackMapRootCounts derivedCounts = derivedPtr.CountRootSlots();
+        counts.derivedSlots = derivedCounts.derivedSlots;
+        counts.derivedRegs = derivedCounts.derivedRegs;
+        return counts;
+    }
+
 private:
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class MethodMap : public StackMap {
@@ -214,7 +225,7 @@ protected:
     SlotRoot stackPtrSlotRoot;
     RegRoot stackPtrRegRoot;
     DerivedPtr derivedPtr;
-    std::list<Uptr> rootsList;
+    std::list<BasePtrType> rootsList;
 };
 
 class StackMapBuilder {
@@ -226,7 +237,7 @@ public:
     ~StackMapBuilder() = default;
 
     template<class MapType>
-    MapType Build() const
+    MapType Build(bool countDerivedRows = false) const
     {
         PrologueRegisterClosure closure;
         PrologueVisitor visitor = [&closure](PrologueRegisterClosure::Type type, uint32_t value) {
@@ -244,11 +255,21 @@ public:
 #else
         auto head = CompressedStackMapHead::GetStackMapHead(startPC, visitor);
 #endif
-        auto entry = head.GetStackMapEntry(startPC, framePC);
+        auto entry = head.GetStackMapEntry(startPC, framePC, countDerivedRows);
         if (!entry.IsValid()) {
             return MapType(stackBase, std::move(closure));
         }
         return MapType(true, stackBase, entry, std::move(closure));
+    }
+
+    StackMapInvalidReason GetInvalidReason() const
+    {
+#ifdef __APPLE__
+        auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr);
+#else
+        auto head = CompressedStackMapHead::GetStackMapHead(startPC, nullptr);
+#endif
+        return head.GetInvalidReason(startPC, framePC);
     }
 
 protected:
@@ -260,8 +281,9 @@ protected:
 
 // specialization for MethodMap which avoids using malloc().
 template<>
-inline MethodMap StackMapBuilder::Build<MethodMap>() const
+inline MethodMap StackMapBuilder::Build<MethodMap>(bool countDerivedRows) const
 {
+    (void)countDerivedRows;
 #ifdef __APPLE__
     auto head = CompressedStackMapHead::GetStackMapHead(stackBase, nullptr, funcDesc);
 #else

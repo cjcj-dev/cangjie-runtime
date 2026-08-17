@@ -492,6 +492,12 @@ struct IdxSet {
     U32 stackSlotIdx;
 };
 
+enum class StackMapLookupResult : U8 {
+    FOUND,
+    ZERO_ENTRIES,
+    PC_MISS,
+};
+
 class StackMapTable : public TableAPI {
 public:
     StackMapTable(U8* tableAddrStart, U32 tableBitStart) : TableAPI(tableAddrStart, tableBitStart) { Init(); }
@@ -550,8 +556,61 @@ public:
         return IdxSet();
     }
 
+    StackMapLookupResult GetLookupResult(Uptr startPC, Uptr framePC) const
+    {
+        U32 recordNum = headerInfo[RECORD_NUM];
+        if (recordNum == 0) {
+            return StackMapLookupResult::ZERO_ENTRIES;
+        }
+        U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 left = 0;
+        U32 right = recordNum - 1;
+        U32 leftPCOff = PCAt(left);
+        U32 rightPCOff = PCAt(right);
+        if (targetPCOff < leftPCOff || targetPCOff > rightPCOff) {
+            return StackMapLookupResult::PC_MISS;
+        }
+        while (left <= right) {
+            U32 mid = (left + right) >> 1;
+            U32 midPCOff = PCAt(mid);
+            if (midPCOff == targetPCOff) {
+                return StackMapLookupResult::FOUND;
+            }
+            if (midPCOff < targetPCOff) {
+                left = mid + 1;
+            } else {
+                right = mid - 1;
+            }
+        }
+        return StackMapLookupResult::PC_MISS;
+    }
+
     U32 GetRegBitsLen() const { return headerInfo[REG_BITS_LEN]; }
     U32 GetSlotBitsLen() const { return headerInfo[SLOT_BITS_LEN]; }
+    U32 GetDerivedPtrRows(Uptr startPC, Uptr framePC, U32 totalRows) const
+    {
+        const U32 recordNum = headerInfo[RECORD_NUM];
+        const U32 targetPCOff = static_cast<U32>(framePC - startPC);
+        U32 currentStart = 0;
+        for (U32 row = 0; row < recordNum; ++row) {
+            if (PCAt(row) == targetPCOff) {
+                currentStart = DerivePtrIdxAt(row);
+                break;
+            }
+        }
+        if (currentStart == 0 || currentStart > totalRows) {
+            return 0;
+        }
+
+        U32 nextStart = totalRows + 1;
+        for (U32 row = 0; row < recordNum; ++row) {
+            U32 candidate = DerivePtrIdxAt(row);
+            if (candidate > currentStart && candidate < nextStart) {
+                nextStart = candidate;
+            }
+        }
+        return nextStart - currentStart;
+    }
 
 private:
     void Init()
@@ -642,6 +701,7 @@ public:
         BitsManager rowBits = data.GetNext(row * rowBitsLen);
         return std::make_pair(rowBits.GetBits(regBitsLen), rowBits.GetNext(regBitsLen).GetBits(slotBitsLen));
     }
+    U32 GetRecordNum() const { return headerInfo[RECORD_NUM]; }
 
 private:
     void Init()

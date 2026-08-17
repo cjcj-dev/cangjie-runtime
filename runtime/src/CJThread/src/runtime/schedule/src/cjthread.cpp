@@ -10,6 +10,8 @@
 #include <csignal>
 #include <unistd.h>
 #include <cstdint>
+#include <atomic>
+#include <mutex>
 #include "processor.h"
 #include "schedule_impl.h"
 #include "thread.h"
@@ -42,6 +44,40 @@ __thread uintptr_t g_protectAddr __attribute__((tls_model("initial-exec"))) = 0;
 
 /* Space reserved for stack overflow check */
 uintptr_t g_cjthreadStackReservedSize = STACK_DEFAULT_REVERSED;
+
+/* The reserved size actually baked into cjthread stacks, as one atomic word so that
+ * set-before-freeze and freeze linearize against each other: bit 0 is the frozen flag,
+ * the value lives in the upper bits. stackGuard is written as stackTopAddr + reserved,
+ * and expand, recover and the freelist reuse check must all move or verify the guard by
+ * that same amount, so the first stack init freezes the word and every later
+ * CJThreadStackReversedSet fails its CAS on the frozen bit. (Set's older guard was only
+ * the calling thread's TLS schedule, which an unbound foreign thread passes at any
+ * time; and a separate flag beside a plain global would let Set slip a new value in
+ * between the flag check and the freeze.) The shift costs one bit: Set rejects any
+ * size above UINTPTR_MAX >> 1, which no real reserved size approaches.
+ * g_cjthreadStackReservedSize stays defined only because it is an exported data
+ * symbol; it is never read here. Set updates it under g_cjthreadStackReservedSetLock,
+ * which orders runtime Sets so that among them the mirror ends at the last accepted
+ * value (the lock-free CAS alone would let two Sets' mirror stores land in the
+ * opposite order of their CASes). The mirror's ABI contract is a quiescent snapshot:
+ * the public Set API is documented init-time-before-ScheduleNew, and a reader that
+ * races a Set, or out-of-tree code writing the symbol directly, is outside that
+ * contract — the lock cannot reach readers who cannot take it. Freeze stays
+ * lock-free; its interleaving with a locked Set is decided by the state CAS. */
+static std::atomic<uintptr_t> g_cjthreadStackReservedState{STACK_DEFAULT_REVERSED << 1};
+static std::mutex g_cjthreadStackReservedSetLock;
+
+static uintptr_t CJThreadStackReservedFreeze(void)
+{
+    uintptr_t state = g_cjthreadStackReservedState.load(std::memory_order_acquire);
+    while ((state & 1) == 0) {
+        if (g_cjthreadStackReservedState.compare_exchange_weak(
+                state, state | 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
+            state |= 1;
+        }
+    }
+    return state >> 1;
+}
 
 #if !defined(MRT_WINDOWS)
 constexpr size_t HUGE_PAGE = 2UL * 1024 * 1024; // use mmap when stack size is beyond 2mb.
@@ -194,11 +230,25 @@ MRT_STATIC_INLINE void CJThreadStackAttrInit(struct CJThread *cjthread, size_t t
 {
     cjthread->stack.totalSize = totalSize;
     cjthread->stack.stackTopAddr = stackAddr;
-
-    // Reserve a part of the stack size to handle stack overflow.
-    cjthread->stack.stackGuard = stackAddr + g_cjthreadStackReservedSize;
-    cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     cjthread->stack.stackSize = stackAttr->stackSizeAlign;
+
+    if (stackAddr == nullptr) {
+        // Foreign and exclusive cjthreads run on the OS thread's stack and own none of
+        // their own. Leave every derived address null instead of computing it from
+        // nullptr: the arithmetic is undefined, and its garbage results used to escape
+        // through the getters looking like real addresses.
+        cjthread->stack.stackGuard = nullptr;
+        cjthread->stack.stackBaseAddr = nullptr;
+        cjthread->stack.cjthreadStackBaseAddr = nullptr;
+        cjthread->stack.stackGrowCnt = stackAttr->stackGrow ? 0 : 1;
+        return;
+    }
+
+    // Reserve a part of the stack size to handle stack overflow. Freezing here pins the
+    // reserved size for the whole process lifetime, so expand/recover/the reuse check
+    // move the guard by the same amount this line used.
+    cjthread->stack.stackGuard = stackAddr + CJThreadStackReservedFreeze();
+    cjthread->stack.stackBaseAddr = stackAddr + stackAttr->stackSizeAlign;
     // 16-byte-aligned. Note that the 64 KB lower stack address is not 0x0 - 0x100000000,
     // but 0x0 - 0xffffff, and the 16 bytes are aligned to 0x0 - 0xfffffff0. The stack
     // address must be 16-byte aligned. Otherwise, an error occurs.
@@ -449,6 +499,25 @@ struct CJThread *CJThreadAlloc(struct Schedule *schedule, struct ArgAttr *argAtt
         newCJThread = ProcessorFreelistGet(ProcessorGet());
     } else if (stackAttr->stackSizeAlign == schedule->schdCJThread.stackSize && coBuf == GLOBAL_BUF) {
         newCJThread = ScheduleGfreelistGet(&scheduleCJThread->gfreelist);
+    }
+    // Freelist reuse keeps the dead cjthread's stack fields and CJThreadInit below does
+    // not reinitialize them, so this is the one point every reused stack passes through,
+    // no matter which entry path will run the task. A guard away from its birth value
+    // means the expand/recover bookkeeping broke somewhere: below birth (the known
+    // producer is an unrecovered stack-overflow expansion) the next task starts with
+    // reduced or no overflow headroom; above birth a recover ran unpaired and the
+    // threshold sits inside the reserved area. Either way, fail closed: running a task
+    // on broken guard accounting turns this diagnosable state into a wild crash later,
+    // and repairing the pointer here would erase the only evidence while leaving the
+    // page protection out of sync.
+    if (newCJThread != nullptr && newCJThread->stack.stackTopAddr != nullptr) {
+        char *birthGuard = newCJThread->stack.stackTopAddr + CJThreadStackReservedFreeze();
+        if (newCJThread->stack.stackGuard != birthGuard) {
+            LOG(RTLOG_FATAL,
+                "reused cjthread stack guard at %p, not its birth value %p (reserved %zu)",
+                newCJThread->stack.stackGuard, birthGuard,
+                static_cast<size_t>(CJThreadStackReservedFreeze()));
+        }
     }
     if (newCJThread == nullptr) {
         newCJThread = CJThreadMemAlloc(schedule, stackAttr);
@@ -889,8 +958,16 @@ struct CJThread* CJThreadBuild(ScheduleHandle schedule, const struct CJThreadAtt
     CJThreadNewSetLocalData(newCJThread, attr);
 
 #if defined(CANGJIE_TSAN_SUPPORT)
-    MapleRuntime::Sanitizer::TsanNewRaceState(newCJThread, CJThreadGet(), __builtin_return_address(0));
-    MapleRuntime::Sanitizer::TsanCleanShadow(newCJThread->stack.stackTopAddr, newCJThread->stack.totalSize);
+    // No-stack cjthreads have no shadow to clean and no per-stack slot to hold a race
+    // state, so as of this skip their TSAN tracking is forgone. Whether that stays the
+    // accepted semantics — together with initialize ordering and proc-state teardown —
+    // is the TSAN lifecycle work's to rule. Deletion stays balanced either way: a
+    // freed foreign cjthread hands compiler-rt a null state, which it ignores, and an
+    // exclusive one is freed without touching the state hooks at all.
+    if (newCJThread->stack.stackTopAddr != nullptr) {
+        MapleRuntime::Sanitizer::TsanNewRaceState(newCJThread, CJThreadGet(), __builtin_return_address(0));
+        MapleRuntime::Sanitizer::TsanCleanShadow(newCJThread->stack.stackTopAddr, newCJThread->stack.totalSize);
+    }
 #endif
 
     CJThreadMake(attr, func, newCJThread);
@@ -1223,6 +1300,15 @@ int CJThreadParkInForeignThread(CJThread* cjthread, ParkCallbackFunc func, void 
     atomic_store_explicit(&cjthread->state, CJTHREAD_PENDING, std::memory_order_relaxed);
     int error = func(arg, (CJThreadHandle)cjthread);
     if (error != 0) {
+        // Same rollback as CJThreadMpark: the callback refused the park, so this
+        // cjthread is still running. Leaving PENDING would make CJThreadReady's
+        // PENDING→READY CAS fail and drop the later wake.
+        atomic_store_explicit(&cjthread->state, CJTHREAD_RUNNING, std::memory_order_relaxed);
+        cjthread->result = error;
+        thread->state = THREAD_RUNNING;
+        MapleRuntime::ThreadLocalData* tlData = MapleRuntime::ThreadLocal::GetThreadLocalData();
+        tlData->SetMutator(mutator);
+        mutator->PreparedToRun(tlData);
         return cjthread->result;
     }
 
@@ -1740,13 +1826,32 @@ int CJThreadStackReversedSet(uintptr_t size)
     if (size < STACK_DEFAULT_REVERSED) {
         return ERRNO_SCHD_CJTHREAD_ARG_INVALID;
     }
-    g_cjthreadStackReservedSize = size;
+    // The state word carries the value shifted left by one; a size with the top bit set
+    // would be silently truncated by the encoding, so it is not representable.
+    if (size > (UINTPTR_MAX >> 1)) {
+        return ERRNO_SCHD_CJTHREAD_ARG_INVALID;
+    }
+
+    // The TLS check above only sees the calling thread; a thread with no bound schedule
+    // passes it while stacks may already exist elsewhere in the process. Every stack
+    // bakes the reserved size into its guard at init, which freezes the state word, so
+    // the CAS below fails once any stack exists. The lock only orders Sets against each
+    // other, keeping the exported mirror at the last accepted value.
+    std::lock_guard<std::mutex> setLock(g_cjthreadStackReservedSetLock);
+    uintptr_t state = g_cjthreadStackReservedState.load(std::memory_order_acquire);
+    do {
+        if ((state & 1) != 0) {
+            return ERRNO_SCHD_IS_RUNNING;
+        }
+    } while (!g_cjthreadStackReservedState.compare_exchange_weak(
+        state, size << 1, std::memory_order_acq_rel, std::memory_order_acquire));
+    __atomic_store_n(&g_cjthreadStackReservedSize, size, __ATOMIC_RELEASE);
     return 0;
 }
 
 uintptr_t CJThreadStackReversedGet(void)
 {
-    return g_cjthreadStackReservedSize;
+    return g_cjthreadStackReservedState.load(std::memory_order_acquire) >> 1;
 }
 
 /* This function is used for the exception try catch mechanism of cangjie. After the stack
@@ -1754,7 +1859,15 @@ uintptr_t CJThreadStackReversedGet(void)
 void CJThreadStackGuardExpand(void)
 {
     struct CJThread *cjthread = CJThreadGet();
-    cjthread->stack.stackGuard -= g_cjthreadStackReservedSize;
+    // Foreign and exclusive cjthreads own no stack: guard is null and there is no
+    // reserved headroom to hand out. Return rather than walk a null pointer — the
+    // protect threshold stays at its disabled (null) value.
+    if (cjthread->stack.stackTopAddr == nullptr) {
+        return;
+    }
+    // The frozen value, not the settable global: recover and the reuse check must
+    // undo/verify exactly what this expand did.
+    cjthread->stack.stackGuard -= CJThreadStackReservedFreeze();
     ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
 }
 
@@ -1763,7 +1876,10 @@ void CJThreadStackGuardExpand(void)
 void CJThreadStackGuardRecover(void)
 {
     struct CJThread *cjthread = CJThreadGet();
-    cjthread->stack.stackGuard += g_cjthreadStackReservedSize;
+    if (cjthread->stack.stackTopAddr == nullptr) {
+        return;
+    }
+    cjthread->stack.stackGuard += CJThreadStackReservedFreeze();
     ProtectAddrSet(reinterpret_cast<uintptr_t>(cjthread->stack.stackGuard));
 }
 
@@ -2277,6 +2393,12 @@ intptr_t CJThreadStackGrow(size_t stackSize)
         LOG_ERROR(ERRNO_SCHD_CJTHREAD_NULL, "cjthread is nullptr");
         return -1;
     }
+    // A cjthread with no stack of its own (foreign/exclusive) has nothing to grow:
+    // same defined answer as the disabled case, and it keeps CJThreadStackAdjust from
+    // treating the null base as a real old stack.
+    if (cjthread->stack.stackTopAddr == nullptr) {
+        return 0;
+    }
     // Check whether the stack scaling function is disabled.
     if (cjthread->stack.stackGrowCnt != 0) {
         return 0;
@@ -2300,15 +2422,26 @@ intptr_t CJThreadStackGrow(size_t stackSize)
 }
 
 #ifdef CANGJIE_SANITIZER_SUPPORT
+// The sanitizer context slot lives at the base of the cjthread's own stack. A no-stack
+// cjthread (foreign/exclusive) has no slot: answer null / drop the store instead of
+// dereferencing the null base. This closes the null dereference in these two
+// accessors only — TSAN's wider lifecycle on no-stack paths (initialize ordering,
+// proc-state teardown) is its own defect family, tracked separately.
 void* CJThreadGetSanitizerContext(void* cjthread)
 {
     CJThread* thread = static_cast<CJThread*>(cjthread);
+    if (thread->stack.cjthreadStackBaseAddr == nullptr) {
+        return nullptr;
+    }
     return *reinterpret_cast<void**>(thread->stack.cjthreadStackBaseAddr);
 }
 
 void CJThreadSetSanitizerContext(void *cjthread, void *state)
 {
     CJThread *thread = static_cast<CJThread *>(cjthread);
+    if (thread->stack.cjthreadStackBaseAddr == nullptr) {
+        return;
+    }
     *reinterpret_cast<void **>(thread->stack.cjthreadStackBaseAddr) = state;
 }
 #endif

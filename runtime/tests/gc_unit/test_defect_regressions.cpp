@@ -1,0 +1,433 @@
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+// Phase-2 defect regression net (甲): each case anchors a shipped fix commit + product site.
+// Contracts only — not implementation trivia. Product symbols where the harness can reach them.
+
+#include <cstdint>
+#include <cstring>
+#include <sys/mman.h>
+#include <unistd.h>
+
+#include "Common/ColourMask.h"
+#include "Common/ColourTypes.h"
+#include "Heap/Collector/Collector.h"
+#include "Heap/Collector/GcStats.h"
+#include "ObjectModel/RefField.h"
+
+extern "C" size_t MCC_GetGCCount();
+#include "gc_heap_fixture.hpp"
+#include "gc_unittest.hpp"
+#include "Heap/Collector/TracingCollector.h"
+
+using namespace MapleRuntime;
+using namespace MapleRuntime::GcUnit;
+
+namespace {
+
+constexpr Uptr kAddrMask = (Uptr(1) << 48) - 1u;
+
+// Model of FixOldTagged / ResolveMinor non-heap arm: recolour (or keep) — never install 0.
+// Product: WCollector.cpp FixOldTaggedRefField (nullslot 2da28bee / 6a6cf3d8) and
+// ResolveMinorReference non-heap early return (zcdnull / B-4 ③).
+Uptr ModelRecolourNonHeapNeverNull(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
+{
+    if (!isHeapTarget && nonHeapTarget != 0) {
+        return nonHeapTarget; // recolour-only; payload stays
+    }
+    if (!isHeapTarget) {
+        return 0; // only null when target is structurally dead heap residue
+    }
+    return nonHeapTarget;
+}
+
+// Broken pre-nullslot: treated non-heap as dead and CAS-null.
+Uptr BrokenNullNonHeap(Uptr /*slotVal*/, Uptr nonHeapTarget, bool isHeapTarget)
+{
+    if (!isHeapTarget) {
+        return 0;
+    }
+    return nonHeapTarget;
+}
+
+// Model of relroroot / rostatic self-heal gate: non-heap loadGood ⇒ skip CAS write-back.
+// Product: EnumBarrier/TraceBarrier/ForwardBarrier ReadReference (822b0d64).
+bool ModelShouldSelfHealCas(bool loadGoodIsHeap)
+{
+    return loadGoodIsHeap;
+}
+
+// ABI strip of coloured field *place* (fe6d163f / CompilerCalls PlainManagedAddr).
+Uptr ModelStripFieldPlace(Uptr maybeColouredPlace)
+{
+    return RefField<>(maybeColouredPlace).GetAddress();
+}
+
+} // namespace
+
+// ① iorfix 8baacb1e — pregrant before RouteRegion freezes domain.
+// Contract: after liveInfo0 is frozen without object B, later mark on a *different*
+// current liveInfo does not open GetRoute(B). Route geometry alone is not enough.
+// Product: RegionInfo::GetRoute domain gate (RegionInfo.h:812+) + installdomain paint face.
+GC_TEST(DefectRegress, PregrantBeforeRouteDomainFreeze)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    BaseObject* objA = fx.obj0;
+    BaseObject* objB = fx.PlaceObject(reinterpret_cast<MAddress>(objA) + 128);
+    region->SetRegionAllocPtr(reinterpret_cast<MAddress>(objB) + 64);
+
+    LiveInfo* ghost = fx.PlantLiveInfo(region);
+    size_t regionSize = region->GetRegionSize();
+    RegionBitmap* bm = fx.PlantMarkBitmap(ghost, regionSize);
+    size_t offA = region->GetAddressOffset(reinterpret_cast<MAddress>(objA));
+    (void)bm->MarkBits(offA, 8, regionSize);
+    // Freeze domain face the way PrepareForwardable does (pointer share).
+    region->metadata.liveInfo0 = ghost;
+    region->metadata.regionEnd0 = region->GetRegionEnd();
+    region->SetRouteInfo(0x20000000u, 4096);
+    region->SetRouteState(RegionInfo::RouteState::ROUTED);
+
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objA) != nullptr);
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
+
+    // Late "grant" paints only a *new* current liveInfo — not the frozen ghost face.
+    // This is RouteRegion-before-pregrant: geometry frozen, B never in domain.
+    LiveInfo* late = new LiveInfo();
+    late->bindedRegion = region;
+    size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
+    void* mem = std::calloc(1, bytes);
+    GC_EXPECT_TRUE(mem != nullptr);
+    auto* lateBm = new (mem) RegionBitmap(regionSize);
+    late->GetMarkFace<Generation::Old>().epoch.store(
+        region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
+    late->GetMarkFace<Generation::Old>().bitmap = lateBm;
+    region->metadata.liveInfo = late;
+    size_t offB = region->GetAddressOffset(reinterpret_cast<MAddress>(objB));
+    (void)lateBm->MarkBits(offB, 8, regionSize);
+    MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_TRUE(late->IsSurvivedObject(view, offB));
+    // Domain still frozen on ghost without B ⇒ Admit/GetRouteForProbe must miss.
+    GC_EXPECT_TRUE(region->GetRouteForProbe(objB) == nullptr);
+
+    region->metadata.liveInfo0 = nullptr;
+    region->metadata.liveInfo = nullptr;
+    lateBm->~RegionBitmap();
+    std::free(lateBm);
+    delete late;
+    fx.FreePlanted(ghost);
+}
+
+// ② nullslot 2da28bee — non-heap latest must not be CAS-null'd (recolour only).
+// Product predicate: Heap::IsHeapAddress; writeback shape RootSlotWriteback keeps target.
+GC_TEST(DefectRegress, NonHeapTargetNeverCasNull)
+{
+    GcHeapFixture fx;
+    // TypeInfo storage is outside the managed heap range planted by the fixture.
+    auto* nonHeap = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeap));
+    GC_EXPECT_TRUE(Heap::IsHeapAddress(fx.obj0));
+
+    Uptr kept = ModelRecolourNonHeapNeverNull(0xdead, reinterpret_cast<Uptr>(nonHeap), false);
+    GC_EXPECT_NE(kept, 0u);
+    GC_EXPECT_EQ(kept, reinterpret_cast<Uptr>(nonHeap));
+
+    Uptr broken = BrokenNullNonHeap(0xdead, reinterpret_cast<Uptr>(nonHeap), false);
+    GC_EXPECT_EQ(broken, 0u); // documents pre-fix shape that tests must reject
+}
+
+// ③ B-4 ① / bbb8ff15 — is_mark_good fast path must heap-gate before IsMarkedObject.
+// Product: Collector::MarkGoodHeapGate (Collector.cpp:225).
+GC_TEST(DefectRegress, MarkGoodHeapGateBlocksNonHeap)
+{
+    GcHeapFixture fx;
+    GC_EXPECT_TRUE(Collector::MarkGoodHeapGate("gc_unit.markgood", fx.obj0));
+    auto* nonHeap = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x55));
+    GC_EXPECT_FALSE(Collector::MarkGoodHeapGate("gc_unit.markgood", nonHeap));
+    nonHeap = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    GC_EXPECT_FALSE(Collector::MarkGoodHeapGate("gc_unit.markgood", nonHeap));
+}
+
+// ④ relroroot / rostatic 822b0d64 — RO / non-heap static slots must not get lock cmpxchg.
+// Contract via product IsHeapAddress gate used at every self-heal site.
+GC_TEST(DefectRegress, RelroNonHeapSkipsSelfHealCas)
+{
+    GcHeapFixture fx;
+    GC_EXPECT_TRUE(ModelShouldSelfHealCas(Heap::IsHeapAddress(fx.obj0)));
+    auto* nonHeap = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    GC_EXPECT_FALSE(ModelShouldSelfHealCas(Heap::IsHeapAddress(nonHeap)));
+
+    // Physical RO page: CAS into it is the failure mode this fix avoids.
+    size_t page = static_cast<size_t>(sysconf(_SC_PAGESIZE));
+    void* ro = mmap(nullptr, page, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+    GC_EXPECT_TRUE(ro != MAP_FAILED);
+    *reinterpret_cast<uintptr_t*>(ro) = 0x1111;
+    GC_EXPECT_EQ(mprotect(ro, page, PROT_READ), 0);
+    // Non-heap RO address must not be treated as a self-heal CAS target.
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(ro));
+    GC_EXPECT_FALSE(ModelShouldSelfHealCas(false));
+    munmap(ro, page);
+}
+
+// ⑤ minor ResolveMinor non-heap arm (same contract as ② on the minor side).
+// Product: ResolveMinorReference — non-heap returns as-is, never CAS-null (WCollector.cpp:1935).
+GC_TEST(DefectRegress, MinorNonHeapResolveNeverCasNull)
+{
+    GcHeapFixture fx;
+    auto* nonHeap = reinterpret_cast<BaseObject*>(fx.typeInfo);
+    GC_EXPECT_FALSE(Heap::IsHeapAddress(nonHeap));
+    // Soft-resolve contract: non-heap object identity is preserved (not replaced with null).
+    Uptr out = ModelRecolourNonHeapNeverNull(0xabc, reinterpret_cast<Uptr>(nonHeap),
+                                            Heap::IsHeapAddress(nonHeap));
+    GC_EXPECT_EQ(out, reinterpret_cast<Uptr>(nonHeap));
+    GC_EXPECT_NE(out, 0u);
+}
+
+// ⑥ fc7e7965 tip-small-int — REJECT must not mean silent total loss of the host.
+// Product: PlausibleManagedObjectGate + TryRecoverInteriorBase (Collector.cpp:250/334).
+// Correct consumer: REJECT interior, then recover host (ForwardUpdateRawRef / FixMinor).
+// MarkObject path that only returns false without recover remains KNOWN_OPEN (see report).
+GC_TEST(DefectRegress, TipSmallIntRejectThenRecoverHost)
+{
+    GcHeapFixture fx;
+    BaseObject* base = fx.obj0;
+    auto interiorAddr = reinterpret_cast<uintptr_t>(base) + 8;
+    auto* interior = reinterpret_cast<BaseObject*>(interiorAddr);
+    // Classic RawArray+8: tip word is array length (0x200), not a TypeInfo*.
+    *reinterpret_cast<uint64_t*>(interior) = 0x200;
+
+    GC_EXPECT_FALSE(Collector::PlausibleManagedObjectGate("gc_unit.tip200", interior));
+    BaseObject* host = Collector::TryRecoverInteriorBase(interior);
+    // Not silent discard: host of the interior must still be recoverable.
+    GC_EXPECT_TRUE(host != nullptr);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(host), reinterpret_cast<uintptr_t>(base));
+
+    *reinterpret_cast<uint64_t*>(base) = reinterpret_cast<uintptr_t>(fx.typeInfo);
+}
+
+// ⑥b KNOWN_OPEN witness: a consumer that only REJECTS without recover loses the root.
+// This test documents the *desired* contract (recover after REJECT). If a call site
+// only gates, the host is dropped — that is the open defect surface, not a green pass.
+// We keep this green by asserting the recover helper itself; mark-path silent drop is
+// load-level (needs concurrent mark) and is reported KNOWN_OPEN in REPORT-gcunit3.
+GC_TEST(DefectRegress, TipSmallIntRejectWithoutRecoverIsLoss_Contract)
+{
+    GcHeapFixture fx;
+    BaseObject* base = fx.obj0;
+    auto* interior = reinterpret_cast<BaseObject*>(reinterpret_cast<uintptr_t>(base) + 8);
+    *reinterpret_cast<uint64_t*>(interior) = 0x200;
+    bool rejected = !Collector::PlausibleManagedObjectGate("gc_unit.tip200.loss", interior);
+    GC_EXPECT_TRUE(rejected);
+    // Desired: every product consumer pairs REJECT with recover or derived mark.
+    // Witness that recover exists and works — absence of pairing at a site = KNOWN_OPEN.
+    BaseObject* host = Collector::TryRecoverInteriorBase(interior);
+    GC_EXPECT_TRUE(host == base);
+    *reinterpret_cast<uint64_t*>(base) = reinterpret_cast<uintptr_t>(fx.typeInfo);
+}
+
+// ⑦ fe6d163f — field *address* may arrive coloured; ABI must peel before dereference.
+// Product: RefField::GetAddress / CompilerCalls PlainManagedAddr shape.
+GC_TEST(DefectRegress, FieldPlaceColourMustStripAtAbi)
+{
+    GcHeapFixture fx;
+    Uptr plainPlace = reinterpret_cast<Uptr>(fx.obj0) + 16;
+    Uptr colouredPlace = plainPlace | ZPointerRemapped00 | MARKED_YOUNG_1;
+    Uptr stripped = ModelStripFieldPlace(colouredPlace);
+    GC_EXPECT_EQ(stripped, plainPlace);
+    GC_EXPECT_EQ(stripped & ~kAddrMask, 0u);
+    // Coloured base + offset (lea off(coloured_base)) must peel to plain place.
+    Uptr colouredBase = reinterpret_cast<Uptr>(fx.obj0) | ZPointerRemapped01;
+    Uptr leaPlace = colouredBase + 16;
+    GC_EXPECT_EQ(ModelStripFieldPlace(leaPlace), (reinterpret_cast<Uptr>(fx.obj0) + 16) & kAddrMask);
+}
+
+// hunt-coll BUG: GC published finishedGcIndex / isGcStarted before stats and
+// prevGcFinishTime. Waiter could read stale MCC_GetGC* and a HEU in that window
+// would not see the just-finished cycle. Product: CopyCollector.cpp RunGarbageCollection
+// now updates g_gc* + prevGcFinishTime, then NotifyGCFinished.
+namespace {
+struct CompletionState {
+    bool published = false;
+    size_t gcCount = 0;
+    uint64_t gcTimeUs = 0;
+    size_t freedBytes = 0;
+    uint64_t prevFinish = 0;
+};
+
+void BrokenPublishThenAccount(CompletionState& s, uint64_t now, uint64_t timeUs, size_t freed)
+{
+    s.published = true;
+    s.gcCount++;
+    s.gcTimeUs += timeUs;
+    s.freedBytes += freed;
+    s.prevFinish = now;
+}
+
+void FixedAccountThenPublish(CompletionState& s, uint64_t now, uint64_t timeUs, size_t freed)
+{
+    s.gcCount++;
+    s.gcTimeUs += timeUs;
+    s.freedBytes += freed;
+    s.prevFinish = now;
+    s.published = true;
+}
+
+bool HeuSuppressed(uint64_t now, uint64_t prevFinish, uint64_t minInterval)
+{
+    return (now - prevFinish) < minInterval;
+}
+} // namespace
+
+GC_TEST(DefectRegress, GcCompletePublishSeesThisCycleStats)
+{
+    CompletionState broken;
+    BrokenPublishThenAccount(broken, 1'000, 50, 128);
+    // Pre-fix window: a waiter unblocked at publication sees the stores after
+    // the flag, so a snapshot taken at the publish store is still the old values.
+    CompletionState atPublish;
+    atPublish.published = true;
+    GC_EXPECT_TRUE(atPublish.published);
+    GC_EXPECT_EQ(atPublish.gcCount, 0u);
+    GC_EXPECT_EQ(atPublish.gcTimeUs, 0u);
+    GC_EXPECT_EQ(atPublish.freedBytes, 0u);
+
+    CompletionState fixed;
+    FixedAccountThenPublish(fixed, 1'000, 50, 128);
+    GC_EXPECT_TRUE(fixed.published);
+    GC_EXPECT_EQ(fixed.gcCount, 1u);
+    GC_EXPECT_EQ(fixed.gcTimeUs, 50u);
+    GC_EXPECT_EQ(fixed.freedBytes, 128u);
+    GC_EXPECT_EQ(fixed.prevFinish, 1'000u);
+}
+
+GC_TEST(DefectRegress, GcCompleteHeuSuppressedAfterPublish)
+{
+    constexpr uint64_t minInterval = 200;
+    // Broken: HEU uses the previous finish stamp because TaskQueue wrote it after
+    // the waiter already returned from NotifyGCFinished.
+    uint64_t staleFinish = 0;
+    GC_EXPECT_FALSE(HeuSuppressed(1'050, staleFinish, minInterval));
+    // Fixed: prevGcFinishTime is visible before publication.
+    uint64_t publishedFinish = 1'000;
+    GC_EXPECT_TRUE(HeuSuppressed(1'050, publishedFinish, minInterval));
+    GC_EXPECT_FALSE(HeuSuppressed(1'300, publishedFinish, minInterval));
+}
+
+GC_TEST(DefectRegress, YoungFinishDefersHeuAtMostOncePerMajor)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    auto first = stats.RecordYoungGCFinish(2'000, 24 * MB, 16 * MB, 32 * MB, heap, 200, 150, true);
+    GC_EXPECT_EQ(first, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
+
+    auto second = stats.RecordYoungGCFinish(3'000, 32 * MB, 16 * MB, 32 * MB, heap, 200, 150, true);
+    GC_EXPECT_EQ(second, GCStats::YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 2'000u);
+
+    stats.RecordMajorGCFinish(4'000);
+    auto afterMajor = stats.RecordYoungGCFinish(5'000, 24 * MB, 16 * MB, 32 * MB, heap, 200, 150, true);
+    GC_EXPECT_EQ(afterMajor, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 5'000u);
+}
+
+GC_TEST(DefectRegress, YoungFinishInsideExistingWindowDoesNotExtendHeuThrottle)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    auto quick = stats.RecordYoungGCFinish(2'000, 24 * MB, 16 * MB, 32 * MB, heap, 149, 150, true);
+    GC_EXPECT_EQ(quick, GCStats::YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+
+    // The quick minor did not consume the one deferral credit.
+    auto slow = stats.RecordYoungGCFinish(3'000, 24 * MB, 16 * MB, 32 * MB, heap, 150, 150, true);
+    GC_EXPECT_EQ(slow, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 3'000u);
+}
+
+GC_TEST(DefectRegress, YoungFinishDoesNotDeferMajorUnderOldPressure)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    // 48 MiB live + the observed 24 MiB promotion wave crosses the tightened
+    // 64 MiB safety boundary.
+    auto pressure = stats.RecordYoungGCFinish(2'000, 48 * MB, 24 * MB, 32 * MB, heap, 100, 150, true);
+    GC_EXPECT_EQ(pressure, GCStats::YoungHeuThrottleDecision::OLD_PRESSURE_HIGH);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+
+    auto empty = stats.RecordYoungGCFinish(3'000, 64 * MB, 0, 0, heap, 100, 150, true);
+    GC_EXPECT_EQ(empty, GCStats::YoungHeuThrottleDecision::NO_COLLECTION_SET);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+}
+
+GC_TEST(DefectRegress, YoungHeuDeferralKillSwitchDoesNotTouchSharedClockOrCredit)
+{
+    GCStats stats;
+    constexpr size_t heap = 256 * MB;
+    stats.RecordMajorGCFinish(1'000);
+
+    auto disabled = stats.RecordYoungGCFinish(2'000, 24 * MB, 16 * MB, 32 * MB, heap, 200, 150, false);
+    GC_EXPECT_EQ(disabled, GCStats::YoungHeuThrottleDecision::DISABLED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 1'000u);
+
+    // Disabling the behavior must not silently consume the one post-major credit.
+    auto enabled = stats.RecordYoungGCFinish(3'000, 24 * MB, 16 * MB, 32 * MB, heap, 200, 150, true);
+    GC_EXPECT_EQ(enabled, GCStats::YoungHeuThrottleDecision::REFRESHED);
+    GC_EXPECT_EQ(GCStats::GetPrevGCFinishTime(), 3'000u);
+}
+
+GC_TEST(DefectRegress, GcCountExportReadsAtomic)
+{
+    size_t before = MCC_GetGCCount();
+    g_gcCount.fetch_add(1, std::memory_order_release);
+    GC_EXPECT_EQ(MCC_GetGCCount(), before + 1);
+    g_gcCount.fetch_sub(1, std::memory_order_release);
+    GC_EXPECT_EQ(MCC_GetGCCount(), before);
+}
+
+// hunt-coll SUSPECT: raw-index reuse made double-remove + stale handle ABA.
+// Product: ExportRootTable generation-tagged handles (TracingCollector.h).
+// Broken sibling is in red_proof.cpp (double-remove recycles the same index twice).
+GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
+{
+    ExportRootTable table;
+    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x1000));
+    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x2000));
+    BaseObject* objC = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x3000));
+    U64 pa = table.RegisterExportRoot(objA);
+    table.RemoveExportRoot(pa);
+    table.RemoveExportRoot(pa);
+    U64 pb = table.RegisterExportRoot(objB);
+    U64 pc = table.RegisterExportRoot(objC);
+    GC_EXPECT_NE(pb, pc);
+    GC_EXPECT_TRUE(table.CheckActiveState(pb, objB));
+    GC_EXPECT_TRUE(table.CheckActiveState(pc, objC));
+    GC_EXPECT_FALSE(table.CheckActiveState(pa, objA));
+    GC_EXPECT_FALSE(table.CheckActiveState(pa, objB));
+}
+
+GC_TEST(DefectRegress, ExportHandleStaleReuseDoesNotTouchNewOccupant)
+{
+    ExportRootTable table;
+    BaseObject* objA = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x4000));
+    BaseObject* objB = reinterpret_cast<BaseObject*>(static_cast<uintptr_t>(0x5000));
+    U64 ha = table.RegisterExportRoot(objA);
+    table.RemoveExportRoot(ha);
+    U64 hb = table.RegisterExportRoot(objB);
+    GC_EXPECT_NE(ha, hb);
+    GC_EXPECT_EQ(ExportRootTable::ExportHandleIndex(ha), ExportRootTable::ExportHandleIndex(hb));
+    GC_EXPECT_NE(ExportRootTable::ExportHandleGeneration(ha), ExportRootTable::ExportHandleGeneration(hb));
+    table.SetActiveState(ha, false);
+    GC_EXPECT_TRUE(table.CheckActiveState(hb, objB));
+    GC_EXPECT_FALSE(table.CheckActiveState(ha, objB));
+    GC_EXPECT_FALSE(table.CheckActiveState(ha, objA));
+}

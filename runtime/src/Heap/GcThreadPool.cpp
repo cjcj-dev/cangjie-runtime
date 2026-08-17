@@ -11,12 +11,16 @@
 #include <sys/resource.h>
 #endif
 #include <sched.h>
+#include <cstdlib>
 
 #include "Base/Log.h"
 #include "Base/Panic.h"
 #include "Base/SysCall.h"
 #include "Mutator/MutatorManager.h"
 #include "securec.h"
+#if defined(CANGJIE_TSAN_SUPPORT)
+#include "Sanitizer/SanitizerInterface.h"
+#endif
 
 // thread pool implementation
 namespace MapleRuntime {
@@ -52,6 +56,31 @@ void GCPoolThread::SetThreadPriority(pid_t tid, int32_t priority)
 }
 #endif
 
+#if defined(CANGJIE_TSAN_SUPPORT)
+// Positive control: two GC workers race a plain store so TSan must report.
+// Enabled only when MRT_GCV2_TSAN_POSCTRL=1 (T2 of tsanworker lane).
+static volatile uint64_t g_tsanPosCtrlWord = 0;
+static std::atomic<int> g_tsanPosCtrlDone{0};
+
+static void TsanPosCtrlMaybeRace(size_t workerId)
+{
+    const char* flag = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TSAN_POSCTRL */;
+    if (flag == nullptr || flag[0] != '1') {
+        return;
+    }
+    // Only two workers participate; spin-write the same non-atomic word.
+    if (workerId != 1 && workerId != 2) {
+        return;
+    }
+    for (int i = 0; i < 10000; ++i) {
+        g_tsanPosCtrlWord = static_cast<uint64_t>(workerId) + static_cast<uint64_t>(i);
+        Sanitizer::TsanWriteMemory(const_cast<uint64_t*>(
+            reinterpret_cast<volatile uint64_t*>(&g_tsanPosCtrlWord)), sizeof(uint64_t));
+    }
+    g_tsanPosCtrlDone.fetch_add(1, std::memory_order_relaxed);
+}
+#endif
+
 void* GCPoolThread::WorkerFunc(void* param)
 {
     // set current thread as a gc thread.
@@ -69,6 +98,12 @@ void* GCPoolThread::WorkerFunc(void* param)
 #if defined(__linux__) || defined(hongmeng)
     thread->tid = MapleRuntime::GetTid();
     SetThreadPriority(thread->tid, pool->priority);
+#endif
+
+#if defined(CANGJIE_TSAN_SUPPORT)
+    // Eager try: no-op if primary TsanInitialize has not run yet (bootstrap).
+    Sanitizer::TsanAttachNativeThread();
+    TsanPosCtrlMaybeRace(thread->id);
 #endif
 
     while (!pool->IsExited()) {
@@ -104,6 +139,12 @@ void* GCPoolThread::WorkerFunc(void* param)
             }
         }
         if (task != nullptr) {
+#if defined(CANGJIE_TSAN_SUPPORT)
+            // Lazy attach: pool threads are created before TsanInitialize; first
+            // real GC work happens after, so re-try here so A2/R2 paths get thr.
+            Sanitizer::TsanAttachNativeThread();
+            TsanPosCtrlMaybeRace(thread->id);
+#endif
             task->Execute(thread->id);
             delete task;
         }
@@ -116,6 +157,9 @@ void* GCPoolThread::WorkerFunc(void* param)
             pool->allThreadStopped.notify_all();
         }
     }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanDetachNativeThread();
+#endif
     return nullptr;
 }
 
@@ -185,7 +229,7 @@ void GCThreadPool::SetMaxActiveThreadNum(int32_t num)
     int32_t oldNum = maxActiveThreadNum;
     if (num >= maxThreadNum) {
         maxActiveThreadNum = maxThreadNum;
-    } else if (num > 0) {
+    } else if (num >= 0) {
         maxActiveThreadNum = num;
     } else {
         LOG(RTLOG_ERROR, "SetMaxActiveThreadNum invalid input val");

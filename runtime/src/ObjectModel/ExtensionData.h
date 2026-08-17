@@ -19,6 +19,9 @@ union OuterTiUnion {
 };
 
 class ATTR_PACKED(4) ExtensionData {
+#ifdef INTERPRETER_ENABLED
+    friend struct ExtensionDataLayoutCheck;
+#endif
 public:
     bool TargetIsTypeInfo() const { return argNum == 0; }
     void* GetTargetType() const
@@ -33,28 +36,30 @@ public:
     FuncPtr* GetFuncTable() const { return funcTable; }
     void UpdateFuncTable(U16 ftSize, FuncPtr* newFt) { funcTableSize  = ftSize; funcTable = newFt; }
     U16 GetFuncTableSize() const { return funcTableSize; }
-    bool IsDirect() const { return flag & 0b10000000; }
+    bool IsDirect() const { return __atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b10000000; }
     bool IsFuncTableUpdated() const
     {
-        return __atomic_load_n(&flag, __ATOMIC_ACQUIRE) &
+        return (__atomic_load_n(&flag, __ATOMIC_ACQUIRE) & 0b00000110) ==
                0b00000110; // "bit-1&2 is 11" means updated already
     }
     bool TryLockFuncTable()
     {
-        U8 expectedFlag = flag & 0b11111001;
+        U8 expectedFlag = __atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b11111001;
+        U8 lockedFlag = expectedFlag | 0b00000100;
         return __atomic_compare_exchange_n(&flag, &expectedFlag,
-                                           flag | 0b00000100,    // "bit-1&2 is 10" means funcTable is locked
-                                           false, __ATOMIC_RELEASE, __ATOMIC_ACQUIRE);
+                                           lockedFlag,    // "bit-1&2 is 10" means funcTable is locked
+                                           false, __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE);
     }
     void SetFuncTableUpdated()
     {
+        U8 currentFlag = __atomic_load_n(&flag, __ATOMIC_RELAXED);
         __atomic_store_n(
-            &flag, flag | 0b00000110,    // "bit-1&2 is 11" means updated already
+            &flag, currentFlag | 0b00000110,    // "bit-1&2 is 11" means updated already
             __ATOMIC_RELEASE);
     }
 
     // "bit-0 is 1" means codegen has computed the outer ti.
-    bool HasOuterTiFastPath() const { return (flag & 0b1) != 0; }
+    bool HasOuterTiFastPath() const { return (__atomic_load_n(&flag, __ATOMIC_RELAXED) & 0b1) != 0; }
     TypeInfo* GetOuterTi(TypeInfo* childTi, U64 index) const
     {
         CHECK(index < funcTableSize);
@@ -62,7 +67,10 @@ public:
             return nullptr;
         }
         if (!IsTargetHasSameSourceWith(childTi)) {
-            for (const auto& pair : childTi->GetMTableDesc()->mTable) {
+            MTableDesc* childDesc = childTi->GetMTableDesc();
+            CHECK(childDesc != nullptr);
+            std::lock_guard<std::recursive_mutex> tableLock(childDesc->mTableMutex);
+            for (const auto& pair : childDesc->mTable) {
                 auto superTi = pair.second.GetSuperTi();
                 if (IsTargetHasSameSourceWith(superTi)) {
                     void* fn = reinterpret_cast<void*>(whereCondFn);

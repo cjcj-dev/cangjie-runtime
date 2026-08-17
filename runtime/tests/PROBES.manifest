@@ -1,0 +1,74 @@
+# runtime/tests inventory.
+#
+# Why this file exists: as of 8f13560c this directory held 21 items and exactly one
+# of them ran. Seven probes had runner scripts that nothing invoked, five files had
+# no runner at all, and tests/gc_unit is behind a default-OFF option. A probe that is
+# present but never runs looks exactly like a probe that passes.
+#
+# runtime/CMakeLists.txt fails the build if a file here is missing from this list, or
+# if a line here names a file that is gone. Adding a probe that nothing runs is still
+# allowed -- it just has to be said out loud, on one line, with a reason.
+#
+# status:
+#   configure  run by runtime/CMakeLists.txt on every configure (no extra step)
+#   manual     runnable, but needs something a configure cannot have: a built runtime
+#              SO, an explicit cpuset, or fault injection. Invoked by a gate, not by
+#              the build. MUST name what it needs.
+#   orphan     no runner at all. Debt: either give it one or delete it.
+#
+# Directories count too: tests/gc_unit is a whole suite behind a default-OFF option,
+# and the first version of this check globbed only *.cpp/*.cj/*.sh, so it was invisible
+# to the accounting that exists to make exactly that visible.
+#
+# <file>                                  <status>   <what it needs / why it is here>
+
+slot_type_split_compile_probe.cpp         configure  three-arm negative compile gate for HeapSlot/RootSlot/DerivedSlot
+mark_generation_compile_probe.cpp         configure  control plus young-as-old and old-as-young negative compile gates for MarkView
+colour_state_machine_probe.cpp            configure  compile-time colour state machine table: 32-epoch formula equivalence against a literal copy, DROP_BIT collision counts (None/Ghost must be 0, each family > 0), and three inject arms
+
+run_colour_table_witness.sh               manual     host g++/clang++ with C++14 only; prints the readable collision witness and per-family counts. Judgement is the configure arm above
+run_colour_predicates_unit.sh             manual     host g++/clang++ with C++14 only; 17 ZGC-named predicates x positive/negative words, 32 mask epochs, and 16 phase-colour rows
+colour_predicates_unit.cpp                manual     harness for run_colour_predicates_unit.sh; frozen externally for the remove-all-four-files negative arm
+
+run_stack_watermark_probe.sh              manual     built runtime SO + cpuset; has its own injection arm
+run_stack_exposure_probe.sh               manual     built runtime SO + cpuset; 6 cases
+run_stack_grow_probe.sh                   manual     built runtime SO + cpuset; 6 cases
+run_object_size_guard_probe.sh            manual     built runtime SO + cpuset + fault injection
+run_generational_barrier_nvi_probe.sh     manual     built runtime SO + cpuset; runtime-side six-phase NVI dispatch
+run_varray_write_barrier_probe.sh         manual     built runtime SO + cpuset; positive control for G-C1/C2/C3
+run_mutator_lock_liveness_probe.sh        manual     source-text structural check; awk-parses source order
+run_epoch_handshake_protocol_probe.sh     manual     g++ only + cpuset; old/new PROTOCOL_FIXED arms
+run_threadlocal_init_race_probe.sh        manual     g++ -fsanitize=thread + cpuset
+run_typeinfo_reuse_probe.sh               manual     built runtime SO; dlopen/dlclose address-reuse positive/negative arms plus measured registeredTypeInfos RSS
+run_zgc_self_heal_loop_probe.sh           manual     built runtime SO; scripts a lost CAS to drive the ported ZBarrier::self_heal loop through its :103-107 retry and :98-101 fast-path-exit arms, which the workload leaves cold
+
+stack_watermark_harness.cpp               manual     harness for run_stack_watermark_probe.sh
+stack_exposure_harness.cpp                manual     harness for run_stack_exposure_probe.sh
+stack_grow_harness.cpp                    manual     harness for run_stack_grow_probe.sh
+object_size_guard_harness.cpp             manual     harness for run_object_size_guard_probe.sh
+generational_barrier_nvi_harness.cpp      manual     harness for run_generational_barrier_nvi_probe.sh
+varray_write_barrier_harness.cpp          manual     harness for run_varray_write_barrier_probe.sh
+mutator_lock_liveness_harness.cpp         manual     harness for run_mutator_lock_liveness_probe.sh
+epoch_handshake_protocol_harness.cpp      manual     harness for run_epoch_handshake_protocol_probe.sh
+threadlocal_init_race_harness.cpp         manual     harness for run_threadlocal_init_race_probe.sh
+typeinfo_reuse_harness.cpp                manual     harness for run_typeinfo_reuse_probe.sh
+typeinfo_reuse_plugin.cpp                 manual     pair of dlopen/dlclose images for TypeInfo virtual-address reuse
+zgc_self_heal_loop_unit.cpp               manual     harness for run_zgc_self_heal_loop_probe.sh
+typeinfo_remove_negative.patch            manual     fault injection: remove both unload-path RemoveTypeInfosInRange calls for the negative runtime
+
+epoch_handshake_foreign_churn.cpp         orphan     no runner; foreign-N2C churn against the epoch handshake
+epoch_handshake_stress.cj                 orphan     no runner; Cangjie-side epoch handshake stress
+remembered_set_erase_range_harness.cpp    orphan     no runner; RememberedSet::EraseRange
+varray_hasreffield_unit.cpp               orphan     no runner; VArray HasRefField false-negative unit
+objm_uleb_overshift_unit.cpp              orphan     no runner; BUG-23 overlong ULEB shift>=70 unit
+objm_nativealloc_zero_unit.cpp            orphan     no runner; BUG-24 NativeAlloc(0) Index underflow unit
+objm_generic_null_ti_unit.cpp             orphan     no runner; BUG-22 constrained generic null TypeInfo unit
+objm_fieldinfo_malloc_unit.cpp            orphan     no runner; BUG-21 FieldInfo malloc-null OOM unit
+objm_same_root_package_unit.cpp           orphan     no runner; SUSPECT-02 IsSameRootPackage NUL walk unit
+rtown_threadcache_tls_unit.cpp            orphan     no runner; BUG-20 ThreadCache TLS leak unit
+rtown_mtable_publish_unit.cpp             orphan     no runner; BUG-18 MTable publish race unit
+rtown_functable_cache_unit.cpp            orphan     no runner; BUG-19 functable cache UAF unit
+
+gc_unit                                   manual     whole GTest suite; runs only with -DMRT_GC_UNIT_TESTS=ON, which nothing sets -- so today nothing runs it. Build-time cost of turning it on has not been measured; do that before flipping the default
+gcparity                                  manual     built runtime SO + official control SO + official/selfhost cjc + cpuset; REPORT-gcparity release matrix and beats-official survival/allocation matrix (run_matrix.sh)
+interp_sentinel_probe.cpp                 manual     built runtime SO; hunt-stackmap BUG2 interpreter-sentinel decode (pre-fix SEGV / post-fix FillInterpretedFrameDesc)

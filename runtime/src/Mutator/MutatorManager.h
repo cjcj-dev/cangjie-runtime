@@ -23,11 +23,16 @@
 #include "SafepointPageManager.h"
 #endif
 #include "ThreadLocal.h"
+#include "Heap/Allocator/RoutePublish.h"
 #include "schedule.h"
 
 namespace MapleRuntime {
 const uint64_t WAIT_LOCK_INTERVAL = 5000; // 5us
-const uint64_t WAIT_LOCK_TIMEOUT = 30;    // seconds
+const uint64_t WAIT_LOCK_TIMEOUT = 240;   // seconds (default; was 30). Aligned with the
+                                          // stop-the-world base timeout (STW_TIMEOUTS_BASE_MS)
+                                          // so the mutator-list write lock is not more aggressive
+                                          // than STW under heavy CPU contention. Override via env
+                                          // cjMutatorLockTimeout (seconds).
 const uint32_t MAX_TIMEOUT_TIMES = 1;
 const int STW_TIMEOUTS_THREADS_BASE_COUNT = 100;
 // STW wait base timeout in milliseconds, for every 100 threads, the time is increased by 240000ms.
@@ -44,6 +49,30 @@ extern "C" void HandleSafepointForArm(ThreadLocalData* tlData);
 #endif
 
 using MutatorVisitor = std::function<void(Mutator&)>;
+
+struct EpochHandshakeStats {
+    uint64_t epoch = 0;
+    size_t requested = 0;
+    size_t acked = 0;
+    size_t ackedTwice = 0;
+    size_t selfAck = 0;
+    size_t gcAssistedAck = 0;
+    size_t startingAck = 0;
+    size_t runningAck = 0;
+    size_t parkedAck = 0;
+    size_t exitingAck = 0;
+    size_t deferredCreates = 0;
+    size_t bornCleanJoins = 0;
+    size_t exitTransitions = 0;
+    size_t destroyDeferred = 0;
+    size_t stopTheWorldCalls = 0;
+    size_t stackScanned = 0;
+    size_t stackFallback = 0;
+    size_t stackFrames = 0;
+    // Residual mutex window only (ledger clear / stats gather). Handshake wait
+    // no longer holds mutator-management W-lock (dynjoin: exclude + born-clean).
+    uint64_t managementLockNanos = 0;
+};
 
 class MutatorManager {
 public:
@@ -90,8 +119,32 @@ public:
 
     bool TryAcquireMutatorManagementRLock()
     {
-        return mutatorManagementRWLock.TryLockRead();
+        // Writer-preference: defer to a pending writer so a non-blocking reader does
+        // not help starve the GC's mutator-list write lock. The caller (DestroyMutator)
+        // already handles a false return by deferring the mutator to expiringMutators.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            return false;
+        }
+        if (!mutatorManagementRWLock.TryLockRead()) {
+            return false;
+        }
+        // Close the race between the pending-writer check above and TryLockRead().
+        // A reader that overlapped a writer announcement must not join the reader
+        // set and extend the writer's wait indefinitely.
+        if (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+            mutatorManagementRWLock.UnlockRead();
+            return false;
+        }
+        return true;
     }
+
+    // Announce/withdraw a pending writer so readers back off. Used by the spin-based
+    // write-lock acquisition (AcquireMutatorManagementWLock*) which does not go through
+    // MutatorManagementWLock(). A counter (not a flag) supports several writers spinning
+    // concurrently; readers wait while any writer is pending.
+    void AnnounceMgmtWriterPending() { mgmtWritersWaiting.fetch_add(1, std::memory_order_acq_rel); }
+
+    void WithdrawMgmtWriterPending() { mgmtWritersWaiting.fetch_sub(1, std::memory_order_acq_rel); }
 
     void AcquireMutatorManagementWLock();
 
@@ -167,6 +220,22 @@ public:
     void EnsurePhaseTransition(GCPhase phase, std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToGCPhase(GCPhase phase);
 
+    static bool EpochHandshakeEnabled();
+    static bool ConcurrentStackScanEnabled();
+    EpochHandshakeStats RunEpochHandshake(const char* source);
+    void RecordEpochHandshakeAck(Mutator& mutator, uint64_t epoch, bool bySelf);
+    void RecordEpochHandshakeStackScan(bool scanned, size_t frames);
+    void RecordEpochHandshakeCreateAttempt();
+    // dynjoin (乙): create during active epoch marks mutator born-clean for that
+    // epoch (completion=active, state=ACKNOWLEDGED) and excludes it from the wait
+    // set. OpenJDK handshake.cpp:293-295: new ThreadsList members have no op.
+    void ExcludeNewMutatorFromActiveEpoch(Mutator& mutator);
+    void RecordEpochHandshakeExitTransition();
+    bool EpochHandshakeActive() const
+    {
+        return epochHandshakeActive.load(std::memory_order_acquire) != 0;
+    }
+
     void EnsureCpuProfileFinish(std::list<Mutator*> &undoneMutators);
     void TransitionAllMutatorsToCpuProfile();
 
@@ -215,11 +284,37 @@ public:
     const SafepointPageManager* GetSafepointPageManager() const { return safepointPageManager; }
 #endif
 
-    void MutatorManagementRLock() { mutatorManagementRWLock.LockRead(); }
+    void MutatorManagementRLock()
+    {
+        // Writer-preference: block new readers while a writer is pending so the GC's
+        // mutator-list write lock cannot be starved by sustained reader churn (many
+        // cjthreads registering/unregistering under heavy parallel compilation). A
+        // reader waits here in the same state it would wait for an already-held write
+        // lock, so this adds no new stop-the-world deadlock.
+        for (;;) {
+            while (mgmtWritersWaiting.load(std::memory_order_acquire) > 0) {
+                (void)sched_yield();
+            }
+            mutatorManagementRWLock.LockRead();
+            // A writer may announce itself after the check above but before LockRead
+            // increments the reader count. Back out in that case. Once a writer is
+            // pending, only the finite set of readers which completed both checks
+            // before the announcement can remain, so the writer must make progress.
+            if (mgmtWritersWaiting.load(std::memory_order_acquire) == 0) {
+                return;
+            }
+            mutatorManagementRWLock.UnlockRead();
+        }
+    }
 
     void MutatorManagementRUnlock() { mutatorManagementRWLock.UnlockRead(); }
 
-    void MutatorManagementWLock() { mutatorManagementRWLock.LockWrite(); }
+    void MutatorManagementWLock()
+    {
+        AnnounceMgmtWriterPending();
+        mutatorManagementRWLock.LockWrite();
+        WithdrawMgmtWriterPending();
+    }
 
     void MutatorManagementWUnlock() { mutatorManagementRWLock.UnlockWrite(); }
 
@@ -239,6 +334,11 @@ private:
     // guard mutator set for stop-the-world/light-sync
     RwLock mutatorManagementRWLock;
 
+    // Number of writers currently waiting for mutatorManagementRWLock. Read by the
+    // read-lock paths to implement writer-preference (see MutatorManagementRLock /
+    // TryAcquireMutatorManagementRLock), preventing GC write-lock starvation.
+    std::atomic<uint32_t> mgmtWritersWaiting{ 0 };
+
     // count of mutators need to be suspended for stw/lsync.
     // this field is also used as futex wait/wakeup word for stw/lsync.
     std::atomic<uint32_t> suspensionMutatorCount;
@@ -254,6 +354,30 @@ private:
     std::atomic<bool> worldStopped = { false };
     std::list<Mutator*> undoneLightSyncMutators;
     GCPhase lightSyncGCPhase;
+
+    std::atomic<uint64_t> epochHandshakeSequence = { 0 };
+    std::atomic<uint64_t> epochHandshakeActive = { 0 };
+    std::atomic<size_t> epochHandshakeAcked = { 0 };
+    std::atomic<size_t> epochHandshakeAckedTwice = { 0 };
+    std::atomic<size_t> epochHandshakeSelfAck = { 0 };
+    std::atomic<size_t> epochHandshakeGcAssistedAck = { 0 };
+    std::atomic<size_t> epochHandshakeStartingAck = { 0 };
+    std::atomic<size_t> epochHandshakeRunningAck = { 0 };
+    std::atomic<size_t> epochHandshakeParkedAck = { 0 };
+    std::atomic<size_t> epochHandshakeExitingAck = { 0 };
+    std::atomic<size_t> epochHandshakeDeferredCreates = { 0 };
+    std::atomic<size_t> epochHandshakeBornCleanJoins = { 0 };
+    std::atomic<size_t> epochHandshakeExitTransitions = { 0 };
+    std::atomic<size_t> epochHandshakeDestroyDeferred = { 0 };
+    std::atomic<size_t> epochHandshakeStopTheWorldCalls = { 0 };
+    std::atomic<size_t> epochHandshakeStackScanned = { 0 };
+    std::atomic<size_t> epochHandshakeStackFallback = { 0 };
+    std::atomic<size_t> epochHandshakeStackFrames = { 0 };
+    std::mutex epochHandshakeLedgerMutex;
+    std::unordered_set<Mutator*> epochHandshakeAckedMutators;
+    // Participants of the active epoch; DestroyMutator must not free these while
+    // active != 0 (replaces the old full-handshake W-lock serialisation).
+    std::unordered_set<Mutator*> epochHandshakeParticipants;
 
 #if defined(_WIN64) || defined (__APPLE__)
     std::condition_variable mutatorSuspensionCV;
@@ -286,6 +410,8 @@ public:
     }
 
     uint64_t GetElapsedTime() const { return TimeUtil::NanoSeconds() - startTime; }
+
+    StwRouteToken route_plan_token() const { return StwRouteToken(); }
 
 private:
     const char* reason = nullptr;

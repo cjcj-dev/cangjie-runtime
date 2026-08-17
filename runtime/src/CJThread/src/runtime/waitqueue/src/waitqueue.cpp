@@ -142,6 +142,24 @@ int WaitqueuePark(struct Waitqueue *wq, long long ns,
         atomic_fetch_add(&queue->timerNwait, 1u);
         node->timeout = &isTimeout;
         node->timer = TimerNew(ns, 0, (TimerFunc) WaitqueueCallback, node);
+        if (node->timer == nullptr) {
+            // TimerNew failed after the node was already queued. Parking here would
+            // wait forever: no timer will fire, and a later Wake* that sees
+            // timer==nullptr would wake us only by luck. Undo the push.
+            if (node->listNode.next == nullptr) {
+                if (queue->nwait == 1) {
+                    queue->tail = nullptr;
+                } else {
+                    queue->tail = node->listNode.prev;
+                }
+            }
+            LinkRemove(&node->listNode);
+            queue->nwait--;
+            atomic_fetch_sub(&queue->timerNwait, 1u);
+            free(node);
+            pthread_mutex_unlock(&queue->mutex);
+            return ERROR_TIMER_PTR_INVALID;
+        }
         CJThreadPark(WaitqueueParkUnlock, TRACE_EV_CJTHREAD_BLOCK_SYNC, queue);
         if (isTimeout) {
             return WAIT_QUEUE_TIMEOUT;
@@ -210,7 +228,6 @@ int WaitqueueWakeAll(struct Waitqueue *wqHandle, WqCallbackFunc callbackFunc,
     struct WaitqueueNode *wqNode;
     int ret;
     struct WaitqueueInner *queue = reinterpret_cast<struct WaitqueueInner *>(wqHandle);
-    unsigned int len;
 
     if (queue == nullptr) {
         return ERRNO_QUEUE_DOESNT_EXIST;
@@ -221,23 +238,15 @@ int WaitqueueWakeAll(struct Waitqueue *wqHandle, WqCallbackFunc callbackFunc,
         pthread_mutex_unlock(&queue->mutex);
         return ret;
     }
-    len = queue->nwait;
-    while (len > 0) {
-        // Obtain the head node. If the head node has a timer, disable the timer.
-        listNode = (&queue->head)->next;
+    listNode = queue->head.next;
+    while (listNode != nullptr) {
+        struct Link *next = listNode->next;
         wqNode = LINK_ENTRY(listNode, struct WaitqueueNode, listNode);
-        while (wqNode->timer != 0 && TimerTryStop(wqNode->timer) == ERROR_TIMER_IS_NOT_WAITING) {
-            len--;
-            // There are no more nodes to wake up. Exit directly.
-            if (len == 0) {
-                pthread_mutex_unlock(&queue->mutex);
-                return 0;
-            }
-            listNode = listNode->next;
-            wqNode = LINK_ENTRY(listNode, struct WaitqueueNode, listNode);
+        if (wqNode->timer != nullptr && TimerTryStop(wqNode->timer) != 0) {
+            listNode = next;
+            continue;
         }
-        len--;
-        if (listNode->next == nullptr) {
+        if (next == nullptr) {
             if (queue->nwait == 1) {
                 queue->tail = nullptr;
             } else {
@@ -246,8 +255,6 @@ int WaitqueueWakeAll(struct Waitqueue *wqHandle, WqCallbackFunc callbackFunc,
         }
         LinkRemove(listNode);
         LinkInit(listNode);
-        wqNode = LINK_ENTRY(listNode, struct WaitqueueNode, listNode);
-        // Wake up the cjthread. If the timer is not set for the node, release the node.
         CJThreadReady(wqNode->cjthread);
         if (wqNode->timer != nullptr) {
             TimerRelease(wqNode->timer);
@@ -255,6 +262,7 @@ int WaitqueueWakeAll(struct Waitqueue *wqHandle, WqCallbackFunc callbackFunc,
         }
         queue->nwait--;
         free(wqNode);
+        listNode = next;
     }
     pthread_mutex_unlock(&queue->mutex);
     return 0;

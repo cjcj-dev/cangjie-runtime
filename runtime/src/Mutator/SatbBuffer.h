@@ -20,44 +20,58 @@ public:
     static constexpr size_t INITIAL_PAGES = 64;    // 64 pages of initial satb buffer
     static constexpr size_t CACHE_LINE_ALIGN = 64; // for most hardware platfrom, the cache line is 64-byte aigned.
     static SatbBuffer& Instance() noexcept;
+    static void MaybeInjectCarryProbe(BaseObject*& target, BaseObject*& knownBase);
+    static void NoteInteriorEnqueued(const BaseObject* target, const BaseObject* knownBase);
+    static void NoteInteriorRetained(const BaseObject* knownBase);
+    static void NoteHostDequeued(const BaseObject* knownBase);
+    static void ReportCarryProbe();
     class Node {
         friend class SatbBuffer;
 
     public:
-        Node() : top(objectContainer), next(nullptr) {}
+        Node() : index(CONTAINER_CAPACITY), next(nullptr) {}
         ~Node() = default;
-        bool IsEmpty() const { return reinterpret_cast<size_t>(top) == reinterpret_cast<size_t>(objectContainer); }
-        bool IsFull() const
-        {
-            static_assert((sizeof(Node) % sizeof(BaseObject**)) == 0, "Satb node must be aligned");
-            return top == &objectContainer[CONTAINER_CAPACITY];
-        }
+        bool IsEmpty() const { return index == CONTAINER_CAPACITY; }
+        bool IsFull() const { return index == 0; }
         void Clear()
         {
-            size_t size = reinterpret_cast<Uptr>(top) - reinterpret_cast<Uptr>(objectContainer);
-            CHECK_DETAIL((memset_s(objectContainer, sizeof(objectContainer), 0, size) == EOK), "memset fail\n");
-            top = objectContainer;
+            if (!IsEmpty()) {
+                size_t size = (CONTAINER_CAPACITY - index) * sizeof(Entry);
+                CHECK_DETAIL((memset_s(&entryContainer[index], size, 0, size) == EOK), "memset fail\n");
+            }
+            index = CONTAINER_CAPACITY;
         }
-        void Push(const BaseObject* obj)
+        bool Push(const BaseObject* target, const BaseObject* knownBase)
         {
-            std::lock_guard<std::mutex> lg(syncLock);
-            *top = const_cast<BaseObject*>(obj);
-            top++;
+            if (UNLIKELY(IsFull())) {
+                return false;
+            }
+            entryContainer[--index] = {
+                const_cast<BaseObject*>(target), const_cast<BaseObject*>(knownBase)
+            };
+            return true;
         }
         template<typename T>
         void GetObjects(T& stack)
         {
-            MRT_ASSERT(top <= &objectContainer[CONTAINER_CAPACITY], "invalid node");
-            std::lock_guard<std::mutex> lg(syncLock);
-            BaseObject** head = objectContainer;
-            while (head != top) {
-                stack.push_back(*head);
-                head++;
+            while (index != CONTAINER_CAPACITY) {
+                Entry& entry = entryContainer[index++];
+                BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
+                if (entry.knownBase != nullptr) {
+                    SatbBuffer::NoteHostDequeued(entry.knownBase);
+                }
+                stack.push_back(objectToMark);
+                entry = { nullptr, nullptr };
             }
-            Clear();
         }
 
     private:
+        // SATB deletion barriers may observe a HeapSlot containing host+offset. Preserve the
+        // producer's validated host until remark; consumers mark knownBase, never the interior.
+        struct Entry {
+            BaseObject* target;
+            BaseObject* knownBase;
+        };
 #if defined(_WIN64)
         static constexpr size_t CONTAINER_CAPACITY = 69;
 #elif defined(__aarch64__) || defined(__arm__)
@@ -65,10 +79,9 @@ public:
 #else
         static constexpr size_t CONTAINER_CAPACITY = 65;
 #endif
-        std::mutex syncLock;
-        BaseObject** top;
+        size_t index;
         Node* next;
-        BaseObject* objectContainer[CONTAINER_CAPACITY] = { nullptr };
+        Entry entryContainer[CONTAINER_CAPACITY] = {};
     };
 
     static constexpr size_t NODE_SIZE = sizeof(Node);
@@ -172,7 +185,10 @@ public:
         if (node == nullptr) {
             node = freeNodes.Pop();
         } else if (node->IsFull()) {
-            // means current node is full
+            Filter(node);
+            if (node->IsEmpty()) {
+                return;
+            }
             retiredNodes.Push(node);
             node = freeNodes.Pop();
         } else {
@@ -200,6 +216,8 @@ public:
         }
     }
     bool ShouldEnqueue(const BaseObject* obj);
+    void Filter(Node* node);
+    void FlushQueue(Node*& node);
 
     // must not have thread racing
     void Init()
@@ -219,8 +237,6 @@ public:
             freeNodes.head = list;
         }
     }
-
-    void RetireNode(Node* node) noexcept { retiredNodes.Push(node); }
 
     void Fini() { ReclaimALLPages(); }
 
@@ -304,8 +320,8 @@ public:
     void ClearWeakRefBuffer()
     {
         for (BaseObject* obj : refObjBuffer) {
-            RefField<>* referentField = reinterpret_cast<RefField<>*>((uintptr_t)obj + TYPEINFO_PTR_SIZE);
-            Heap::GetBarrier().ReadWeakRef(obj, *referentField);
+            HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<uintptr_t>(obj) + TYPEINFO_PTR_SIZE);
+            Heap::GetBarrier().ReadWeakRef(obj, referentField);
         }
         refObjBuffer.clear();
     }

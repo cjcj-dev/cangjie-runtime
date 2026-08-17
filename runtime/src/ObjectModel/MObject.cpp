@@ -48,7 +48,7 @@ MObject* MObject::NewFinalizer(const TypeInfo* ti, MSize size)
     auto addr = HeapManager::Allocate(size);
     if (LIKELY(addr != NULL_ADDRESS)) {
         (void)SetClassInfo(addr, const_cast<TypeInfo*>(ti));
-        reinterpret_cast<BaseObject*>(addr)->OnFinalizerCreated();
+        from_alloc_addr(addr)->OnFinalizerCreated();
     } else {
         return nullptr;
     }

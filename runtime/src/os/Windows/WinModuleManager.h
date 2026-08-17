@@ -10,6 +10,25 @@
 
 #include <windows.h>
 #include <psapi.h>
+
+// This header is the only path by which <windows.h> reaches the C++ runtime
+// core: Mutator.h includes UnwindWin.h, which includes this file, so 72 of the
+// 138 translation units end up parsing <windows.h> before their own code.
+// Many of them then say std::min(...) or std::numeric_limits<T>::max(), which
+// the object-like expansion of a min/max macro would wreck.
+//
+// mingw-w64 already keeps those macros out of C++ -- minwindef.h:169 guards
+// them with "#ifndef __cplusplus" before it even reaches "#ifndef NOMINMAX" --
+// so -DNOMINMAX is a no-op here and is deliberately NOT defined (upstream has
+// never defined it either).  That exemption is a property of the toolchain,
+// not of this repository, so assert it rather than assume it: a toolchain that
+// stops honouring it would otherwise surface as an unrelated-looking error in
+// whichever GC file happened to call std::min first.
+#if defined(min) || defined(max)
+#error "<windows.h> defined min/max as macros in a C++ translation unit; \
+this build needs -DNOMINMAX (see runtime/src/os/Windows/WinModuleManager.h)"
+#endif
+
 #include <unordered_set>
 
 #include "Base/CString.h"

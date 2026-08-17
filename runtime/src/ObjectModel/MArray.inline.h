@@ -27,7 +27,10 @@ inline void MArray::SetLength(MIndex number) { length = number; }
 
 inline U8* MArray::ConvertToCArray() const
 {
-    return reinterpret_cast<uint8_t*>(reinterpret_cast<Uptr>(this) + MArray::GetContentOffset());
+    // Colour bits live above bit 47 (RefField.h). C/libc must see a plain VA.
+    constexpr Uptr kRefAddressMask = (static_cast<Uptr>(1) << 48) - 1;
+    Uptr plain = reinterpret_cast<Uptr>(this) & kRefAddressMask;
+    return reinterpret_cast<uint8_t*>(plain + MArray::GetContentOffset());
 }
 
 inline MIndex MArray::GetMArraySize() const { return (MArray::GetContentOffset() + GetContentSize()); }

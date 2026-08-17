@@ -836,12 +836,19 @@ int ProcessorInit(void *schedule, struct Processor *processor, unsigned int proc
     std::atomic_store_explicit(&processor->cjthreadNext, (CJThread *)nullptr, std::memory_order_relaxed);
 
     // Init processor running queue
-    QueueInit(&processor->runq, PROCESSOR_QUEUE_CAPACITY);
+    int error = QueueInit(&processor->runq, PROCESSOR_QUEUE_CAPACITY);
+    if (error != 0) {
+        return error;
+    }
 
     // Init local cjthread free list
     processor->freelist.cjthreadNum = 0;
     DulinkInit(&processor->freelist.freeList);
-    PthreadSpinInit(&processor->lock);
+    error = PthreadSpinInit(&processor->lock);
+    if (error != 0) {
+        QueueDestroy(&processor->runq);
+        return error;
+    }
 
 #if defined(CANGJIE_TSAN_SUPPORT)
     MapleRuntime::Sanitizer::TsanNewRaceProc(processor);

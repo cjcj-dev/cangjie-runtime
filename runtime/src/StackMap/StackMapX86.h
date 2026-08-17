@@ -49,7 +49,7 @@ public:
         static constexpr RegisterId calleeSavedRegister[] = { R15, R14, R13, R12, RBX };
 #endif
         for (auto reg : calleeSavedRegister) {
-            regSlotsMap.Insert(reg, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(reg, &RootSlotAt(slotAddr));
             slotAddr -= slotLength;
         }
     }
@@ -65,12 +65,12 @@ public:
         Uptr slotAddr = fp;
         for (U32 i = 0; i < stubPushNum; ++i) {
             slotAddr -= universalSlotLength;
-            regSlotsMap.Insert(stubPushOrder[i], reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(stubPushOrder[i], &RootSlotAt(slotAddr));
         }
 
         for (U8 i = XMM0; i <= XMM15; ++i) {
             slotAddr -= xmmSlotLength;
-            regSlotsMap.Insert(i, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(i, &RootSlotAt(slotAddr));
         }
     }
 #else
@@ -84,19 +84,19 @@ public:
                                                             R9,  R10, R11, R12, R13, R14, R15 };
         Uptr slotAddr = fp - universalSlotLength;
         for (U32 i = 0; i < stubPushNum; ++i, slotAddr -= universalSlotLength) {
-            regSlotsMap.Insert(stubPushOrder[i], reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(stubPushOrder[i], &RootSlotAt(slotAddr));
         }
 
         Uptr sp = slotAddr - stackDepth;
         slotAddr = sp;
         for (U8 i = XMM0; i <= XMM15; ++i, slotAddr += xmmSlotLength) {
-            regSlotsMap.Insert(i, reinterpret_cast<SlotAddress>(slotAddr));
+            regSlotsMap.Insert(i, &RootSlotAt(slotAddr));
         }
     }
 #endif
 
     bool VisitGCRoots(const RootVisitor& visitor, const RegDebugVisitor& debugFunc, RegSlotsMap& regSlotsMap,
-                      std::list<Uptr>* rootsList = nullptr) const
+                      std::list<BasePtrType>* rootsList = nullptr) const
     {
         RegBits bits = regBits;
         // Visit universal register roots
@@ -124,6 +124,23 @@ public:
             }
         }
         return true;
+    }
+
+    size_t CountRootSlots() const
+    {
+        RegBits bits = regBits;
+        size_t count = 0;
+        for (RegisterNum i = RAX; i <= R15; ++i, bits >>= 1) {
+            if ((bits & LOWEST_BIT) != 0) {
+                ++count;
+            }
+        }
+        for (RegisterNum i = XMM0; i <= XMM15; ++i, bits >>= 1) {
+            if ((bits & LOWEST_BIT) != 0) {
+                count += 2;
+            }
+        }
+        return count;
     }
 
     static void RecordRegs(RegSlotsMap& regSlotsMap, Uptr fp)

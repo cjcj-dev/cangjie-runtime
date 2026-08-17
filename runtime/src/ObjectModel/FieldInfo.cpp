@@ -31,19 +31,19 @@ const char* InstanceFieldInfo::GetName(TypeInfo* declaringTypeInfo) const
 
 inline U32 InstanceFieldInfo::GetOffset(TypeInfo* declaringTypeInfo) const
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldOffset(fieldIdx);
 }
 
 TypeInfo* InstanceFieldInfo::GetFieldType(TypeInfo* declaringTypeInfo)
 {
-    CHECK(!(fieldIdx > declaringTypeInfo->GetFieldNum()));
+    CHECK(fieldIdx < declaringTypeInfo->GetFieldNum());
     return declaringTypeInfo->GetFieldType(fieldIdx);
 }
 
 void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
 {
-    CHECK(!(fieldIdx > declaringTi->GetFieldNum()));
+    CHECK(fieldIdx < declaringTi->GetFieldNum());
     Uptr fieldAddr = reinterpret_cast<Uptr>(instanceObj) + TYPEINFO_PTR_SIZE + GetOffset(declaringTi);
     TypeInfo* fieldTi = GetFieldType(declaringTi);
     if (fieldTi->IsRef()) {
@@ -57,6 +57,10 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
             return obj;
         }
         void* tmp = malloc(fieldSize);
+        if (tmp == nullptr) {
+            ExceptionManager::OutOfMemory();
+            return nullptr;
+        }
         Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj, fieldAddr, fieldSize);
         Heap::GetBarrier().WriteStruct(obj, reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE, fieldSize,
             reinterpret_cast<MAddress>(tmp), fieldSize);
@@ -73,13 +77,18 @@ void* InstanceFieldInfo::GetValue(TypeInfo* declaringTi, ObjRef instanceObj)
         }
         return obj;
     } else if (fieldTi->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+        // VArray may embed managed refs; HasRefField is the authority (G-C3).
+        MSize vArraySize = fieldTi->GetInstanceSize();
         MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(fieldTi, size);
-        if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE), vArraySize,
-                     reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
+        if (vArraySize == 0) {
+            return obj;
+        }
+        MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
+        if (fieldTi->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize, fieldAddr, vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
+                            reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
         }
         return obj;
@@ -102,6 +111,10 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
             return;
         }
         void* tmp = malloc(fieldSize);
+        if (tmp == nullptr) {
+            ExceptionManager::OutOfMemory();
+            return;
+        }
         Heap::GetBarrier().ReadStruct(reinterpret_cast<MAddress>(tmp), instanceObj,
             reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE, fieldSize);
         Heap::GetBarrier().WriteStruct(instanceObj, fieldAddr, fieldSize,
@@ -114,12 +127,16 @@ void InstanceFieldInfo::SetValue(TypeInfo* declaringTypeInfo, ObjRef instanceObj
             LOG(RTLOG_ERROR, "SetValue memcpy_s fail");
         }
     } else if (fieldTi->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
-        if (memcpy_s(reinterpret_cast<void*>(fieldAddr), vArraySize,
-                     reinterpret_cast<void*>(reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE),
-                     vArraySize) != EOK) {
+        // VArray may embed managed refs; direct memcpy skips remset (G-C2).
+        MSize vArraySize = fieldTi->GetInstanceSize();
+        if (vArraySize == 0) {
+            return;
+        }
+        MAddress src = reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE;
+        if (fieldTi->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(instanceObj, fieldAddr, vArraySize, src, vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(fieldAddr), vArraySize,
+                            reinterpret_cast<void*>(src), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
         }
     } else {
@@ -142,7 +159,7 @@ void* InstanceFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -163,8 +180,7 @@ void* StaticFieldInfo::GetValue()
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        RefField<false>* refField = reinterpret_cast<RefField<false>*>(addr);
-        return Heap::GetBarrier().ReadStaticRef(*refField);
+        return Heap::GetBarrier().ReadStaticRef(RootSlotAt(addr));
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
         MSize fieldSize = fieldTi->GetInstanceSize();
@@ -186,13 +202,18 @@ void* StaticFieldInfo::GetValue()
         }
         return obj;
     } else if (fieldTi->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
-        MSize size = MRT_ALIGN(fieldTi->GetInstanceSize() + vArraySize, TYPEINFO_PTR_SIZE);
+        // VArray may embed managed refs; HasRefField is the authority (G-C3).
+        MSize vArraySize = fieldTi->GetInstanceSize();
+        MSize size = MRT_ALIGN(TYPEINFO_PTR_SIZE + vArraySize, TYPEINFO_PTR_SIZE);
         MObject* obj = ObjectManager::NewObject(fieldTi, size);
-        if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE), vArraySize,
-                     reinterpret_cast<void*>(addr), vArraySize) != EOK) {
+        if (vArraySize == 0) {
+            return obj;
+        }
+        MAddress dst = reinterpret_cast<Uptr>(obj) + TYPEINFO_PTR_SIZE;
+        if (fieldTi->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(obj, dst, vArraySize, addr, vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
+                            reinterpret_cast<void*>(addr), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
         }
         return obj;
@@ -206,8 +227,7 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
 {
     TypeInfo* fieldTi = GetFieldType();
     if (fieldTi->IsRef()) {
-        RefField<>* rootField = reinterpret_cast<RefField<>*>(addr);
-        Heap::GetBarrier().WriteStaticRef(*rootField, newValue);
+        Heap::GetBarrier().WriteStaticRef(RootSlotAt(addr), newValue);
     } else if (fieldTi->IsStruct() || fieldTi->IsTuple() || fieldTi->IsEnum()) {
         MSize fieldSize = fieldTi->GetInstanceSize();
         if (fieldSize == 0) {
@@ -222,12 +242,17 @@ void StaticFieldInfo::SetValue(ObjRef newValue)
             LOG(RTLOG_ERROR, "SetValue memcpy_s fail");
         }
     } else if (fieldTi->IsVArray()) {
-        // VArray is only used to store value types,
-        // so we can copy the memory directly
-        MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
-        if (memcpy_s(reinterpret_cast<void*>(addr), vArraySize,
-                     reinterpret_cast<void*>(reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE),
-                     vArraySize) != EOK) {
+        // Static VArray is a root slot (not heap remset holder); still route
+        // ref-bearing payload through WriteStruct so colour/heal stays consistent.
+        MSize vArraySize = fieldTi->GetInstanceSize();
+        if (vArraySize == 0) {
+            return;
+        }
+        MAddress src = reinterpret_cast<Uptr>(newValue) + TYPEINFO_PTR_SIZE;
+        if (fieldTi->HasRefField()) {
+            Heap::GetBarrier().WriteStruct(nullptr, addr, vArraySize, src, vArraySize);
+        } else if (memcpy_s(reinterpret_cast<void*>(addr), vArraySize,
+                            reinterpret_cast<void*>(src), vArraySize) != EOK) {
             LOG(RTLOG_ERROR, "GetValue memcpy_s fail");
         }
     } else {
@@ -250,7 +275,7 @@ void* StaticFieldInfo::GetAnnotations(TypeInfo* arrayTi)
     }
     ArgValue values;
     uintptr_t structRet[ARRAY_STRUCT_SIZE];
-    values.AddReference(reinterpret_cast<BaseObject*>(structRet));
+    values.AddReference(as_abi_ref_slot(structRet));
     uintptr_t threadData = MapleRuntime::MRT_GetThreadLocalData();
 #if defined(__aarch64__)
     ApplyCangjieMethodStub(values.GetData(), reinterpret_cast<void*>(values.GetStackSize()),
@@ -314,13 +339,18 @@ bool SetStructField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 
 bool SetVArrayField(ObjRef obj, Uptr argAddr, TypeInfo* argType, ObjRef argObj)
 {
-    MSize vArraySize = argType->GetFieldNum() * argType->GetComponentTypeInfo()->GetInstanceSize();
+    MSize vArraySize = argType->GetInstanceSize();
     if (vArraySize == 0) {
         return true;
     }
+    MAddress src = reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE;
+    // G-C2: ref-bearing VArray must post-record via WriteStruct, not bare memcpy.
+    if (argType->HasRefField()) {
+        Heap::GetBarrier().WriteStruct(obj, argAddr, vArraySize, src, vArraySize);
+        return true;
+    }
     if (memcpy_s(reinterpret_cast<void*>(argAddr), vArraySize,
-                 reinterpret_cast<void*>(reinterpret_cast<Uptr>(argObj) + TYPEINFO_PTR_SIZE),
-                 vArraySize) != EOK) {
+                 reinterpret_cast<void*>(src), vArraySize) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for VArray field");
         return false;
     }
@@ -338,7 +368,7 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
     }
     U64 argCnt = cjRawArray->len;
     ObjRef rawArray = reinterpret_cast<ObjRef>(cjRawArray);
-    RefField<false>* refField = reinterpret_cast<RefField<false>*>(&(cjRawArray->data));
+    HeapSlot<false>* refField = &HeapSlotAt<false>(&(cjRawArray->data));
 
     for (U64 idx = 0; idx < argCnt; ++idx) {
         ObjRef argObj = static_cast<ObjRef>(Heap::GetBarrier().ReadReference(rawArray, *refField));
@@ -362,8 +392,7 @@ void SetFieldFromArgs(ObjRef obj, TypeInfo* ti, void* args)
         } else if (argType->IsPrimitiveType()) {
             success = SetPrimitiveField(obj, argAddr, argType, argObj);
         } else if (argType->IsVArray()) {
-            // VArray is only used to store value types,
-            // so we can copy the memory directly
+            // HasRefField branch handled inside SetVArrayField (G-C2).
             success = SetVArrayField(obj, argAddr, argType, argObj);
         } else {
             LOG(RTLOG_FATAL, "FieldInitializer: %s type not supported", argType->GetName());
@@ -487,15 +516,19 @@ BaseObject* PrimitiveToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 
 BaseObject* VArrayToAny(TypeInfo* fieldTi, Uptr fieldAddr)
 {
-    // VArray is only used to store value types, so we can copy the memory directly
-    MSize vArraySize = fieldTi->GetFieldNum() * fieldTi->GetComponentTypeInfo()->GetInstanceSize();
+    // RAW_POINTER_OBJECT is not guaranteed young (RegionSpace raw-pointer path);
+    // ref-bearing VArray must go through WriteStruct (G-C3).
+    MSize vArraySize = fieldTi->GetInstanceSize();
     MSize size = MRT_ALIGN(vArraySize + TYPEINFO_PTR_SIZE, TYPEINFO_PTR_SIZE);
     BaseObject* fieldObj = ObjectManager::NewObject(fieldTi, size, AllocType::RAW_POINTER_OBJECT);
     if (vArraySize == 0) {
         return fieldObj;
     }
-    if (memcpy_s(reinterpret_cast<void*>(reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE), vArraySize,
-                 reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
+    MAddress dst = reinterpret_cast<Uptr>(fieldObj) + TYPEINFO_PTR_SIZE;
+    if (fieldTi->HasRefField()) {
+        Heap::GetBarrier().WriteStruct(fieldObj, dst, vArraySize, fieldAddr, vArraySize);
+    } else if (memcpy_s(reinterpret_cast<void*>(dst), vArraySize,
+                        reinterpret_cast<void*>(fieldAddr), vArraySize) != EOK) {
         LOG(RTLOG_ERROR, "FieldInitializer: memcpy_s failed for VArray field");
     }
 

@@ -138,6 +138,9 @@ extern "C" void MRT_PreRunManagedCode(Mutator* mutator, int layers, ThreadLocalD
         mutator->EnterSaferegion(false);
     }
     mutator->SetManagedContext(true);
+    mutator->SetEpochHandshakeLifecycle(Mutator::EPOCH_HANDSHAKE_RUNNING);
+    mutator->SetSafepointStatePtr(&threadData->safepointState);
+    mutator->SetSafepointActive(mutator->HasAnySuspensionRequest());
     mutator->LeaveSaferegion();
 #ifdef _WIN64
     Runtime& runtime = Runtime::Current();

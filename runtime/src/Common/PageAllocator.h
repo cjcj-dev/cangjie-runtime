@@ -275,7 +275,8 @@ public:
     // choose appropriate allocation to allocate
     void* Allocate(size_t size)
     {
-        uint32_t alignedSize = MapleRuntime::AlignUp(static_cast<uint32_t>(size), AllocatorUtils::ALLOC_ALIGNMENT);
+        CHECK(size <= std::numeric_limits<size_t>::max() - (AllocatorUtils::ALLOC_ALIGNMENT - 1));
+        size_t alignedSize = MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
         if (alignedSize <= RUN_ALLOC_LARGE_SIZE) {
             uint32_t index = RUNTYPE_SIZE_TO_RUN_IDX(alignedSize);
             return allocator[index].Allocate();
@@ -286,7 +287,8 @@ public:
 
     ATTR_NO_INLINE void Deallocate(void* p, size_t size)
     {
-        uint32_t alignedSize = MapleRuntime::AlignUp(static_cast<uint32_t>(size), AllocatorUtils::ALLOC_ALIGNMENT);
+        CHECK(size <= std::numeric_limits<size_t>::max() - (AllocatorUtils::ALLOC_ALIGNMENT - 1));
+        size_t alignedSize = MapleRuntime::AlignUp<size_t>(size, AllocatorUtils::ALLOC_ALIGNMENT);
         if (alignedSize <= RUN_ALLOC_LARGE_SIZE) {
             uint32_t index = RUNTYPE_SIZE_TO_RUN_IDX(alignedSize);
             allocator[index].Deallocate(p);

@@ -50,7 +50,7 @@ public:
     }
 
     void VisitGCRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, uintptr_t base,
-                      std::list<Uptr>* rootsList = nullptr) const
+                      std::list<BasePtrType>* rootsList = nullptr) const
     {
         if (slotFormat != PURE_COMPRESSED_STACKMAP) {
             VisitWAHGCRoots(visitor, debugFunc, base, rootsList);
@@ -63,23 +63,55 @@ public:
                     continue;
                 }
                 SlotBias bias = static_cast<I32>(i * BIT_SIZE + j) * BYTES_PER_SLOT + slotBias * BIAS_COEF;
-                SlotAddress slot = reinterpret_cast<SlotAddress>(static_cast<intptr_t>(base) + bias);
+                SlotAddress slot = &RootSlotAt(static_cast<MAddress>(static_cast<intptr_t>(base) + bias));
                 if (debugFunc != nullptr) {
-                    debugFunc(bias, slot->object);
+                    debugFunc(bias, slot->LoadPlain());
                 }
                 if (rootsList != nullptr) {
-                    rootsList->push_back(reinterpret_cast<Uptr>(slot->object));
+                    rootsList->push_back(slot->LoadPlain());
                 }
                 visitor(*slot);
             }
         }
     }
 
+    size_t CountRootSlots() const
+    {
+        size_t count = 0;
+        if (slotFormat == PURE_COMPRESSED_STACKMAP) {
+            for (SlotBits bits : slotBits) {
+                while (bits != 0) {
+                    count += bits & LOWEST_BIT;
+                    bits >>= 1;
+                }
+            }
+            return count;
+        }
+
+        constexpr U32 pureValueWidth = 31;
+        constexpr U32 pureValueBit = 1U << pureValueWidth;
+        constexpr U32 pureValueMask = pureValueBit - 1;
+        constexpr U32 compressedTagBit = 1U << 30;
+        constexpr U32 compressedCountMask = compressedTagBit - 1;
+        for (SlotBits bits : slotBits) {
+            if ((bits & pureValueBit) != 0) {
+                bits &= pureValueMask;
+                while (bits != 0) {
+                    count += bits & LOWEST_BIT;
+                    bits >>= 1;
+                }
+            } else if ((bits & compressedTagBit) != 0) {
+                count += static_cast<size_t>(bits & compressedCountMask) * pureValueWidth;
+            }
+        }
+        return count;
+    }
+
     ~SlotRoot() { std::vector<SlotBits>().swap(slotBits); }
 
 private:
     void VisitWAHGCRoots(const RootVisitor& visitor, const SlotDebugVisitor& debugFunc, uintptr_t base,
-        std::list<Uptr>* rootsList = nullptr) const
+        std::list<BasePtrType>* rootsList = nullptr) const
     {
         constexpr U32 PureValWidth = 31;
         constexpr U32 PureValBit = 1 << PureValWidth;
@@ -90,12 +122,12 @@ private:
 
         auto VisitOneSlot = [&](I32 Idx) {
             SlotBias bias = baseBias + static_cast<I32>(Idx) * BYTES_PER_SLOT;
-            SlotAddress slot = reinterpret_cast<SlotAddress>(static_cast<intptr_t>(base) + bias);
+            SlotAddress slot = &RootSlotAt(static_cast<MAddress>(static_cast<intptr_t>(base) + bias));
             if (debugFunc != nullptr) {
-                debugFunc(bias, slot->object);
+                debugFunc(bias, slot->LoadPlain());
             }
             if (rootsList != nullptr) {
-                rootsList->push_back(reinterpret_cast<Uptr>(slot->object));
+                rootsList->push_back(slot->LoadPlain());
             }
             visitor(*slot);
         };

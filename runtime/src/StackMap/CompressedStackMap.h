@@ -23,12 +23,19 @@
 #include "StackMap/StackMapX86.h"
 #endif
 namespace MapleRuntime {
+enum class StackMapInvalidReason : U8 {
+    NONE,
+    ZERO_ENTRIES,
+    PC_MISS,
+    ZERO_ROOT_INDICES,
+};
+
 class CompressedStackMapEntry {
 public:
     CompressedStackMapEntry(const IdxSet& idx, const RegTable& reg, const SlotTable& slot, const LineNumTable& lineNum,
-                            const DerivedPtrTable derived, bool valid)
+                            const DerivedPtrTable derived, U32 derivedRows, bool valid)
         : idxSet(idx), regTable(reg), slotTable(slot),
-          lineNumTable(lineNum), derivedPtrTable(derived), isValid(valid) {}
+          lineNumTable(lineNum), derivedPtrTable(derived), derivedPtrRows(derivedRows), isValid(valid) {}
     explicit CompressedStackMapEntry(bool valid) : isValid(valid) {}
 
     ~CompressedStackMapEntry() = default;
@@ -58,7 +65,7 @@ public:
         if (idx == 0) {
             return DerivedPtr();
         }
-        return DerivedPtr(derivedPtrTable, regTable, slotTable, idx);
+        return DerivedPtr(derivedPtrTable, regTable, slotTable, idx, derivedPtrRows);
     }
 
     LineNum BuildLineNum() const
@@ -94,6 +101,7 @@ private:
     SlotTable slotTable;
     LineNumTable lineNumTable;
     DerivedPtrTable derivedPtrTable;
+    U32 derivedPtrRows{ 0 };
     bool isValid = false;
 };
 class CompressedStackMapHead {
@@ -130,20 +138,36 @@ public:
         }
     }
 
-    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC) const
+    CompressedStackMapEntry GetStackMapEntry(Uptr startPC, Uptr framePC, bool countDerivedRows = false) const
     {
         StackMapTable stackMapTable(prologue.GetNextTable());
-        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
-        if (idxSet.slotIdx == 0 && idxSet.regIdx == 0 && idxSet.lineNumIdx == 0 &&
-                idxSet.stackRegIdx == 0 && idxSet.stackSlotIdx == 0) {
+        if (stackMapTable.GetLookupResult(startPC, framePC) != StackMapLookupResult::FOUND) {
             return CompressedStackMapEntry(false);
         }
+        auto idxSet = stackMapTable.GetIdxSet(startPC, framePC);
         RegTable regTable(stackMapTable.GetNextTable());
         SlotTable slotTable(regTable.GetNextTable(), slotFormat);
         LineNumTable lineTable(slotTable.GetNextTable());
         DerivedPtrTable derivedTable(lineTable.GetNextTable(), stackMapTable.GetRegBitsLen(),
                                      stackMapTable.GetSlotBitsLen());
-        return CompressedStackMapEntry(idxSet, regTable, slotTable, lineTable, derivedTable, true);
+        U32 derivedRows = countDerivedRows
+            ? stackMapTable.GetDerivedPtrRows(startPC, framePC, derivedTable.GetRecordNum())
+            : 0;
+        return CompressedStackMapEntry(idxSet, regTable, slotTable, lineTable, derivedTable, derivedRows, true);
+    }
+
+    StackMapInvalidReason GetInvalidReason(Uptr startPC, Uptr framePC) const
+    {
+        StackMapTable stackMapTable(prologue.GetNextTable());
+        switch (stackMapTable.GetLookupResult(startPC, framePC)) {
+            case StackMapLookupResult::ZERO_ENTRIES:
+                return StackMapInvalidReason::ZERO_ENTRIES;
+            case StackMapLookupResult::PC_MISS:
+                return StackMapInvalidReason::PC_MISS;
+            case StackMapLookupResult::FOUND:
+                return StackMapInvalidReason::ZERO_ROOT_INDICES;
+        }
+        return StackMapInvalidReason::ZERO_ROOT_INDICES;
     }
 
 private:

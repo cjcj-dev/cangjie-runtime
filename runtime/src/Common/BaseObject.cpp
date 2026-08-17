@@ -4,16 +4,60 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
+#include <cstdlib>
+
+#include "Common/ColourMask.h"
+#include "Base/Log.h"
 #include "BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/FinalizerProcessor.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MArray.inline.h"
 #include "ObjectModel/MObject.h"
 #include "ObjectModel/MObject.inline.h"
+#include "ObjectModel/RefField.inline.h"
+#include "Heap/Verify/PlainCensus.h"
 
 namespace MapleRuntime {
+// COLOUR_WRITEBACK_AUDIT §六 判据 1：唯一落笔 choke（单一定义，默认关）。
+// plaincensus: also feed fail-open writer counters (MRT_GCV2_PLAIN_WRITE_COUNT=1).
+void AssertColouredWriteIfEnabled(const void* slot, MAddress newVal)
+{
+    static const bool assertOn = []() {
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ASSERT_COLOURED_WRITES */;
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    static const bool countOn = []() {
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PLAIN_WRITE_COUNT */;
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    if (LIKELY(!assertOn && !countOn)) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(slot)) {
+        return;
+    }
+    if ((newVal & ((MAddress(1) << 48) - 1)) == 0) {
+        return;
+    }
+    constexpr MAddress kColourMask = REMAP_COLOUR_MASK | MARKED_YOUNG_MASK | MARKED_OLD_MASK;
+    bool hasColour = (newVal & kColourMask) != 0;
+    bool tagged = ((newVal >> 48) & 1) != 0;
+    bool loadGood = (newVal & static_cast<MAddress>(::g_cjLoadBadMask)) == 0;
+    if (!hasColour) {
+        NotePlainHeapWrite(slot, static_cast<uintptr_t>(newVal));
+    }
+    if (LIKELY(!assertOn)) {
+        return;
+    }
+    CHECK_DETAIL(hasColour && (loadGood || tagged),
+                 "MRT_GCV2_ASSERT_COLOURED_WRITES: plain/bad-colour heap ref write @%p val=%#zx "
+                 "hasColour=%d loadGood=%d tagged=%d",
+                 slot, newVal, hasColour, loadGood, tagged);
+}
+
 TypeInfo* BaseObject::GetTypeInfo() const { return stateWord.GetTypeInfo(); }
 
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
@@ -71,7 +115,7 @@ static void ForEachElementInArray(ObjectPtr obj, const RefFieldVisitor& visitor)
         }
     } else if (componentTypeInfo->IsObjectType() || componentTypeInfo->IsArrayType() ||
                componentTypeInfo->IsInterface()) {
-        RefField<>* arrayContent = reinterpret_cast<RefField<>*>(mArray->ConvertToCArray());
+        HeapSlot<>* arrayContent = &HeapSlotAt<>(mArray->ConvertToCArray());
         // for each object in array.
         for (MIndex i = 0; i < arrayLengthVal; ++i) {
             visitor(arrayContent[i]);
@@ -121,7 +165,7 @@ void BaseObject::ForEachAggRefFieldInArray(const RefFieldVisitor& visitor, MAddr
         MRT_ASSERT((alignedStart + contentSize) >= aggEnd, "aggregate element is not align\n");
         MAddress currentAddr = alignedStart;
         for (U64 i = startIndex; (i < arrayLen) && (currentAddr < aggEnd); ++i) {
-            gcTib.ForEachBitmapWord(currentAddr, visitor);
+            gcTib.ForEachBitmapWordInRange(currentAddr, visitor, aggStart, aggEnd);
             currentAddr += contentSize;
         }
     } else {
@@ -170,10 +214,71 @@ bool BaseObject::IsInTraceRegion() const
 
 bool BaseObject::CompareExchangeRefField(RefField<>& field, const RefField<> oldRef, const RefField<> newRef)
 {
-    if (field.CompareExchange(oldRef.GetFieldValue(), newRef.GetFieldValue())) {
-        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", oldRef.GetFieldValue(), newRef.GetFieldValue());
+    if (HealSlot(field, oldRef.GetFieldValue(), newRef.GetFieldValue(),
+                 HealSite::BaseObjectCompareExchangeRefField, HealNull::Allow)) {
+        DLOG(BARRIER, "update obj %p ref-field@%p: %#zx => %#zx", raw(oldRef.GetFieldValue()), raw(newRef.GetFieldValue()));
         return true;
     }
     return false;
 }
 } // namespace MapleRuntime
+
+// Phase B: the read-barrier mask the compiler tests against (see TypeDef.h for why).
+// "All colour bits set" keeps the predicate identical to the shift form it replaces.
+// Phase C: bad = mid-evacuation, or carrying a colour other than the one being handed out.
+// The initial conceptual state is RemappedYoung0 x RemappedOld0, encoded by Remapped00.
+// ⭐⭐⭐ 0809：⭐ 让"⭐ 这枚 .so 是哪个 commit 建的"变成一条 `strings` 能答的问题。
+//   ⛔ 一晚三次：⭐ 修法在源码里，⭐ 而跑的是旧二进制（⭐ 信号死锁修法 · ⭐ opt · ⭐ cjc/std/runtime 三份）
+//   ⇒ ⭐ 而 `.so` 只有 GNU build-id ⇒ ⭐⭐ 能区分两枚，⛔ 说不出来自哪个 commit
+//   ⇒ ⭐ 于是只能靠目录日期猜 —— ⭐⭐ 而 `sdk-stageA2` 目录是 08-07、⭐ 里面的 runtime 更早
+//   ⭐ 判法：`strings <libcangjie-runtime.so> | grep CJRT-COMMIT:`
+#ifndef CJ_RUNTIME_COMMIT
+#define CJ_RUNTIME_COMMIT "unknown"
+#endif
+extern "C" __attribute__((used, visibility("default")))
+const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
+
+// c4unify: these three used to be hand-written literal expressions -- a second copy of
+// WCollector::set_good_masks, whose own comment said it was written to "match live
+// set_good_masks shape". They are now the same function evaluated at the initial epoch, and the
+// old literals survive only as witnesses in the static_asserts below: if the shared formula ever
+// drifts from what shipped, the build stops here rather than at the first flip.
+//
+// ⭐ The named constexpr constants are load-bearing, not style. These three globals are
+// constant-initialised today (they land in .data), and both the compiler-emitted barriers and
+// BaseObject.cpp itself read them before main. Routing through a `constexpr unsigned long`
+// makes a platform on which the expression is not a constant expression a compile error instead
+// of a silent demotion to dynamic initialisation -- which would leave the masks reading 0 during
+// static init, i.e. every reference load-good, i.e. no barrier at all.
+namespace {
+constexpr MapleRuntime::BadMasks kInitialBadMasks =
+    MapleRuntime::ComputeBadMasks(MapleRuntime::kInitialEpochColours);
+
+constexpr unsigned long kLoadBad0 = static_cast<unsigned long>(kInitialBadMasks.loadBad);
+constexpr unsigned long kMarkBad0 = static_cast<unsigned long>(kInitialBadMasks.markBad);
+constexpr unsigned long kStoreBad0 = static_cast<unsigned long>(kInitialBadMasks.storeBad);
+
+// Witnesses: the literal expressions this file carried before c4unify, verbatim.
+static_assert(kLoadBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                            (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00)),
+              "g_cjLoadBadMask initial value changed");
+// Mark-good includes load-good plus the current young and old mark epochs. The initial current
+// epochs are *_0, so their *_1 bits are bad (OpenJDK zAddress.cpp:78-87,120-127).
+static_assert(kMarkBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                            (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+                            MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1),
+              "g_cjMarkBadMask initial value changed");
+// Store-good = mark-good | current Remembered (initial REMEMBERED_0). Store-bad rejects the
+// other rem bit and all mark-bad bits (OpenJDK zAddress.cpp:83-87).
+static_assert(kStoreBad0 == (MapleRuntime::TAGGED_BITS_MASK |
+                             (MapleRuntime::REMAP_COLOUR_MASK ^ MapleRuntime::ZPointerRemapped00) |
+                             MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
+                             MapleRuntime::REMEMBERED_1),
+              "g_cjStoreBadMask initial value changed");
+} // namespace
+
+extern "C" unsigned long g_cjLoadBadMask = kLoadBad0;
+
+extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = kMarkBad0;
+
+extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = kStoreBad0;
