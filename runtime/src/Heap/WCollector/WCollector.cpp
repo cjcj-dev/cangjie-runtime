@@ -3534,21 +3534,16 @@ public:
         // FYS non-young / legacy set: per-worker dedup (no shared set write under race).
         std::unordered_set<BaseObject*> localNonYoungSeen;
         WCollector* collector = shared.collector;
-        const bool fullYoungScan = shared.fullYoungScan;
         const bool useBitmapLedger = shared.useBitmapLedger;
         const bool recordSlots = shared.recordSlots;
 
-        auto pushTarget = [collector, fullYoungScan, this](RefField<>& field) {
+        auto pushTarget = [collector, this](RefField<>& field) {
             BaseObject* target = collector->ResolveMinorReference(field);
             // h3seed3: same free|garbage scrub as TraceYoungClosureSerial.
             if (ScrubMinorFreeTarget(field, target, false)) {
                 return;
             }
-            if (fullYoungScan) {
-                PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
-            } else {
-                collector->PushYoungObject(target, workStack, "closure_edge");
-            }
+            collector->PushYoungObject(target, workStack, "closure_edge");
         };
 
         for (;;) {
@@ -3611,15 +3606,8 @@ public:
                     ++nMarked;
                     CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
                     localObjects.push_back(object);
-                } else if (!fullYoungScan) {
-                    continue;
                 } else {
-                    if (!localNonYoungSeen.insert(object).second) {
-                        EatArmDiag::NoteNonYoungDedupSkipFields(object);
-                        continue;
-                    }
-                    CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
-                    localObjects.push_back(object);
+                    continue;
                 }
             } else {
                 if (isYoung) {
@@ -3662,10 +3650,7 @@ public:
                     if (!localNonYoungSeen.insert(object).second) {
                         continue;
                     }
-                } else if (!fullYoungScan) {
-                    continue;
-                } else if (!localNonYoungSeen.insert(object).second) {
-                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
+                } else {
                     continue;
                 }
                 CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -4032,15 +4017,8 @@ private:
                 ++nMarked;
                 CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
                 localObjects.push_back(object);
-            } else if (!shared.fullYoungScan) {
-                return;
             } else {
-                if (!ClaimSeen(object)) {
-                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
-                    return;
-                }
-                CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
-                localObjects.push_back(object);
+                return;
             }
         } else {
             if (isYoung) {
@@ -4058,10 +4036,7 @@ private:
                 if (!ClaimSeen(object)) {
                     return;
                 }
-            } else if (!shared.fullYoungScan) {
-                return;
-            } else if (!ClaimSeen(object)) {
-                EatArmDiag::NoteNonYoungDedupSkipFields(object);
+            } else {
                 return;
             }
             CHECK_DETAIL(object->IsValidObject(), "minor closure reached invalid object %p", object);
@@ -4077,14 +4052,7 @@ private:
             if (ScrubMinorFreeTarget(field, target, false)) {
                 return;
             }
-            if (shared.fullYoungScan) {
-                BaseObject* admitted = AdmitYoungObject(target, "closure_edge.fys.striped", &field);
-                if (admitted != nullptr) {
-                    PushObject(admitted);
-                }
-            } else {
-                PushFilteredYoung(target, "closure_edge");
-            }
+            PushFilteredYoung(target, "closure_edge");
         };
         if (UNLIKELY(object->IsWeakRef())) {
             HeapSlot<>& referentField = HeapSlotAt<>(reinterpret_cast<MAddress>(object) + TYPEINFO_PTR_SIZE);
@@ -4132,7 +4100,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         (void)LedgerInsert(reachableSlots, slot, g_minorLedgerCost.slotInsN, g_minorLedgerCost.slotInsNew,
                            g_minorLedgerCost.slotInsNs);
     };
-    auto pushTarget = [this, fullYoungScan, &workStack, markCostMode](RefField<>& field) {
+    auto pushTarget = [this, &workStack, markCostMode](RefField<>& field) {
         if (markCostMode == 1) {
             uint64_t t0 = TimeUtil::NanoSeconds();
         BaseObject* target = ResolveMinorReference(field);
@@ -4144,19 +4112,13 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
         }
-        if (fullYoungScan) {
+        {
             size_t before = workStack.size();
-            PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
-                if (workStack.size() > before) {
-                    ++g_markInternalCost.edgeYoungPushN;
-                }
-            } else {
-                size_t before = workStack.size();
-                PushYoungObject(target, workStack, "closure_edge");
-                if (workStack.size() > before) {
-                    ++g_markInternalCost.edgeYoungPushN;
-                }
+            PushYoungObject(target, workStack, "closure_edge");
+            if (workStack.size() > before) {
+                ++g_markInternalCost.edgeYoungPushN;
             }
+        }
             g_markInternalCost.resolvePushNs += TimeUtil::NanoSeconds() - t0;
             ++g_markInternalCost.edgeN;
             return;
@@ -4171,13 +4133,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             HeldFreeDiag::NoteEnumSlot(&field, target, "closure_edge");
         }
-        if (fullYoungScan) {
-            size_t before = (markCostMode == 2) ? workStack.size() : 0;
-            PushAdmittedYoung(target, workStack, "closure_edge.fys", &field);
-            if (markCostMode == 2 && workStack.size() > before) {
-                ++g_markInternalCost.edgeYoungPushN;
-            }
-        } else {
+        {
             size_t before = (markCostMode == 2) ? workStack.size() : 0;
             PushYoungObject(target, workStack, "closure_edge");
             if (markCostMode == 2 && workStack.size() > before) {
@@ -4295,19 +4251,7 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 }
                 reachableVec.push_back(object);
             } else {
-                // FYS path may visit non-young holders; claim via set (no mark bitmap on old).
-                if (!fullYoungScan) {
-                    continue;
-                }
-                if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
-                                  g_minorLedgerCost.objInsNs)) {
-                    EatArmDiag::NoteNonYoungDedupSkipFields(object);
-                    continue;
-                }
-                if (markCostMode != 0) {
-                    ++g_markInternalCost.claimOldN;
-                }
-                reachableVec.push_back(object);
+                continue;
             }
         } else {
             if (!LedgerInsert(reachableObjects, object, g_minorLedgerCost.objInsN, g_minorLedgerCost.objInsNew,
@@ -4352,10 +4296,8 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
                 if (markCostMode != 0) {
                     ++g_markInternalCost.claimYoungN;
                 }
-            } else if (!fullYoungScan) {
+            } else {
                 continue;
-            } else if (markCostMode != 0) {
-                ++g_markInternalCost.claimOldN;
             }
             reachableVec.push_back(object);
         }
@@ -4749,7 +4691,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
     // is counted at the pop, not at the push -- the question this answers is "did the
     // window do GC work", not "how many greys survived the filter".
-    auto visitSatbObj = [this, fullYoungScan, &workStack, windowStats]() {
+    auto visitSatbObj = [this, &workStack, windowStats]() {
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
         while (!remarkStack.empty()) {
@@ -4761,11 +4703,7 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
             if (!Heap::IsHeapAddress(obj)) {
                 continue;
             }
-            if (fullYoungScan) {
-                PushAdmittedYoung(obj, workStack, "young_satb.fys");
-            } else {
-                PushYoungObject(obj, workStack, "young_satb");
-            }
+            PushYoungObject(obj, workStack, "young_satb");
         }
     };
     visitSatbObj();
@@ -5148,70 +5086,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 ++retainedDrop;
             }
         }
-        if (fullYoungScan) {
-            bool oracleKeep =
-                LedgerCount(reachableSlots, slot, g_minorLedgerCost.slotLookN, g_minorLedgerCost.slotLookNs) != 0;
-            if (retainedProbe) {
-                if (keepByRetainedSnapshot == oracleKeep) {
-                    ++filterCorrect;
-                } else {
-                    ++filterIncorrect;
-                    // holderlive (F2): the two disagreement directions are not equally bad and
-                    // a single "incorrect" count hides that. overKeep = the filter kept a slot
-                    // the closure says is dead: floating garbage, which is what today's
-                    // fail-open already does. overDrop = the filter dropped a slot the closure
-                    // reached: that edge is live and dropping it is a missed mark. overDrop is
-                    // the number this filter has to keep at zero to be allowed to decide.
-                    if (keepByRetainedSnapshot) {
-                        ++filterOverKeep;
-                    } else {
-                        ++filterOverDrop;
-                    }
-                }
-                // holderlive (F2) ③: the bad_target population was never crossed with holder
-                // liveness, so "D4 is benign because those holders are dead" was an assumption.
-                // Under FYS the closure is the liveness oracle, so classify the target of every
-                // slot by whether its holder survived. Read-only: peek + FindToVersion, no
-                // ResolveMinorReference (that one can CAS-install into the slot).
-                HeapSlot<>* peekField = &HeapSlotAt<>(slot);
-                RefField<> tgtPeek(*peekField);
-                BaseObject* tgtRaw = to_object(tgtPeek.GetTargetObject());
-                BaseObject* tgt = tgtRaw;
-                if (tgtRaw != nullptr && Heap::IsHeapAddress(tgtRaw)) {
-                    BaseObject* to = plannedTo(tgtRaw);
-                    if (to != nullptr) {
-                        tgt = to;
-                    }
-                }
-                bool targetOk = tgt != nullptr && Heap::IsHeapAddress(tgt) && tgt->IsValidObject();
-                if (oracleKeep) {
-                    if (targetOk) {
-                        ++liveHolderTargetOk;
-                    } else {
-                        ++liveHolderTargetBad;
-                    }
-                } else {
-                    if (targetOk) {
-                        ++deadHolderTargetOk;
-                    } else {
-                        ++deadHolderTargetBad;
-                    }
-                }
-            }
-            if (!oracleKeep) {
-                if (statsOut != nullptr) {
-                    ++statsOut->skippedFysFilter;
-                }
-                // eatarm D5: FYS remset filter — raw target for T identity (no Resolve side-effects).
-                if (EatArmDiag::Enabled()) {
-                    HeapSlot<>* dropField = &HeapSlotAt<>(slot);
-                    RefField<> dropPeek(*dropField);
-                    BaseObject* dropT = to_object(dropPeek.GetTargetObject());
-                    EatArmDiag::NoteFysRemsetSkip(slot, dropT);
-                }
-                continue;
-            }
-        } else if (!keepByRetainedSnapshot) {
+        if (!keepByRetainedSnapshot) {
             ++scrubbedDeadHolder;
             continue;
         }
@@ -7636,16 +7511,7 @@ void WCollector::DoYoungGarbageCollection()
         StackRootSlotAttest::Finish();
     }
 
-    // gchot: once-per-process (campaigns set FYS at process start, never mid-run setenv).
-    static const bool fullYoungScanEnv = []() {
-        const char* fallback = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
-        return fallback == nullptr || std::strcmp(fallback, "0") != 0;
-    }();
-    bool fullYoungScan = fullYoungScanEnv;
-    // fysaudit: product path forced FYS=0 (audit walk is separate; never admits missing edges).
-    if (FysAuditDiag::ForceProductFullYoungScanFalse()) {
-        fullYoungScan = false;
-    }
+    constexpr bool fullYoungScan = false;
     // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
     // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
@@ -7697,36 +7563,10 @@ void WCollector::DoYoungGarbageCollection()
             if (Heap::IsHeapAddress(object)) {
                 allocationRoots.insert(object);
             }
-            if (fullYoungScan) {
-                PushAdmittedYoung(object, workStack, "alloc_buffer.fys");
-            } else {
-                PushYoungObject(object, workStack, "alloc_buffer");
-            }
+            PushYoungObject(object, workStack, "alloc_buffer");
         }
-        VisitMinorRoots([this, fullYoungScan, &workStack](BaseObject* object) {
-            if (fullYoungScan) {
-                if (Heap::IsHeapAddress(object)) {
-                    // youngstatic: under FYS PushYoungObject is bypassed — still count static
-                    // family for Q1 funnel (TLS origin set by VisitMinorRootSlots).
-                    if (YoungStaticProbeOn() && gMinorRootOrigin != nullptr &&
-                        std::strcmp(gMinorRootOrigin, "static") == 0) {
-                        g_ysPushSeen.fetch_add(1, std::memory_order_relaxed);
-                        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-                        if (region == nullptr || !region->IsYoungRegion()) {
-                            g_ysPushNotYoung.fetch_add(1, std::memory_order_relaxed);
-                        } else if (region->IsMarkedObject(
-                                       region->GetMarkView<Generation::Young>(), object)) {
-                            g_ysPushAlready.fetch_add(1, std::memory_order_relaxed);
-                        } else {
-                            g_ysPushYoungUnmarked.fetch_add(1, std::memory_order_relaxed);
-                        }
-                    }
-                    PushAdmittedYoung(object, workStack, "minor_root.fys");
-                }
-            } else {
-                // origin comes from gMinorRootOrigin set inside VisitMinorRootSlots/ValueRoots
-                PushYoungObject(object, workStack, "minor_root");
-            }
+        VisitMinorRoots([this, &workStack](BaseObject* object) {
+            PushYoungObject(object, workStack, "minor_root");
         }, stackScanEpoch);
     }
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
