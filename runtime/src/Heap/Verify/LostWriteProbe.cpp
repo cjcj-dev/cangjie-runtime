@@ -97,11 +97,8 @@ void EnsureAtexit()
 void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
 {
     EnsureAtexit();
-    const uint64_t wr = g_wr.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_wr.fetch_add(1, std::memory_order_relaxed);
     if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
-        if ((wr & (wr - 1)) == 0) {
-            Dump("pow2");
-        }
         return;
     }
     const uint32_t phase = static_cast<uint32_t>(collector.GetGCPhase());
@@ -109,27 +106,20 @@ void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
     const uintptr_t fieldU = reinterpret_cast<uintptr_t>(field);
     if (collector.IsGhostFromObject(obj)) {
         if (obj->IsForwarded()) {
-            const uint64_t n = g_a.fetch_add(1, std::memory_order_relaxed) + 1;
+            g_a.fetch_add(1, std::memory_order_relaxed);
             PushSample(g_aN, g_aS, objU, fieldU, phase);
-            if ((n & (n - 1)) == 0) {
-                Dump("a_pow2");
-            }
         } else {
             g_b.fetch_add(1, std::memory_order_relaxed);
             PushSample(g_bN, g_bS, objU, fieldU, phase);
         }
-        if ((wr & (wr - 1)) == 0) {
-            Dump("pow2");
-        }
         return;
     }
-    RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(objU);
-    if (reg != nullptr && reg->IsRouteDestHeld() && !obj->IsValidObject()) {
-        g_c.fetch_add(1, std::memory_order_relaxed);
-        PushSample(g_cN, g_cS, objU, fieldU, phase);
-    }
-    if ((wr & (wr - 1)) == 0) {
-        Dump("pow2");
+    if (!obj->IsValidObject()) {
+        RegionInfo* reg = RegionInfo::TryGetRegionInfoAt(objU);
+        if (reg != nullptr && reg->IsRouteDestHeld()) {
+            g_c.fetch_add(1, std::memory_order_relaxed);
+            PushSample(g_cN, g_cS, objU, fieldU, phase);
+        }
     }
 }
 
@@ -137,10 +127,7 @@ void NoteResolveNull(BaseObject* from, bool movableGhost)
 {
     EnsureAtexit();
     if (movableGhost && from != nullptr) {
-        const uint64_t n = g_resolveNull.fetch_add(1, std::memory_order_relaxed) + 1;
-        if ((n & (n - 1)) == 0) {
-            Dump("resolve_pow2");
-        }
+        g_resolveNull.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
