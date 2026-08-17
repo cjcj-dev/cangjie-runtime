@@ -2131,14 +2131,10 @@ public:
 
     void ReleaseForwarding() { ZForwardingLife::release_page(metadata.fwdRefCount); }
 
-    // Copy path: only a from-region has payload a mutator may copy out of.
-    bool TryLockReadFromRegion()
-    {
-        if (!(IsFromRegion() || IsLoneFromRegion())) {
-            return false;
-        }
-        return RetainForwarding();
-    }
+    // ZForwarding::retain_page: the three-state count is the gate, not the list
+    // type. After ForwardRegion, CollectRegion moves the region to garbage
+    // while the payload is still live; mutator relocate must still pin it.
+    bool TryLockReadFromRegion() { return RetainForwarding(); }
 
     void UnlockReadFromRegion() { ReleaseForwarding(); }
 

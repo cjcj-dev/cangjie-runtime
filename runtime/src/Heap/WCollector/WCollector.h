@@ -353,6 +353,17 @@ public:
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
         if (to == nullptr) {
+            // ZRelocate::forward_object after retain_page refused (zRelocate.cpp:408-410):
+            // the page is done; the object must already be in the forwarding table.
+            if (obj->IsForwarded()) {
+                BaseObject* published = FindToVersion(obj);
+                if (published != nullptr) {
+                    if (funnel) {
+                        receiptCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    return published;
+                }
+            }
             if (funnel) {
                 routeNullCount.fetch_add(1, std::memory_order_relaxed);
             }
@@ -684,8 +695,9 @@ private:
     void FixMinorRootSlots();
     void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
     void FixMinorObjectSlots(BaseObject* object);
-    // stw: optional STW handle for MRT_GCV2_MINOR_CONC_REF_FIX=1 (release after root fix,
-    // re-STW before copy/finish). nullptr keeps product STW-centralized ref_fix.
+    // stw: live handle lets relocate follow ZGC Phase 7/8 (zGeneration.cpp:573-580):
+    // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
+    // slot catch-up + evac_finish. nullptr keeps the whole evacuate under the caller STW.
     void EvacuateYoungRegions(const std::vector<BaseObject*>& reachableVec, const MinorSlotSet& rememberedSlots,
                               bool refFixSlotsCoveredByReachable, const MinorInteriorBaseMap& interiorBases,
                               std::unique_ptr<ScopedStopTheWorld>* stw = nullptr);
