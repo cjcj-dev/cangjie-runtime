@@ -268,10 +268,11 @@ public:
     // to the current object. The generation check prevents an address-reuse alias from selecting a
     // route installed by the other generation.
     //
-    // permhole receiptization: RouteObject is geometric (ROUTED before Copy fills tip).
-    // Receipt is from-FORWARDED (copy + release already happened), not tip-valid.
-    // IsValidObject is only a hole check after FORWARDED. Mid-copy returns to Wait.
-    // WaitRoutedTipReady returns receipt, or from if copy has not started, or CHECKs hole.
+    // ZRelocate::relocate_object (zRelocate.cpp:382-410) has three exits only:
+    //   ① find() hit → to    ② retain+copy → to    ③ wait, then forward_object
+    // forward_object (zRelocate.cpp:412-416) asserts find()!=null. There is no
+    // "return from". non-heap / no-ghost are "not in this forwarding table"
+    // (zGeneration.inline.hpp:131-140), not a fourth relocate exit.
     // permhit: WaitRoutedTipReady is reachable from here and nowhere else (Collector.h:169
     // make_load_good is its only caller), so "enter=0" alone cannot say whether the wait was
     // never needed or whether the read barrier never reached this funnel at all. Count each
@@ -294,6 +295,7 @@ public:
         static std::atomic<uint64_t> routeNullCount{ 0 };
         static std::atomic<uint64_t> receiptCount{ 0 };
         static std::atomic<uint64_t> waitCount{ 0 };
+        static std::atomic<uint64_t> giveFromCount{ 0 };
         const bool funnel = RemapFunnelOn();
         // toverfail reuses the same arm split as MRT_GCV2_WAITFWD (e49a5bcc), under its
         // own gate so product path is unchanged when both are off.
@@ -305,13 +307,14 @@ public:
                 std::atexit([]() {
                     std::fprintf(stderr,
                                  "[GCV2][remapfunnel] atexit call=%llu nonHeap=%llu noGhost=%llu "
-                                 "routeNull=%llu receipt=%llu wait=%llu\n",
+                                 "routeNull=%llu receipt=%llu wait=%llu giveFrom=%llu\n",
                                  static_cast<unsigned long long>(callCount.load(std::memory_order_relaxed)),
                                  static_cast<unsigned long long>(nonHeapCount.load(std::memory_order_relaxed)),
                                  static_cast<unsigned long long>(noGhostCount.load(std::memory_order_relaxed)),
                                  static_cast<unsigned long long>(routeNullCount.load(std::memory_order_relaxed)),
                                  static_cast<unsigned long long>(receiptCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(waitCount.load(std::memory_order_relaxed)));
+                                 static_cast<unsigned long long>(waitCount.load(std::memory_order_relaxed)),
+                                 static_cast<unsigned long long>(giveFromCount.load(std::memory_order_relaxed)));
                     std::fflush(stderr);
                 });
             }
@@ -350,37 +353,8 @@ public:
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        if (to == nullptr) {
-            // ZRelocate::forward_object after retain_page refused (zRelocate.cpp:408-410):
-            // the page is done; the object must already be in the forwarding table.
-            if (obj->IsForwarded()) {
-                BaseObject* published = FindToVersion(obj);
-                if (published != nullptr) {
-                    if (funnel) {
-                        receiptCount.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    return published;
-                }
-            }
-            if (funnel) {
-                routeNullCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapRouteNull(); // 甲
-            }
-            return obj;
-        }
-        if (LIKELY(!Heap::IsHeapAddress(to))) {
-            if (funnel) {
-                receiptCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapReceipt();
-            }
-            return to;
-        }
-        if (obj->IsForwarded() || forwarding->IsCompacted()) {
-            if (to->IsValidObject()) {
+        if (to != nullptr) {
+            if (LIKELY(!Heap::IsHeapAddress(to))) {
                 if (funnel) {
                     receiptCount.fetch_add(1, std::memory_order_relaxed);
                 }
@@ -389,45 +363,74 @@ public:
                 }
                 return to;
             }
-        } else {
-            // portmutreloc: this is the branch ZRelocate::relocate_object reaches when find()
-            // came back null (zRelocate.cpp:386-406) -- a route exists, no to-version has been
-            // installed yet -- and it is where ZGC stops deferring to a worker:
-            //
-            //     if (forwarding->retain_page(&_queue)) {
-            //         to_addr = relocate_object_inner(forwarding, safe(from_addr), &cursor);
-            //         forwarding->release_page();
-            //         if (!is_null(to_addr)) return to_addr;
-            //         _queue.add_and_wait(forwarding);
-            //     }
-            //
-            // Everything below was the "else" of that: hand the mutator the *from* pointer
-            // back when no copy has started, otherwise spin in WaitRoutedTipReady up to
-            // kMaxSpins=4096 and FATAL. Both legs are kept -- this is an added first choice,
-            // not a replacement.
-            BaseObject* self = TryMutatorRelocate(obj, forwarding);
-            if (self != nullptr) {
-                return self;
+            if ((obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
+                if (funnel) {
+                    receiptCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (tv) {
+                    ToverFailDiag::NoteRemapReceipt();
+                }
+                return to;
             }
-            // ZRelocate::relocate_object after retain/copy refused: add_and_wait,
-            // never hand the from address back (zRelocate.cpp:403-409). Returning
-            // from here is what made survival_dense checksum drift under concurrent
-            // relocate — the mutator read a from-face that flip had already made
-            // load-bad, then treated the id as live.
+        } else if (obj->IsForwarded()) {
+            BaseObject* published = FindToVersion(obj);
+            if (published != nullptr) {
+                if (funnel) {
+                    receiptCount.fetch_add(1, std::memory_order_relaxed);
+                }
+                return published;
+            }
         }
+        // ② retain + copy (zRelocate.cpp:393-400). nullptr = retain refused or copy missed.
+        BaseObject* self = TryMutatorRelocate(obj, forwarding);
+        if (self != nullptr) {
+            return self;
+        }
+        to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
+        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
+            if (funnel) {
+                receiptCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            return to;
+        }
+        // ③ wait then find. ZGC waits only after retain-ok+copy-fail, or inside
+        // retain_page when the page is claimed. We wait whenever find is still
+        // null. Page-vs-object wait grain is a known difference — not changed here.
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }
         if (tv) {
-            ToverFailDiag::NoteRemapWait(); // 丙 entry
+            ToverFailDiag::NoteRemapWait();
         }
-        // Gated on StatsOn(), not on the feature: this is the leg the port exists to displace,
-        // so it must be counted with the feature OFF too or the on-arm has nothing to be
-        // compared against.
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        return WaitRoutedTipReady(obj, to, forwarding);
+        BaseObject* waited = WaitRoutedTipReady(obj, to, forwarding);
+        if (waited != nullptr && waited != obj) {
+            return waited;
+        }
+        to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
+        if (to != nullptr) {
+            if (funnel) {
+                receiptCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            return to;
+        }
+        // ZRelocate::forward_object: find()==null is an invariant break, not a
+        // fourth exit. Never silent return obj (that was the checksum-drift path).
+        giveFromCount.fetch_add(1, std::memory_order_relaxed);
+        if (funnel) {
+            routeNullCount.fetch_add(1, std::memory_order_relaxed);
+        }
+        LOG(RTLOG_ERROR,
+            "[GCV2][remapfunnel] giveFrom from=%p to=%p forwarded=%u route=%u — ZGC asserts here",
+            obj, to, static_cast<unsigned>(obj->IsForwarded()),
+            static_cast<unsigned>(forwarding->GetRouteState()));
+        CHECK_DETAIL(false,
+                     "relocate_or_remap_object: unpublished after wait (ZGC forward_object "
+                     "assert). from=%p",
+                     obj);
+        return obj;
     }
 
     void AddRawPointerObject(BaseObject* obj) override
