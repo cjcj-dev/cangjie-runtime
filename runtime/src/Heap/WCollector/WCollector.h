@@ -411,15 +411,11 @@ public:
             if (self != nullptr) {
                 return self;
             }
-            if (!obj->GetObjectState().IsLockedState()) {
-                if (funnel) {
-                    routeNullCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (tv) {
-                    ToverFailDiag::NoteRemapRouteNull();
-                }
-                return obj;
-            }
+            // ZRelocate::relocate_object after retain/copy refused: add_and_wait,
+            // never hand the from address back (zRelocate.cpp:403-409). Returning
+            // from here is what made survival_dense checksum drift under concurrent
+            // relocate — the mutator read a from-face that flip had already made
+            // load-bad, then treated the id as live.
         }
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
