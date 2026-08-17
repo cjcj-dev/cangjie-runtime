@@ -90,7 +90,19 @@ constexpr uintptr_t MARKED_OLD_0 = uintptr_t(1) << MARKED_OLD_SHIFT;
 constexpr uintptr_t MARKED_OLD_1 = uintptr_t(1) << (MARKED_OLD_SHIFT + 1u);
 constexpr uintptr_t MARKED_OLD_MASK = MARKED_OLD_0 | MARKED_OLD_1;
 // Remembered[0,1] one-hot epoch (OpenJDK zAddress.hpp:148-154). Lives in former padding at
-// bits 58-59 when TAG_ID_BITS=1 (ops/design/REMEMBERED_BIT_DESIGN.md).
+// bits 56-57 (ops/design/REMEMBERED_BIT_DESIGN.md).
+//
+// The "bits 58-59 when TAG_ID_BITS=1" this comment used to claim was written while isTagged and
+// tagID still occupied two bits below the colour families. zshape deleted both, so every family
+// moved down by two; the comment did not follow. Recomputed from the shifts above:
+//   Remapped 48-51 | MarkedYoung 52-53 | MarkedOld 54-55 | Remembered 56-57 | Finalizable 58-59
+//
+// Bit 56 is not an arbitrary boundary. Under LA57 a pointer is canonical only while bits 63:57
+// all equal bit 56, and our addresses keep 57-63 clear, so setting bit 56 alone already makes the
+// word non-canonical: dereferencing a store-coloured reference raw raises #GP (si_code=128,
+// si_addr=0) rather than a page fault (si_code=1 with a real si_addr). A crash report therefore
+// tells you which family leaked -- load colours (<=55) fault, store colours (>=56) trap -- and
+// reading the wrong bit numbers off this comment sends that diagnosis to the wrong family.
 constexpr unsigned REMEMBERED_BITS = 2u;
 constexpr unsigned REMEMBERED_SHIFT = MARKED_OLD_SHIFT + MARKED_OLD_BITS;
 constexpr uintptr_t REMEMBERED_0 = uintptr_t(1) << REMEMBERED_SHIFT;
