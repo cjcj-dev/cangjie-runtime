@@ -6092,22 +6092,30 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return object;
     };
 
-    // P2: concurrent heap ref_fix after STW root fix. Requires flip so pre-flip from-face
-    // colour fails is_load_good (Idle/Preforward self-heal). Default OFF.
-    // Env MRT_GCV2_MINOR_CONC_REF_FIX=1 (implies flip once). Needs live STW handle.
-    static const bool minorConcRefFixEnv = []() {
-        const char* v = std::getenv("MRT_GCV2_MINOR_CONC_REF_FIX");
-        return v != nullptr && std::strcmp(v, "1") == 0;
+    // ZGC Phase 7/8 (zGeneration.cpp:573-580, 918-931, 850-853): pause_relocate_start
+    // is flip + set_phase(Relocate) + _relocate.start(); object copy is concurrent.
+    // Flip is the trap that makes mutator loads take the self-heal / relocate_object
+    // path; without it, concurrent copy is the empty window concreffix measured.
+    // MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back to the all-STW evacuate.
+    static const bool youngFlipOff = []() {
+        const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
+        return v != nullptr && std::strcmp(v, "0") == 0;
     }();
-    const bool minorConcRefFix = minorConcRefFixEnv && stw != nullptr && *stw != nullptr;
+    const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
+    const bool doYoungFlip = !youngFlipOff;
+    GCThreadPool* threadPool = GetThreadPool();
+    static const bool forceSerialEnv = []() {
+        const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool useParallel = threadPool != nullptr && !forceSerialEnv;
 
     // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     static const bool refFixCoveredDedup = []() {
         const char* v = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
-    const bool refFixCoveredDedupActive =
-        refFixCoveredDedup && refFixSlotsCoveredByReachable && !minorConcRefFix;
+    const bool refFixCoveredDedupActive = refFixCoveredDedup && refFixSlotsCoveredByReachable;
 
     // reachableVec is already materialised by TraceYoungClosure (setbitmap O1③). Under
     // non-concurrent FYS, RescanRememberedSet only consumes slots present in reachableSlots;
@@ -6401,28 +6409,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // minortime: ⑦ ref fix (preforward roots + fixForwardedReferences)
         MRT_PHASE_TIMER("young.ref_fix");
 
-        // flipwire P1: opt-in minor young-remap flip (ZGC relocate_start). Default OFF.
-        // Env MRT_GCV2_MINOR_YOUNG_FLIP=1; still STW-centralized heap fix unless P2.
-        static const bool minorYoungFlip = []() {
-            const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
-            return v != nullptr && std::strcmp(v, "1") == 0;
-        }();
-        if (minorConcRefFixEnv && !minorConcRefFix) {
-            VLOG(REPORT,
-                 "[GCV2][reffix][conc] requested but no STW handle — fallback centralized STW ref_fix");
-        }
-        const bool doYoungFlip = minorYoungFlip || minorConcRefFix;
+        // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
+        // enter Relocate. Product path. MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back.
         if (doYoungFlip) {
             flip_young_relocate_start();
         }
-
-        GCThreadPool* threadPool = GetThreadPool();
-        static const bool forceSerialEnv = []() {
-            const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
-            return value != nullptr && std::strcmp(value, "1") == 0;
-        }();
-        const bool forceSerial = forceSerialEnv;
-        const bool useParallel = threadPool != nullptr && !forceSerial;
 
         if (refFixCoveredDedup) {
             const size_t coveredLedger = refFixCoveredDedupActive && rememberedSlots.size() >= remsetVec.size()
@@ -6430,10 +6421,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 : 0;
             VLOG(REPORT,
                  "[GCV2][reffixconc][dedup] requested=1 active=%u input=%zu covered=%zu residual=%zu "
-                 "interior=%zu concMarkCompatible=%u concRefFix=%u",
-                 static_cast<unsigned>(refFixCoveredDedupActive), rememberedSlots.size(),
-                 coveredLedger, remsetVec.size(), interiorBases.size(),
-                 static_cast<unsigned>(refFixSlotsCoveredByReachable), static_cast<unsigned>(minorConcRefFix));
+                  "interior=%zu concMarkCompatible=%u concRelocate=%u",
+                  static_cast<unsigned>(refFixCoveredDedupActive), rememberedSlots.size(),
+                  coveredLedger, remsetVec.size(), interiorBases.size(),
+                  static_cast<unsigned>(refFixSlotsCoveredByReachable), static_cast<unsigned>(concRelocate));
         }
 
         {
@@ -6674,88 +6665,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk");
-            if (minorConcRefFix) {
-                // ZGC shape: pause_relocate_start (flip+roots) → concurrent_relocate (object copy)
-                // → mutator load-barrier self-heal. ZGC does NOT concurrent field-walk for
-                // centralized fix; slots heal via barrier, pages free only after relocate done.
-                // Prior P2 ran FixMinorObjectSlots concurrently → ForEachBitmapWord SEGV
-                // (rdi=0 / null GCTib) under mutator races (fixinput reject 10k+, si_code=MAPERR).
-                // Conc window = ForwardObject only on reachableVec; full slot fix under re-STW.
-                TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
-                // Conc window: mutators resume under PreforwardBarrier and self-heal load-bad
-                // from-faces (ZGC load-barrier). GC does NOT concurrent-forward or concurrent
-                // field-walk here — both raced (ForEachBitmapWord rdi=0 / TypeInfo+8 MAPERR;
-                // O2 NEW 11/20 after forward_only). Slot fix + residual ForwardFromSpace stay STW.
-                // concreffix: the released window is the entire product of this flag, so time it
-                // on the structured channel. The record can only be emitted from inside this
-                // branch, which makes it the positive control that the flag took effect.
-                {
-                    MRT_PHASE_TIMER("young.ref_fix_conc_window");
-                    stw->reset();
-                    VLOG(REPORT,
-                         "[GCV2][reffix][conc] concurrent heap ref_fix start nObj=%zu nSlot=%zu flip=1 "
-                         "mode=mutator_self_heal",
-                         reachableVec.size(), remsetVec.size());
-                    // Brief yield so mutators actually run; without this the re-STW can re-enter
-                    // before any mutator progress (still correct, but no concurrent work done).
-                    sched_yield();
-                    *stw = std::make_unique<ScopedStopTheWorld>("young post-ref_fix", true,
-                                                                GCPhase::GC_PHASE_PREFORWARD);
-                }
-                VLOG(REPORT, "[GCV2][reffix][conc] concurrent heap ref_fix done; STW re-entered");
-
-                // STW slot fix after concurrent forward (roots may have been dirtied by mutators).
-                g_minorRefCasFail.store(0, std::memory_order_relaxed);
-                g_minorRefCasOk.store(0, std::memory_order_relaxed);
-                FixMinorRootSlots();
-                PreforwardDiscoveredExternObjects();
-                PreforwardAllResurrectExportFromObjects();
-                // Pre-release remset snapshot + edges mutators recorded into the active remset
-                // during the concurrent window (Snapshot is non-destructive).
-                remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-                {
-                    std::unordered_set<MAddress> concRemset =
-                        Heap::GetHeap().GetRememberedSet().Snapshot();
-                    remsetVec.reserve(remsetVec.size() + concRemset.size());
-                    for (MAddress slot : concRemset) {
-                        remsetVec.push_back(slot);
-                    }
-                    VLOG(REPORT,
-                         "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                         rememberedSlots.size(), concRemset.size(), remsetVec.size());
-                    // concreffix: conc_new is the only observable a mutator can leave behind in
-                    // this window, so it decides whether the window did anything at all. The
-                    // VLOG above needs REPORT, which would perturb the timings being measured;
-                    // mirror it on the gated channel instead. Being inside an opt-in branch is
-                    // not a reason to leave it unconditional: the branch condition can change
-                    // later, while a log level never lowers itself back.
-                    static const bool concProductOn =
-                        DiagGate::LegacyOrToken("MRT_GCV2_REFFIX_WALK", "reffixwalk");
-                    if (concProductOn) {
-                        LOG(RTLOG_ERROR,
-                            "[GCV2][reffix][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                            rememberedSlots.size(), concRemset.size(), remsetVec.size());
-                    }
-                }
-                if (!useParallel) {
-                    size_t taken = 0;
-                    fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
-                    VLOG(REPORT,
-                         "[GCV2][reffix][conc_stw] slot_fix objects_taken=%zu nObj=%zu nSlot=%zu "
-                         "cas_ok=%zu cas_fail=%zu",
-                         taken, reachableVec.size(), remsetVec.size(),
-                         g_minorRefCasOk.load(std::memory_order_relaxed),
-                         g_minorRefCasFail.load(std::memory_order_relaxed));
-                } else {
-                    fixHeapParallelOnly(threadPool);
-                    VLOG(REPORT,
-                         "[GCV2][reffix][conc_stw] slot_fix nObj=%zu nSlot=%zu "
-                         "cas_ok=%zu cas_fail=%zu parallel=1",
-                         reachableVec.size(), remsetVec.size(),
-                         g_minorRefCasOk.load(std::memory_order_relaxed),
-                         g_minorRefCasFail.load(std::memory_order_relaxed));
-                }
-            } else if (!useParallel) {
+            if (!useParallel) {
                 VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial %s",
                      threadPool == nullptr ? "pool_unavailable" : "force_serial");
                 // pass1 roots already done; only heap+remset+pass2 roots remain.
@@ -6774,7 +6684,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         {
             MRT_PHASE_TIMER("young.ref_fix_tail");
-            // fixinput positive control: reject/unrecoverable >0 when tip-in-heap hits Fix.
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
             size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
             size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
@@ -6784,13 +6693,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
-            // Mid-evac checkpoint: after slot fix, before region reclaim.
             postEvacPoint("post-fix-pre-forward", true);
         }
     }
 
     {
-        // minortime: ⑥ copy / forward
+        // Intermediate (task §四): flip is the product path (pause_relocate_start);
+        // object copy stays STW. Concurrent ForwardObject drifted survival_dense
+        // checksum; in-window ForwardFromSpace SEGV'd (si_addr=0x8 / f019451c).
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
@@ -7840,10 +7750,9 @@ void WCollector::DoYoungGarbageCollection()
         const char* value = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    static const bool minorConcRefFixRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_MINOR_CONC_REF_FIX");
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
+    // zconc: MRT_GCV2_MINOR_CONC_REF_FIX deleted. Concurrent relocate is the
+    // product path; the old flag only opened an empty yield window and inverted
+    // the two remset-dedup gates (REPORT-concreffix).
     auto envOne = [](const char* name) {
         const char* value = std::getenv(name);
         return value != nullptr && std::strcmp(value, "1") == 0;
@@ -7857,7 +7766,7 @@ void WCollector::DoYoungGarbageCollection()
     // Rescan's FYS gate makes every consumed slot a member of reachableSlots at
     // runtime; this is a control-flow invariant, not a workload coverage guess.
     const bool remsetConsumedLedgerElideActive = remsetHashOptRequested && fullYoungScan && !youngConcMark &&
-        refFixCoveredDedupRequested && !minorConcRefFixRequested && !consumedIdentityRequired;
+        refFixCoveredDedupRequested && !consumedIdentityRequired;
 
     MinorSlotSet liveRememberedSlots;
     if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
@@ -7894,11 +7803,11 @@ void WCollector::DoYoungGarbageCollection()
     if (remsetHashOptRequested) {
         VLOG(REPORT,
              "[GCV2][remsetdrain][hash-opt] requested=1 active=%u recorded=%zu live=%zu consumed=%zu "
-             "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u concRefFix=%u identityRequired=%u",
-             static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
-             remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
-             static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark),
-             static_cast<unsigned>(minorConcRefFixRequested), static_cast<unsigned>(consumedIdentityRequired));
+              "consumedLedger=%zu interiors=%zu fys=%u youngConc=%u identityRequired=%u",
+              static_cast<unsigned>(remsetConsumedLedgerElideActive), rememberedSlots.size(), remsetStats.live,
+              remsetStats.consumed, consumedSlots.size(), remsetInteriorBases.size(),
+              static_cast<unsigned>(fullYoungScan), static_cast<unsigned>(youngConcMark),
+              static_cast<unsigned>(consumedIdentityRequired));
     }
     // fysaudit: D2 retained-drop + D4 live-not-consumed (product path already FYS=0 under audit).
     if (FysAuditDiag::Enabled()) {
@@ -8634,8 +8543,8 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     size_t allocatedBefore = space.AllocatedBytes();
-    // ⑥⑦⑧ inside EvacuateYoungRegions: young.ref_fix / young.copy / young.evac_finish
-    // Pass STW so MRT_GCV2_MINOR_CONC_REF_FIX can release after root fix (P2).
+    // ⑥⑦⑧ inside EvacuateYoungRegions: pause relocate_start / concurrent copy / evac_finish
+    // Pass STW so Phase 8 can release the world for concurrent_relocate.
     //
     // fysfixa / fysaudit D4: slot authority for remset fix = Rescan-admitted
     // consumedSlots, not the pre-rescan liveRememberedSlots ledger.
@@ -9136,7 +9045,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     };
 
     const bool tv = ToverFailDiag::Enabled();
-    for (int spins = 0; spins < kMaxSpins; ++spins) {
+    for (int spins = 0;; ++spins) {
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
             BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
@@ -9175,44 +9084,18 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
                 spins, again != nullptr ? again : to);
         }
-        if (!from->GetObjectState().IsLockedState()) {
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapWaitGiveUp();
-            }
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
-            }
-            return from;
-        }
+        // zconc: unlocked + not FORWARDED means the worker has not claimed this
+        // object yet. ZGC waits (add_and_wait); handing from back is the
+        // checksum-drift path under concurrent_relocate.
         sched_yield();
         to = space.GetRegionManager().RouteObject(from, forwarding);
         if (to == nullptr) {
-            // Plan gone mid-wait — keep from (valid object; not a geometric guess).
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
-            }
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
-            }
-            return from;
+            // Plan gone mid-wait. ZGC still waits for the worker that claimed
+            // the page; keep spinning until FORWARDED or the page is done.
+            continue;
         }
     }
-    // Still ROUTED/ROUTING after bound: do not hand geometric null-tip; from is still live.
-    if (diagOn) {
-        giveUpCount.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (tv) {
-        ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
-    }
-    if (MutatorRelocate::StatsOn()) {
-        MutatorRelocate::NoteWaitGiveUp();
-    }
+    LOG(RTLOG_FATAL, "WaitRoutedTipReady exited without receipt");
     return from;
 }
 

@@ -136,9 +136,10 @@ constexpr PhaseColourState FULL_PHASE_COLOUR_MAP[] = {
 //   * With concurrent stack scan, MarkedYoung/Remembered flip before ENUM is
 //     published; without it, ScopedStopTheWorld publishes ENUM first and the
 //     same flip happens inside ENUM. The phase alone cannot distinguish them.
-//   * The young remap flip happens inside PREFORWARD only when
-//     MRT_GCV2_MINOR_YOUNG_FLIP=1 or concurrent ref-fix implies it. Its product
-//     default is off, so this table must not claim a mandatory post-flip state.
+//   * The young remap flip happens inside PREFORWARD by default (zconc /
+//     ZGC relocate_start). MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls it back. This
+//     table still must not claim a mandatory post-flip state, because the
+//     rollback switch exists.
 //   * MarkedOld/RemappedOld do not flip in a young-only cycle.
 constexpr PhaseColourState YOUNG_PHASE_COLOUR_MAP[] = {
     { PhaseColourId::IDLE,

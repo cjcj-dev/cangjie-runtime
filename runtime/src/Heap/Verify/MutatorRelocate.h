@@ -39,10 +39,8 @@ class RegionInfo;
 //
 // The two halves are separately observable because they answer different questions:
 //
-//   MRT_GCV2_MUTATOR_RELOCATE=1   Turn the relocate leg on. Implies the drain below, because
-//                                 a mutator copying out of a from-region while
-//                                 DispelGhostFromRegion / ClearUnits retires it underneath is
-//                                 exactly the hazard retain_page exists to prevent.
+//   MRT_GCV2_MUTATOR_RELOCATE=0   Off-switch. Default on (zconc / ZGC relocate_object).
+//                                 Drain is unconditional via ZForwardingLife.
 //   MRT_GCV2_MUTRELOC_DRAIN=1     The pin's drain half only (detach_page), with no mutator
 //                                 relocation. Lets the drain be measured on its own.
 //   MRT_GCV2_MUTRELOC_STATS=1     Counters only, no behaviour change. This is what makes the
