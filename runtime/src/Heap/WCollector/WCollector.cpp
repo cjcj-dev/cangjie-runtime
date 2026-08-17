@@ -9132,7 +9132,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     };
 
     const bool tv = ToverFailDiag::Enabled();
-    for (int spins = 0; spins < kMaxSpins; ++spins) {
+    for (int spins = 0;; ++spins) {
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
             BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
@@ -9171,44 +9171,18 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
                 spins, again != nullptr ? again : to);
         }
-        if (!from->GetObjectState().IsLockedState()) {
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapWaitGiveUp();
-            }
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
-            }
-            return from;
-        }
+        // zconc: unlocked + not FORWARDED means the worker has not claimed this
+        // object yet. ZGC waits (add_and_wait); handing from back is the
+        // checksum-drift path under concurrent_relocate.
         sched_yield();
         to = space.GetRegionManager().RouteObject(from, forwarding);
         if (to == nullptr) {
-            // Plan gone mid-wait — keep from (valid object; not a geometric guess).
-            if (diagOn) {
-                giveUpCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            if (tv) {
-                ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
-            }
-            if (MutatorRelocate::StatsOn()) {
-                MutatorRelocate::NoteWaitGiveUp();
-            }
-            return from;
+            // Plan gone mid-wait. ZGC still waits for the worker that claimed
+            // the page; keep spinning until FORWARDED or the page is done.
+            continue;
         }
     }
-    // Still ROUTED/ROUTING after bound: do not hand geometric null-tip; from is still live.
-    if (diagOn) {
-        giveUpCount.fetch_add(1, std::memory_order_relaxed);
-    }
-    if (tv) {
-        ToverFailDiag::NoteRemapWaitGiveUp(); // 丙
-    }
-    if (MutatorRelocate::StatsOn()) {
-        MutatorRelocate::NoteWaitGiveUp();
-    }
+    LOG(RTLOG_FATAL, "WaitRoutedTipReady exited without receipt");
     return from;
 }
 
