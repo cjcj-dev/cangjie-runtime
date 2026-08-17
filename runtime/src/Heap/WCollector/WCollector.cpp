@@ -7920,7 +7920,7 @@ void WCollector::DoYoungGarbageCollection()
                             }
                         });
                     }
-                    object->ForEachRefField([this, &workStack, fullYoungScan, object](RefField<>& field) {
+                    object->ForEachRefField([this, &workStack, object](RefField<>& field) {
                         BaseObject* target = ResolveMinorReference(field);
                         if (target == nullptr || !Heap::IsHeapAddress(target)) {
                             return;
@@ -7970,7 +7970,7 @@ void WCollector::DoYoungGarbageCollection()
                             }
                         }
                     }
-                    VisitMinorRoots([this, fullYoungScan, &workStack, &rootExtraN](BaseObject* object) {
+                    VisitMinorRoots([this, &workStack, &rootExtraN](BaseObject* object) {
                         if (fullYoungScan) {
                             size_t before = workStack.size();
                             PushAdmittedYoung(object, workStack, "minor_root_final.fys");
@@ -8046,7 +8046,7 @@ void WCollector::DoYoungGarbageCollection()
                         if (!object->HasRefField()) {
                             continue;
                         }
-                        object->ForEachRefField([this, &fieldExtra, &reachableSlots, fullYoungScan,
+                        object->ForEachRefField([this, &fieldExtra, &reachableSlots,
                                                 object](RefField<>& field) {
                             MAddress slot = reinterpret_cast<MAddress>(&field);
                             if (fullYoungScan && Heap::IsHeapAddress(slot)) {
