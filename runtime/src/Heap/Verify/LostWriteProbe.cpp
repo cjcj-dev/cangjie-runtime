@@ -108,6 +108,7 @@ void EnsureAtexit()
 
 void NoteWrite(BaseObject* obj, const void* field, const Collector& collector)
 {
+    EnsureAtexit();
     if (++t_wr >= kTlsFlush) {
         FlushWr();
     }

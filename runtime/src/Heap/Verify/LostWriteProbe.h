@@ -11,8 +11,10 @@ class Collector;
 namespace LostWriteProbe {
 
 constexpr bool kEnabled = true;
+constexpr bool kWriteClassify = false;
 
 inline bool Enabled() { return kEnabled; }
+inline bool WriteClassify() { return kWriteClassify; }
 
 void NoteWrite(BaseObject* obj, const void* field, const Collector& collector);
 
