@@ -3688,10 +3688,6 @@ public:
                     }
                     continue;
                 }
-                RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
-                if (referentRegion->IsYoungRegion()) {
-                    WeakRefBuffer::Instance().Insert(object);
-                }
                 // weak referent double-scan: do not claim referent; N2 CAS converge.
                 referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
                 if (shared.pool != nullptr) {
@@ -4097,10 +4093,6 @@ private:
             if (!Heap::IsHeapAddress(referent)) {
                 return;
             }
-            RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
-            if (referentRegion->IsYoungRegion()) {
-                WeakRefBuffer::Instance().Insert(object);
-            }
             referent->ForEachRefField([&pushTarget](RefField<>& field) { pushTarget(field); });
             return;
         }
@@ -4384,10 +4376,6 @@ void WCollector::TraceYoungClosureSerial(WorkStack& workStack, bool fullYoungSca
             BaseObject* referent = ResolveMinorReference(referentField);
             if (!Heap::IsHeapAddress(referent)) {
                 continue;
-            }
-            RegionInfo* referentRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(referent));
-            if (referentRegion->IsYoungRegion()) {
-                WeakRefBuffer::Instance().Insert(object);
             }
             if (markCostMode == 1) {
                 uint64_t t0 = TimeUtil::NanoSeconds();
@@ -8638,7 +8626,6 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ⑧ pre-evac finish (phase + weak/satb clear)
         MRT_PHASE_TIMER("young.pre_evac_clear");
         TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
-        WeakRefBuffer::Instance().ClearWeakRefBuffer();
         SatbBuffer::Instance().ClearBuffer();
     }
 
