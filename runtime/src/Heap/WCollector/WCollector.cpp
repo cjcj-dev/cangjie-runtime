@@ -87,8 +87,17 @@ struct CopierRouteMint {
 
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
 
-// Frame-colour census after relocate-start flip. Compile-time on; no MRT_GCV2_ env.
-static constexpr bool kFrameColourCensus = true;
+// Frame-colour census after relocate-start flip. Compile-time off; no MRT_GCV2_ env.
+//
+// It answered its question and the answer is stable: across 550 flips the stack roots held
+// zero old-epoch colours and zero current-epoch colours, because runtime stack roots are
+// plain by ABI (BaseObject.h, "Stack/runtime roots are uncoloured RootSlots"). Leaving it
+// compiled in would put a full walk of every mutator stack, plus a log line per mutator,
+// inside the relocate-start pause.
+//
+// Kept rather than deleted because the same walk answers the follow-up question -- whether a
+// plain stack root still names a from-object after relocation, which no colour bit can flag.
+static constexpr bool kFrameColourCensus = false;
 
 static void CensusFrameColoursAfterFlip(const char* site, uintptr_t prevRemap)
 {
