@@ -66,6 +66,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/RelocAudit.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -6774,6 +6775,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     {
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
+        if (RelocAudit::kEnabled) {
+            RelocAudit::CompareAtEvacFinish("young.evac_finish");
+        }
         size_t residualPromoteRecords = 0;
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
@@ -8689,6 +8693,9 @@ void WCollector::DoGarbageCollection()
         InvalidateOldTaggedRefs(false);
     }
 
+    if (RelocAudit::kEnabled) {
+        RelocAudit::CompareAtEvacFinish("major.pre_collect");
+    }
     CollectSmallSpace();
     // domainon: major path coverage dump (Record may fire under non-YOUNG if youngRegion).
     PromotedRegionDomain::DumpCoverageByReason("post-major");
@@ -9343,6 +9350,9 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     toObj->SetStateCode(ObjectState::NORMAL);
     std::atomic_thread_fence(std::memory_order_release);
     obj->UnlockObject(ObjectState::FORWARDED);
+    if (RelocAudit::kEnabled) {
+        RelocAudit::Note(obj, toObj, size);
+    }
     return toObj;
 }
 

@@ -56,6 +56,7 @@ set(SRC_LIST
     "StackRootSlotAttest.cpp"
     "LoadGoodProbe.cpp"
     "ZgcSelfHealDiag.cpp"
+    "RelocAudit.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
