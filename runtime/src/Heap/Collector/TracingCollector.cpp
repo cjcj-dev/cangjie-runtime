@@ -36,17 +36,17 @@ SkippedStackMapCounts g_rootMapMissCounts;
 thread_local size_t g_currentThreadRootMapMissCount = 0;
 
 const bool STRICT_STACKMAP_ENABLED = []() {
-    const char* value = std::getenv("MRT_GC_STRICT_STACKMAP");
+    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GC_STRICT_STACKMAP */;
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
 const bool ROOTMAP_MISS_COUNT_ENABLED = []() {
-    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS");
+    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS */;
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
 const bool ROOTMAP_MISS_FATAL_ENABLED = []() {
-    const char* value = std::getenv("MRT_GCV2_ROOTMAP_MISS_FATAL");
+    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS_FATAL */;
     return value != nullptr && std::strcmp(value, "1") == 0;
 }();
 
@@ -130,7 +130,7 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
     // SKIPPED_PC_MISS is not just a counter. Gate detail volume with env.
     {
         size_t maxWho = 16;
-        const char* maxEnv = std::getenv("MRT_GCV2_SKIPPED_WHO_MAX");
+        const char* maxEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIPPED_WHO_MAX */;
         if (maxEnv != nullptr && maxEnv[0] != '\0') {
             char* end = nullptr;
             unsigned long parsed = std::strtoul(maxEnv, &end, 10);

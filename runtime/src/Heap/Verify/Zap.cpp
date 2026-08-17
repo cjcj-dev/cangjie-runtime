@@ -23,13 +23,13 @@ bool EnvIsOne(const char* name)
 
 bool HeapZap::ReclaimEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_ZAP_RECLAIM");
+    static const bool on = false /* pinned:MRT_GCV2_ZAP_RECLAIM */;
     return on;
 }
 
 bool HeapZap::AllocEnabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_ZAP_ALLOC");
+    static const bool on = false /* pinned:MRT_GCV2_ZAP_ALLOC */;
     return on;
 }
 

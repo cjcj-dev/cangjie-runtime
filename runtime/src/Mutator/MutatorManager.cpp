@@ -28,7 +28,7 @@ thread_local bool inEpochHandshake = false;
 uint64_t GetEpochHandshakeTimeoutMillis()
 {
     static const uint64_t timeout = []() -> uint64_t {
-        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EPOCH_HANDSHAKE_TIMEOUT_MS */;
         if (value != nullptr) {
             char* end = nullptr;
             unsigned long long parsed = std::strtoull(value, &end, 10);
@@ -270,7 +270,7 @@ MutatorManager& MutatorManager::Instance() noexcept { return Runtime::Current().
 bool MutatorManager::EpochHandshakeEnabled()
 {
     static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_EPOCH_HANDSHAKE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EPOCH_HANDSHAKE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     return enabled || ConcurrentStackScanEnabled();
@@ -279,7 +279,7 @@ bool MutatorManager::EpochHandshakeEnabled()
 bool MutatorManager::ConcurrentStackScanEnabled()
 {
     static const bool enabled = []() {
-        const char* value = std::getenv("MRT_GCV2_CONCURRENT_STACK_SCAN");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CONCURRENT_STACK_SCAN */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     return enabled;

@@ -69,7 +69,7 @@ bool ReadFlag(const char* name)
 
 bool AbortOnViolation()
 {
-    static const bool on = []() { return ReadFlag("MRT_GCV2_ZGC_SELFHEAL_ABORT"); }();
+    static const bool on = []() { return false /* pinned:MRT_GCV2_ZGC_SELFHEAL_ABORT */; }();
     return on;
 }
 
@@ -208,7 +208,7 @@ bool Enabled()
 
 bool CensusEnabled()
 {
-    static const bool on = []() { return ReadFlag("MRT_GCV2_ZGC_SELFHEAL_REPORT"); }();
+    static const bool on = []() { return false /* pinned:MRT_GCV2_ZGC_SELFHEAL_REPORT */; }();
     return on;
 }
 

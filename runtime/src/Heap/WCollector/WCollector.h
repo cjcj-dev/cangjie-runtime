@@ -281,7 +281,7 @@ public:
     static bool RemapFunnelOn()
     {
         static const int on = []() {
-            const char* v = std::getenv("MRT_GCV2_WAITFWD");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_WAITFWD */;
             return (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
         }();
         return on != 0;
@@ -570,7 +570,7 @@ protected:
     static bool PlainRootsEnabled()
     {
         static const bool on = []() {
-            const char* v = std::getenv("MRT_GCV2_PLAIN_ROOTS");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PLAIN_ROOTS */;
             if (v == nullptr) {
                 return true;
             }

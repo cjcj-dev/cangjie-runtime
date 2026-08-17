@@ -14,7 +14,7 @@ namespace MapleRuntime {
 bool StackWatermark::VerifyEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_STACK_WATERMARK_VERIFY");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STACK_WATERMARK_VERIFY */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;

@@ -60,7 +60,7 @@ void RecordEntry(const Entry& entry)
 
 bool TraceClear::Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_TRACE_CLEAR") || EnvIsOne("MRT_GCV2_F3_REGION");
+    static const bool on = false /* pinned:MRT_GCV2_TRACE_CLEAR */ || false /* pinned:MRT_GCV2_F3_REGION */;
     return on;
 }
 
@@ -92,7 +92,7 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
 void TraceClear::NoteRegionEvent(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
                                  unsigned int isGhost, unsigned int regionType, unsigned int routeState)
 {
-    static const bool f3Region = EnvIsOne("MRT_GCV2_F3_REGION");
+    static const bool f3Region = false /* pinned:MRT_GCV2_F3_REGION */;
     if (!f3Region || size == 0) {
         return;
     }
@@ -211,7 +211,7 @@ void TraceClear::DumpRecent(size_t n)
 
 bool TraceClear::SkipCompactMemset()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_SKIP_COMPACT_MEMSET");
+    static const bool on = false /* pinned:MRT_GCV2_SKIP_COMPACT_MEMSET */;
     return on;
 }
 

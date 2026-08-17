@@ -35,7 +35,7 @@ std::atomic<size_t> g_allocIntoCSetRetired{ 0 };
 bool AllocIntoCSetDiagEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_ALLOC_INTO_CSET_DIAG");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ALLOC_INTO_CSET_DIAG */;
         return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
     return on;
@@ -305,7 +305,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
             static const bool youngConcMarkOn = []() {
-                const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
+                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
             if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {

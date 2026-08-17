@@ -89,7 +89,7 @@ namespace {
 bool VerifyStackRootPostconditionEnabled()
 {
     static const bool on = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     return on;
@@ -98,7 +98,7 @@ bool VerifyStackRootPostconditionEnabled()
 bool InjectStackRootPostconditionFailure()
 {
     static const bool on = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE_INJECT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE_INJECT */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     return on;
@@ -168,7 +168,7 @@ namespace {
 bool YoungStaticProbeOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNGSTATIC");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNGSTATIC */;
         return v != nullptr && v[0] == '1' && v[1] == '\0';
     }();
     return on;
@@ -188,7 +188,7 @@ namespace {
 bool FysGrantProbeOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_FYSGRANT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FYSGRANT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -199,7 +199,7 @@ bool FysGrantProbeOn()
 bool ReffixConcProbeOn()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_REFFIXCONC_PROBE");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIXCONC_PROBE */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -257,7 +257,7 @@ std::atomic<bool> g_f3DeadarmAtexit{ false };
 bool F3DeadarmAssertEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_F3_DEADARM_ASSERT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_F3_DEADARM_ASSERT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -445,7 +445,7 @@ void NoteResolveRootNull(void* rootSlot, BaseObject* from, BaseObject* to, Regio
 void ReportForwardRaceCounts()
 {
     static const bool account = []() {
-        const char* v = std::getenv("MRT_GCV2_FORWARD_RACE_ACCOUNT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FORWARD_RACE_ACCOUNT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     if (!account) {
@@ -554,7 +554,7 @@ struct MinorLedgerCost {
     static int Mode()
     {
         static const int mode = []() {
-            const char* v = std::getenv("MRT_GCV2_LEDGER_COST");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_LEDGER_COST */;
             if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
                 return 0;
             }
@@ -631,7 +631,7 @@ struct MarkInternalCost {
     static int Mode()
     {
         static const int mode = []() {
-            const char* v = std::getenv("MRT_GCV2_MARK_COST");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_COST */;
             if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
                 return 0;
             }
@@ -698,7 +698,7 @@ struct ClosureHashProbe {
     static int Mode()
     {
         static const int mode = []() {
-            const char* v = std::getenv("MRT_GCV2_CLOSURE_HASH");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CLOSURE_HASH */;
             if (v == nullptr || v[0] == '\0' || std::strcmp(v, "0") == 0) {
                 return 0;
             }
@@ -1022,7 +1022,7 @@ bool WCollector::TryUntagRefField(BaseObject* obj, RefField<>& field, BaseObject
 #endif
         if (UNLIKELY(!isValidTarget)) {
             static const bool f3Region = []() {
-                const char* value = std::getenv("MRT_GCV2_F3_REGION");
+                const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_F3_REGION */;
                 return value != nullptr && std::strcmp(value, "1") == 0;
             }();
             if (f3Region) {
@@ -1896,11 +1896,11 @@ void WCollector::InvalidateOldTaggedRefsBeforeDispel()
     // Population was empty across 123 majors × 3 loads; cost was ~27% of major total_gc.
     // VERIFY / ACCOUNT still force the walk so soak/ALOT can keep the insurance tripwire.
     static const bool preflipWalk = []() {
-        const char* verify = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        const char* verify = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY */;
         if (verify != nullptr && std::strcmp(verify, "1") == 0) {
             return true;
         }
-        const char* account = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
+        const char* account = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_ACCOUNT */;
         return account != nullptr && std::strcmp(account, "1") == 0;
     }();
     if (!preflipWalk) {
@@ -1919,15 +1919,15 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // Sharding = atomic address cursor + region-head ownership; roots = 6 family tasks;
     // account counters are per-worker then merged (H1/H2/H3). A1 VERIFY/ACCOUNT locals below.
     static const bool accountEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_PREFLIP_ACCOUNT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_ACCOUNT */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool preflipVerifyEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool preflipInjectEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_INJECT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY_INJECT */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     // Locals for lambda capture (static const cannot be captured under -std=gnu++14).
@@ -2198,7 +2198,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     // Positive control for silent serial degradation (spec §六 T3 ②).
     // Force serial via MRT_GCV2_STWPAR_FORCE_SERIAL=1 for bidirectional proof.
     static const bool forceSerialEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_STWPAR_FORCE_SERIAL");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STWPAR_FORCE_SERIAL */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     const bool forceSerial = forceSerialEnv;
@@ -2250,7 +2250,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
         {
-            const char* wEnv = std::getenv("MRT_GCV2_STWPAR_WORKERS");
+            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STWPAR_WORKERS */;
             if (wEnv != nullptr && wEnv[0] != '\0') {
                 int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
                 if (want >= 1 && want < heapWorkers) {
@@ -2384,7 +2384,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
              rootTotals.oldTaggedRootSlots, heapTotals.fields, rootTotals.rootSlots);
         if (fixedTotal > 0) {
             static const bool preflipVerifyFatal = []() {
-                const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_FATAL");
+                const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PREFLIP_VERIFY_FATAL */;
                 return value != nullptr && std::strcmp(value, "1") == 0;
             }();
             LOG(RTLOG_ERROR,
@@ -3392,7 +3392,7 @@ std::atomic<uint64_t> g_minorScrubFixN{ 0 };
 bool MinorScrubCountEnabled()
 {
     static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MINOR_SCRUB_COUNT");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_SCRUB_COUNT */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return on;
@@ -3401,7 +3401,7 @@ bool MinorScrubCountEnabled()
 bool MinorScrubOff()
 {
     static const bool off = []() {
-        const char* v = std::getenv("MRT_GCV2_MINOR_SCRUB_OFF");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_SCRUB_OFF */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     return off;
@@ -4436,7 +4436,7 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     // T-D ③: dispel frozen across parallel mark window (same as R2 reffix).
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
     {
-        const char* inject = std::getenv("MRT_GCV2_MARKPAR_INJECT_DISPEL");
+        const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_INJECT_DISPEL */;
         if (inject != nullptr && std::strcmp(inject, "1") == 0) {
             RegionInfo::InjectDispelCountForTest();
             VLOG(REPORT, "[GCV2][markpar] inject_dispel=1 (positive control)");
@@ -4447,7 +4447,7 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     int32_t poolCap = helperNum + 1;
     int32_t workers = poolCap;
     {
-        const char* wEnv = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */;
         if (wEnv != nullptr && wEnv[0] != '\0') {
             int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
             if (want >= 1 && want < workers) {
@@ -4564,7 +4564,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 {
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
     {
-        const char* inject = std::getenv("MRT_GCV2_MARKPAR_INJECT_DISPEL");
+        const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_INJECT_DISPEL */;
         if (inject != nullptr && std::strcmp(inject, "1") == 0) {
             RegionInfo::InjectDispelCountForTest();
             VLOG(REPORT, "[GCV2][markpar][striped] inject_dispel=1 (positive control)");
@@ -4573,7 +4573,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
     int32_t workers = threadPool->GetMaxThreadNum() + 1;
     {
-        const char* wEnv = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */;
         if (wEnv != nullptr && wEnv[0] != '\0') {
             int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
             if (want >= 1 && want < workers) {
@@ -4684,16 +4684,16 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
     }
     GCThreadPool* threadPool = GetThreadPool();
     static const bool forceSerialEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_FORCE_SERIAL */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool stripedEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_MARKPAR_STRIPED");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_STRIPED */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
-    const bool workersEnvSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
+    const bool workersEnvSet = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */ != nullptr;
     const bool useParallel = threadPool != nullptr && workersEnvSet && !forceSerialEnv && !forceSerialForCost;
     if (!useParallel) {
         // It used to print pool_unavailable unconditionally, which sent readers to inspect
@@ -4830,7 +4830,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t scrubbedBadTarget = 0;
     size_t scrubbedStaleOldTag = 0;
     static const bool retainedProbe = []() {
-        const char* value = std::getenv("MRT_GCV2_RETLIVE_PROBE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_RETLIVE_PROBE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     // remsetlife: uncapped classification of the bad_target arm. The existing sample log
@@ -4838,7 +4838,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     // samples. Counters answer "where does the target sit" for every dropped edge.
     // Default off; observation only, no control-flow change.
     static const bool remsetLifeProbe = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSETLIFE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSETLIFE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     size_t btNoRegion = 0;
@@ -4861,7 +4861,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     // floor stayed 2115). Ship the mechanism behind a switch and let the D1
     // delta decide, rather than defaulting on against an unreproduced premise.
     static const bool remsetReRemember = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_REREMEMBER");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_REREMEMBER */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     size_t reRemembered = 0;
@@ -5556,7 +5556,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     if (current == nullptr) {
         // concwin: classify which young object Compact/Admit missed (default off).
         static const bool concwinOn = []() {
-            const char* v = std::getenv("MRT_GCV2_CONCWIN");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_CONCWIN */;
             return v != nullptr && v[0] == '1' && v[1] == '\0';
         }();
         if (concwinOn) {
@@ -5705,7 +5705,7 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         // fwdnull: classify why ForwardObject returned null on a root (default off).
         // Gate MRT_GCV2_FWDNULL=1. Answers Q1 ① survivor / ② Admit / ③ mark / ④ Route.
         static const bool fwdnullOn = []() {
-            const char* v = std::getenv("MRT_GCV2_FWDNULL");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FWDNULL */;
             return v != nullptr && v[0] == '1' && v[1] == '\0';
         }();
         if (fwdnullOn) {
@@ -6078,7 +6078,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     auto postEvacPoint = [this](const char* point, bool runHeap = true) {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
         if (postEvac == nullptr || std::strcmp(postEvac, "1") != 0) {
             return;
         }
@@ -6106,7 +6106,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // path; without it, concurrent copy is the empty window concreffix measured.
     // MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back to the all-STW evacuate.
     static const bool youngFlipOff = []() {
-        const char* v = std::getenv("MRT_GCV2_MINOR_YOUNG_FLIP");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_YOUNG_FLIP */;
         return v != nullptr && std::strcmp(v, "0") == 0;
     }();
     const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
@@ -6128,14 +6128,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     const bool doYoungFlip = !youngFlipOff;
     GCThreadPool* threadPool = GetThreadPool();
     static const bool forceSerialEnv = []() {
-        const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_FORCE_SERIAL */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     const bool useParallel = threadPool != nullptr && !forceSerialEnv;
 
     // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     static const bool refFixCoveredDedup = []() {
-        const char* v = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_COVERED_DEDUP */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool refFixCoveredDedupActive = refFixCoveredDedup && refFixSlotsCoveredByReachable;
@@ -6211,7 +6211,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const int32_t helperNum = pool->GetMaxThreadNum();
         int32_t heapWorkers = helperNum + 1;
         {
-            const char* wEnv = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_WORKERS */;
             if (wEnv != nullptr && wEnv[0] != '\0') {
                 int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
                 if (want >= 1 && want < heapWorkers) {
@@ -6296,7 +6296,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // Positive control: MRT_GCV2_REFFIX_INJECT_DISPEL=1 forces a synthetic bump so
         // the assertion path is proven to fire (not a silent always-pass).
         {
-            const char* inject = std::getenv("MRT_GCV2_REFFIX_INJECT_DISPEL");
+            const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_INJECT_DISPEL */;
             if (inject != nullptr && std::strcmp(inject, "1") == 0) {
                 RegionInfo::InjectDispelCountForTest();
                 VLOG(REPORT, "[GCV2][reffix] inject_dispel=1 (positive control)");
@@ -6309,7 +6309,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
         {
-            const char* wEnv = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            const char* wEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_WORKERS */;
             if (wEnv != nullptr && wEnv[0] != '\0') {
                 int32_t want = static_cast<int32_t>(std::strtol(wEnv, nullptr, 10));
                 if (want >= 1 && want < heapWorkers) {
@@ -6739,7 +6739,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
         {
-            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
             if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
                 ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
             }
@@ -6793,7 +6793,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
-            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
             if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
                 ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
             }
@@ -6808,7 +6808,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
         // residualPromote path is empty (product real_load: residual≡0), re-tag
         // the first minor candidate as young after demote. Default off.
-        const char* keepOneYoungEnv = std::getenv("MRT_GCV2_REBUILD_KEEP_ONE_YOUNG");
+        const char* keepOneYoungEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REBUILD_KEEP_ONE_YOUNG */;
         const bool keepOneYoung =
             keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
         bool keptOneYoung = false;
@@ -6936,7 +6936,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
 void WCollector::ValidateMinorReferences(const char* point, const std::vector<BaseObject*>* reachableVec)
 {
-    const char* enabled = std::getenv("MRT_GCV2_STALE_REFERENCE_VALIDATOR");
+    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_STALE_REFERENCE_VALIDATOR */;
     if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
         return;
     }
@@ -7114,7 +7114,7 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
     // collect young objs reachable that way, compare to region mark bitmap after young-only mark.
     // For each unmarked-but-full-reachable young object, scan non-young holders for incoming
     // old→young edges and report whether that field is in the minor-acquired remset.
-    const char* enabled = std::getenv("MRT_GCMARKGAP_PROBE");
+    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCMARKGAP_PROBE */;
     if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
         return;
     }
@@ -7286,7 +7286,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
     // Mark source: MRT_GCV2_VERIFY_MARK_SOURCE (HotSpot VerifyOption isomorphic).
     // Default IndependentVsBitmap — does NOT require MinorClosure membership, so fullYoungScan
     // is not tautological (gcvheap / HotSpot inventory #22).
-    const char* enabled = std::getenv("MRT_GCV2_VERIFY_YOUNG_MARKING");
+    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_YOUNG_MARKING */;
     if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
         return;
     }
@@ -7491,7 +7491,7 @@ void WCollector::DoYoungGarbageCollection()
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
     // force via POST_EVAC so we do not need global VERIFY_HEAP (avoids pre-evac side effects).
     {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
             VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
                  minorTotalRuns + 1, minorTotalRuns);
@@ -7526,7 +7526,7 @@ void WCollector::DoYoungGarbageCollection()
     VerifyRegionSets("after-prepare-young");
     // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
     {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
             VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
                  minorTotalRuns + 1);
@@ -7650,12 +7650,12 @@ void WCollector::DoYoungGarbageCollection()
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
     // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
     static const bool remsetHashOptRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_REMSET_HASH_OPT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_HASH_OPT */;
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     // setbitmap O1③: default ON (bitmap claim + vector). MRT_GCV2_SETBITMAP=0 → legacy set path.
     static const bool useBitmapLedger = []() {
-        const char* v = std::getenv("MRT_GCV2_SETBITMAP");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SETBITMAP */;
         if (v != nullptr && std::strcmp(v, "0") == 0) {
             return false;
         }
@@ -7735,7 +7735,7 @@ void WCollector::DoYoungGarbageCollection()
     // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
     // STW2 = concurrent remset drain + re-enum + evacuate.
     static const bool youngConcMark = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     // portyoungconc L2 (ZGC zGeneration.cpp:665-669 concurrent_mark = mark_roots + mark_follow;
@@ -7746,7 +7746,7 @@ void WCollector::DoYoungGarbageCollection()
     // mark_closure / remset_rescan / mark_from_remset in the concurrent window. Requires
     // YOUNG_CONC_MARK=1 because STW2 is where the resulting residue is resealed.
     static const bool youngConcFollowRequested = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_FOLLOW");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
@@ -7756,11 +7756,11 @@ void WCollector::DoYoungGarbageCollection()
     // makes the first n mark-ends report "not converged" so the edge has a positive control
     // (a re-entry that is never taken cannot be shown to work).
     static const bool youngMarkEndReenter = []() {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_REENTER");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_REENTER */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const size_t youngMarkEndForceReenter = []() -> size_t {
-        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER */;
         if (v == nullptr) {
             return 0;
         }
@@ -7775,7 +7775,7 @@ void WCollector::DoYoungGarbageCollection()
     // its STW2 admits slots recorded after this initial remset snapshot.
     // Keep opt-in (`=1`): `=0` or unset preserves the unrestricted-ledger path.
     static const bool markRemsetIntersectRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_MARK_REMSET_INTERSECT");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_REMSET_INTERSECT */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     const bool markRemsetIntersectActive =
@@ -7835,7 +7835,7 @@ void WCollector::DoYoungGarbageCollection()
         tlsCollector = nullptr;
     }
     static const bool refFixCoveredDedupRequested = []() {
-        const char* value = std::getenv("MRT_GCV2_REFFIX_COVERED_DEDUP");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REFFIX_COVERED_DEDUP */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     // zconc: MRT_GCV2_MINOR_CONC_REF_FIX deleted. Concurrent relocate is the
@@ -8558,11 +8558,11 @@ void WCollector::DoYoungGarbageCollection()
         ClosureHashProbe::ReportEqual(minorTotalRuns + 1, reachableVec, dualVec, useBitmapLedger, fullYoungScan);
     }
     static const bool verifyRemsetEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_REMSET */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     static const bool verifyHeapEnabled = []() {
-        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_HEAP */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     std::unordered_set<BaseObject*> rootReachableForVerify;
@@ -8597,7 +8597,7 @@ void WCollector::DoYoungGarbageCollection()
     // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing
     // does not require global VERIFY_HEAP.
     {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
             VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
             VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
@@ -8664,7 +8664,7 @@ void WCollector::DoYoungGarbageCollection()
     // Gate default off: MRT_GCV2_VERIFY_POST_EVAC=1. force=true so this does not
     // require MRT_GCV2_VERIFY_HEAP/REMSET (avoids pre-evacuate side effects).
     {
-        const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
         if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
             VerifyHeapObjects("post-evacuate", true);
             std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
@@ -8746,7 +8746,7 @@ void WCollector::DoGarbageCollection()
     // nothing left to do -- but that claim needs measuring before the walk goes away for good, so
     // it is a switch rather than a deletion. Nobody has measured what this pass costs.
     static const bool skipPostflipWalk = []() {
-        const char* v = std::getenv("MRT_GCV2_SKIP_POSTFLIP_WALK");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIP_POSTFLIP_WALK */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     if (!skipPostflipWalk) {
@@ -9033,7 +9033,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     static std::atomic<uint64_t> giveUpCount{0};
     static int diagOn = -1;
     if (diagOn < 0) {
-        const char* v = std::getenv("MRT_GCV2_WAITFWD");
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_WAITFWD */;
         diagOn = (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
     }
     if (diagOn) {

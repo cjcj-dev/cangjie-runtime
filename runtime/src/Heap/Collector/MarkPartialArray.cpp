@@ -33,7 +33,7 @@ std::atomic<uint64_t> g_notEncodable{ 0 };
 
 bool Enabled()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PARTIAL_ARRAY");
+    static const bool on = false /* pinned:MRT_GCV2_PARTIAL_ARRAY */;
     return on;
 }
 
@@ -83,7 +83,7 @@ void NoteNotEncodable() { (void)g_notEncodable.fetch_add(1, std::memory_order_re
 // the report itself never ran.
 bool ForceReport()
 {
-    static const bool on = EnvIsOne("MRT_GCV2_PARTIAL_ARRAY_REPORT");
+    static const bool on = false /* pinned:MRT_GCV2_PARTIAL_ARRAY_REPORT */;
     return on;
 }
 

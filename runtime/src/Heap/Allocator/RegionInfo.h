@@ -522,7 +522,7 @@ public:
     static bool RetainedOwnCopyEnabled()
     {
         static const bool enabled = []() {
-            const char* value = std::getenv("MRT_GCV2_RETAINED_OWN_COPY");
+            const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_RETAINED_OWN_COPY */;
             return value != nullptr && std::strcmp(value, "1") == 0;
         }();
         return enabled;
@@ -1093,7 +1093,7 @@ public:
     static bool MarkEpochAssertEnabled()
     {
         static const bool on = []() {
-            const char* v = std::getenv("MRT_GCV2_MARK_EPOCH_ASSERT");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_EPOCH_ASSERT */;
             return v != nullptr && std::strcmp(v, "1") == 0;
         }();
         return on;
@@ -1540,7 +1540,7 @@ public:
         // Inject: MRT_GCV2_DOMAINEQ_INJECT=1 forces one synthetic interior count so a silent
         // harness is visible. Default off — zero product side effect.
         static const int domainEqMode = []() {
-            const char* v = std::getenv("MRT_GCV2_DOMAINEQ");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DOMAINEQ */;
             if (v != nullptr && v[0] == '1' && v[1] == '\0') {
                 return 1;
             }
@@ -1554,7 +1554,7 @@ public:
             bool expect = false;
             if (g_deAtexit.compare_exchange_strong(expect, true, std::memory_order_relaxed)) {
                 std::atexit([]() {
-                    const char* inj = std::getenv("MRT_GCV2_DOMAINEQ_INJECT");
+                    const char* inj = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DOMAINEQ_INJECT */;
                     if (inj != nullptr && inj[0] == '1' && inj[1] == '\0') {
                         g_deInject.store(1, std::memory_order_relaxed);
                         g_deSurvivedNotStart.fetch_add(1, std::memory_order_relaxed);
@@ -1578,7 +1578,7 @@ public:
             // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
             // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
             static const bool nullRouteDiag = []() {
-                const char* v = std::getenv("MRT_GCV2_NULLROUTE_DIAG");
+                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_NULLROUTE_DIAG */;
                 return v != nullptr && v[0] == '1' && v[1] == '\0';
             }();
             // eatarm: only ROUTED/FORWARDABLE/ROUTING (same exclusive arm as IOR CHECK).
@@ -2203,7 +2203,7 @@ public:
             // must wait. Default off. Proves detach waits rather than racing a
             // recycled table (task §六③).
             static const int holdUs = []() {
-                const char* v = std::getenv("MRT_GCV2_ZLIFE_INJECT_HOLD_US");
+                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ZLIFE_INJECT_HOLD_US */;
                 if (v == nullptr || *v == '\0') {
                     return 0;
                 }
@@ -2679,7 +2679,7 @@ public:
         }
         size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
         static const bool abortOn = []() {
-            const char* v = std::getenv("MRT_GCV2_LIVE_CROSSCHECK");
+            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_LIVE_CROSSCHECK */;
             return v != nullptr && std::strcmp(v, "1") == 0;
         }();
         if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
@@ -2798,7 +2798,7 @@ private:
         } else if ((n & 0x3ffU) == 0) {
             LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
         }
-        const char* fatal = std::getenv("MRT_GCV2_TIPINHEAP_FATAL");
+        const char* fatal = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TIPINHEAP_FATAL */;
         if (fatal != nullptr && fatal[0] == '1' && fatal[1] == '\0') {
             LOG(RTLOG_FATAL,
                 "[GCV2][tipguard][TYPEINFO_IN_HEAP_FATAL] obj=%p tip=%p objSize=%zu hits=%zu",

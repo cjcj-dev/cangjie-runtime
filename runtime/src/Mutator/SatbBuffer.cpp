@@ -35,7 +35,7 @@ std::array<std::atomic<BaseObject*>, SATB_CARRY_PROBE_HOST_CAPACITY> g_satbCarry
 bool SatbCarryProbeOn()
 {
     static const bool on = []() {
-        const char* value = std::getenv("MRT_GCV2_SATB_CARRY_PROBE");
+        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SATB_CARRY_PROBE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
     return on;
