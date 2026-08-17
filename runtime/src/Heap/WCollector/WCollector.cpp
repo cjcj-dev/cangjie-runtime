@@ -6697,13 +6697,16 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
         {
             MRT_PHASE_TIMER("young.concurrent_relocate");
-            stw->reset();
-            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
-                 reachableVec.size());
+            // pubwindow discriminator: copy under STW, then release. Not a fix —
+            // it drops concurrency to test whether the [reset, copy-done] window
+            // is the checksum-drift cause (WCollector.cpp:6700-6705).
             {
                 MRT_PHASE_TIMER("young.copy");
                 ForwardFromSpace();
             }
+            stw->reset();
+            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
+                 reachableVec.size());
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
         }
