@@ -159,7 +159,10 @@ public:
         return regionManager.ExemptFromRegions();
     }
 
-    BaseObject* RouteObject(BaseObject* fromObj) { return regionManager.RouteObject(fromObj); }
+    PublishedRoute FindPublishedRoute(BaseObject* fromObj)
+    {
+        return regionManager.FindPublishedRoute(fromObj);
+    }
 
     template<Generation G>
     void PrepareFromSpace() { regionManager.PrepareFromRegionList<G>(); }

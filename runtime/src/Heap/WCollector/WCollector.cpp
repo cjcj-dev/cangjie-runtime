@@ -79,6 +79,10 @@
 #endif
 
 namespace MapleRuntime {
+struct CopierRouteMint {
+    static CopierRouteToken Make() { return CopierRouteToken(); }
+};
+
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
 
 namespace {
@@ -1722,14 +1726,14 @@ void WCollector::TraceHeap()
     }
 }
 
-void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field)
+void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw)
 {
     RefField<> oldField(field);
     if (!IsOldPointer(oldField)) {
         return;
     }
     BaseObject* fromObj = to_object(oldField.GetTargetObject());
-    BaseObject* latest = FindToVersion(fromObj);
+    BaseObject* latest = PlanRouteUnderStw(fromObj, stw).dest;
     if (latest == nullptr) {
         latest = fromObj;
     }
@@ -1983,8 +1987,8 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed](BaseObject* obj,
-                                                                                          HeapAccount& acc) {
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed,
+                          &stw](BaseObject* obj, HeapAccount& acc) {
         RegionInfo* accountRegion = nullptr;
         if (account) {
             ++acc.processedObjects;
@@ -2026,7 +2030,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
-                              &acc](RefField<>& field) {
+                              &acc, &stw](RefField<>& field) {
             uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
             if (trackFixed) {
@@ -2038,7 +2042,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                     ++acc.oldTaggedSlots;
                 }
             }
-            FixOldTaggedRefField(obj, field);
+            FixOldTaggedRefField(obj, field, stw);
             if (oldTagged && raw(field.GetFieldValue()) != oldValue) {
                 ++acc.fixedSlots;
             }
@@ -2735,8 +2739,12 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
     return true;
 }
 
-BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
+BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
+    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
+        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+    };
+
     RefField<> value(field);
     BaseObject* object = to_object(value.GetTargetObject());
     if (!IsOldPointer(value)) {
@@ -2748,7 +2756,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
             !IsUnmovableFromObject(object)) {
             // installdomain: admit into route domain before any install/forward consumes it.
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = FindToVersion(object);
+            BaseObject* to = plannedTo(object);
             // satbfix: only install a to that is a live object tip; a RECENT_FULL hole
             // address must not be written into the slot (same invalid_object family).
             if (to != nullptr && Heap::IsHeapAddress(to)) {
@@ -2774,7 +2782,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field) const
     // N2: CAS (FYS=1 multi-writer safe; product default FYS=1).
     // hangfloor: use RootSlotWriteback so heap remset/fields keep Phase C colour.
     MAddress expected = raw(value.GetFieldValue());
-    BaseObject* to = FindToVersion(object);
+    BaseObject* to = plannedTo(object);
     bool toActiveBadTip = false;
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
@@ -2891,8 +2899,12 @@ static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObje
     }
 }
 
-BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
+BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
+    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
+        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+    };
+
     zaddress_unsafe observed = root.LoadPlain();
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* object = to_object(observedBits.GetTargetObject());
@@ -2918,7 +2930,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = FindToVersion(object);
+            BaseObject* to = plannedTo(object);
             // satbfix parity. Three arms resolve a from-object to a to-address and install it;
             // this was the only one without the liveness gate:
             //   RefField<>& overload, load-good arm  :2641-2644  — has it, and its comment
@@ -2944,7 +2956,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root) const
         return object;
     }
 
-    BaseObject* to = FindToVersion(object);
+    BaseObject* to = plannedTo(object);
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
@@ -4805,8 +4817,12 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
 void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                                      const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots,
                                      bool fullYoungScan, MinorSlotSet* consumedOut, DiffPathRemsetStats* statsOut,
-                                     MinorInteriorBaseMap* interiorBasesOut)
+                                     MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
+    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
+        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+    };
+
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
     //   1) region-level holder_dead (free/garbage region only — not object liveness)
     //   2) pre-check target safety BEFORE ResolveMinorReference
@@ -5174,7 +5190,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                 BaseObject* tgtRaw = to_object(tgtPeek.GetTargetObject());
                 BaseObject* tgt = tgtRaw;
                 if (tgtRaw != nullptr && Heap::IsHeapAddress(tgtRaw)) {
-                    BaseObject* to = FindToVersion(tgtRaw);
+                    BaseObject* to = plannedTo(tgtRaw);
                     if (to != nullptr) {
                         tgt = to;
                     }
@@ -5220,7 +5236,7 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
         // Pre-check (before resolve): one-gen-stale old-tag whose from has no to-version
         // and is not a live object — drop without FindLatestVersion (F5 fail-closed stays).
         if (IsOldPointer(peek)) {
-            BaseObject* to = FindToVersion(rawTarget);
+            BaseObject* to = plannedTo(rawTarget);
             bool fromLive = false;
             if (to == nullptr && Heap::IsHeapAddress(rawTarget)) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(rawTarget));
@@ -5468,12 +5484,13 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     }
 }
 
-bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase) const
+bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
+                                      const ScopedStopTheWorld* stw) const
 {
     // N1: major-style CAS tolerate (TryUpdateRefFieldImpl family). Under multi-worker
     // fix, CAS fail is normal (peer already updated) — abort assertion was serial-only.
     RefField<> oldField(field);
-    BaseObject* target = ResolveMinorReference(field);
+    BaseObject* target = ResolveMinorReference(field, stw);
     // Static / RO slots may hold non-heap objects (never evacuated). Colouring them
     // changes the bit pattern so equal-skip misses, then CAS faults on RELRO.
     // Same heap gate as ForwardUpdateRawRef / FindToVersion.
@@ -5652,10 +5669,10 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase)
     return true;
 }
 
-bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
+bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     MAddress oldValue = raw(root.LoadPlain());
-    BaseObject* target = ResolveMinorReference(root);
+    BaseObject* target = ResolveMinorReference(root, stw);
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return false;
     }
@@ -5795,8 +5812,11 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root) const
     return true;
 }
 
-bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase) const
+bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase,
+                                      const ScopedStopTheWorld* stw) const
 {
+    (void)stw;
+
     zaddress_unsafe observed = derived.LoadDerived();
     if (knownBase == nullptr || is_null(observed)) {
         return false;
@@ -5830,7 +5850,7 @@ bool WCollector::FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBa
     return raw(observed) != raw(derived.LoadDerived());
 }
 
-void WCollector::FixMinorRootSlots()
+void WCollector::FixMinorRootSlots(const ScopedStopTheWorld* stw)
 {
     size_t callN = g_fixMinorRootSlotsCalls.fetch_add(1, std::memory_order_relaxed);
     const size_t entryBefore = g_resolveRootEntry.load(std::memory_order_relaxed);
@@ -5877,19 +5897,19 @@ void WCollector::FixMinorRootSlots()
     collectorResources.GetFinalizerProcessor().VisitRawPointers(grantVisitor);
     Heap::GetHeap().VisitAllExportRoots(grantVisitor);
 
-    RootVisitor rawRootVisitor = [this](ObjectRef& root) {
+    RootVisitor rawRootVisitor = [this, stw](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(root);
+        bool wrote = FixMinorEvacuatedSlot(root, stw);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(root);
+            BaseObject* tgt = ResolveMinorReference(root, stw);
             HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root");
         }
     };
-    DerivedPtrVisitor derivedVisitor = [this](BasePtrType basePtr, DerivedSlot& derived) {
+    DerivedPtrVisitor derivedVisitor = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
         BaseObject* knownBase = is_null(basePtr) ? nullptr :
             to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        bool wrote = FixMinorEvacuatedSlot(derived, knownBase);
+        bool wrote = FixMinorEvacuatedSlot(derived, knownBase, stw);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             zaddress_unsafe value = derived.LoadDerived();
             BaseObject* target = is_null(value) ? nullptr :
@@ -5931,7 +5951,7 @@ std::atomic<size_t> g_fixinputRecover{ 0 };
 std::atomic<size_t> g_fixinputUnrecoverable{ 0 };
 } // namespace
 
-void WCollector::FixMinorObjectSlots(BaseObject* object)
+void WCollector::FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw)
 {
     // secondclass ②: belt-and-braces — refuse null tip before HasRefField.
     if (object == nullptr || !object->IsValidObject()) {
@@ -5949,7 +5969,7 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
         if (host != nullptr && host != object &&
             Collector::PlausibleManagedObjectGate("FixMinorObjectSlots.host", host)) {
             g_fixinputRecover.fetch_add(1, std::memory_order_relaxed);
-            FixMinorObjectSlots(host);
+            FixMinorObjectSlots(host, stw);
             return;
         }
         g_fixinputUnrecoverable.fetch_add(1, std::memory_order_relaxed);
@@ -5968,12 +5988,12 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
     // eatarm brackets the host so an IOR can be attributed to the object being fixed;
     // nullgate names the edge inside. Both are gated and neither subsumes the other.
     EatArmDiag::SetFixHost(object);
-    object->ForEachRefField([this, object](RefField<>& field) {
+    object->ForEachRefField([this, object, stw](RefField<>& field) {
         NullRouteCaller::ScopedEdge _edge("liveobj", object, reinterpret_cast<uintptr_t>(&field));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(field);
+        bool wrote = FixMinorEvacuatedSlot(field, nullptr, stw);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(field);
+            BaseObject* tgt = ResolveMinorReference(field, stw);
             HeldFreeDiag::NoteFixSlot(&field, tgt, wrote ? 1 : 0, "FixMinor.field");
         }
     });
@@ -5983,7 +6003,7 @@ void WCollector::FixMinorObjectSlots(BaseObject* object)
 // R2: parallel ⑦ young.ref_fix — index-shard reachableObjects + remset slots;
 // root families = 6 family-level tasks (static not split). Template = A2 stwpar2.
 // Env: MRT_GCV2_REFFIX_WORKERS, MRT_GCV2_REFFIX_FORCE_SERIAL.
-void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
+void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool, const ScopedStopTheWorld* stw)
 {
     // statresid: serial grant-before-route for all root families (must complete before
     // any parallel Forward/Route freezes a shared region's geometry).
@@ -6016,19 +6036,19 @@ void WCollector::FixMinorRootSlotsParallel(GCThreadPool* threadPool)
 
     // 5 root families as separate tasks (static kept whole — mutex+dedup set).
     // Order matches serial FixMinorRootSlots.
-    auto rootFix = [this](ObjectRef& root) {
+    auto rootFix = [this, stw](ObjectRef& root) {
         NullRouteCaller::ScopedEdge _edge("root", nullptr, reinterpret_cast<uintptr_t>(&root));
         NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
-        bool wrote = FixMinorEvacuatedSlot(root);
+        bool wrote = FixMinorEvacuatedSlot(root, stw);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
-            BaseObject* tgt = ResolveMinorReference(root);
+            BaseObject* tgt = ResolveMinorReference(root, stw);
             HeldFreeDiag::NoteFixSlot(&root, tgt, wrote ? 1 : 0, "FixMinor.root.par");
         }
     };
-    DerivedPtrVisitor derivedFix = [this](BasePtrType basePtr, DerivedSlot& derived) {
+    DerivedPtrVisitor derivedFix = [this, stw](BasePtrType basePtr, DerivedSlot& derived) {
         BaseObject* knownBase = is_null(basePtr) ? nullptr :
             to_object(safe(uncolor_bits(to_zpointer(raw(basePtr)))));
-        bool wrote = FixMinorEvacuatedSlot(derived, knownBase);
+        bool wrote = FixMinorEvacuatedSlot(derived, knownBase, stw);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             zaddress_unsafe value = derived.LoadDerived();
             BaseObject* target = is_null(value) ? nullptr :
@@ -6102,6 +6122,21 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         return v != nullptr && std::strcmp(v, "0") == 0;
     }();
     const bool concRelocate = stw != nullptr && *stw != nullptr && !youngFlipOff;
+    // Concurrent copy is opt-in, not default. REPORT-zpublish measured it drifting the
+    // survival_dense checksum 1 run in 5 (368685912892819 vs golden 368685940367600)
+    // while 4/5 were golden -- a silent wrong answer, which is worse than a missing
+    // optimisation. The publish-vs-compute split (this branch's main work) was necessary
+    // but is demonstrably not sufficient; ops/design/ROUTE_PUBLISH_VS_COMPUTE.md.
+    // MRT_GCV2_CONC_RELOCATE=1 turns it on -- that is the arm where role=mutator
+    // any_copies first became non-zero (2269) and noGhost fell 99.997% -> 99.773%.
+    static const bool concRelocateOn = []() {
+        const char* v = std::getenv("MRT_GCV2_CONC_RELOCATE");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
+    const bool doConcRelocate = concRelocate && concRelocateOn;
+    auto liveStw = [stw]() -> const ScopedStopTheWorld* {
+        return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
+    };
     const bool doYoungFlip = !youngFlipOff;
     GCThreadPool* threadPool = GetThreadPool();
     static const bool forceSerialEnv = []() {
@@ -6132,11 +6167,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
     }
 
-    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject](
+    auto fixHeapSlice = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject, &liveStw](
                             size_t beginObj, size_t endObj, size_t beginSlot, size_t endSlot,
                             size_t& objectsTaken) {
+        const ScopedStopTheWorld* evacStw = liveStw();
         for (size_t i = beginObj; i < endObj; ++i) {
-            FixMinorObjectSlots(currentObject(reachableVec[i]));
+            FixMinorObjectSlots(currentObject(reachableVec[i]), evacStw);
             ++objectsTaken;
         }
         for (size_t i = beginSlot; i < endSlot; ++i) {
@@ -6146,21 +6182,23 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw);
                 if (UNLIKELY(HeldFreeDiag::Enabled())) {
-                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot), evacStw);
                     HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
                 }
             }
         }
     };
 
-    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject]() {
-        FixMinorRootSlots();
+    auto fixForwardedReferencesSerial = [this, &reachableVec, &remsetVec, &interiorBases, &currentObject,
+                                         &liveStw]() {
+        const ScopedStopTheWorld* evacStw = liveStw();
+        FixMinorRootSlots(evacStw);
         PreforwardDiscoveredExternObjects();
         PreforwardAllResurrectExportFromObjects();
         for (BaseObject* object : reachableVec) {
-            FixMinorObjectSlots(currentObject(object));
+            FixMinorObjectSlots(currentObject(object), evacStw);
         }
         for (MAddress slot : remsetVec) {
             if (Heap::IsHeapAddress(slot)) {
@@ -6168,9 +6206,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 NullRouteCaller::ScopedTag _nrTag("FixMinorEvacuatedSlot");
                 auto known = interiorBases.find(slot);
                 BaseObject* knownBase = known != interiorBases.end() ? known->second : nullptr;
-                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase);
+                bool wrote = FixMinorEvacuatedSlot(HeapSlotAt<>(slot), knownBase, evacStw);
                 if (UNLIKELY(HeldFreeDiag::Enabled())) {
-                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot));
+                    BaseObject* tgt = ResolveMinorReference(HeapSlotAt<>(slot), evacStw);
                     HeldFreeDiag::NoteFixSlot(reinterpret_cast<void*>(slot), tgt, wrote ? 1 : 0, "FixMinor.remset");
                 }
             }
@@ -6263,7 +6301,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              g_minorRefCasFail.load(std::memory_order_relaxed));
     };
 
-    auto fixForwardedReferencesParallel = [this, &reachableVec, &remsetVec, &fixHeapSlice](GCThreadPool* pool) {
+    auto fixForwardedReferencesParallel = [this, &reachableVec, &remsetVec, &fixHeapSlice,
+                                           &liveStw](GCThreadPool* pool) {
         // T-D ③: dispel must stay frozen across the parallel window.
         const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
         // Positive control: MRT_GCV2_REFFIX_INJECT_DISPEL=1 forces a synthetic bump so
@@ -6314,7 +6353,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // the part it would remove. Timing them apart is the only way to size that trade.
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk_roots");
-            FixMinorRootSlotsParallel(pool);
+            FixMinorRootSlotsParallel(pool, liveStw());
             pool->Start();
             pool->WaitFinish();
         }
@@ -6653,7 +6692,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // pass1 is load-bearing for previous-gen residual (MINOR_CONCURRENCY §七 T-A).
         {
             MRT_PHASE_TIMER("young.ref_fix_root_pass1");
-            FixMinorRootSlots();
+            FixMinorRootSlots(liveStw());
             PreforwardDiscoveredExternObjects();
             PreforwardAllResurrectExportFromObjects();
             postEvacPoint("post-preforward-roots", false); // breadcrumb only — avoid SEGV before fix body
@@ -6663,13 +6702,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         g_minorRefCasFail.store(0, std::memory_order_relaxed);
         g_minorRefCasOk.store(0, std::memory_order_relaxed);
 
-        {
+        if (!doConcRelocate) {
             MRT_PHASE_TIMER("young.ref_fix_bulk");
             if (!useParallel) {
                 VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial %s",
                      threadPool == nullptr ? "pool_unavailable" : "force_serial");
-                // pass1 roots already done; only heap+remset+pass2 roots remain.
-                // Mirror serial fixForwardedReferences but roots again (same as before).
                 fixForwardedReferencesSerial();
                 VLOG(REPORT,
                      "[GCV2][reffix][parallel] workers_active=1 workers_scheduled=1 objects_taken=[%zu] "
@@ -6682,7 +6719,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
         }
 
-        {
+        if (!doConcRelocate) {
             MRT_PHASE_TIMER("young.ref_fix_tail");
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
             size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
@@ -6697,10 +6734,73 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
     }
 
-    {
-        // Intermediate (task §四): flip is the product path (pause_relocate_start);
-        // object copy stays STW. Concurrent ForwardObject drifted survival_dense
-        // checksum; in-window ForwardFromSpace SEGV'd (si_addr=0x8 / f019451c).
+    if (doConcRelocate) {
+        TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
+        {
+            MRT_PHASE_TIMER("young.concurrent_relocate");
+            stw->reset();
+            VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
+                 reachableVec.size());
+            {
+                MRT_PHASE_TIMER("young.copy");
+                ForwardFromSpace();
+            }
+            *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
+                                                        GCPhase::GC_PHASE_FORWARD);
+        }
+        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
+        postEvacPoint("post-forward-pre-reclaim", true);
+        {
+            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
+            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
+                ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
+            }
+        }
+        {
+            MRT_PHASE_TIMER("young.ref_fix_bulk");
+            g_minorRefCasFail.store(0, std::memory_order_relaxed);
+            g_minorRefCasOk.store(0, std::memory_order_relaxed);
+            FixMinorRootSlots(liveStw());
+            PreforwardDiscoveredExternObjects();
+            PreforwardAllResurrectExportFromObjects();
+            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
+            {
+                std::unordered_set<MAddress> concRemset =
+                    Heap::GetHeap().GetRememberedSet().Snapshot();
+                remsetVec.reserve(remsetVec.size() + concRemset.size());
+                for (MAddress slot : concRemset) {
+                    remsetVec.push_back(slot);
+                }
+                VLOG(REPORT,
+                     "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
+                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
+            }
+            if (useParallel) {
+                fixHeapParallelOnly(threadPool);
+            } else {
+                size_t taken = 0;
+                fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
+                VLOG(REPORT,
+                     "[GCV2][relocate][conc_stw] slot_fix objects_taken=%zu nObj=%zu nSlot=%zu "
+                     "cas_ok=%zu cas_fail=%zu",
+                     taken, reachableVec.size(), remsetVec.size(),
+                     g_minorRefCasOk.load(std::memory_order_relaxed),
+                     g_minorRefCasFail.load(std::memory_order_relaxed));
+            }
+        }
+        {
+            MRT_PHASE_TIMER("young.ref_fix_tail");
+            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
+            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
+            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
+            if (rej != 0 || rec != 0 || unr != 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
+                    rej, rec, unr);
+            }
+            ValidateMinorReferences("before-return", &reachableVec);
+        }
+    } else {
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
@@ -7798,7 +7898,7 @@ void WCollector::DoYoungGarbageCollection()
         MRT_PHASE_TIMER("young.remset_rescan");
         RescanRememberedSet(workStack, rememberedSlots, reachableSlots, weakSlots, fullYoungScan,
                             remsetConsumedLedgerElideActive ? nullptr : &consumedSlots, &remsetStats,
-                            &remsetInteriorBases);
+                            &remsetInteriorBases, stw.get());
     }
     if (remsetHashOptRequested) {
         VLOG(REPORT,
@@ -7939,7 +8039,7 @@ void WCollector::DoYoungGarbageCollection()
                     // reachableSlots. Concurrent edges are the authority for new greys.
                     RescanRememberedSet(workStack, concurrentRemset, reachableSlots, weakSlots,
                                         /*fullYoungScan=*/false, &consumedSlots, &remsetStats,
-                                        &remsetInteriorBases);
+                                        &remsetInteriorBases, stw.get());
                     for (MAddress slot : concurrentRemset) {
                         if (!Heap::IsHeapAddress(slot)) {
                             continue;
@@ -8411,7 +8511,7 @@ void WCollector::DoYoungGarbageCollection()
             TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
                               /*useBitmapLedger=*/false);
             RescanRememberedSet(dualStack, rememberedSlots, dualSlots, dualWeaks, fullYoungScan, nullptr, nullptr,
-                                nullptr);
+                                nullptr, stw.get());
             TraceYoungClosure(dualStack, fullYoungScan, dualObjects, dualVec, dualSlots, dualWeaks,
                               /*useBitmapLedger=*/false);
         } else {
@@ -9048,7 +9148,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     for (int spins = 0;; ++spins) {
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
+            BaseObject* again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
             if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
@@ -9067,7 +9167,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         RegionInfo::RouteState rs = forwarding->GetRouteState();
         if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            BaseObject* again = space.GetRegionManager().RouteObject(from, forwarding);
+            BaseObject* again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
             if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
@@ -9088,7 +9188,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // object yet. ZGC waits (add_and_wait); handing from back is the
         // checksum-drift path under concurrent_relocate.
         sched_yield();
-        to = space.GetRegionManager().RouteObject(from, forwarding);
+        to = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
         if (to == nullptr) {
             // Plan gone mid-wait. ZGC still waits for the worker that claimed
             // the page; keep spinning until FORWARDED or the page is done.
@@ -9292,7 +9392,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
         return nullptr;
     }
     size_t size = RegionSpace::GetAllocSize(*obj);
-    BaseObject* toObj = fwdTable.RouteObject(obj);
+    BaseObject* toObj = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
     if (toObj == nullptr) {
         obj->UnlockObject(ObjectState::NORMAL);
         return nullptr;

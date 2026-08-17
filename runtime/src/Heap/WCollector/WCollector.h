@@ -55,11 +55,9 @@ class ForwardTable {
 public:
     explicit ForwardTable(RegionSpace& space) : theSpace(space) {}
 
-    // if object is not relocated (forwarded or compacted), return nullptr.
-    BaseObject* RouteObject(BaseObject* old)
+    RoutePlan PlanRoute(BaseObject* old, CopierRouteToken token)
     {
-        BaseObject* toAddress = theSpace.RouteObject(old);
-        return toAddress;
+        return theSpace.GetRegionManager().PlanRoute(old, token);
     }
 
     // if region is compacted, return false.
@@ -351,7 +349,7 @@ public:
             return obj;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        BaseObject* to = space.GetRegionManager().RouteObject(obj, forwarding);
+        BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
         if (to == nullptr) {
             // ZRelocate::forward_object after retain_page refused (zRelocate.cpp:408-410):
             // the page is done; the object must already be in the forwarding table.
@@ -472,11 +470,16 @@ public:
 
     bool IsUnmovableFromObject(BaseObject* obj) const override;
 
-    // this is called when caller assures from-object/from-region still exists.
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
     {
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(fromObj, region);
+        return space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
+    }
+
+    RoutePlan PlanRouteUnderStw(BaseObject* fromObj, const ScopedStopTheWorld& stw) const
+    {
+        RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        return space.GetRegionManager().PlanRoute(fromObj, stw.route_plan_token());
     }
 
     BaseObject* FindToVersion(BaseObject* obj) const override
@@ -484,7 +487,7 @@ public:
         // Mirror IsGhostFromObject: GetGhostFromRegionAt → GetUnitIdxAt has no heap range
         // check, so null / non-heap (incl. colour-only null after flip) aborts as
         // "GetUnitIdxAt OOB addr=0". FixOldTaggedRefField then nulls the slot.
-        // nullptr here is dual: non-heap/null gate OR no to-version for a heap from.
+        // nullptr here is dual: non-heap/null gate OR unpublished / no to-version.
         // Soft-resolve paths must not CAS-null on the non-heap reading (RO static).
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return nullptr;
@@ -494,7 +497,7 @@ public:
             return nullptr;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().RouteObject(obj);
+        return space.GetRegionManager().FindPublishedRoute(obj).dest;
     }
 
 protected:
@@ -648,8 +651,10 @@ private:
 
     bool CasInstallResolvedTarget(RefField<>& field, MAddress expected, BaseObject* target,
                                   HealSite site, HealNull allowNull = HealNull::Disallow) const;
-    BaseObject* ResolveMinorReference(RefField<>& field) const;
-    BaseObject* ResolveMinorReference(RootSlot& root) const;
+    BaseObject* ResolveMinorReference(RefField<>& field,
+                                     const ScopedStopTheWorld* stw = nullptr) const;
+    BaseObject* ResolveMinorReference(RootSlot& root,
+                                     const ScopedStopTheWorld* stw = nullptr) const;
     void VisitMinorRootSlots(RootVisitor& rawRootVisitor, uint64_t stackScanEpoch = 0);
     void VisitMinorValueRoots(const std::function<void(BaseObject*)>& visitor);
     void VisitMinorRoots(const std::function<void(BaseObject*)>& visitor, uint64_t stackScanEpoch = 0);
@@ -684,13 +689,16 @@ private:
     void RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& rememberedSlots,
                              const MinorSlotSet& reachableSlots, const MinorSlotSet& weakSlots, bool fullYoungScan,
                              MinorSlotSet* consumedOut = nullptr, DiffPathRemsetStats* statsOut = nullptr,
-                             MinorInteriorBaseMap* interiorBasesOut = nullptr);
-    bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr) const;
-    bool FixMinorEvacuatedSlot(RootSlot& root) const;
-    bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase) const;
-    void FixMinorRootSlots();
-    void FixMinorRootSlotsParallel(GCThreadPool* threadPool);
-    void FixMinorObjectSlots(BaseObject* object);
+                             MinorInteriorBaseMap* interiorBasesOut = nullptr,
+                             const ScopedStopTheWorld* stw = nullptr);
+    bool FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase = nullptr,
+                               const ScopedStopTheWorld* stw = nullptr) const;
+    bool FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld* stw = nullptr) const;
+    bool FixMinorEvacuatedSlot(DerivedSlot& derived, BaseObject* knownBase = nullptr,
+                               const ScopedStopTheWorld* stw = nullptr) const;
+    void FixMinorRootSlots(const ScopedStopTheWorld* stw = nullptr);
+    void FixMinorRootSlotsParallel(GCThreadPool* threadPool, const ScopedStopTheWorld* stw = nullptr);
+    void FixMinorObjectSlots(BaseObject* object, const ScopedStopTheWorld* stw = nullptr);
     // stw: live handle lets relocate follow ZGC Phase 7/8 (zGeneration.cpp:573-580):
     // pause = flip + phase + root fix; concurrent = ForwardFromSpace; re-STW = heap
     // slot catch-up + evac_finish. nullptr keeps the whole evacuate under the caller STW.
@@ -716,7 +724,7 @@ private:
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94 + bfb5e8b24fa7c462321709c0c5af8290dccb38a6.
     void InvalidateOldTaggedRefsBeforeDispel();
     void InvalidateOldTaggedRefs(bool requireSurvivedMark);
-    void FixOldTaggedRefField(BaseObject* holder, RefField<>& field);
+    void FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
     void Preforward();
