@@ -7,16 +7,20 @@
 
 #include "GcStats.h"
 
+#include <cstdlib>
+#include <cstring>
+
+#include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
-size_t g_gcCount = 0;
-uint64_t g_gcTotalTimeUs = 0;
-size_t g_gcCollectedTotalBytes = 0;
+std::atomic<size_t> g_gcCount{ 0 };
+std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
+std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
 
-uint64_t GCStats::prevGcStartTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
-uint64_t GCStats::prevGcFinishTime = TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS;
+std::atomic<uint64_t> GCStats::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
+std::atomic<uint64_t> GCStats::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 
 void GCStats::Init()
 {
@@ -26,6 +30,9 @@ void GCStats::Init()
     gcEndTime = TimeUtil::NanoSeconds();
     collectedObjects = 0;
     collectedBytes = 0;
+    youngCandidateBytes = 0;
+    youngPromotedBytes = 0;
+    youngHeuDeferralUsed = false;
 
     fromSpaceSize = 0;
     smallGarbageSize = 0;
@@ -42,10 +49,77 @@ void GCStats::Init()
     garbageRatio = 0.0;
     collectionRate = 0.0;
 
-    // 20 MB:set 20 MB as intial value
-    heapThreshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
-    // 0.2:set 20% heap size as intial value
-    heapThreshold = std::min(static_cast<size_t>(Heap::GetHeap().GetMaxCapacity() * 0.2), heapThreshold);
+    const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
+    const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
+    size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
+    if (useJvmIhop) {
+        // Modern G1 uses 45% only as its initial IHOP; UpdateGCStats remains the adaptive controller here.
+        constexpr size_t initialHeapOccupancyPercent = 45;
+        heapThreshold.store(maxCapacity * initialHeapOccupancyPercent / 100, std::memory_order_relaxed);
+    } else {
+        // 20 MB:set 20 MB as intial value
+        size_t threshold = std::min(CangjieRuntime::GetGCParam().gcThreshold, 20 * MB);
+        // 0.2:set 20% heap size as intial value
+        threshold = std::min(static_cast<size_t>(maxCapacity * 0.2), threshold);
+        heapThreshold.store(threshold, std::memory_order_relaxed);
+    }
+    VLOG(REPORT, "[GCV2][jvm-ihop] enabled=%d initial-threshold=%zu max-capacity=%zu adaptive-update=1",
+         useJvmIhop, heapThreshold.load(std::memory_order_relaxed), maxCapacity);
+}
+
+GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestamp, size_t allocatedAfter,
+                                                               size_t promotedBytes, size_t candidateBytes,
+                                                               size_t maxCapacity, uint64_t durationNs,
+                                                               uint64_t heuMinIntervalNs, bool deferralEnabled)
+{
+    if (!deferralEnabled) {
+        return YoungHeuThrottleDecision::DISABLED;
+    }
+    if (candidateBytes == 0) {
+        return YoungHeuThrottleDecision::NO_COLLECTION_SET;
+    }
+
+    // Stay well inside the copying major's half-heap to-space reserve. The
+    // quarter-heap limit is the measured safe point for bounded deferral.
+    const size_t majorSafetyLimit = maxCapacity / 4;
+    const bool oldPressureHigh = allocatedAfter >= majorSafetyLimit ||
+        promotedBytes >= majorSafetyLimit - allocatedAfter;
+    if (oldPressureHigh) {
+        return YoungHeuThrottleDecision::OLD_PRESSURE_HIGH;
+    }
+    // A short minor completed inside the suppression budget that was already
+    // established by the preceding major. Restarting the full window here
+    // would add latency without closing the slow-minor hole.
+    if (durationNs < heuMinIntervalNs) {
+        return YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW;
+    }
+    if (youngHeuDeferralUsed) {
+        return YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED;
+    }
+
+    youngHeuDeferralUsed = true;
+    SetPrevGCFinishTime(timestamp);
+    return YoungHeuThrottleDecision::REFRESHED;
+}
+
+const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
+{
+    switch (decision) {
+        case YoungHeuThrottleDecision::REFRESHED:
+            return "refreshed";
+        case YoungHeuThrottleDecision::DISABLED:
+            return "disabled";
+        case YoungHeuThrottleDecision::NO_COLLECTION_SET:
+            return "no-collection-set";
+        case YoungHeuThrottleDecision::DEFERRAL_ALREADY_USED:
+            return "deferral-already-used";
+        case YoungHeuThrottleDecision::OLD_PRESSURE_HIGH:
+            return "old-pressure-high";
+        case YoungHeuThrottleDecision::WITHIN_EXISTING_HEU_WINDOW:
+            return "within-existing-window";
+        default:
+            return "invalid";
+    }
 }
 
 void GCStats::Dump() const

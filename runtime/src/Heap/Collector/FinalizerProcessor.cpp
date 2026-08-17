@@ -90,8 +90,10 @@ void FinalizerProcessor::Run()
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
             while (running) {
                 hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
-                hasPendingReclaimHeapGarbage = shouldReclaimHeapGarbage.load(std::memory_order_relaxed);
-                hasPendingFeedHungryBuffers = shouldFeedHungryBuffers.load(std::memory_order_relaxed);
+                hasPendingReclaimHeapGarbage =
+                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
+                hasPendingFeedHungryBuffers =
+                    shouldFeedHungryBuffers.exchange(false, std::memory_order_acq_rel);
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
@@ -197,11 +199,12 @@ void FinalizerProcessor::EnqueueFinalizables(const std::function<bool(BaseObject
     std::lock_guard<std::mutex> l(listLock);
     auto it = finalizers.begin();
     while (it != finalizers.end() && countLimit != 0) {
-        RefField<> tmpField(reinterpret_cast<MAddress>(*it));
-        BaseObject* obj = tmpField.GetTargetObject();
+        // finalizers is visited as a GC root while listLock is held, so its
+        // plain value names a live object for this locked inspection.
+        BaseObject* obj = to_object(safe(it->LoadPlain()));
         --countLimit;
         if (finalizable(obj)) {
-            finalizables.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+            finalizables.push_back(*it);
             it = finalizers.erase(it);
         } else {
             ++it;
@@ -225,8 +228,9 @@ void FinalizerProcessor::ProcessFinalizableList()
         // keep GC thread from visiting roots when workingFinalizables list is updating
         ScopedObjectAccess soa;
         CHECK_DETAIL(ExceptionManager::GetPendingException() == nullptr, "should not exist pending exception");
-        RefField<> tmpField(reinterpret_cast<MAddress>(*itor));
-        BaseObject* finalizeObjAddr = Heap::GetBarrier().ReadStaticRef(tmpField);
+        // workingFinalizables remains a registered GC root; ScopedObjectAccess
+        // prevents a moving collection while this plain value is consumed.
+        BaseObject* finalizeObjAddr = to_object(safe(itor->LoadPlain()));
 
         TypeInfo* classInfo = reinterpret_cast<MObject*>(finalizeObjAddr)->GetTypeInfo();
         FuncRef finalizerMethod = classInfo->GetFinalizeMethod();
@@ -312,13 +316,13 @@ void FinalizerProcessor::LogAfterProcess()
 
 void FinalizerProcessor::RegisterFinalizer(BaseObject* obj)
 {
-    RefField<> tmpField(nullptr);
-    Heap::GetBarrier().WriteStaticRef(tmpField, obj);
+    RootSlot root;
+    StorePlain(root, from_object(obj));
     std::lock_guard<std::mutex> l(listLock);
-    finalizers.push_back(reinterpret_cast<BaseObject*>(tmpField.GetFieldValue()));
+    finalizers.push_back(root);
 }
 
-void FinalizerProcessor::RegisterFinalizers(ManagedList<BaseObject*>& objs)
+void FinalizerProcessor::RegisterFinalizers(ManagedList<RootSlot>& objs)
 {
     if (objs.empty()) {
         return;
@@ -331,12 +335,10 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
-    shouldReclaimHeapGarbage.store(false, std::memory_order_relaxed);
 }
 
 void FinalizerProcessor::FeedHungryBuffers()
 {
     Heap::GetHeap().GetAllocator().FeedHungryBuffers();
-    shouldFeedHungryBuffers.store(false, std::memory_order_relaxed);
 }
 } // namespace MapleRuntime

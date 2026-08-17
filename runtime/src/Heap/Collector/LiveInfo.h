@@ -20,6 +20,35 @@ constexpr size_t kBitsPerByte = 8;
 constexpr size_t kMarkedBytesPerBit = 8;
 constexpr size_t kBitsPerWord = sizeof(uint64_t) * kBitsPerByte;
 class RegionInfo;
+
+// The collector whose transitive closure owns a mark face.  This is deliberately
+// distinct from RegionInfo::_generation_id: major marking visits the whole heap,
+// including regions which are currently young.
+enum class Generation : uint8_t {
+    Young = 0,
+    Old = 1,
+};
+
+// A mark read is not representable without naming the closure which produced it.
+// Construction is restricted to RegionInfo so MarkView<Young> can reject an old
+// region at the minting boundary.  The two instantiations intentionally have no
+// conversion between them; runtime/tests/mark_generation_compile_probe.cpp keeps
+// that property under an always-run negative compile gate.
+template<Generation G>
+class MarkView {
+public:
+    RegionInfo* GetRegion() const { return region; }
+    uint64_t GetEpoch() const { return epoch; }
+
+private:
+    MarkView(RegionInfo* regionIn, uint64_t epochIn) : region(regionIn), epoch(epochIn) {}
+
+    RegionInfo* region;
+    uint64_t epoch;
+
+    friend class RegionInfo;
+};
+
 struct RegionBitmap {
     static constexpr uint8_t factor = 16;
     std::atomic<uint16_t> partLiveBytes[factor];
@@ -37,6 +66,10 @@ struct RegionBitmap {
     struct BitMaskInfo {
         size_t headWordIdx;
         uint64_t headMaskBits;
+        // Single bit for the object start (offset/8). "Already marked" must mean this bit,
+        // not any bit in the multi-byte head mask — otherwise a neighbor mark makes MarkBits
+        // return already without setting the start bit, and CHECK(IsMarkedObject) ABRTs.
+        uint64_t startBitMask;
         size_t tailWordCnt; // count of mask words excludes the start mask
         uint64_t lastMaskBits;
     };
@@ -46,6 +79,7 @@ struct RegionBitmap {
         size_t headWordIdx = (start / kMarkedBytesPerBit) / kBitsPerWord;
         size_t headMaskBitStart = (start / kMarkedBytesPerBit) % kBitsPerWord;
         maskInfo.headWordIdx = headWordIdx;
+        maskInfo.startBitMask = static_cast<uint64_t>(1) << headMaskBitStart;
 
         size_t headBitCnt = kBitsPerWord - headMaskBitStart;
         size_t maskBitCnt = byteCnt / kMarkedBytesPerBit;
@@ -69,12 +103,13 @@ struct RegionBitmap {
     bool ApplyBitMaskInfo(const BitMaskInfo& maskInfo, size_t byteCnt, size_t regionSize)
     {
         uint64_t old = markWords[maskInfo.headWordIdx].load();
-        bool isMarked = ((old & maskInfo.headMaskBits) != 0);
+        // Already = start bit only (same predicate as IsMarked / IsMarkedObject).
+        bool isMarked = ((old & maskInfo.startBitMask) != 0);
         if (isMarked) {
             return isMarked;
         }
         old = markWords[maskInfo.headWordIdx].fetch_or(maskInfo.headMaskBits);
-        isMarked = ((old & maskInfo.headMaskBits) != 0);
+        isMarked = ((old & maskInfo.startBitMask) != 0);
         if (isMarked) {
             return isMarked;
         }
@@ -174,23 +209,96 @@ struct RegionBitmap {
         }
         return (preLiveBits + liveBits) * kMarkedBytesPerBit;
     }
+
+    size_t GetLiveBytes() const { return liveBytes.load(std::memory_order_acquire); }
+
+    size_t RecomputeLiveBytes() const
+    {
+        size_t liveBits = 0;
+        size_t count = wordCnt.load(std::memory_order_acquire);
+        for (size_t i = 0; i < count; ++i) {
+            liveBits += static_cast<size_t>(__builtin_popcountll(markWords[i].load(std::memory_order_acquire)));
+        }
+        return liveBits * kMarkedBytesPerBit;
+    }
 };
 struct LiveInfo {
     static constexpr MAddress TEMPORARY_PTR = 0x1234;
     RegionInfo* bindedRegion = nullptr;
-    RegionBitmap* markBitmap = nullptr;
     RegionBitmap* resurrectBitmap = nullptr;
     RegionBitmap* enqueueBitmap = nullptr;
 
-    uint64_t GetPreLiveBytes(size_t offset, size_t regionSize)
+    template<Generation G>
+    bool IsSurvivedObject(MarkView<G> view, size_t offset) const
+    {
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr &&
+            reinterpret_cast<MAddress>(markBitmap) != TEMPORARY_PTR && markBitmap->IsMarked(offset)) {
+            return true;
+        }
+        // Resurrection is a major/old decision.  A young closure is not complete
+        // for old/large objects and must not inherit an old resurrection verdict.
+        return G == Generation::Old && resurrectBitmap != nullptr &&
+            reinterpret_cast<MAddress>(resurrectBitmap) != TEMPORARY_PTR && resurrectBitmap->IsMarked(offset);
+    }
+
+    template<Generation G>
+    size_t GetBitmapLiveBytes(MarkView<G> view) const
+    {
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->GetLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->GetLiveBytes());
+    }
+
+    template<Generation G>
+    size_t RecomputeBitmapLiveBytes(MarkView<G> view) const
+    {
+        const MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        const bool current = face.epoch.load(std::memory_order_acquire) == view.GetEpoch();
+        return (!current || markBitmap == nullptr ? 0 : markBitmap->RecomputeLiveBytes()) +
+            (G != Generation::Old || resurrectBitmap == nullptr ? 0 : resurrectBitmap->RecomputeLiveBytes());
+    }
+
+private:
+    struct MarkFace {
+        // ZGC ZLiveMap::_seqnum counterpart, now one per collector generation.
+        std::atomic<uint64_t> epoch{ 0 };
+        RegionBitmap* bitmap = nullptr;
+    };
+
+    MarkFace markFaces[2];
+
+    template<Generation G>
+    MarkFace& GetMarkFace()
+    {
+        return markFaces[static_cast<size_t>(G)];
+    }
+
+    template<Generation G>
+    const MarkFace& GetMarkFace() const
+    {
+        return markFaces[static_cast<size_t>(G)];
+    }
+
+    // Geometry prefix-sum: only RegionInfo::GetPreLiveBytesInGhostRegion (ticket path).
+    // Anchor: ops/design/ROUTE_DOMAIN.md §2.
+    friend class RegionInfo;
+    template<Generation G>
+    uint64_t GetPreLiveBytes(MarkView<G> view, size_t offset, size_t regionSize)
     {
         RegionBitmap::PreMaskInfo maskInfo;
         RegionBitmap::GetPreMaskInfo(offset, regionSize, maskInfo);
         uint64_t liveBytes = 0;
-        if (markBitmap != nullptr) {
+        MarkFace& face = GetMarkFace<G>();
+        RegionBitmap* markBitmap = __atomic_load_n(&face.bitmap, std::memory_order_acquire);
+        if (face.epoch.load(std::memory_order_acquire) == view.GetEpoch() && markBitmap != nullptr) {
             liveBytes += markBitmap->GetPreLiveBytes(maskInfo);
         }
-        if (resurrectBitmap != nullptr) {
+        if (G == Generation::Old && resurrectBitmap != nullptr) {
             liveBytes += resurrectBitmap->GetPreLiveBytes(maskInfo);
         }
         return liveBytes;
@@ -211,6 +319,8 @@ struct RouteInfo {
         toRegion1UsedBytes = to1used;
         toRegion2Idx = to2;
     }
+    uint32_t GetToRegion1UsedBytes() const { return toRegion1UsedBytes; }
+    uint32_t GetToRegion2Idx() const { return toRegion2Idx; }
 };
 } // namespace MapleRuntime
 #endif // MRT_LIVE_INFO_H

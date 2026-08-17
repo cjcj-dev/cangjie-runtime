@@ -11,11 +11,14 @@ set(SRC_LIST
     "CollectorProxy.cpp"
     "CollectorResources.cpp"
     "TracingCollector.cpp"
+    "MarkPartialArray.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"
+    "PromotedRegionDomain.cpp"
+    "ZForwardingLife.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

@@ -77,14 +77,14 @@ private:
 class StaticRootTable {
 public:
     struct StaticRootArray {
-        RefField<>* content[0];
+        RootSlot* content[0];
     };
 
     StaticRootTable() { totalRootsCount = 0; }
     ~StaticRootTable() = default;
     void RegisterRoots(StaticRootArray* addr, U32 size);
     void UnregisterRoots(StaticRootArray* addr, U32 size);
-    void VisitRoots(const RefFieldVisitor& visitor);
+    void VisitRoots(const RootSlotVisitor& visitor);
 
 private:
     std::mutex gcRootsLock;                         // lock gcRootsBuckets
@@ -100,61 +100,114 @@ private:
 };
 
 struct ExportObjectInfo {
-    ExportObjectInfo(BaseObject* obj, bool state) : exportObj(static_cast<ExportObject*>(obj)), activeState(state) {}
-    ExportObject* exportObj = nullptr;
+    ExportObjectInfo(BaseObject* obj, bool state) : generation(1), occupied(true), activeState(state)
+    {
+        StorePlain(exportObj, from_object(obj));
+    }
+    RootSlot exportObj;
+    U32 generation = 0;
+    bool occupied = false;
     bool activeState = true;
 };
 class ExportRootTable {
 public:
+    static constexpr U32 HANDLE_INDEX_BITS = 32;
+
+    static U64 PackExportHandle(U32 index, U32 generation)
+    {
+        return (static_cast<U64>(generation) << HANDLE_INDEX_BITS) | static_cast<U64>(index);
+    }
+    static U32 ExportHandleIndex(U64 handle) { return static_cast<U32>(handle); }
+    static U32 ExportHandleGeneration(U64 handle) { return static_cast<U32>(handle >> HANDLE_INDEX_BITS); }
+
     U64 RegisterExportRoot(BaseObject* exportObj)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
         if (accessableId.empty()) {
             exportRoots.emplace_back(exportObj, true);
-            return exportRoots.size() - 1;
+            U32 index = static_cast<U32>(exportRoots.size() - 1);
+            return PackExportHandle(index, exportRoots[index].generation);
         }
-        U64 id = accessableId.front();
+        U64 index = accessableId.front();
         accessableId.pop_front();
-        exportRoots[id].exportObj = static_cast<ExportObject*>(exportObj);
-        exportRoots[id].activeState = true;
-        return id;
+        ExportObjectInfo& slot = exportRoots[index];
+        U32 nextGen = slot.generation + 1;
+        if (nextGen == 0) {
+            nextGen = 1;
+        }
+        slot.generation = nextGen;
+        StorePlain(slot.exportObj, from_object(exportObj));
+        slot.occupied = true;
+        slot.activeState = true;
+        return PackExportHandle(static_cast<U32>(index), nextGen);
     }
-    BaseObject* GetExportRoot(U64 id)
+    BaseObject* GetExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id < exportRoots.size()) {
-            return Heap::GetBarrier().ReadStaticRef(reinterpret_cast<RefField<>&>(exportRoots[id].exportObj));
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return nullptr;
         }
-        return nullptr;
+        return Heap::GetBarrier().ReadStaticRef(exportRoots[index].exportObj);
     }
-    void RemoveExportRoot(U64 id)
+    void RemoveExportRoot(U64 handle)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id < exportRoots.size()) {
-            exportRoots[id].exportObj = nullptr;
-            exportRoots[id].activeState = true;
-            accessableId.push_back(id);
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return;
         }
+        StorePlain(exportRoots[index].exportObj, zaddress::null);
+        exportRoots[index].occupied = false;
+        exportRoots[index].activeState = true;
+        accessableId.push_back(index);
     }
     void VisitGCRoots(const RootVisitor& visitor);
-    void SetActiveState(U64 id, bool state)
+    void SetActiveState(U64 handle, bool state)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        exportRoots[id].activeState = state;
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
+            return;
+        }
+        exportRoots[index].activeState = state;
     }
-    bool CheckActiveState(U64 id, BaseObject* obj)
+    bool CheckActiveState(U64 handle, BaseObject* obj)
     {
         std::lock_guard<std::mutex> lg(tableMutex);
-        if (id >= exportRoots.size()) {
+        U64 index = 0;
+        if (!ResolveLiveIndex(handle, index)) {
             return false;
         }
-        auto info = exportRoots[id];
-        if (info.exportObj != obj) {
+        auto info = exportRoots[index];
+        // tableMutex excludes GC visitation, so this retained root is live here.
+        if (to_object(safe(info.exportObj.LoadPlain())) != obj) {
             return false;
         }
         return info.activeState;
     }
 private:
+    bool ResolveLiveIndex(U64 handle, U64& index) const
+    {
+        U32 rawIndex = ExportHandleIndex(handle);
+        U32 generation = ExportHandleGeneration(handle);
+        if (rawIndex >= exportRoots.size()) {
+            return false;
+        }
+        const ExportObjectInfo& slot = exportRoots[rawIndex];
+        if (!slot.occupied) {
+            return false;
+        }
+        // Packed MCC handles carry a non-zero generation. ExportObject::GetId is a
+        // U32 slot index used by the OHOS cycle resolver; accept that raw index
+        // only while the slot is occupied (object identity is checked by caller).
+        if (generation != 0 && generation != slot.generation) {
+            return false;
+        }
+        index = rawIndex;
+        return true;
+    }
+
     std::mutex tableMutex;
     std::vector<ExportObjectInfo> exportRoots;
     std::list<U64> accessableId;
@@ -168,6 +221,11 @@ class TracingCollector : public Collector {
     friend ConcurrentMarkingWork;
     friend ExportRootsTracingWork;
 public:
+    enum class RefSlotKind : U8 {
+        STRONG,
+        WEAK_REFERENT,
+    };
+
     explicit TracingCollector(Allocator& allocator, CollectorResources& resources)
         : Collector(), theAllocator(allocator), collectorResources(resources)
     {}
@@ -178,9 +236,14 @@ public:
 
     static void VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& regSlotsMap, const FrameInfo& frame,
                                 Mutator& mutator);
+    static size_t CurrentThreadRootMapMissCount();
 
     static void VisitHeapReferencesOnStack(const RootVisitor& rootVisitor, const DerivedPtrVisitor& derivedPtrVisitor,
                                            RegSlotsMap& regSlotsMap, const FrameInfo& frame, Mutator& mutator);
+
+    static void VisitHeapReferencesOnStack(const RootVisitor& regRootVisitor, const RootVisitor& slotRootVisitor,
+                                           const DerivedPtrVisitor& derivedPtrVisitor, RegSlotsMap& regSlotsMap,
+                                           const FrameInfo& frame, Mutator& mutator);
 
     static void RecordStubCalleeSaved(RegSlotsMap& regSlotsMap, Uptr fp);
 #ifdef __arm__
@@ -247,23 +310,38 @@ public:
 
     bool ShouldIgnoreRequest(GCRequest& request) override { return request.ShouldBeIgnored(); }
 
-    // live but not resurrected object.
-    bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject(obj); }
+    // live but not resurrected object.  The generation is part of the predicate;
+    // there is intentionally no IsMarkedObject(BaseObject*) compatibility API.
+    template<Generation G>
+    bool IsMarkedObject(const BaseObject* obj) const { return RegionSpace::IsMarkedObject<G>(obj); }
 
     // live or resurrected object.
+    template<Generation G>
     inline bool IsSurvivedObject(const BaseObject* obj) const
     {
-        return RegionSpace::IsMarkedObject(obj) || RegionSpace::IsResurrectedObject(obj);
+        return RegionSpace::IsMarkedObject<G>(obj) ||
+            (G == Generation::Old && RegionSpace::IsResurrectedObject(obj));
     }
     void DFSTraceExportObject(BaseObject* exportObj);
     virtual bool MarkObject(BaseObject* obj) const
     {
+        // getsize7: base path uses unsized RegionInfo::MarkObject → GetSize without gate.
+        // WCollector overrides this; keep the base arm safe for non-WCollector builds/tests.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::MarkObject", obj)) {
+            return true;
+        }
         RegionInfo* regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-        
-        bool marked = regionInfo->MarkObject(obj);
+        // livesame: MarkObject adds live only on 0→1 (ZGC inc_live).
+        bool marked;
+        if (gcReason == GC_REASON_YOUNG) {
+            MarkView<Generation::Young> view = regionInfo->GetMarkView<Generation::Young>();
+            marked = regionInfo->MarkObject(view, obj);
+        } else {
+            MarkView<Generation::Old> view = regionInfo->GetMarkView<Generation::Old>();
+            marked = regionInfo->MarkObject(view, obj);
+        }
         if (!marked) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 DLOG(TRACE, "marking tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -272,16 +350,33 @@ public:
     }
 
     virtual void EnumRefFieldRoot(RefField<>& ref, RootSet& rootSet) const {};
-    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack) { std::abort(); }
-    virtual BaseObject* GetAndTryTagObj(BaseObject* obj, RefField<>& field) { std::abort(); }
+    virtual void TraceObjectRefFields(BaseObject* obj, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::TraceObjectRefFields");
+    }
+    // Follow one partial-array chunk popped off the work stack. Ported from
+    // ZGC's ZMark::follow_partial_array (zMark.cpp:265-270). Only reachable
+    // when MarkPartialArray::Enabled(), since nothing pushes chunks otherwise.
+    virtual void FollowPartialArray(BaseObject* entry, WorkStack& workStack)
+    {
+        Collector::AbortUnimplemented("TracingCollector::FollowPartialArray");
+    }
+    virtual BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field)
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetAndTryTagObj");
+    }
     inline bool IsResurrectedObject(const BaseObject* obj) const { return RegionSpace::IsResurrectedObject(obj); }
 
     virtual bool ResurrectObject(BaseObject* obj, size_t offset, RegionInfo* regionInfo)
     {
+        // getsize7: same GetSize hazard as MarkObject on the unsized resurrect path.
+        if (!Collector::PlausibleManagedObjectGate("TracingCollector::ResurrectObject", obj)) {
+            return true;
+        }
+        // livesame: ResurrectObject counts on 0→1 inside.
         bool resurrected = regionInfo->ResurrectObject(obj, offset);
         if (!resurrected) {
             size_t objSize = obj->GetSize();
-            regionInfo->AddLiveByteCount(objSize);
             if (!fixReferences && regionInfo->IsFromRegion()) {
                 VLOG(REPORT, "resurrection tag w-obj %p<cls %p>+%zu", obj, obj->GetTypeInfo(), objSize);
             }
@@ -302,12 +397,19 @@ public:
     void TransitionToGCPhase(const GCPhase phase, const bool)
     {
         MutatorManager::Instance().TransitionAllMutatorsToGCPhase(phase);
+        RegionInfo::AdvanceCompactRouteTableGracePeriod();
+        // fwdgrace: same premise and same edge -- a completed transition is the mutator grace
+        // period, so it is also what retires the liveInfo/bitmap arena. Default off.
+        ForwardDataManager::AdvanceGracePeriod();
     }
 
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }
 
     virtual void UpdateGCStats();
-    virtual uint16_t GetCurrentTagID() { std::abort(); }
+    virtual uint16_t GetCurrentTagID()
+    {
+        Collector::AbortUnimplemented("TracingCollector::GetCurrentTagID");
+    }
 
     static const size_t MAX_MARKING_WORK_SIZE;
     static const size_t MIN_MARKING_WORK_SIZE;
@@ -378,7 +480,10 @@ protected:
 
     bool AddConcurrentTracingWork(RootSet& rs);
     void AddExportObjectsTracingWork(RootSet& exportRoots);
-    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const { std::abort(); }
+    virtual void EnumAndTagRawRoot(ObjectRef& root, RootSet& rootSet) const
+    {
+        Collector::AbortUnimplemented("TracingCollector::EnumAndTagRawRoot");
+    }
 
     void FindUselessExternObjects();
 
@@ -390,7 +495,7 @@ private:
     void EnumFinalizerProcessorRoots(RootSet& rootSet) const;
     void EnumAllSurrectedExportRoots(RootSet& rootSet);
 
-    void VisitStaticRoots(const RefFieldVisitor& visitor) const;
+    void VisitStaticRoots(const RootSlotVisitor& visitor) const;
     void VisitFinalizerRoots(const RootVisitor& visitor) const;
 };
 } // namespace MapleRuntime

@@ -7,6 +7,12 @@
 
 #include "CollectorResources.h"
 
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#if defined(__linux__) || defined(hongmeng)
+#include <sched.h>
+#endif
 #include <thread>
 
 #include "Base/SysCall.h"
@@ -106,6 +112,11 @@ void CollectorResources::StopGCThreads()
         delete gcThreadPool;
         gcThreadPool = nullptr;
     }
+    if (evacuationThreadPool != nullptr) {
+        evacuationThreadPool->Exit();
+        delete evacuationThreadPool;
+        evacuationThreadPool = nullptr;
+    }
     gcThreadRunning.store(false, std::memory_order_release);
 }
 
@@ -186,9 +197,9 @@ void CollectorResources::RequestGC(GCReason reason, bool async)
 void CollectorResources::NotifyGCFinished(uint64_t gcIndex)
 {
     std::unique_lock<std::mutex> lock(gcFinishedCondMutex);
-    isGcStarted.store(false, std::memory_order_relaxed);
+    isGcStarted.store(false, std::memory_order_release);
     if (gcIndex != GCTask::ASYNC_TASK_INDEX) { // sync gc, need set taskIndex
-        finishedGcIndex.store(gcIndex);
+        finishedGcIndex.store(gcIndex, std::memory_order_release);
     }
     gcFinishedCondVar.notify_all();
     BroadcastGCCompletion();
@@ -222,11 +233,72 @@ void CollectorResources::StartGCThreads()
     }
     // starts the thread pool.
     if (gcThreadPool == nullptr) {
-        int32_t helperThreads = 1;
-        gcThreadCount = helperThreads + 1;
-        VLOG(REPORT, "total gc thread count %d, helper thread count %d", gcThreadCount, helperThreads);
+        // Off by default: on real_load the formula picks 23 workers on a 32-core
+        // domain and costs 2.22x task-clock for 1.14x wall (REPORT-jvmparam),
+        // which reproduces the earlier no-headroom result from REPORT-gcthreads.
+        const char* jvmThreadsEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_GC_THREADS */;
+        const bool useJvmThreads = jvmThreadsEnv != nullptr && std::strcmp(jvmThreadsEnv, "1") == 0;
+        unsigned int activeProcessorCount = std::thread::hardware_concurrency();
+        bool affinityDetected = false;
+#if defined(__linux__) || defined(hongmeng)
+        cpu_set_t cpuSet;
+        CPU_ZERO(&cpuSet);
+        if (sched_getaffinity(0, sizeof(cpuSet), &cpuSet) == 0) {
+            int affinityProcessorCount = CPU_COUNT(&cpuSet);
+            if (affinityProcessorCount > 0) {
+                activeProcessorCount = static_cast<unsigned int>(affinityProcessorCount);
+                affinityDetected = true;
+            }
+        }
+#endif
+        activeProcessorCount = std::max(activeProcessorCount, 1U);
+        if (useJvmThreads) {
+            constexpr unsigned int parallelThreadSwitchPoint = 8;
+            constexpr unsigned int parallelThreadNumerator = 5;
+            constexpr unsigned int parallelThreadDenominator = 8;
+            unsigned int parallelThreads = activeProcessorCount <= parallelThreadSwitchPoint ?
+                activeProcessorCount : parallelThreadSwitchPoint +
+                    (activeProcessorCount - parallelThreadSwitchPoint) * parallelThreadNumerator /
+                        parallelThreadDenominator;
+            gcThreadCount = static_cast<int32_t>(parallelThreads);
+            concurrentGcThreadCount = std::max(static_cast<int32_t>((parallelThreads + 2) / 4), 1);
+        } else {
+            gcThreadCount = 2;
+            concurrentGcThreadCount = 2;
+        }
+        int32_t helperThreads = gcThreadCount - 1;
+        VLOG(REPORT,
+             "total gc thread count %d, helper thread count %d, concurrent gc thread count %d, "
+             "active processor count %u, affinity detected %d, jvm formula %d",
+             gcThreadCount, helperThreads, concurrentGcThreadCount, activeProcessorCount, affinityDetected,
+             useJvmThreads);
         gcThreadPool = new (std::nothrow) GCThreadPool("gc", helperThreads, GCPoolThread::GC_THREAD_PRIORITY);
         CHECK_DETAIL(gcThreadPool != nullptr, "new GCThreadPool failed");
+
+        // evacpar: copy already owns work by region, but the shared product pool
+        // is normally fixed at two total workers.  A dedicated opt-in pool lets
+        // the copy phase scale without also widening ref-fix/mark work.  Unset,
+        // malformed, one, and out-of-affinity values preserve the old pool.
+        const char* evacWorkersEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_EVACPAR_WORKERS */;
+        if (evacWorkersEnv != nullptr && evacWorkersEnv[0] != '\0') {
+            char* end = nullptr;
+            long requested = std::strtol(evacWorkersEnv, &end, 10);
+            bool valid = end != evacWorkersEnv && *end == '\0' && requested >= 2 &&
+                static_cast<unsigned long>(requested) <= activeProcessorCount;
+            if (valid) {
+                int32_t evacHelpers = static_cast<int32_t>(requested) - 1;
+                evacuationThreadPool =
+                    new (std::nothrow) GCThreadPool("evac", evacHelpers, GCPoolThread::GC_THREAD_STW_PRIORITY);
+                CHECK_DETAIL(evacuationThreadPool != nullptr, "new evacuation GCThreadPool failed");
+                VLOG(REPORT,
+                     "[GCV2][evacpar][config] workers=%ld activeProcessorCount=%u dedicated=1",
+                     requested, activeProcessorCount);
+            } else {
+                VLOG(REPORT,
+                     "[GCV2][evacpar][config] invalid workers=%s activeProcessorCount=%u dedicated=0",
+                     evacWorkersEnv, activeProcessorCount);
+            }
+        }
     }
 
     // create the collector thread.
@@ -246,11 +318,7 @@ int32_t CollectorResources::GetGCThreadCount(const bool isConcurrent) const
     if (GetThreadPool() == nullptr) {
         return 1;
     }
-    if (isConcurrent) {
-        return gcThreadCount;
-    }
-    // default to 2
-    return 2;
+    return isConcurrent ? concurrentGcThreadCount : gcThreadCount;
 }
 
 void CollectorResources::BroadcastGCCompletion()

@@ -42,13 +42,18 @@ public:
 
     GCThreadPool* GetThreadPool() const { return gcThreadPool; }
 
+    // evacpar: optional phase-local pool for young region copying.  Keeping it
+    // separate prevents a copy-only worker experiment from widening marking or
+    // reference fixing through the shared GC pool.
+    GCThreadPool* GetEvacuationThreadPool() const { return evacuationThreadPool; }
+
     bool IsHeapMarked() const { return isHeapMarked; }
 
     void SetHeapMarked(bool value) { isHeapMarked = value; }
 
-    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_relaxed); }
+    bool IsGcStarted() const { return isGcStarted.load(std::memory_order_acquire); }
 
-    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_relaxed); }
+    void SetGcStarted(bool val) { isGcStarted.store(val, std::memory_order_release); }
 
     bool IsGCActive() const { return Heap::GetHeap().IsGCEnabled() && isGCActive.load(std::memory_order_relaxed); }
 
@@ -71,11 +76,14 @@ private:
 
     // the thread pool for parallel tracing.
     GCThreadPool* gcThreadPool = nullptr;
+    // Created only when MRT_GCV2_EVACPAR_WORKERS requests at least two workers.
+    GCThreadPool* evacuationThreadPool = nullptr;
     int32_t gcThreadCount = 1;
     TaskQueue<GCExecutor>* taskQueue = nullptr;
 
     // the collector thread handle.
     pthread_t gcMainThread = 0;
+    int32_t concurrentGcThreadCount = 1;
     std::atomic<pid_t> gcTid{ 0 };
     std::atomic<bool> gcThreadRunning = { false };
     // finishedGcIndex records the currently finished gcIndex
