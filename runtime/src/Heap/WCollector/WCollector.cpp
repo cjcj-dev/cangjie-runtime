@@ -2835,8 +2835,17 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
 
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+    // ZRelocate::relocate_object (zRelocate.cpp:382-410): find() hit → return;
+    // else retain+copy then insert. PlanRouteUnderStw is geometry-only and must
+    // not be installed into a slot (ROUTE_PUBLISH_VS_COMPUTE 丙). TRACE callers
+    // pass stw==nullptr and stay on FindToVersion — ForwardObjectImpl CHECKs
+    // PREFORWARD|FORWARD (WCollector.cpp:9283).
+    auto publishedOrCopy = [this, stw](BaseObject* from) -> BaseObject* {
+        BaseObject* to = FindToVersion(from);
+        if (to == nullptr && stw != nullptr) {
+            to = const_cast<WCollector*>(this)->TryForwardObject(from);
+        }
+        return to;
     };
 
     RefField<> value(field);
@@ -2850,7 +2859,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
             !IsUnmovableFromObject(object)) {
             // installdomain: admit into route domain before any install/forward consumes it.
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = plannedTo(object);
+            BaseObject* to = publishedOrCopy(object);
             // satbfix: only install a to that is a live object tip; a RECENT_FULL hole
             // address must not be written into the slot (same invalid_object family).
             if (to != nullptr && Heap::IsHeapAddress(to)) {
@@ -2876,7 +2885,7 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
     // N2: CAS (FYS=1 multi-writer safe; product default FYS=1).
     // hangfloor: use RootSlotWriteback so heap remset/fields keep Phase C colour.
     MAddress expected = raw(value.GetFieldValue());
-    BaseObject* to = plannedTo(object);
+    BaseObject* to = publishedOrCopy(object);
     bool toActiveBadTip = false;
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
@@ -2995,8 +3004,14 @@ static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObje
 
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
-    auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+    // Same published-or-copy as the RefField overload (zRelocate.cpp:382-410).
+    // old-tag arm HealRoot's the same `to` — leave unpublished geometry out.
+    auto publishedOrCopy = [this, stw](BaseObject* from) -> BaseObject* {
+        BaseObject* to = FindToVersion(from);
+        if (to == nullptr && stw != nullptr) {
+            to = const_cast<WCollector*>(this)->TryForwardObject(from);
+        }
+        return to;
     };
 
     zaddress_unsafe observed = root.LoadPlain();
@@ -3024,7 +3039,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
         if (object != nullptr && Heap::IsHeapAddress(object) && IsGhostFromObject(object) &&
             !IsUnmovableFromObject(object)) {
             EnsureRouteDomainMembership(const_cast<WCollector*>(this), object);
-            BaseObject* to = plannedTo(object);
+            BaseObject* to = publishedOrCopy(object);
             // satbfix parity. Three arms resolve a from-object to a to-address and install it;
             // this was the only one without the liveness gate:
             //   RefField<>& overload, load-good arm  :2641-2644  — has it, and its comment
@@ -3050,7 +3065,7 @@ BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTh
         return object;
     }
 
-    BaseObject* to = plannedTo(object);
+    BaseObject* to = publishedOrCopy(object);
     if (to != nullptr && Heap::IsHeapAddress(to)) {
         RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
         if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
