@@ -6665,11 +6665,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk");
-            if (concRelocate) {
-                // Pause Relocate Start is already done (flip + PREFORWARD + root pass1).
-                // Heap field-walk stays after concurrent_relocate. Walking fields while
-                // mutators run is the f019451c SEGV (ForEachBitmapWord rdi=0).
-            } else if (!useParallel) {
+            if (!useParallel) {
                 VLOG(REPORT, "[GCV2][reffix][parallel] fallback=serial %s",
                      threadPool == nullptr ? "pool_unavailable" : "force_serial");
                 // pass1 roots already done; only heap+remset+pass2 roots remain.
@@ -6686,7 +6682,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
         }
 
-        if (!concRelocate) {
+        {
             MRT_PHASE_TIMER("young.ref_fix_tail");
             size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
             size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
@@ -6701,93 +6697,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
     }
 
-    if (concRelocate) {
-        // Phase 8: Concurrent Relocate (zGeneration.cpp:850-853 / zRelocate.cpp:1289).
-        // Mutators run under ForwardBarrier; load-bad from-faces self-heal and
-        // TryMutatorRelocate copies on the mutator thread. From-pages stay until
-        // ZForwardingLife detach_page (CollectRegion → DrainScope).
-        TransitionToGCPhase(GCPhase::GC_PHASE_FORWARD, true);
-        {
-            MRT_PHASE_TIMER("young.concurrent_relocate");
-            stw->reset();
-            VLOG(REPORT,
-                 "[GCV2][relocate][conc] concurrent_relocate start nObj=%zu flip=1",
-                 reachableVec.size());
-            {
-                // Intermediate (task §四): copy only. ForwardFromSpace also walks
-                // to-object fields and CollectRegion — both raced (si_addr=0x8,
-                // f019451c / survival_dense rc=139). Reclaim + remset stay in re-STW.
-                MRT_PHASE_TIMER("young.copy");
-                for (BaseObject* object : reachableVec) {
-                    if (object == nullptr || !Heap::IsHeapAddress(object)) {
-                        continue;
-                    }
-                    if (IsGhostFromObject(object) && !IsUnmovableFromObject(object)) {
-                        (void)ForwardObject(object);
-                    }
-                }
-            }
-            *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
-                                                        GCPhase::GC_PHASE_FORWARD);
-        }
-        VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
-        {
-            MRT_PHASE_TIMER("young.copy_reclaim");
-            ForwardFromSpace();
-        }
-        postEvacPoint("post-forward-pre-reclaim", true);
-        {
-            const char* postEvac = std::getenv("MRT_GCV2_VERIFY_POST_EVAC");
-            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-                ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
-            }
-        }
-        {
-            MRT_PHASE_TIMER("young.ref_fix_bulk");
-            g_minorRefCasFail.store(0, std::memory_order_relaxed);
-            g_minorRefCasOk.store(0, std::memory_order_relaxed);
-            FixMinorRootSlots();
-            PreforwardDiscoveredExternObjects();
-            PreforwardAllResurrectExportFromObjects();
-            remsetVec.assign(rememberedSlots.begin(), rememberedSlots.end());
-            {
-                std::unordered_set<MAddress> concRemset =
-                    Heap::GetHeap().GetRememberedSet().Snapshot();
-                remsetVec.reserve(remsetVec.size() + concRemset.size());
-                for (MAddress slot : concRemset) {
-                    remsetVec.push_back(slot);
-                }
-                VLOG(REPORT,
-                     "[GCV2][relocate][conc_stw] remset pre=%zu conc_new=%zu total=%zu",
-                     rememberedSlots.size(), concRemset.size(), remsetVec.size());
-            }
-            if (useParallel) {
-                fixHeapParallelOnly(threadPool);
-            } else {
-                size_t taken = 0;
-                fixHeapSlice(0, reachableVec.size(), 0, remsetVec.size(), taken);
-                VLOG(REPORT,
-                     "[GCV2][relocate][conc_stw] slot_fix objects_taken=%zu nObj=%zu nSlot=%zu "
-                     "cas_ok=%zu cas_fail=%zu",
-                     taken, reachableVec.size(), remsetVec.size(),
-                     g_minorRefCasOk.load(std::memory_order_relaxed),
-                     g_minorRefCasFail.load(std::memory_order_relaxed));
-            }
-        }
-        {
-            MRT_PHASE_TIMER("young.ref_fix_tail");
-            size_t rej = g_fixinputReject.load(std::memory_order_relaxed);
-            size_t rec = g_fixinputRecover.load(std::memory_order_relaxed);
-            size_t unr = g_fixinputUnrecoverable.load(std::memory_order_relaxed);
-            if (rej != 0 || rec != 0 || unr != 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][fixinput] reject=%zu recover=%zu unrecoverable=%zu",
-                    rej, rec, unr);
-            }
-            ValidateMinorReferences("before-return", &reachableVec);
-            postEvacPoint("post-fix-pre-forward", true);
-        }
-    } else {
+    {
+        // Intermediate (task §四): flip is the product path (pause_relocate_start);
+        // object copy stays STW. Concurrent ForwardObject drifted survival_dense
+        // checksum; in-window ForwardFromSpace SEGV'd (si_addr=0x8 / f019451c).
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
