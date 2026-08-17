@@ -14,6 +14,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
+#include "Heap/Verify/LostWriteProbe.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
@@ -231,6 +232,9 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
+    if (LostWriteProbe::Enabled()) {
+        LostWriteProbe::NoteWrite(obj, &field, theCollector);
+    }
     WriteReferenceImpl(obj, field, ref);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
@@ -453,6 +457,9 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
 {
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
+    if (LostWriteProbe::Enabled()) {
+        LostWriteProbe::NoteWrite(obj, &field, theCollector);
+    }
     AtomicWriteReferenceImpl(obj, field, ref, order);
     if (!prevStoreGood) {
         NoteStoreSlowPath();

@@ -64,6 +64,7 @@
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/WhoPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/LostWriteProbe.h"
 #include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
@@ -2836,7 +2837,12 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        BaseObject* to = stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        if (to == nullptr && LostWriteProbe::Enabled() && from != nullptr && Heap::IsHeapAddress(from) &&
+            IsGhostFromObject(from) && !IsUnmovableFromObject(from)) {
+            LostWriteProbe::NoteResolveNull(from, true);
+        }
+        return to;
     };
 
     RefField<> value(field);
@@ -2996,7 +3002,12 @@ static void NoteRootGateRefusal(const RootSlot& root, BaseObject* from, BaseObje
 BaseObject* WCollector::ResolveMinorReference(RootSlot& root, const ScopedStopTheWorld* stw) const
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        BaseObject* to = stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        if (to == nullptr && LostWriteProbe::Enabled() && from != nullptr && Heap::IsHeapAddress(from) &&
+            IsGhostFromObject(from) && !IsUnmovableFromObject(from)) {
+            LostWriteProbe::NoteResolveNull(from, true);
+        }
+        return to;
     };
 
     zaddress_unsafe observed = root.LoadPlain();
@@ -4840,7 +4851,12 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
                                      MinorInteriorBaseMap* interiorBasesOut, const ScopedStopTheWorld* stw)
 {
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
-        return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        BaseObject* to = stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
+        if (to == nullptr && LostWriteProbe::Enabled() && from != nullptr && Heap::IsHeapAddress(from) &&
+            IsGhostFromObject(from) && !IsUnmovableFromObject(from)) {
+            LostWriteProbe::NoteResolveNull(from, true);
+        }
+        return to;
     };
 
     // HotSpot G1RemSet scrub analogue. ORDER matters (STEER2 / defect⑤):
@@ -9237,10 +9253,17 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
 BaseObject* WCollector::TryForwardObject(BaseObject* obj)
 {
     if (!Collector::PlausibleManagedObjectGate("WCollector::TryForwardObject", obj)) {
+        if (LostWriteProbe::Enabled()) {
+            const bool movableGhost = IsGhostFromObject(obj) && !IsUnmovableFromObject(obj);
+            LostWriteProbe::NoteTryForwardNull(obj, movableGhost);
+        }
         return nullptr;
     }
     RegionInfo* region = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
     if (region == nullptr) {
+        if (LostWriteProbe::Enabled()) {
+            LostWriteProbe::NoteTryForwardNull(obj, false);
+        }
         return nullptr;
     }
 
@@ -9274,6 +9297,9 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
     } else if (region->IsCompacted()) {
         // Compact copies under region write-lock before COMPACTED is published.
         return FindToVersion(obj);
+    }
+    if (LostWriteProbe::Enabled()) {
+        LostWriteProbe::NoteTryForwardNull(obj, true);
     }
     return nullptr;
 }

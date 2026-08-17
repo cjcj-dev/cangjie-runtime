@@ -17,6 +17,7 @@
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
+#include "Heap/Verify/LostWriteProbe.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
@@ -1069,6 +1070,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
     // cross-table has to be on stderr before the crash, not only at exit.
     LoadGoodProbe::Report("gc_end");
+    LostWriteProbe::Report("gc_end");
     // portarray: positive control for large-array chunking; self-gates, default off.
     MarkPartialArray::Report("gc_end");
     ReportSkippedStackMapCounts();

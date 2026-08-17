@@ -55,6 +55,7 @@ set(SRC_LIST
     "EnumPushDiag.cpp"
     "StackRootSlotAttest.cpp"
     "LoadGoodProbe.cpp"
+    "LostWriteProbe.cpp"
     "ZgcSelfHealDiag.cpp"
 )
 
