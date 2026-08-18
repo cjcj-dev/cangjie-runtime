@@ -80,10 +80,22 @@ fi
 KNOWN="$SRC/known_failures.txt"
 OUT="$GC_UNIT_OUT/gate_run.log"
 mkdir -p "$GC_UNIT_OUT"
+# Timeout, because a hanging test is not a failing test. The suite runs in tens of seconds; the one
+# time it did not, a perturbation reintroduced an unbounded probe loop and the *build* hung rather
+# than the gate reporting anything -- POST_BUILD inherits the hang, so `cmake --build` never
+# returned and the only signal was a 600s wall. 600s is far above the observed wall, so it cannot
+# fire on a slow machine.
+GC_UNIT_TIMEOUT="${GC_UNIT_TIMEOUT:-600}"
 set +e
-bash "$SCRIPT" >"$OUT" 2>&1
+timeout "$GC_UNIT_TIMEOUT" bash "$SCRIPT" >"$OUT" 2>&1
 suite_rc=$?
 set -e
+if [[ $suite_rc -eq 124 ]]; then
+  echo "GC_UNIT_GATE_FAIL: suite did not finish within ${GC_UNIT_TIMEOUT}s -- a test is hung, not slow" >&2
+  echo "  last lines of $OUT:" >&2
+  tail -5 "$OUT" >&2
+  exit 6
+fi
 tail -20 "$OUT"
 
 # The suite's own exit code is not the gate's verdict: it is nonzero whenever anything fails,

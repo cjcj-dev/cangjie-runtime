@@ -177,3 +177,81 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexIsRefusedNotTruncated)
     GC_EXPECT_EQ(tab->find(inRange), dest);
     tab->Destroy();
 }
+
+// ---------------------------------------------------------------------------------------------
+// The two defects a real collection found and this suite did not.
+//
+// Both were merged, passed 120 tests, and then broke the first workload they met. They share a
+// shape: each needs more than one region, or more objects than a hand-built table holds, and every
+// test above works on a single table sized for the objects it is about to be given. A suite can be
+// green and still have never posed the question.
+
+// ZGC's probe loop terminates because ZForwarding sizes _entries to next_pow2(live_objects * 2), so
+// the table cannot fill (zForwarding.inline.hpp:43-50). We sized ours from an estimate that could
+// come out at one, and the loop is the same loop -- two GC threads sat at 100% CPU inside find()
+// while a ten-second workload ran past a five-minute timeout.
+//
+// Filling the table on purpose is the whole test. A miss on a full table must come back, because a
+// miss is a state the caller handles by falling back to route geometry; not coming back is not.
+GC_TEST(ZForwardingEntries, FullTableProbeTerminatesInsteadOfSpinning)
+{
+    constexpr MAddress kStart = 0x1000;
+    constexpr size_t kAlign = size_t(1) << 3;
+    ForwardingEntries* tab = ForwardingEntries::Create(2, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+
+    const size_t capacity = tab->length();
+    GC_EXPECT_TRUE(capacity > 0);
+
+    // Fill every slot. Distinct from-indices, so nothing collapses onto an existing entry.
+    for (size_t i = 0; i < capacity; ++i) {
+        const MAddress from = kStart + (i * kAlign);
+        GC_EXPECT_TRUE(tab->insert(from, 0x9000 + (i * kAlign)) != 0);
+    }
+
+    // A key that is not in a full table: the probe visits every slot, finds no empty one, and has to
+    // stop anyway. Before the bound this call did not return.
+    const MAddress absent = kStart + (capacity * kAlign);
+    GC_EXPECT_EQ(tab->find(absent), static_cast<MAddress>(0));
+
+    // Inserting into a full table is refused rather than retried forever, and the refusal is
+    // counted -- "the table declined" and "the table never had it" are different facts.
+    const uint64_t before = ForwardingEntries::FullRefusals().load(std::memory_order_relaxed);
+    GC_EXPECT_EQ(tab->insert(absent, 0x9000), static_cast<MAddress>(0));
+    GC_EXPECT_EQ(ForwardingEntries::FullRefusals().load(std::memory_order_relaxed), before + 1);
+
+    // The entries that were there are still there and still correct.
+    GC_EXPECT_EQ(tab->find(kStart), static_cast<MAddress>(0x9000));
+    tab->Destroy();
+}
+
+// EnsureEntries publishes one table pointer across every unit slot a region covers, so a non-null
+// pointer in a slot is not proof of ownership. ClearEntries used to free on that alone, which frees
+// a neighbour's live table; the neighbour then frees it again. The crash was a SIGSEGV inside
+// __libc_free during post_trace, on the chunk header of an address already returned.
+//
+// The table records the address it was built for, so this is checkable without a heap: two tables,
+// two starts, and the question "does this pointer belong to the region being cleared".
+GC_TEST(ZForwardingEntries, TableKnowsWhichRegionItWasBuiltFor)
+{
+    constexpr MAddress kRegionA = 0x10000;
+    constexpr MAddress kRegionB = 0x20000;
+
+    ForwardingEntries* a = ForwardingEntries::Create(4, kRegionA, 0);
+    ForwardingEntries* b = ForwardingEntries::Create(4, kRegionB, 0);
+    GC_EXPECT_TRUE(a != nullptr && b != nullptr);
+
+    // Ownership is a comparison against a recorded address, not a convention about which slot the
+    // pointer was read out of.
+    GC_EXPECT_EQ(a->start(), kRegionA);
+    GC_EXPECT_EQ(b->start(), kRegionB);
+    GC_EXPECT_TRUE(a->start() != b->start());
+
+    // The predicate ClearEntries applies: clearing region B must not free a table built for A, no
+    // matter which slot handed it over.
+    GC_EXPECT_TRUE(!(a->start() == kRegionB));
+    GC_EXPECT_TRUE(b->start() == kRegionB);
+
+    a->Destroy();
+    b->Destroy();
+}
