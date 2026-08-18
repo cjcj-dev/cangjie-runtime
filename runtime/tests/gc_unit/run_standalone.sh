@@ -58,6 +58,8 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/test_followedge.cpp" \
   "$SRC/test_z_forwarding_life.cpp" \
   "$SRC/test_colour_is_checks.cpp" \
+    "$SRC/test_z_forwarding_life.cpp" \
+    "$SRC/test_remap_young_roots.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"

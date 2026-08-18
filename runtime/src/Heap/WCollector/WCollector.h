@@ -8,6 +8,7 @@
 #ifndef MRT_WCOLLECTOR_H
 #define MRT_WCOLLECTOR_H
 #include "Common/ColourMask.h"
+#include "Heap/WCollector/RemapYoungRoots.h"
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
@@ -1008,6 +1009,10 @@ private:
     void FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw);
     void PreforwardConcurrencyModelRoots();
     void PostTrace();
+    // OpenJDK ZGenerationOld::remap_young_roots (zGeneration.cpp:1503-1523):
+    // before old relocate-start flip, remap young roots + remset so none carry
+    // two remap-bit errors.
+    void RemapYoungRoots();
     void Preforward();
     void PreforwardAllExportFromRoots();
     void PreforwardStaticRoots();
