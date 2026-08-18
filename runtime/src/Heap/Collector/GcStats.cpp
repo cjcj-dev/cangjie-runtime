@@ -32,6 +32,10 @@ void GCStats::Init()
     collectedBytes = 0;
     youngCandidateBytes = 0;
     youngPromotedBytes = 0;
+    tenuringThreshold = 0;
+    for (size_t i = 0; i < 16; ++i) {
+        liveByAge[i] = 0;
+    }
     youngHeuDeferralUsed = false;
 
     fromSpaceSize = 0;
