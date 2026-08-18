@@ -7131,63 +7131,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         }
 
-        // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
-        // live young region count is the product-path authority
-        // (RegionInfo::youngRegionCount / GetYoungRegionCount —
-        // RegionManager.cpp:185-209; VerifyRegions.cpp:325). When count==0 every
-        // holder is non-young and every target is non-young ⇒ rebuild walk is pure
-        // cost with zero output. P2 in-place aging reintroduces live young ⇒ gate
-        // reopens automatically (structure, not an env switch).
-        RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
-        size_t rebuiltRecords = 0;
         const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
-        if (liveYoungRegions == 0) {
-            VLOG(REPORT,
-                 "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
-        } else {
-            {
-            // PROBE evacct: how much of young.evac_finish is the reachableVec remset rebuild walk?
-            // Walks every field of the remset-derived closure and re-records old→young edges.
-            MRT_PHASE_TIMER("young.evac_rebuild_walk");
-            for (BaseObject* object : reachableVec) {
-                BaseObject* holder = currentObject(object);
-                // unitzero: ForwardObject returns nullptr for movable ghost-from with no
-                // to-version (WCollector.cpp:6699-6703). GetRegionInfoAt → GetUnitIdxAt
-                // has no null gate → named fatal "OOB addr=0" under young.evac_finish
-                // rebuild (probe 9/9: ra1=EvacuateYoungRegions ra0=GetRegionInfoAt).
-                // Same disposition as FixMinorObjectSlots null early-return; do not walk
-                // edges of a non-object. Boundary check in GetUnitIdxAt stays strict.
-                if (holder == nullptr || !Heap::IsHeapAddress(holder)) {
-                    continue;
-                }
-                RegionInfo* holderRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-                if (holderRegion->IsYoungRegion() || !holder->HasRefField()) {
-                    continue;
-                }
-                holder->ForEachRefField([this, &rememberedSet, &rebuiltRecords](RefField<>& field) {
-                    BaseObject* target = ResolveMinorReference(field);
-                    if (!Heap::IsHeapAddress(target)) {
-                        return;
-                    }
-                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (targetRegion->IsYoungRegion()) {
-                        rememberedSet.Record(reinterpret_cast<MAddress>(&field));
-                        ++rebuiltRecords;
-                    }
-                });
-            }
-            }
-            if (rebuiltRecords == 0) {
-                VLOG(REPORT,
-                     "[GCV2Minor][rebuild-gate] anomaly open-gate-zero-output "
-                     "youngRegionCount=%zu",
-                     liveYoungRegions);
-            }
-        }
         VLOG(REPORT,
-             "[GCV2Minor] remembered-set rebuilt=%zu promoteReplay=%zu residualPromote=%zu "
+             "[GCV2Minor] remembered-set promoteReplay=%zu residualPromote=%zu "
              "youngRegionCount=%zu",
-             rebuiltRecords, promotedPathRecords, residualPromoteRecords, liveYoungRegions);
+             promotedPathRecords, residualPromoteRecords, liveYoungRegions);
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
