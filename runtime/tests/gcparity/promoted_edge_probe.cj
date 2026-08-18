@@ -17,12 +17,14 @@ class PromoHolder {
 }
 
 main(): Int64 {
-    // cjEnableGC must be unset at compile time (cjEnableGC=0 bakes RequestGC off).
+    // Compile with cjEnableGC unset. cjEnableGC=0 is baked into the ELF and
+    // disables RequestGC (r8 vs r9).
     //
-    // Packing: a 128KiB TL region that mixes live B with later junk is selected
-    // for copy and B lands in an old dest (RegionManager.cpp:2709 dest is old).
-    // Pad 8192 leaves (~128KiB) and drop them before/after A and B so each
-    // cohort owns its own dense regions (ExemptFromRegions + stay-young).
+    // 24MiB Int64 ballast lifts heapThreshold above the 32MiB young line
+    // after the first HEU major so later cycles are young-only.
+    // 8192-leaf pads retire the current 128KiB TL region so A and B each
+    // own dense recentFull pages (ExemptFromRegions + residual flip-promote,
+    // not copy-to-old).
     let junkSlots: Int64 = 256
     var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-(i + 1))})
     var cursor: Int64 = 0
@@ -38,6 +40,10 @@ main(): Int64 {
         checksum = checksum + junk[(cursor + round) % junkSlots].id
     }
     println("PROMOTED_EDGE_WARMUP checksum=${checksum}")
+
+    let ballast = Array<Int64>(3000000, {i => i})
+    checksum = checksum + ballast[0] + ballast[2999999]
+    println("PROMOTED_EDGE_BALLAST checksum=${checksum}")
 
     var pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-10000 - i)})
     checksum = checksum + pad[0].id
@@ -63,6 +69,7 @@ main(): Int64 {
         }
         checksum = checksum + holders[round % nHolders].id
         checksum = checksum + junk[(cursor + round) % junkSlots].id
+        checksum = checksum + ballast[round]
     }
     println("PROMOTED_EDGE_AGED checksum=${checksum}")
 
@@ -81,7 +88,7 @@ main(): Int64 {
     checksum = checksum + pad[0].id
     pad = Array<PromoLeaf>(1, {_ => PromoLeaf(0)})
 
-    for (wave in 0..3) {
+    for (wave in 0..4) {
         for (round in 0..400) {
             for (i in 0..3200) {
                 let n = PromoLeaf(80000000 + wave * 10000000 + round * 10000 + i)
@@ -95,6 +102,7 @@ main(): Int64 {
                 checksum = checksum + k.id
             }
             checksum = checksum + junk[(cursor + round) % junkSlots].id
+            checksum = checksum + ballast[wave * 400 + round]
         }
         println("PROMOTED_EDGE_DRIVE wave=${wave} checksum=${checksum}")
     }
@@ -105,7 +113,7 @@ main(): Int64 {
             walk = walk + k.id
         }
     }
-    checksum = checksum + walk + junk[0].id + pad[0].id
+    checksum = checksum + walk + junk[0].id + ballast[100] + pad[0].id
     println("PROMOTED_EDGE_OK checksum=${checksum} walk=${walk} holders=${nHolders} cursor=${cursor}")
     return 0
 }
