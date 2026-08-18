@@ -7,6 +7,7 @@
 set(SRC_LIST
     "Barrier.cpp"
     "RememberedSet.cpp"
+    "StoreBarrierBuffer.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

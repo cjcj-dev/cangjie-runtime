@@ -32,6 +32,7 @@
 #include "Base/SysCall.h"
 #endif
 #include "Concurrency/Concurrency.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
@@ -7802,6 +7803,7 @@ void WCollector::DoYoungGarbageCollection()
         // above drains into this same minor. Ask here, before the drain, how many D1 edges the
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
         FysAuditDiag::CensusPostPinned(minorTotalRuns + 1, pinnedRemsetRecords);
+        StoreBarrierBuffer::FlushAll(rememberedSet);
         rememberedSet.DrainForMinor(rememberedSlots);
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             for (MAddress slot : rememberedSlots) {
@@ -8201,6 +8203,7 @@ void WCollector::DoYoungGarbageCollection()
             size_t totalConcRemset = 0;
             {
                 MinorSlotSet concurrentRemset;
+                StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
                 totalConcRemset = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
                 if (totalConcRemset != 0) {
                     rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());

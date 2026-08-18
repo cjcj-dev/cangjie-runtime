@@ -12,6 +12,7 @@
 #include <unordered_set>
 
 #include "Common/MarkWorkStack.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "RegionList.h"
 
 namespace MapleRuntime {
@@ -108,6 +109,8 @@ public:
 
     void FlushRegion();
 
+    StoreBarrierBuffer& GetStoreBarrierBuffer() { return storeBarrierBuffer; }
+
 private:
     // slow path
     MAddress TryAllocateOnce(size_t totalSize, AllocType allocType);
@@ -129,6 +132,7 @@ private:
     std::list<BaseObject*> youngAllocBlack;
     // h3seed2: mutator-local young→young dirty holders (see PushY2yDirtyHolder)
     std::unordered_set<BaseObject*> y2yDirtyHolders;
+    StoreBarrierBuffer storeBarrierBuffer;
 };
 } // namespace MapleRuntime
 #endif // MRT_ALLOC_BUFFER_H
