@@ -34,6 +34,7 @@ set(GC_UNIT_SOURCES
     test_page_age.cpp
     test_stay_young.cpp
     test_gc_trigger.cpp
+    test_mutator_relocate.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

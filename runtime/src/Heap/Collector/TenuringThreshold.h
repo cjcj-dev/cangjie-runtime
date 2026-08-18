@@ -18,7 +18,7 @@ namespace MapleRuntime {
 
 // Act on the computed threshold: age < threshold stays young (in-place, no Route to old).
 // Copy dest is still old; stay-young is flip-survive (zRelocate.cpp:1346-1352), not per-age to-space.
-constexpr bool kPageAgeAdaptiveTenuring = false;
+constexpr bool kPageAgeAdaptiveTenuring = true;
 constexpr uint32_t kMaxTenuringThreshold = untype(PageAge::survivor14);
 
 struct TenuringInputs {

@@ -9344,84 +9344,46 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     };
 
     const bool tv = ToverFailDiag::Enabled();
-    for (int spins = 0;; ++spins) {
-        if (from->IsForwarded()) {
-            std::atomic_thread_fence(std::memory_order_acquire);
-            BaseObject* again = nullptr;
-            if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-                if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
-                    const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
-                    again = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
-                }
-            }
-            if (again == nullptr && !(ForwardingTable::kEntriesSoleWhenArmed &&
-                                     ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from)))) {
-                again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
-            }
-            if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
-                if (diagOn) {
-                    tipReadyCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (tv) {
-                    ToverFailDiag::NoteRemapWaitTip();
-                }
-                if (MutatorRelocate::StatsOn()) {
-                    MutatorRelocate::NoteWaitReceipt();
-                }
-                return again; // receipt after object FORWARDED
-            }
-            // Object flag without tip: ZGC add_and_wait still waits for page is_done().
-            // Hole only after the region publishes; mid-route keep spinning.
-        }
-        RegionInfo::RouteState rs = forwarding->GetRouteState();
-        if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
-            std::atomic_thread_fence(std::memory_order_acquire);
-            const bool armed = ForwardingTable::kEntriesSoleWhenArmed &&
-                               ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from));
-            BaseObject* again = nullptr;
-            if (armed) {
+    auto lookupTo = [&]() -> BaseObject* {
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+            if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
                 const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
-                again = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
-            } else {
-                again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+                return stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
             }
-            if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
-                if (diagOn) {
-                    tipReadyCount.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (tv) {
-                    ToverFailDiag::NoteRemapWaitTip();
-                }
-                if (MutatorRelocate::StatsOn()) {
-                    MutatorRelocate::NoteWaitReceipt();
-                }
-                return again;
-            }
-            if (armed) {
-                return from;
-            }
-            return permanentHole(
-                rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
-                spins, again != nullptr ? again : to);
         }
-        // zconc: unlocked + not FORWARDED means the worker has not claimed this
-        // object yet. ZGC waits (add_and_wait); handing from back is the
-        // checksum-drift path under concurrent_relocate.
-        sched_yield();
-        if (ForwardingTable::kEntriesSoleWhenArmed &&
-            ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
-            const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
-            to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
-        } else {
-            to = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+        return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+    };
+    BaseObject* again = lookupTo();
+    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
+        if (diagOn) {
+            tipReadyCount.fetch_add(1, std::memory_order_relaxed);
         }
-        if (to == nullptr) {
-            // Plan gone mid-wait. ZGC still waits for the worker that claimed
-            // the page; keep spinning until FORWARDED or the page is done.
-            continue;
+        if (tv) {
+            ToverFailDiag::NoteRemapWaitTip();
         }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitReceipt();
+        }
+        return again;
     }
-    LOG(RTLOG_FATAL, "WaitRoutedTipReady exited without receipt");
+    const bool tableHit = again != nullptr;
+    const RegionInfo::RouteState rs = forwarding->GetRouteState();
+    const bool regionPublished =
+        rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
+        forwarding->IsForwardingDone();
+    const bool retainRefused = !forwarding->IsForwardingDone() && !regionPublished;
+    const MutatorRelocate::UnpublishedAnswer ans =
+        MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
+    if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
+        return again;
+    }
+    if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitGiveUp();
+        }
+        return from;
+    }
+    (void)permanentHole;
     return from;
 }
 
