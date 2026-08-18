@@ -6,9 +6,13 @@
 
 
 #include "GcRequest.h"
+#include "GcTrigger.h"
 
 #include "Base/TimeUtils.h"
 #include "GcStats.h"
+
+static_assert(!MapleRuntime::kGcTriggerAllocRateEnabled,
+              "product still uses occupancy+interval; flip only after mutrelo");
 namespace MapleRuntime {
 namespace {
 // Set a safe initial value so that the first GC is able to trigger.
