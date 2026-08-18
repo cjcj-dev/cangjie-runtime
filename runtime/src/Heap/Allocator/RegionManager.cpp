@@ -24,6 +24,7 @@
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
+#include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
 #include "Heap.h"
@@ -1986,6 +1987,7 @@ RegionInfo* RegionManager::AllocateThreadLocalRegion(bool expectPhysicalMem, boo
     if (region != nullptr) {
         {
             region->SetYoungRegionFlag(youngRegion ? 1 : 0);
+            region->SetYoungAge(0);
             GCPhase phase = Heap::GetHeap().GetCollector().GetGCPhase();
             if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER) {
                 region->SetTraceRegionFlag(1);
@@ -2485,6 +2487,23 @@ void PermhitReceiptAudit(RegionInfo* region, const char* point)
         position += allocSize;
     }
 }
+bool StayYoungThisCycle(RegionInfo* region)
+{
+    if (!kPageAgeAdaptiveTenuring) {
+        return false;
+    }
+    const uint32_t thr = Heap::GetHeap().GetCollector().GetGCStats().tenuringThreshold;
+    return !ShouldPromoteAge(region->GetYoungAge(), thr);
+}
+
+bool AgeYoungSurvivor(RegionInfo* region)
+{
+    uint8_t next = region->GetYoungAge();
+    if (next < untype(PageAge::survivor14)) {
+        region->SetYoungAge(static_cast<uint8_t>(next + 1));
+    }
+    return true;
+}
 } // namespace
 
 template<Generation G>
@@ -2565,7 +2584,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     }();
     const bool forceInPlace =
         forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
-    if (forceInPlace || !RouteRegion(region)) {
+    const bool stayYoung = youngRegion && StayYoungThisCycle(region);
+    if (forceInPlace || stayYoung || !RouteRegion(region)) {
+        if (youngRegion && stayYoung) {
+            AgeYoungSurvivor(region);
+            return;
+        }
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             // In-place promote (compacted / unrouted): scan before clearing young flag.
@@ -2787,6 +2811,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 pos += sz;
             }
             PermWhoAdmit::NoteAbandon(region, walked, forwarded);
+        }
+        if (youngRegion && StayYoungThisCycle(region)) {
+            AgeYoungSurvivor(region);
+            region->DispelGhostFromRegion();
+            ExemptFromRegion(region);
+            return;
         }
         if (youngRegion) {
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();

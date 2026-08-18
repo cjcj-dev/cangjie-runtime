@@ -92,10 +92,11 @@ public:
     size_t collectedBytes;
     size_t collectedObjects;
 
-    // Young collection-set bytes and marked bytes that survive the minor. All
-    // candidate survivors are promoted by the current evacuation policy.
+    // Young collection-set bytes and marked bytes that survive the minor.
     size_t youngCandidateBytes;
     size_t youngPromotedBytes;
+    uint32_t tenuringThreshold;
+    size_t liveByAge[16];
 
     double garbageRatio;
     double collectionRate; // bytes per nano-second

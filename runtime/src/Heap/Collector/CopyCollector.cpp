@@ -80,6 +80,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
     gcStats.collectedBytes = 0;
     gcStats.youngCandidateBytes = 0;
     gcStats.youngPromotedBytes = 0;
+    gcStats.tenuringThreshold = 0;
     gcStats.gcStartTime = TimeUtil::NanoSeconds();
 
     DoGarbageCollection();

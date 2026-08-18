@@ -33,6 +33,7 @@
 #endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/Collector/MarkPartialArray.h"
+#include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
 #include "Heap/HeapWork.h"
 #if defined(MRT_GCV2_UNTAG_BREADCRUMB)
@@ -7022,6 +7023,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     keptOneYoung = true;
                     continue;
                 }
+                if (kPageAgeAdaptiveTenuring &&
+                    !ShouldPromoteAge(region->GetYoungAge(), GetGCStats().tenuringThreshold)) {
+                    uint8_t next = region->GetYoungAge();
+                    if (next < untype(PageAge::survivor14)) {
+                        region->SetYoungAge(static_cast<uint8_t>(next + 1));
+                    }
+                    continue;
+                }
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
                 // still demote to old; must replay young→young edges that become old→young.
                 // promodomain §A.3 residual arm: register + old sync walk (domain default off).
@@ -8790,11 +8799,29 @@ void WCollector::DoYoungGarbageCollection()
     }
 
     size_t liveBytes = 0;
+    TenuringInputs tenuringIn;
+    tenuringIn.softMaxCapacity = Heap::GetHeap().GetMaxCapacity();
+    tenuringIn.youngAllocated = stats.candidateBytes;
     for (RegionInfo* region : minorCandidateRegions) {
-        liveBytes += region->GetLiveByteCount();
+        const size_t live = region->GetLiveByteCount();
+        liveBytes += live;
+        uint32_t age = region->GetYoungAge();
+        if (age >= kPageAgeCount) {
+            age = untype(PageAge::survivor14);
+        }
+        tenuringIn.liveByAge[age] += live;
     }
-    GetGCStats().youngCandidateBytes = stats.candidateBytes;
-    GetGCStats().youngPromotedBytes = liveBytes;
+    tenuringIn.youngGarbage = stats.candidateBytes > liveBytes ? (stats.candidateBytes - liveBytes) : 0;
+    GCStats& gcStats = GetGCStats();
+    gcStats.youngCandidateBytes = stats.candidateBytes;
+    gcStats.youngPromotedBytes = liveBytes;
+    for (uint32_t i = 0; i < kPageAgeCount; ++i) {
+        gcStats.liveByAge[i] = tenuringIn.liveByAge[i];
+    }
+    gcStats.tenuringThreshold = ComputeTenuringThreshold(tenuringIn);
+    VLOG(REPORT, "[GCV2][pageage] threshold=%u live0=%zu live1=%zu garbage=%zu allocated=%zu",
+         gcStats.tenuringThreshold, tenuringIn.liveByAge[0], tenuringIn.liveByAge[1],
+         tenuringIn.youngGarbage, tenuringIn.youngAllocated);
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
