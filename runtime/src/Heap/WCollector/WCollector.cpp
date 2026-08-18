@@ -7026,9 +7026,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 }
                 if (kPageAgeAdaptiveTenuring &&
                     !ShouldPromoteAge(region->GetYoungAge(), GetGCStats().tenuringThreshold)) {
-                    uint8_t next = region->GetYoungAge();
-                    if (next < untype(PageAge::survivor14)) {
-                        region->SetYoungAge(static_cast<uint8_t>(next + 1));
+                    if (region->IsLoneFromRegion() || region->IsFromRegion()) {
+                        manager.EnlistStayYoungSurvivor(region);
+                    } else if (region->GetRegionType() != RegionInfo::RegionType::RECENT_FULL_REGION) {
+                        RegionManager::FinishStayYoungInPlace(region);
                     }
                     continue;
                 }

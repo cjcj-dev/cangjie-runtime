@@ -16,17 +16,9 @@
 
 namespace MapleRuntime {
 
-// Whether the product *acts* on the computed threshold. Off for now: with it on,
-// natural_wave_notime failed 3 of 3 (one 300s timeout, one SIGSEGV, one SIGABRT) where the same
-// tree with it off runs clean, so keeping young survivors young is exposing something the rest of
-// the collector is not ready for. The threshold itself is still computed and still tested -- see
-// ComputeTenuringThreshold below, which no longer consults this flag.
-//
-// That separation is the point. The first version short-circuited the computation on this flag, so
-// turning the policy off also turned off the three tests that check the arithmetic, and the switch
-// could not be used to isolate the failure it exists for. A policy switch belongs at the call site,
-// not inside the function whose result the policy uses.
-constexpr bool kPageAgeAdaptiveTenuring = false;
+// Act on the computed threshold: age < threshold stays young (in-place, no Route to old).
+// Copy dest is still old; stay-young is flip-survive (zRelocate.cpp:1346-1352), not per-age to-space.
+constexpr bool kPageAgeAdaptiveTenuring = true;
 constexpr uint32_t kMaxTenuringThreshold = untype(PageAge::survivor14);
 
 struct TenuringInputs {

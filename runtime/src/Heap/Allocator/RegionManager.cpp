@@ -2534,15 +2534,27 @@ bool StayYoungThisCycle(RegionInfo* region)
     return !ShouldPromoteAge(region->GetYoungAge(), thr);
 }
 
-bool AgeYoungSurvivor(RegionInfo* region)
+} // namespace
+
+void RegionManager::BumpYoungSurvivorAge(RegionInfo* region)
 {
     uint8_t next = region->GetYoungAge();
     if (next < untype(PageAge::survivor14)) {
         region->SetYoungAge(static_cast<uint8_t>(next + 1));
     }
-    return true;
 }
-} // namespace
+
+void RegionManager::FinishStayYoungInPlace(RegionInfo* region)
+{
+    BumpYoungSurvivorAge(region);
+    region->DispelGhostFromRegion();
+}
+
+void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
+{
+    FinishStayYoungInPlace(region);
+    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
+}
 
 template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
@@ -2625,7 +2637,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
     const bool stayYoung = youngRegion && StayYoungThisCycle(region);
     if (forceInPlace || stayYoung || !RouteRegion(region)) {
         if (youngRegion && stayYoung) {
-            AgeYoungSurvivor(region);
+            EnlistStayYoungSurvivor(region);
             return;
         }
         if (youngRegion) {
@@ -2851,9 +2863,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             PermWhoAdmit::NoteAbandon(region, walked, forwarded);
         }
         if (youngRegion && StayYoungThisCycle(region)) {
-            AgeYoungSurvivor(region);
-            region->DispelGhostFromRegion();
-            ExemptFromRegion(region);
+            EnlistStayYoungSurvivor(region);
             return;
         }
         if (youngRegion) {
