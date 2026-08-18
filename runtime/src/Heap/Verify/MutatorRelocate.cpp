@@ -1,7 +1,7 @@
 #include "Heap/Verify/MutatorRelocate.h"
 namespace MapleRuntime {
 namespace MutatorRelocate {
-bool Enabled() { return false; }
+bool Enabled() { return kMutatorSelfRelocate; }
 bool DrainEnabled() { return false; }
 bool StatsOn() { return false; }
 bool InjectOn() { return false; }

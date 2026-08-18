@@ -68,6 +68,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_store_barrier_buffer.cpp" \
     "$SRC/test_page_age.cpp" \
     "$SRC/test_stay_young.cpp" \
+    "$SRC/test_mutator_relocate.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"

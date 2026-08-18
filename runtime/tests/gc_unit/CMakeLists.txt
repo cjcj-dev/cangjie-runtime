@@ -33,6 +33,7 @@ set(GC_UNIT_SOURCES
     test_store_barrier_buffer.cpp
     test_page_age.cpp
     test_stay_young.cpp
+    test_mutator_relocate.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

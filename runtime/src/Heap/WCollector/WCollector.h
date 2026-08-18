@@ -429,9 +429,10 @@ public:
             }
             return to;
         }
-        // ③ wait then find. ZGC waits only after retain-ok+copy-fail, or inside
-        // retain_page when the page is claimed. We wait whenever find is still
-        // null. Page-vs-object wait grain is a known difference — not changed here.
+        // ③ table still empty. ZGC add_and_wait only after retain-ok+alloc-fail
+        // (zRelocate.cpp:403-409), then forward_object asserts find()!=null.
+        // Our hole is VisitLive never copied this from: miss means keep from
+        // (kUnpublishedMeansKeepFrom), not sched_yield for a publisher.
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }
@@ -441,31 +442,14 @@ public:
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        BaseObject* waited = WaitRoutedTipReady(obj, to, forwarding);
-        if (waited != nullptr && waited != obj) {
-            return waited;
+        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding);
+        if (resolved != nullptr && resolved != obj) {
+            return resolved;
         }
-        to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        if (to != nullptr) {
-            if (funnel) {
-                receiptCount.fetch_add(1, std::memory_order_relaxed);
-            }
-            return to;
-        }
-        // ZRelocate::forward_object: find()==null is an invariant break, not a
-        // fourth exit. Never silent return obj (that was the checksum-drift path).
-        giveFromCount.fetch_add(1, std::memory_order_relaxed);
         if (funnel) {
+            giveFromCount.fetch_add(1, std::memory_order_relaxed);
             routeNullCount.fetch_add(1, std::memory_order_relaxed);
         }
-        LOG(RTLOG_ERROR,
-            "[GCV2][remapfunnel] giveFrom from=%p to=%p forwarded=%u route=%u — ZGC asserts here",
-            obj, to, static_cast<unsigned>(obj->IsForwarded()),
-            static_cast<unsigned>(forwarding->GetRouteState()));
-        CHECK_DETAIL(false,
-                     "relocate_or_remap_object: unpublished after wait (ZGC forward_object "
-                     "assert). from=%p",
-                     obj);
         return obj;
     }
 
