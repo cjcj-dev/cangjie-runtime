@@ -9346,7 +9346,17 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     for (int spins = 0;; ++spins) {
         if (from->IsForwarded()) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            BaseObject* again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+            BaseObject* again = nullptr;
+            if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+                if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
+                    const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+                    again = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
+                }
+            }
+            if (again == nullptr && !(ForwardingTable::kEntriesSoleWhenArmed &&
+                                     ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from)))) {
+                again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+            }
             if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
@@ -9365,7 +9375,15 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         RegionInfo::RouteState rs = forwarding->GetRouteState();
         if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
             std::atomic_thread_fence(std::memory_order_acquire);
-            BaseObject* again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+            const bool armed = ForwardingTable::kEntriesSoleWhenArmed &&
+                               ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from));
+            BaseObject* again = nullptr;
+            if (armed) {
+                const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+                again = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
+            } else {
+                again = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+            }
             if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
                 if (diagOn) {
                     tipReadyCount.fetch_add(1, std::memory_order_relaxed);
@@ -9378,6 +9396,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 }
                 return again;
             }
+            if (armed) {
+                return from;
+            }
             return permanentHole(
                 rs == RegionInfo::RouteState::FORWARDED ? "region_FORWARDED_tip_null" : "region_COMPACTED_tip_null",
                 spins, again != nullptr ? again : to);
@@ -9386,7 +9407,13 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         // object yet. ZGC waits (add_and_wait); handing from back is the
         // checksum-drift path under concurrent_relocate.
         sched_yield();
-        to = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+        if (ForwardingTable::kEntriesSoleWhenArmed &&
+            ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
+            const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
+            to = stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
+        } else {
+            to = space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
+        }
         if (to == nullptr) {
             // Plan gone mid-wait. ZGC still waits for the worker that claimed
             // the page; keep spinning until FORWARDED or the page is done.
