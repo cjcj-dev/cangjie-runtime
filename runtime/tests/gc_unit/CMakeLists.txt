@@ -26,6 +26,7 @@ set(GC_UNIT_SOURCES
     test_z_forwarding_life.cpp
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
+    test_forwarding_entries.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

@@ -2232,6 +2232,7 @@ void RegionManager::CompactRegion(RegionInfo* region)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
             region->RecordCompactRoute(offset, toAddress);
             if (O2ORemsetDiag::Enabled()) {
@@ -2309,6 +2310,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
             region->RecordCompactRoute(offset, toAddress);
             std::atomic_thread_fence(std::memory_order_release);
@@ -2345,6 +2347,7 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
                 O2ORemsetDiag::NoteCompactRemsetInFrom(remIn);
             }
             collector.CopyObject(*currentObj, *toObj, size);
+            ForwardingTable::InsertMapping(currentPtr, toAddress);
             toObj->SetStateCode(ObjectState::NORMAL);
             region->RecordCompactRoute(offset, toAddress);
             std::atomic_thread_fence(std::memory_order_release);

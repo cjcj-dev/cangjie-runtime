@@ -9569,6 +9569,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
     }
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
+    ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
     // TryMutatorRelocate, so this counts objects a mutator relocated itself and nothing else --
     // the one number that distinguishes "the ported leg ran" from "the leg exists". GC workers
