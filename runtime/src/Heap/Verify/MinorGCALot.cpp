@@ -24,22 +24,8 @@ std::atomic<bool> g_intervalArmed{ false };
 
 size_t ParseInterval()
 {
-    // Forcing this to a small interval is how the mark-gap was found: ProbeUnmarkedLive lives
-    // inside DoYoungGarbageCollection, and a 900s compile of packages/basic ran no young
-    // collection at all -- its single young flip came from the major Preforward, which flips both
-    // generations.  ALot is a forensic recipe, never a performance one: with interval=2000 the
-    // same 900s budget covered 71 young cycles before the remset fix and 44 after it, so any
-    // cost measured under ALot is not a production number.
-    const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_GC_ALOT */;
-    if (v == nullptr || v[0] == '\0') {
-        return 0;
-    }
-    char* end = nullptr;
-    unsigned long n = std::strtoul(v, &end, 10);
-    if (end == v || n == 0) {
-        return 0;
-    }
-    return static_cast<size_t>(n);
+    // Forensic recipe only. Flip kMinorGCALotInterval in MinorGCALot.h and rebuild.
+    return kMinorGCALotInterval;
 }
 
 void ArmYoungIntervalIfNeeded()
@@ -50,7 +36,7 @@ void ArmYoungIntervalIfNeeded()
     }
     // Drop the 200ms young throttle so ALot can actually raise minor frequency.
     g_gcRequests[GC_REASON_YOUNG].SetMinInterval(0);
-    VLOG(REPORT, "[GCV2][alot] armed MRT_GCV2_MINOR_GC_ALOT interval=%zu (young minIntervelNs=0)",
+    VLOG(REPORT, "[GCV2][alot] armed kMinorGCALotInterval=%zu (young minIntervelNs=0)",
          MinorGCALot::Interval());
 }
 } // namespace
