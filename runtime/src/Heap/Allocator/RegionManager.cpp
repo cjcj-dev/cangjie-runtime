@@ -37,6 +37,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/WCollector/RelocationSetSelector.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
@@ -1320,7 +1321,8 @@ void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
     regionList->DeleteRegionLocked(region);
 }
 
-// forward only regions whose garbage bytes is greater than or equal to exemptedRegionThreshold.
+// Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
+// Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
     size_t forwardBytes = 0;
@@ -1333,22 +1335,16 @@ size_t RegionManager::ExemptFromRegions()
                 std::min(region->GetCensusBoundary(), region->GetRegionAllocPtr()));
         }
     });
-    auto visitor = [this, exempt, &floatingGarbage](RegionInfo* fromRegion) {
-        size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
+    std::vector<RegionInfo*> snapshot;
+    fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
+    std::vector<RelocRegionDesc> descs;
+    std::vector<RegionInfo*> descRegions;
+    descs.reserve(snapshot.size());
+    descRegions.reserve(snapshot.size());
+    for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        if (liveBytes > threshold) { // ignore this region
-            RegionInfo* del = fromRegion;
-            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by forwarding: %zu units, %zu live bytes", del,
-                del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
-                del->GetUnitCount(), del->GetLiveByteCount());
-
-            CHECK(del->IsFromRegion());
-            del->PreserveRetainedLiveInfo();
-            RemoveRegionLocked(&fromRegionList, del);
-            ExemptFromRegion(del);
-            floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
-        } else if (rawPtrCnt > 0) {
+        if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
@@ -1360,9 +1356,51 @@ size_t RegionManager::ExemptFromRegions()
             RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
+            continue;
         }
-    };
-    fromRegionList.VisitAllRegions(visitor);
+        if (!kUseRelocationSetSelector) {
+            size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
+            if (liveBytes > threshold) {
+                RegionInfo* del = fromRegion;
+                CHECK(del->IsFromRegion());
+                del->PreserveRetainedLiveInfo();
+                RemoveRegionLocked(&fromRegionList, del);
+                ExemptFromRegion(del);
+                floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
+            }
+            continue;
+        }
+        RelocRegionDesc d;
+        d.liveBytes = liveBytes;
+        d.capacity = fromRegion->GetRegionSize();
+        d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
+        d.id = static_cast<uint32_t>(descs.size());
+        descs.push_back(d);
+        descRegions.push_back(fromRegion);
+    }
+    if (kUseRelocationSetSelector) {
+        const RelocSelectResult selected = SelectRelocationSet(descs);
+        std::vector<char> keep(descs.size(), 0);
+        for (uint32_t id : selected.selectedIds) {
+            if (id < keep.size()) {
+                keep[id] = 1;
+            }
+        }
+        for (size_t i = 0; i < descs.size(); ++i) {
+            if (keep[i] != 0) {
+                continue;
+            }
+            RegionInfo* del = descRegions[i];
+            DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
+                del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
+                del->GetUnitCount(), del->GetLiveByteCount());
+            CHECK(del->IsFromRegion());
+            del->PreserveRetainedLiveInfo();
+            RemoveRegionLocked(&fromRegionList, del);
+            ExemptFromRegion(del);
+            floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
+        }
+    }
 
     size_t newFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;

@@ -133,17 +133,27 @@ public:
         return at(cursor);
     }
 
-    // zForwarding.inline.hpp:230-245
+    // zForwarding.inline.hpp:230-245, plus a bound ZGC does not need.
+    //
+    // ZGC's loop is `while (entry.populated())` with no trip count, and that is safe there because
+    // the table is never full: nentries is next_pow2(live_objects * 2), so the load factor cannot
+    // exceed one half and an empty slot always terminates the probe. Ours is sized from an estimate
+    // that can come out far too small, and on a full table this loop never ends -- observed as two
+    // GC threads at 100% CPU inside find(), a collection that never finishes and a workload that
+    // went from 10 seconds to a 300-second timeout.
+    //
+    // Bounding it turns "hang" into "miss", and a miss is a state every caller already handles:
+    // FindToVersion falls back to route geometry, which is what it did before this table existed.
     ForwardingEntry find(uintptr_t fromIndex, ForwardingCursor* cursor) const
     {
         ForwardingEntry entry = first(fromIndex, cursor);
-        while (entry.populated()) {
+        for (size_t probes = 0; probes < length_ && entry.populated(); ++probes) {
             if (entry.from_index() == fromIndex) {
                 return entry;
             }
             entry = next(cursor);
         }
-        return entry;
+        return entry.populated() ? ForwardingEntry() : entry;
     }
 
     // zForwarding.inline.hpp:248-252 — miss is null, never geometry.
@@ -157,12 +167,16 @@ public:
         return heapBase_ + static_cast<MAddress>(entry.to_offset());
     }
 
-    // zForwarding.inline.hpp:267-292
+    // zForwarding.inline.hpp:267-292, bounded for the same reason find() is: on a full table the
+    // rescan loop below never finds an empty slot, and the outer retry never stops asking for one.
+    // kNotStored says so out loud instead of spinning.
+    static constexpr size_t kNotStored = SIZE_MAX;
+
     size_t insert(uintptr_t fromIndex, size_t toOffset, ForwardingCursor* cursor)
     {
         const ForwardingEntry neu(fromIndex, toOffset);
         std::atomic_thread_fence(std::memory_order_release);
-        for (;;) {
+        for (size_t attempt = 0; attempt < length_; ++attempt) {
             uint64_t expected = 0;
             if (words_[*cursor].compare_exchange_strong(expected, neu.raw(), std::memory_order_relaxed,
                                                         std::memory_order_relaxed)) {
@@ -173,13 +187,31 @@ public:
                 return toOffset;
             }
             ForwardingEntry entry = at(cursor);
-            while (entry.populated()) {
+            bool full = true;
+            for (size_t probes = 0; probes < length_ && entry.populated(); ++probes) {
                 if (entry.from_index() == fromIndex) {
                     return entry.to_offset();
                 }
                 entry = next(cursor);
             }
+            if (!entry.populated()) {
+                full = false;
+            }
+            if (full) {
+                break;
+            }
         }
+        FullRefusals().fetch_add(1, std::memory_order_relaxed);
+        return kNotStored;
+    }
+
+    // Inserts dropped because the table had no free slot. Separate from OverflowRefusals: that one
+    // means "this region is too big for an 18-bit index", this one means "we sized the table too
+    // small". Both degrade to a geometry fallback, and both are invisible without a counter.
+    static std::atomic<uint64_t>& FullRefusals()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
     }
 
     // Number of insert() calls refused because the region is larger than one from_index can
@@ -203,6 +235,9 @@ public:
         (void)find(fromIndex, &cursor);
         const size_t toOffset = static_cast<size_t>(to - heapBase_);
         const size_t finalOff = insert(fromIndex, toOffset, &cursor);
+        if (finalOff == kNotStored) {
+            return 0;
+        }
         return heapBase_ + static_cast<MAddress>(finalOff);
     }
 

@@ -6,6 +6,7 @@
 
 #include "Heap/Allocator/ForwardingTable.h"
 
+#include <algorithm>
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
@@ -118,11 +119,28 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     if (g_map[first].entries.load(std::memory_order_acquire) != nullptr) {
         return;
     }
+    // ZGC sizes the table from the live *object* count and doubles it, so the load factor stays
+    // under one half and the open-addressing probe always terminates (zForwarding.inline.hpp:43-50).
+    //
+    // Two things went wrong with copying that here. liveBytes >> kAlignShift counts eight-byte
+    // words, not objects, so it is not the same quantity. And this runs lazily, on the first insert
+    // into a region, at which point GetLiveByteCount() can still be zero -- which used to fall
+    // through to liveObjs = 1 and a table with two slots. The third object forwarded out of that
+    // region then probed a full table forever: two GC threads pinned at 100% CPU inside find(),
+    // and a workload that takes ten seconds ran past a five-minute timeout.
+    //
+    // The probes are bounded now, so a table that fills degrades to a geometry fallback rather than
+    // a hang. This still sizes it not to fill: when the live count is unusable, take the region's
+    // own capacity as the bound on how many objects can possibly be in it.
     const uint64_t liveBytes = region->GetLiveByteCount();
-    uint32_t liveObjs = static_cast<uint32_t>(liveBytes >> ForwardingEntries::kAlignShift);
-    if (liveObjs == 0) {
-        liveObjs = 1;
+    uint64_t estimate = liveBytes >> ForwardingEntries::kAlignShift;
+    if (estimate == 0) {
+        estimate = regionSize >> ForwardingEntries::kAlignShift;
     }
+    if (estimate == 0) {
+        estimate = 1;
+    }
+    const uint32_t liveObjs = static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
     ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base);
     if (created == nullptr) {
         return;
@@ -131,6 +149,13 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     if (!g_map[first].entries.compare_exchange_strong(expected, created, std::memory_order_release,
                                                       std::memory_order_acquire)) {
         created->Destroy();
+        // Adopting whatever was already there is only right when it belongs to this region. The
+        // fan-out below writes one pointer across every unit a region covers, so a slot can hold a
+        // *neighbour's* table -- and inserting into that one would index from the wrong base and,
+        // worse, hand this region an owner it does not own.
+        if (expected == nullptr || expected->start() != start) {
+            return;
+        }
         created = expected;
     }
     const size_t count = regionSize / g_unitSize + ((regionSize % g_unitSize) != 0 ? 1 : 0);
@@ -153,7 +178,15 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     for (size_t i = 1; i < count && first + i < g_entries; ++i) {
         g_map[first + i].entries.store(nullptr, std::memory_order_release);
     }
-    if (tab != nullptr) {
+    // One table, many slots: EnsureEntries publishes the same pointer across every unit the region
+    // covers, so "I took a non-null pointer out of a slot" is not "I own it". Freeing on that alone
+    // frees a neighbour's live table, and the next region to clear frees it again -- which is
+    // exactly the crash this guard was added for: SIGSEGV inside __libc_free during post_trace,
+    // faulting on the chunk header of an address that had already been returned to the allocator.
+    //
+    // The table records the address it was built for, so ownership is a comparison, not a
+    // convention.
+    if (tab != nullptr && tab->start() == regionStart) {
         tab->Destroy();
     }
 }
