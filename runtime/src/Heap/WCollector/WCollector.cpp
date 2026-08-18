@@ -6288,10 +6288,24 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     // but is demonstrably not sufficient; ops/design/ROUTE_PUBLISH_VS_COMPUTE.md.
     // MRT_GCV2_CONC_RELOCATE=1 turns it on -- that is the arm where role=mutator
     // any_copies first became non-zero (2269) and noGhost fell 99.997% -> 99.773%.
-    static const bool concRelocateOn = []() {
-        const char* v = std::getenv("MRT_GCV2_CONC_RELOCATE");
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
+    // On. It was off because of a silent wrong answer -- survival_dense produced
+    // 368685912892819 instead of the golden 368685940367600 in one run of five -- and a wrong
+    // checksum is worse than a missing optimisation, so the comment above was right to keep it off.
+    //
+    // That measurement predates mutator-assisted relocation. Concurrent relocation is exactly the
+    // arm where a mutator meets an object the collector has not moved yet; until this cycle it hit
+    // WaitRoutedTipReady, which waited for a publication nobody had been asked to make. The comment
+    // above even records the symptom: role=mutator any_copies first became non-zero on this arm.
+    //
+    // Re-measured on the workload the defect was found on, after that fix:
+    //   correctness  15 of 15 runs golden with it on, 4 of 4 with it off, no wrong answer
+    //   wall         11.74s off, 8.38s on -- 1.40x, five runs each
+    // and natural_wave_notime is 8 of 8 with it on.
+    //
+    // A compile-time constant rather than the env read it replaces: this was the last live
+    // MRT_GCV2_ getenv in the tree, and the campaign cut those from 190 to 3 precisely because a
+    // pinned-off env read looks identical to a mechanism that never fires.
+    constexpr bool concRelocateOn = true;
     const bool doConcRelocate = concRelocate && concRelocateOn;
     auto liveStw = [stw]() -> const ScopedStopTheWorld* {
         return (stw != nullptr && *stw != nullptr) ? stw->get() : nullptr;
