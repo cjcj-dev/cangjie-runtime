@@ -7108,6 +7108,9 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         // promodomain v1: discharge flip-promoted registry in young.evac_finish (STW).
         // Dual-run: old RecordPromotedCrossGenEdges already ran; domain visitor reconciles.
+        {
+        // PROBE evacct: how much of young.evac_finish is the PROMODOMAIN discharge?
+        MRT_PHASE_TIMER("young.evac_domain_discharge");
         if (PromotedRegionDomain::Enabled()) {
             RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
             size_t domainEdges = PromotedRegionDomain::DischargeAll(
@@ -7126,6 +7129,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // domain off: still dump reason×site coverage (always-on counters).
             PromotedRegionDomain::DumpCoverageByReason("evac_finish_domain_off");
         }
+        }
 
         // R1 structural gate (MINOR_CONCURRENCY_0805 §9.5): after residual demote,
         // live young region count is the product-path authority
@@ -7141,6 +7145,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             VLOG(REPORT,
                  "[GCV2Minor][rebuild-gate] skip rebuild youngRegionCount=0");
         } else {
+            {
+            // PROBE evacct: how much of young.evac_finish is the reachableVec remset rebuild walk?
+            // Walks every field of the remset-derived closure and re-records old→young edges.
+            MRT_PHASE_TIMER("young.evac_rebuild_walk");
             for (BaseObject* object : reachableVec) {
                 BaseObject* holder = currentObject(object);
                 // unitzero: ForwardObject returns nullptr for movable ghost-from with no
@@ -7168,6 +7176,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     }
                 });
             }
+            }
             if (rebuiltRecords == 0) {
                 VLOG(REPORT,
                      "[GCV2Minor][rebuild-gate] anomaly open-gate-zero-output "
@@ -7182,7 +7191,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
+        {
+        // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
+        MRT_PHASE_TIMER("young.evac_prepare_next");
         fwdTable.PrepareForwardTable<Generation::Young>();
+        }
         ValidateMinorReferences("after-dispel", nullptr);
         manager.ReassembleFromSpace();
     }
