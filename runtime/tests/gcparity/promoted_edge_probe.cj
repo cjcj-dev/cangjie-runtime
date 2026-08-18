@@ -16,41 +16,29 @@ class PromoHolder {
     }
 }
 
-func fillJunk(junk: Array<PromoLeaf>, startId: Int64): Int64 {
-    var checksum: Int64 = 0
-    let n = Int64(junk.size)
-    for (i in 0..n) {
-        let leaf = PromoLeaf(startId + i)
-        junk[i] = leaf
-        checksum = checksum + leaf.id
-    }
-    return checksum
-}
-
-func churnJunk(junk: Array<PromoLeaf>, startId: Int64, rounds: Int64): Int64 {
-    var checksum: Int64 = 0
-    let n = Int64(junk.size)
-    for (r in 0..rounds) {
-        for (i in 0..n) {
-            let leaf = PromoLeaf(startId + r * n + i)
-            junk[i] = leaf
-            checksum = checksum + junk[i].id
-        }
-        checksum = checksum + junk[r % n].id
-    }
-    return checksum
-}
-
 main(): Int64 {
-    // 4096 live junk slots stay well under the 32KiB large-object line.
-    // 2048 rounds * 4096 allocs ≈ 8.4e6 objects ≈ 200MiB young allocated
-    // so the 32MiB young line (RegionManager.cpp:1493) fires several times.
-    let junkSlots: Int64 = 4096
-    var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-1)})
+    // Same escape shape as survival_dense.cj:12-28 — store every new object
+    // into a rooted array so cjc cannot scalar-replace the allocation.
+    let junkSlots: Int64 = 65536
+    var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-(i + 1))})
+    var cursor: Int64 = 0
     var checksum: Int64 = 0
 
-    checksum = checksum + fillJunk(junk, 1)
-    checksum = checksum + churnJunk(junk, 100000, 256)
+    // 400 * 3200 = 1.28e6 objects ≈ 30+MiB. Two waves cross the 32MiB young line
+    // (RegionManager.cpp:1493) before A is linked to B.
+    for (wave in 0..2) {
+        for (round in 0..400) {
+            for (i in 0..3200) {
+                let id = wave * 10000000 + round * 10000 + i
+                let n = PromoLeaf(id)
+                junk[cursor % junkSlots] = n
+                checksum = checksum + n.id
+                cursor = cursor + 1
+            }
+            checksum = checksum + junk[(cursor + round) % junkSlots].id
+        }
+        println("PROMOTED_EDGE_WAVE wave=${wave} checksum=${checksum}")
+    }
     println("PROMOTED_EDGE_WARMUP checksum=${checksum}")
 
     let nHolders: Int64 = 8192
@@ -59,8 +47,18 @@ main(): Int64 {
         holders[i].kid = None
         checksum = checksum + holders[i].id
     }
-    checksum = checksum + churnJunk(junk, 2000000, 256)
-    checksum = checksum + holders[0].id
+
+    for (round in 0..400) {
+        for (i in 0..3200) {
+            let id = 30000000 + round * 10000 + i
+            let n = PromoLeaf(id)
+            junk[cursor % junkSlots] = n
+            checksum = checksum + n.id
+            cursor = cursor + 1
+        }
+        checksum = checksum + holders[round % nHolders].id
+        checksum = checksum + junk[(cursor + round) % junkSlots].id
+    }
     println("PROMOTED_EDGE_AGED checksum=${checksum}")
 
     for (i in 0..nHolders) {
@@ -70,12 +68,23 @@ main(): Int64 {
     }
     println("PROMOTED_EDGE_LINKED checksum=${checksum}")
 
-    checksum = checksum + churnJunk(junk, 8000000, 768)
-    for (i in 0..nHolders) {
-        checksum = checksum + holders[i].id
-        if (let Some(k) <- holders[i].kid) {
-            checksum = checksum + k.id
+    for (wave in 0..3) {
+        for (round in 0..400) {
+            for (i in 0..3200) {
+                let id = 80000000 + wave * 10000000 + round * 10000 + i
+                let n = PromoLeaf(id)
+                junk[cursor % junkSlots] = n
+                checksum = checksum + n.id
+                cursor = cursor + 1
+            }
+            let h = holders[round % nHolders]
+            checksum = checksum + h.id
+            if (let Some(k) <- h.kid) {
+                checksum = checksum + k.id
+            }
+            checksum = checksum + junk[(cursor + round) % junkSlots].id
         }
+        println("PROMOTED_EDGE_DRIVE wave=${wave} checksum=${checksum}")
     }
 
     var walk: Int64 = 0
@@ -85,7 +94,7 @@ main(): Int64 {
         }
     }
     checksum = checksum + walk
-    checksum = checksum + junk[7].id
-    println("PROMOTED_EDGE_OK checksum=${checksum} walk=${walk} holders=${nHolders}")
+    checksum = checksum + junk[0].id
+    println("PROMOTED_EDGE_OK checksum=${checksum} walk=${walk} holders=${nHolders} cursor=${cursor}")
     return 0
 }
