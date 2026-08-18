@@ -7051,6 +7051,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const bool keepOneYoung =
             keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
         bool keptOneYoung = false;
+        {
+        // PROBE evac2: how much of young.evac_finish is the promoted-region object walk?
+        // ZGC does this same walk (ZRelocateAddRemsetForFlipPromoted, zRelocate.cpp:1257-1288)
+        // but runs it inside concurrent_relocate, yielding between pages.
+        MRT_PHASE_TIMER("young.evac_promote_walk");
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
@@ -7081,6 +7086,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                 residualPromoteRecords += recEdges;
                 (void)region->PromoteYoungRegion(promotionView);
             }
+        }
         }
         if (keepOneYoung && !keptOneYoung) {
             // No residual young remained (common today). Re-tag one candidate so
