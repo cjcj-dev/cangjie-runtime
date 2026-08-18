@@ -23,10 +23,10 @@ main(): Int64 {
     // (~8MiB). The next 4.5MiB of alloc hits HEU, which full-scans B and
     // makes the promoted remset edge non-load-bearing (arm P 8/8 golden).
     //
-    // 16e6 Int64 ≈ 128MiB old ballast after the first HEU keeps
-    // threshold − live ≈ 32MiB so the young line (RegionManager.cpp:1493)
-    // fires first. r11 packing otherwise unchanged. Golden = walk(B) =
-    // sum(1..8192) = 33558528.
+    // 5e6 Int64 ≈ 40MiB old ballast after the first HEU keeps
+    // threshold ≈ 1.25*live ≈ 50MiB, so the 32MiB young line
+    // (RegionManager.cpp:1493) fires first. 128MiB ballast OOMed
+    // the 256MB heap. Golden = walk(B) = sum(1..8192) = 33558528.
     let junkSlots: Int64 = 256
     var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-(i + 1))})
     var cursor: Int64 = 0
@@ -43,8 +43,8 @@ main(): Int64 {
     }
     println("PROMOTED_EDGE_WARMUP acc=${acc}")
 
-    let ballast = Array<Int64>(16000000, {i => i})
-    acc = acc + ballast[0] + ballast[15999999]
+    let ballast = Array<Int64>(5000000, {i => i})
+    acc = acc + ballast[0] + ballast[4999999]
     println("PROMOTED_EDGE_BALLAST acc=${acc}")
 
     var pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-10000 - i)})
