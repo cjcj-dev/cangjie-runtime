@@ -14,6 +14,7 @@
 #include <unordered_set>
 
 #include "Base/AtomicSpinLock.h"
+#include "Base/GcLog.h"
 #include "Base/Globals.h"
 #include "Base/Panic.h"
 #include "Base/RwLock.h"
@@ -401,11 +402,18 @@ public:
     {
         startTime = TimeUtil::NanoSeconds();
         MutatorManager::Instance().StopTheWorld(syncGCPhase, phase);
+        stoppedTime = TimeUtil::NanoSeconds();
     }
 
     __attribute__((always_inline)) ~ScopedStopTheWorld()
     {
-        LOG(RTLOG_REPORT, "%s stw time %zu us", reason, GetElapsedTime() / 1000); // 1000:nsec per usec
+        const uint64_t endTime = TimeUtil::NanoSeconds();
+        LOG(RTLOG_REPORT, "%s stw time %zu us", reason, (endTime - startTime) / 1000); // 1000:nsec per usec
+        // The line above goes to REPORT, which Release gates behind MRT_REPORT=<path> -- so the one
+        // number a pause budget is made of was only visible in a mode that writes ~10MB per run and
+        // perturbs the thing being measured. Emit it on the same always-on MRT_GC_LOG channel as
+        // rec=cycle/rec=phase instead.
+        GcLog::Stw(reason, stoppedTime - startTime, endTime - stoppedTime);
         MutatorManager::Instance().StartTheWorld();
     }
 
@@ -416,6 +424,7 @@ public:
 private:
     const char* reason = nullptr;
     uint64_t startTime = 0;
+    uint64_t stoppedTime = 0;
 };
 
 // Scoped light sync.

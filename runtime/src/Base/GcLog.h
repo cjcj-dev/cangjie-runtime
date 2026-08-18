@@ -26,6 +26,7 @@ namespace MapleRuntime {
 //   [GCLOG] v=2 rec=cycle seq= kind= reason= start_ns= dur_ns= live_before= live_after=
 //           collected= heap_used= threshold= rss_kb=
 //   [GCLOG] v=2 rec=phase seq= name= us=
+//   [GCLOG] v=2 rec=stw   seq= reason= wait_ns= held_ns=
 //   [GCLOG] v=3 rec=crash ...  (crash signature; always-on via write(2), see Crash())
 //
 // A phase record carries the seq of the cycle it belongs to, so phases join to cycles without
@@ -81,21 +82,36 @@ public:
         if (!Enabled()) {
             return;
         }
-        // Phase names are free text at the call sites ("enum roots & update old pointers within"),
-        // and a space would end the value halfway through for any key=value reader. Fold anything
-        // outside the safe set into '_' so a name is always one token.
         char safe[MAX_PHASE_NAME + 1];
-        size_t i = 0;
-        for (; i < MAX_PHASE_NAME && name[i] != '\0'; ++i) {
-            char c = name[i];
-            bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '.' ||
-                        c == '_' || c == '-';
-            safe[i] = keep ? c : '_';
-        }
-        safe[i] = '\0';
+        FoldToToken(name, safe);
         // Same always-on channel as Cycle (see Cycle comment).
         EmitLine("[GCLOG] v=%u rec=phase seq=%llu name=%s us=%llu", SCHEMA_VERSION,
                  static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(us));
+    }
+
+    // One record per stop-the-world, because neither of the two records above can answer "how long
+    // was the world stopped".  rec=cycle is wall time for the whole collection and rec=phase is
+    // work, and a phase timer reads the same whether its body ran inside the pause or beside a
+    // running mutator -- so a change that moves work out of the pause and a change that makes the
+    // work slower are indistinguishable in both.  Measured 2026-08-18: turning young concurrent
+    // mark+follow on moved `mark_closure` into the concurrent window and every available ruler
+    // showed it as a regression, because none of them measured a pause.
+    //
+    // wait_ns is the rendezvous (from the request until the last mutator has parked) and held_ns is
+    // the body.  They are reported apart because they respond to different things: wait_ns tracks
+    // safepoint polling density in the mutators, held_ns tracks what the collector does with the
+    // world stopped.  Mutators are progressively blocked during wait_ns, so a pause budget must
+    // count both -- ZGC's pause tracer likewise starts at the VM operation, not at the last arrival.
+    static void Stw(const char* reason, uint64_t waitNs, uint64_t heldNs)
+    {
+        if (!Enabled()) {
+            return;
+        }
+        char safe[MAX_PHASE_NAME + 1];
+        FoldToToken(reason, safe);
+        EmitLine("[GCLOG] v=%u rec=stw seq=%llu reason=%s wait_ns=%llu held_ns=%llu", SCHEMA_VERSION,
+                 static_cast<unsigned long long>(CurrentSeq()), safe, static_cast<unsigned long long>(waitNs),
+                 static_cast<unsigned long long>(heldNs));
     }
 
     // Remember the most recent FATAL log body (text after the level letter). Called from
@@ -175,6 +191,24 @@ private:
     // Fixed buffer + fprintf(stderr): independent of LogFile REPORT enablement and of any
     // MRT_REPORT file path. Mirrors rec=crash intent (always visible when the feature is on)
     // without requiring signal-handler AS-safety (cycle/phase run on the GC thread).
+    // Names and reasons are free text at the call sites ("enum roots & update old pointers within",
+    // "young collection"), and a space would end the value halfway through for any key=value
+    // reader. Fold anything outside the safe set into '_' so a value is always one token.
+    // `out` must have room for MAX_PHASE_NAME + 1.
+    static void FoldToToken(const char* text, char* out)
+    {
+        size_t i = 0;
+        if (text != nullptr) {
+            for (; i < MAX_PHASE_NAME && text[i] != '\0'; ++i) {
+                char c = text[i];
+                bool keep = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ||
+                            c == '.' || c == '_' || c == '-';
+                out[i] = keep ? c : '_';
+            }
+        }
+        out[i] = '\0';
+    }
+
     static void EmitLine(const char* format, ...)
     {
         char buf[1024];
