@@ -29,6 +29,7 @@ set(GC_UNIT_SOURCES
     test_forwarding_entries.cpp
     test_young_conc.cpp
     test_relocation_set_selector.cpp
+    test_store_barrier_buffer.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

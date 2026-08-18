@@ -8,6 +8,7 @@
 #include "Barrier.inline.h"
 #include "Base/Macros.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Verify/ZgcInvariants.h"
 #include "Heap/Allocator/RegionSpace.h"
@@ -1350,7 +1351,16 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
             }
             return;
         }
-        theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
+        if (kBufferStoreBarriers) {
+            AllocBuffer* alloc = AllocBuffer::GetAllocBuffer();
+            if (alloc != nullptr) {
+                alloc->GetStoreBarrierBuffer().Add(fieldAddress, theRememberedSet);
+            } else {
+                theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
+            }
+        } else {
+            theRememberedSet.Record(fieldAddress, /*fromMutatorBarrier=*/true);
+        }
         if (probeOn) {
             NoteWrite(fieldAddress, phase, REASON_RECORDED, true);
         }

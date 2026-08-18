@@ -24,6 +24,7 @@ namespace MapleRuntime {
 class Barrier;
 class WCollector;
 class RegionManager;
+class StoreBarrierBuffer;
 
 // Exact old-region field bitmap. The two heap-wide backing arrays are partitioned
 // by address: every region owns two disjoint slices, one bit per aligned reference
@@ -77,6 +78,7 @@ private:
     friend class Barrier;
     friend class WCollector;
     friend class RegionManager;
+    friend class StoreBarrierBuffer;
 #if defined(MRT_REMSET_BITMAP_CROSSCHECK)
     friend class RememberedSetTest;
 #endif

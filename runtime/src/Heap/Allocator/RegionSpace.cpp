@@ -221,6 +221,7 @@ void AllocBuffer::Init()
 
 void AllocBuffer::Fini()
 {
+    storeBarrierBuffer.Flush(Heap::GetHeap().GetRememberedSet());
     Heap::GetHeap().RemoveAllocBuffer(*this);
 }
 
