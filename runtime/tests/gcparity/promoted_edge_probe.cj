@@ -17,15 +17,13 @@ class PromoHolder {
 }
 
 main(): Int64 {
-    // Compile MUST leave cjEnableGC unset (cjEnableGC=0 is baked into the ELF
-    // and silently disables RequestGC). Shape:
-    //   1) junk until the first HEU major (20MiB)
-    //   2) 3e6 Int64 ballast so later HEU threshold sits above the 32MiB young line
-    //   3) cohort A (small holders, dense 128KiB regions)
-    //   4) one young wave — A ages 0→1 and stays young (threshold=1)
-    //   5) write B while A is still young (barrier skips remset, Barrier.cpp:1330)
-    //   6) more young waves — A flip-promotes, B stays young, remset must carry B
-    let junkSlots: Int64 = 65536
+    // cjEnableGC must be unset at compile time (cjEnableGC=0 bakes RequestGC off).
+    //
+    // Packing: a 128KiB TL region that mixes live B with later junk is selected
+    // for copy and B lands in an old dest (RegionManager.cpp:2709 dest is old).
+    // Pad 8192 leaves (~128KiB) and drop them before/after A and B so each
+    // cohort owns its own dense regions (ExemptFromRegions + stay-young).
+    let junkSlots: Int64 = 256
     var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-(i + 1))})
     var cursor: Int64 = 0
     var checksum: Int64 = 0
@@ -41,9 +39,9 @@ main(): Int64 {
     }
     println("PROMOTED_EDGE_WARMUP checksum=${checksum}")
 
-    let ballast = Array<Int64>(3000000, {i => i})
-    checksum = checksum + ballast[0] + ballast[2999999]
-    println("PROMOTED_EDGE_BALLAST checksum=${checksum}")
+    var pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-10000 - i)})
+    checksum = checksum + pad[0].id
+    pad = Array<PromoLeaf>(1, {_ => PromoLeaf(0)})
 
     let nHolders: Int64 = 8192
     var holders = Array<PromoHolder>(nHolders, {i => PromoHolder(i)})
@@ -51,6 +49,10 @@ main(): Int64 {
         holders[i].kid = None
         checksum = checksum + holders[i].id
     }
+
+    pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-20000 - i)})
+    checksum = checksum + pad[0].id
+    pad = Array<PromoLeaf>(1, {_ => PromoLeaf(0)})
 
     for (round in 0..400) {
         for (i in 0..3200) {
@@ -61,9 +63,12 @@ main(): Int64 {
         }
         checksum = checksum + holders[round % nHolders].id
         checksum = checksum + junk[(cursor + round) % junkSlots].id
-        checksum = checksum + ballast[round]
     }
     println("PROMOTED_EDGE_AGED checksum=${checksum}")
+
+    pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-30000 - i)})
+    checksum = checksum + pad[0].id
+    pad = Array<PromoLeaf>(1, {_ => PromoLeaf(0)})
 
     for (i in 0..nHolders) {
         let leaf = PromoLeaf(i + 1)
@@ -71,6 +76,10 @@ main(): Int64 {
         checksum = checksum + leaf.id
     }
     println("PROMOTED_EDGE_LINKED checksum=${checksum}")
+
+    pad = Array<PromoLeaf>(8192, {i => PromoLeaf(-40000 - i)})
+    checksum = checksum + pad[0].id
+    pad = Array<PromoLeaf>(1, {_ => PromoLeaf(0)})
 
     for (wave in 0..3) {
         for (round in 0..400) {
@@ -86,7 +95,6 @@ main(): Int64 {
                 checksum = checksum + k.id
             }
             checksum = checksum + junk[(cursor + round) % junkSlots].id
-            checksum = checksum + ballast[wave * 400 + round]
         }
         println("PROMOTED_EDGE_DRIVE wave=${wave} checksum=${checksum}")
     }
@@ -97,8 +105,7 @@ main(): Int64 {
             walk = walk + k.id
         }
     }
-    checksum = checksum + walk
-    checksum = checksum + junk[0].id + ballast[100]
+    checksum = checksum + walk + junk[0].id + pad[0].id
     println("PROMOTED_EDGE_OK checksum=${checksum} walk=${walk} holders=${nHolders} cursor=${cursor}")
     return 0
 }
