@@ -27,6 +27,7 @@ set(GC_UNIT_SOURCES
     test_colour_is_checks.cpp
     test_remap_young_roots.cpp
     test_forwarding_entries.cpp
+    test_young_conc.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

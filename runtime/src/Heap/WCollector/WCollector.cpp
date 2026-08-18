@@ -7501,12 +7501,10 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
                                       const MinorObjectSet& allocationRoots)
 {
     // Gate mirrors ValidateMinorReferences. Default OFF — product path must not abort.
-    // Env: MRT_GCV2_VERIFY_YOUNG_MARKING=1 to enable (default unset/other = off).
-    // Mark source: MRT_GCV2_VERIFY_MARK_SOURCE (HotSpot VerifyOption isomorphic).
-    // Default IndependentVsBitmap — does NOT require MinorClosure membership, so fullYoungScan
+    // Flip kVerifyYoungMarking / kVerifyMarkSource in VerifyOption.h and rebuild.
+    // IndependentVsBitmap does NOT require MinorClosure membership, so fullYoungScan
     // is not tautological (gcvheap / HotSpot inventory #22).
-    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_YOUNG_MARKING */;
-    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+    if (!kVerifyYoungMarking) {
         return;
     }
 
@@ -7664,7 +7662,7 @@ void WCollector::ValidateYoungMarking(const std::vector<BaseObject*>& reachableV
     size_t matchCount = (actualYoung >= unexpectedYoung) ? (actualYoung - unexpectedYoung) : 0;
     size_t expectedSize = useIndependent ? (useBitmap ? expectedCandidateYoung : expectedYoung.size()) : actualYoung;
     VLOG(REPORT,
-         "[GCV2][verify][young-marking] run=%zu phase=post-trace env=MRT_GCV2_VERIFY_YOUNG_MARKING=1 "
+         "[GCV2][verify][young-marking] run=%zu phase=post-trace kVerifyYoungMarking=1 "
          "markSource=%s mark-equivalence=%zu/%zu missing=%zu unexpected=%zu "
          "expectedAll=%zu expectedOffCandidate=%zu requireMinorClosure=%u",
          minorTotalRuns + 1, VerifyMarkSourceName(markSource), matchCount, expectedSize, missingYoung,
