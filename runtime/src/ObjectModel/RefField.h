@@ -117,6 +117,7 @@ enum class HealSite : uint16_t {
     WCollectorNormalizeRawRoot,
     WCollectorPreserveRawInterior,
     WCollectorPreserveRootInterior,
+    WCollectorRemapYoungRoots,
     WCollectorRemsetResolveDead,
     WCollectorResolveDeadRoot,
     WCollectorResolveRootLoadGoodForward,

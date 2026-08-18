@@ -70,6 +70,7 @@
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Common/ColourPredicates.h"
+#include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.inline.h"
 #include "UnwindStack/StackFrameCursor.h"
@@ -1721,6 +1722,120 @@ void WCollector::PreforwardStaticRoots()
     RootSlotVisitor visitor = [this](RootSlot& root) { ForwardUpdateRawRef(root); };
     Heap::GetHeap().VisitStaticRoots(visitor);
 }
+
+void WCollector::RemapYoungRoots()
+{
+    if (!RemapYoungRootsLogic::kEnableRemapYoungRoots) {
+        return;
+    }
+    MRT_PHASE_TIMER("RemapYoungRoots");
+    const uintptr_t youngMask = ZPointerRemappedYoungMask;
+    const uintptr_t oldMask = ZPointerRemappedOldMask;
+    size_t remsetSeen = 0;
+    size_t remsetColoured = 0;
+    size_t remsetRemapped = 0;
+    size_t remsetDoubleBad = 0;
+    size_t staticSeen = 0;
+    size_t staticColoured = 0;
+    size_t staticRemapped = 0;
+    size_t staticDoubleBad = 0;
+    size_t stackSeen = 0;
+    size_t stackColoured = 0;
+
+    auto remapField = [&](RefField<>& field, size_t& seen, size_t& coloured, size_t& remapped,
+                          size_t& doubleBad) {
+        ++seen;
+        RefField<> oldField(field);
+        const uintptr_t rawVal = raw(oldField.GetFieldValue());
+        const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
+        if (kind == RemapYoungRootsLogic::Kind::Uncoloured) {
+            return;
+        }
+        ++coloured;
+        if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
+            ++doubleBad;
+        }
+        if (kind == RemapYoungRootsLogic::Kind::LoadGood) {
+            return;
+        }
+        BaseObject* latest = make_load_good(oldField);
+        if (!Heap::IsHeapAddress(latest)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots", latest)) {
+            return;
+        }
+        RefField<> newField = GetAndTryTagRefField(latest);
+        if (oldField.GetFieldValue() != newField.GetFieldValue()) {
+            if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                         HealSite::WCollectorRemapYoungRoots)) {
+                ++remapped;
+            }
+        }
+    };
+
+    std::unordered_set<MAddress> remset = Heap::GetHeap().GetRememberedSet().Snapshot();
+    for (MAddress slot : remset) {
+        if (slot == 0) {
+            continue;
+        }
+        remapField(*reinterpret_cast<RefField<>*>(slot), remsetSeen, remsetColoured, remsetRemapped,
+                   remsetDoubleBad);
+    }
+
+    RootSlotVisitor staticVisitor = [&](RootSlot& root) {
+        ++staticSeen;
+        const uintptr_t rawVal = raw(root.LoadPlain());
+        const auto kind = RemapYoungRootsLogic::Classify(rawVal, youngMask, oldMask);
+        if (kind == RemapYoungRootsLogic::Kind::Uncoloured) {
+            return;
+        }
+        ++staticColoured;
+        if (kind == RemapYoungRootsLogic::Kind::DoubleBad) {
+            ++staticDoubleBad;
+        }
+        if (kind == RemapYoungRootsLogic::Kind::LoadGood) {
+            return;
+        }
+        RefField<> asField(to_zpointer(rawVal));
+        BaseObject* latest = make_load_good(asField);
+        if (!Heap::IsHeapAddress(latest)) {
+            return;
+        }
+        if (!Collector::PlausibleManagedObjectGate("RemapYoungRoots.static", latest)) {
+            return;
+        }
+        HealRoot(root, from_object(latest), HealSite::WCollectorRemapYoungRoots);
+        ++staticRemapped;
+    };
+    Heap::GetHeap().VisitStaticRoots(staticVisitor);
+
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        if (!mutator.IsManagedContext()) {
+            return;
+        }
+        mutator.MutatorLock();
+        StackFrameCursor cursor(mutator.GetUnwindContext());
+        RootVisitor visitor = [&](ObjectRef& root) {
+            ++stackSeen;
+            if ((raw(root.LoadPlain()) & REMAP_COLOUR_MASK) != 0) {
+                ++stackColoured;
+            }
+        };
+        while (!cursor.Done()) {
+            cursor.ProcessOne(visitor, mutator);
+        }
+        mutator.MutatorUnlock();
+    });
+
+    LOG(RTLOG_ERROR,
+        "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
+        "static seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
+        "stack seen=%zu coloured=%zu flipSeq=%lu",
+        remsetSeen, remsetColoured, remsetRemapped, remsetDoubleBad, staticSeen, staticColoured,
+        staticRemapped, staticDoubleBad, stackSeen, stackColoured,
+        static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
+}
 void WCollector::PreforwardFinalizerProcessorRoots()
 {
     RootVisitor visitor = [this](ObjectRef& root) { ForwardUpdateRawRef(root); };
@@ -2607,6 +2722,9 @@ void WCollector::Preforward()
         // fwdgrace: this sync does not go through TransitionToGCPhase, so the arena grace
         // period has to be advanced alongside the route-table one or the two drift apart.
         ForwardDataManager::AdvanceGracePeriod();
+        // OpenJDK zGeneration.cpp:1054-1063: Phase 8 remaps young roots under the driver
+        // lock *before* pause_relocate_start flips the old remap bits (zGeneration.cpp:1503-1508).
+        RemapYoungRoots();
         // This collector relocates both generations in one full-GC relocation set. Match the two
         // generation relocate-start flips while mutators are stopped, before any root is forwarded.
         flip_young_relocate_start();
