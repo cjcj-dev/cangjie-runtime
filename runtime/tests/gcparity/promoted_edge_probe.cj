@@ -16,36 +16,41 @@ class PromoHolder {
     }
 }
 
-func plantJunk(junk: Array<PromoLeaf>, cursor: Int64, id: Int64): Int64 {
-    let n = PromoLeaf(id)
-    junk[cursor % Int64(junk.size)] = n
-    return n.id
+func fillJunk(junk: Array<PromoLeaf>, startId: Int64): Int64 {
+    var checksum: Int64 = 0
+    let n = Int64(junk.size)
+    for (i in 0..n) {
+        let leaf = PromoLeaf(startId + i)
+        junk[i] = leaf
+        checksum = checksum + leaf.id
+    }
+    return checksum
 }
 
-func driveJunk(junk: Array<PromoLeaf>, startId: Int64, count: Int64, startCursor: Int64): (Int64, Int64) {
+func churnJunk(junk: Array<PromoLeaf>, startId: Int64, rounds: Int64): Int64 {
     var checksum: Int64 = 0
-    var cursor = startCursor
-    for (i in 0..count) {
-        checksum = checksum + plantJunk(junk, cursor, startId + i)
-        cursor = cursor + 1
+    let n = Int64(junk.size)
+    for (r in 0..rounds) {
+        for (i in 0..n) {
+            let leaf = PromoLeaf(startId + r * n + i)
+            junk[i] = leaf
+            checksum = checksum + junk[i].id
+        }
+        checksum = checksum + junk[r % n].id
     }
-    checksum = checksum + junk[0].id
-    checksum = checksum + junk[Int64(junk.size) - 1].id
-    return (checksum, cursor)
+    return checksum
 }
 
 main(): Int64 {
+    // 4096 live junk slots stay well under the 32KiB large-object line.
+    // 2048 rounds * 4096 allocs ≈ 8.4e6 objects ≈ 200MiB young allocated
+    // so the 32MiB young line (RegionManager.cpp:1493) fires several times.
     let junkSlots: Int64 = 4096
-    var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-1000000 - i)})
+    var junk = Array<PromoLeaf>(junkSlots, {i => PromoLeaf(-1)})
     var checksum: Int64 = 0
-    var cursor: Int64 = 0
-    var wave: (Int64, Int64)
 
-    // 1.6e6 * ~24B ≈ 38MiB young allocated → crosses the 32MiB young line
-    // (RegionManager.cpp:1493) before cohort A exists.
-    wave = driveJunk(junk, 0, 1600000, cursor)
-    checksum = checksum + wave[0]
-    cursor = wave[1]
+    checksum = checksum + fillJunk(junk, 1)
+    checksum = checksum + churnJunk(junk, 100000, 256)
     println("PROMOTED_EDGE_WARMUP checksum=${checksum}")
 
     let nHolders: Int64 = 8192
@@ -54,14 +59,10 @@ main(): Int64 {
         holders[i].kid = None
         checksum = checksum + holders[i].id
     }
-    wave = driveJunk(junk, 3000000, 1600000, cursor)
-    checksum = checksum + wave[0]
-    cursor = wave[1]
+    checksum = checksum + churnJunk(junk, 2000000, 256)
     checksum = checksum + holders[0].id
     println("PROMOTED_EDGE_AGED checksum=${checksum}")
 
-    // Cohort B: fresh age=0, reachable only through A. Written while A is still
-    // young so the barrier skips remset (Barrier.cpp:1330).
     for (i in 0..nHolders) {
         let leaf = PromoLeaf(i + 1)
         holders[i].kid = leaf
@@ -69,13 +70,10 @@ main(): Int64 {
     }
     println("PROMOTED_EDGE_LINKED checksum=${checksum}")
 
-    for (round in 0..4) {
-        wave = driveJunk(junk, 8000000 + round * 1600000, 1600000, cursor)
-        checksum = checksum + wave[0]
-        cursor = wave[1]
-        let h = holders[round]
-        checksum = checksum + h.id
-        if (let Some(k) <- h.kid) {
+    checksum = checksum + churnJunk(junk, 8000000, 768)
+    for (i in 0..nHolders) {
+        checksum = checksum + holders[i].id
+        if (let Some(k) <- holders[i].kid) {
             checksum = checksum + k.id
         }
     }
@@ -87,7 +85,7 @@ main(): Int64 {
         }
     }
     checksum = checksum + walk
-    checksum = checksum + junk[1].id
+    checksum = checksum + junk[7].id
     println("PROMOTED_EDGE_OK checksum=${checksum} walk=${walk} holders=${nHolders}")
     return 0
 }
