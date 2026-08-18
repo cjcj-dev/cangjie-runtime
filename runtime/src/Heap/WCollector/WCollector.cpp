@@ -9353,37 +9353,40 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         }
         return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
     };
-    BaseObject* again = lookupTo();
-    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
-        if (diagOn) {
-            tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+    auto accept = [&](BaseObject* got) -> BaseObject* {
+        if (got != nullptr && Heap::IsHeapAddress(got) && got->IsValidObject()) {
+            if (diagOn) {
+                tipReadyCount.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (tv) {
+                ToverFailDiag::NoteRemapWaitTip();
+            }
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitReceipt();
+            }
+            return got;
         }
-        if (tv) {
-            ToverFailDiag::NoteRemapWaitTip();
-        }
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitReceipt();
-        }
-        return again;
+        return nullptr;
+    };
+    if (BaseObject* hit = accept(lookupTo())) {
+        return hit;
     }
-    const bool tableHit = again != nullptr;
-    const RegionInfo::RouteState rs = forwarding->GetRouteState();
-    const bool regionPublished =
-        rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
-        forwarding->IsForwardingDone();
-    const bool retainRefused = !forwarding->IsForwardingDone() && !regionPublished;
-    const MutatorRelocate::UnpublishedAnswer ans =
-        MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
-    if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
-        return again;
+    RelocateQueue::EnsureHelpInstalled();
+    RelocateQueue::Instance().add_and_wait(forwarding);
+    if (BaseObject* hit = accept(lookupTo())) {
+        return hit;
     }
-    if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
-        if (MutatorRelocate::StatsOn()) {
-            MutatorRelocate::NoteWaitGiveUp();
+    if (from->IsForwarded()) {
+        BaseObject* published = FindToVersion(from);
+        if (BaseObject* hit = accept(published)) {
+            return hit;
         }
-        return from;
     }
     (void)permanentHole;
+    CHECK_DETAIL(false,
+                 "relocate_or_remap_object: unpublished after add_and_wait "
+                 "(ZGC forward_object assert). from=%p done=%u",
+                 from, static_cast<unsigned>(forwarding->IsForwardingDone()));
     return from;
 }
 

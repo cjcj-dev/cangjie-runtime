@@ -68,14 +68,12 @@ namespace MutatorRelocate {
 
 // Compile-time on. zRelocate.cpp:382-410: mutator copies on the spot; no MRT_GCV2_* gate.
 constexpr bool kMutatorSelfRelocate = true;
-// Table miss after the page is done / retain refused = object was not copied. Keep from.
-// zRelocate.cpp:412-416 asserts find()!=null; our VisitLive/GetRoute hole makes miss mean
-// "never copied", not "wait". Product WaitRoutedTipReady must honour this.
-constexpr bool kUnpublishedMeansKeepFrom = true;
+// After add_and_wait, find() miss is ZGC forward_object assert (zRelocate.cpp:412-416).
+constexpr bool kUnpublishedMeansKeepFrom = false;
 
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
-    KeepFrom = 1,
+    AssertForwarded = 1,
 };
 
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
@@ -85,7 +83,7 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
     }
     (void)regionPublished;
     (void)retainRefused;
-    return UnpublishedAnswer::KeepFrom;
+    return UnpublishedAnswer::AssertForwarded;
 }
 
 // Which retire edge drained. Mirrors FwdInflight::Retire, which measured the same edges.

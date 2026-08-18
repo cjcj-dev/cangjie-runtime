@@ -38,6 +38,7 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Allocator/ForwardingTable.h"
+#include "Heap/Collector/RelocateQueue.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -50,6 +51,25 @@
 #include "Sync/Sync.h"
 
 namespace MapleRuntime {
+
+static void HelpQueuedForward(RegionInfo* region)
+{
+    if (region == nullptr || region->IsForwardingDone()) {
+        return;
+    }
+    RegionManager& mgr = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator()).GetRegionManager();
+    if (region->IsYoungRegion()) {
+        mgr.ForwardRegion<Generation::Young>(region);
+    } else {
+        mgr.ForwardRegion<Generation::Old>(region);
+    }
+}
+
+void RelocateQueue::EnsureHelpInstalled()
+{
+    Instance().SetHelp(&HelpQueuedForward);
+}
+
 uintptr_t RegionInfo::UnitInfo::totalUnitCount = 0;
 uintptr_t RegionInfo::UnitInfo::heapStartAddress = 0;
 size_t RegionInfo::UnitInfo::unitSizeShift = 0;
@@ -586,9 +606,18 @@ public:
 
     void Execute(size_t) override
     {
+        RelocateQueue& q = RelocateQueue::Instance();
         while (true) {
+            while (RegionInfo* urgent = q.poll_and_claim()) {
+                regionManager.ForwardRegion<G>(urgent);
+            }
             RegionInfo* region = fromRegionList.TakeHeadRegion(RegionInfo::RegionType::LONE_FROM_REGION);
-            if (region == nullptr) { break; }
+            if (region == nullptr) {
+                while (RegionInfo* urgent = q.poll_and_claim()) {
+                    regionManager.ForwardRegion<G>(urgent);
+                }
+                break;
+            }
             regionManager.ForwardRegion<G>(region);
         }
     }
@@ -1646,6 +1675,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
 template<Generation G>
 void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 {
+    RelocateQueue::EnsureHelpInstalled();
     if (threadPool != nullptr) {
         int32_t threadNum = threadPool->GetMaxThreadNum() + 1;
         // We won't change fromRegionList during gc, so we can use it without lock.
@@ -2559,6 +2589,11 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
 template<Generation G>
 void RegionManager::ForwardRegion(RegionInfo* region)
 {
+    if (region == nullptr || region->IsForwardingDone() ||
+        region->GetRouteState() == RegionInfo::RouteState::FORWARDED ||
+        region->GetRouteState() == RegionInfo::RouteState::COMPACTED) {
+        return;
+    }
     MarkView<G> markView = region->GetRouteMarkView<G>();
     CHECK_DETAIL(region->IsFromRegion() || region->IsLoneFromRegion() || (region->IsThreadLocalRegion() &&
         (region->IsRoutingState() || region->IsCompacted())), "region type %u", region->GetRegionType());

@@ -429,10 +429,8 @@ public:
             }
             return to;
         }
-        // ③ table still empty. ZGC add_and_wait only after retain-ok+alloc-fail
-        // (zRelocate.cpp:403-409), then forward_object asserts find()!=null.
-        // Our hole is VisitLive never copied this from: miss means keep from
-        // (kUnpublishedMeansKeepFrom), not sched_yield for a publisher.
+        // ③ add_and_wait (zRelocate.cpp:134-151 / :403-409): enqueue + notify +
+        // cv wait for is_done, then find. Miss after done is forward_object assert.
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }
@@ -442,15 +440,7 @@ public:
         if (MutatorRelocate::StatsOn()) {
             MutatorRelocate::NoteWaitEnter();
         }
-        BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding);
-        if (resolved != nullptr && resolved != obj) {
-            return resolved;
-        }
-        if (funnel) {
-            giveFromCount.fetch_add(1, std::memory_order_relaxed);
-            routeNullCount.fetch_add(1, std::memory_order_relaxed);
-        }
-        return obj;
+        return WaitRoutedTipReady(obj, to, forwarding);
     }
 
     void AddRawPointerObject(BaseObject* obj) override

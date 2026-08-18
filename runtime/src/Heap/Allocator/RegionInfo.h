@@ -36,6 +36,7 @@
 #include "Base/RwLock.h"
 #include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/Collector/RelocateQueue.h"
 #include "Heap/Collector/GcInfos.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Collector/ManagedObjectGate.h"
@@ -2227,9 +2228,15 @@ public:
 
     bool ClaimForwarding() { return ZForwardingLife::claim(metadata.fwdClaimed); }
 
-    void MarkForwardingDone() { ZForwardingLife::mark_done(metadata.fwdDone); }
+    void MarkForwardingDone()
+    {
+        ZForwardingLife::mark_done(metadata.fwdDone);
+        RelocateQueue::Instance().OnDone(this);
+    }
 
     bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
+
+    const std::atomic<bool>& ForwardingDoneFlag() const { return metadata.fwdDone; }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
