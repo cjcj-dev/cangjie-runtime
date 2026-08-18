@@ -41,6 +41,9 @@ std::atomic<uint64_t> g_destAgree{ 0 };
 std::atomic<uint64_t> g_destDisagree{ 0 };
 std::atomic<uint64_t> g_destPending{ 0 };
 std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
+std::atomic<uint64_t> g_armedHit{ 0 };
+std::atomic<uint64_t> g_armedMiss{ 0 };
+std::atomic<uint64_t> g_unarmed{ 0 };
 
 } // namespace
 
@@ -241,6 +244,37 @@ MAddress ForwardingTable::FindTo(MAddress from)
     return tab->find(from);
 }
 
+bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
+
+MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
+{
+    ForwardingEntries* tab = GetEntries(from);
+    if (tab == nullptr) {
+        g_unarmed.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::Unarmed;
+        }
+        return 0;
+    }
+    const MAddress to = tab->find(from);
+    if (to != 0) {
+        g_armedHit.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::ArmedHit;
+        }
+        return to;
+    }
+    g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+    if (answer != nullptr) {
+        *answer = ToAnswer::ArmedMiss;
+    }
+    return 0;
+}
+
+uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
+uint64_t ForwardingTable::ArmedMissCount() { return g_armedMiss.load(std::memory_order_relaxed); }
+uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
+
 void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
 {
     if (!Ready()) {
@@ -308,6 +342,9 @@ void ForwardingTable::DumpCompare(const char* why)
         why == nullptr ? "?" : why, g_destTotal.load(std::memory_order_relaxed),
         g_destAgree.load(std::memory_order_relaxed), g_destDisagree.load(std::memory_order_relaxed),
         g_destPending.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[FWDENT][sole] why=%s armedHit=%lu armedMiss=%lu unarmed=%lu",
+        why == nullptr ? "?" : why, g_armedHit.load(std::memory_order_relaxed),
+        g_armedMiss.load(std::memory_order_relaxed), g_unarmed.load(std::memory_order_relaxed));
     for (unsigned t = 0; t < kTypeBuckets; ++t) {
         const uint64_t to = g_tableOnlyByType[t].load(std::memory_order_relaxed);
         const uint64_t lo = g_legacyOnlyByType[t].load(std::memory_order_relaxed);

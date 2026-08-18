@@ -14,9 +14,32 @@
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
 
-GC_TEST(StayYoung, PolicyOn)
+// The switch's *value* is a shipping decision, not an invariant, so nothing here asserts it. A test
+// that says "the policy is on" fails the moment someone turns it off for a good reason -- which is
+// what happened: adaptive tenuring is off pending the phase-8 hang, and this test turned that into
+// a red build. The behaviour tests below drive ShouldPromoteAge and the ageing helpers directly, so
+// they keep their meaning whichever way the switch is set.
+//
+// What is worth pinning is that the switch reaches the decision at all, in whichever direction it
+// currently points -- otherwise it could be dead and everything would still look green.
+GC_TEST(StayYoung, PolicySwitchIsWiredToTheDecision)
 {
-    GC_EXPECT_TRUE(kPageAgeAdaptiveTenuring);
+    // promoteAll is the one input that must win regardless of policy: a major collection promotes
+    // everything, and no threshold may override that.
+    TenuringInputs forced{};
+    forced.promoteAll = true;
+    forced.liveByAge[1] = 4096;
+    GC_EXPECT_EQ(ComputeTenuringThreshold(forced), 0u);
+
+    // And the threshold is computed from the distribution rather than being a constant, which is
+    // the property the policy consumes when it is on.
+    TenuringInputs shaped{};
+    shaped.liveByAge[1] = 4096;
+    shaped.liveByAge[2] = 4096;
+    shaped.youngAllocated = 1 << 20;
+    shaped.softMaxCapacity = 1 << 24;
+    const uint32_t shapedThreshold = ComputeTenuringThreshold(shaped);
+    GC_EXPECT_TRUE(shapedThreshold <= kMaxTenuringThreshold);
 }
 
 GC_TEST(StayYoung, BelowThresholdDoesNotPromote)

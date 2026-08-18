@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <cstddef>
+#include <cstdint>
 
 #include "Common/TypeDef.h"
 #include "Heap/Allocator/ForwardingEntry.h"
@@ -24,6 +25,12 @@ public:
     // Compile-time: FindToVersion prefers a stored entry, then falls back to geometry
     // until the entry exists.  After route retirement only the entry can answer.
     static constexpr bool kConsumeEntries = true;
+    // Step ③: an armed region (GetEntries != null) answers only from the table.
+    // Miss is "no to" — never invent a destination from route geometry.
+    // Unarmed regions still use geometry (transition). zForwarding.inline.hpp:248-252.
+    static constexpr bool kEntriesSoleWhenArmed = true;
+
+    enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
 
     static void Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
@@ -38,6 +45,11 @@ public:
     // After copy: zRelocate.cpp:367-372
     static MAddress InsertMapping(MAddress from, MAddress to);
     static MAddress FindTo(MAddress from);
+    static bool EntriesArmed(MAddress from);
+    static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
+    static uint64_t ArmedHitCount();
+    static uint64_t ArmedMissCount();
+    static uint64_t UnarmedCount();
 
     static void NoteCompare(MAddress addr, bool legacy);
     static void NoteDestCompare(MAddress from, MAddress geometricTo);

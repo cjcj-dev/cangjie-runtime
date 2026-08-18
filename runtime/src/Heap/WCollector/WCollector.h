@@ -367,7 +367,28 @@ public:
             return obj;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+            if (ForwardingTable::EntriesArmed(fromAddr)) {
+                const MAddress stored = ForwardingTable::FindTo(fromAddr);
+                if (stored != 0) {
+                    BaseObject* to = reinterpret_cast<BaseObject*>(stored);
+                    if (funnel) {
+                        receiptCount.fetch_add(1, std::memory_order_relaxed);
+                    }
+                    if (tv) {
+                        ToverFailDiag::NoteRemapReceipt();
+                    }
+                    return to;
+                }
+            }
+        }
         BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+            if (ForwardingTable::EntriesArmed(fromAddr)) {
+                to = nullptr;
+            }
+        }
         if (to != nullptr) {
             if (LIKELY(!Heap::IsHeapAddress(to))) {
                 if (funnel) {
@@ -540,6 +561,13 @@ public:
 
     BaseObject* GetForwardPointer(BaseObject* fromObj, RegionInfo* region)
     {
+        const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
+        if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+            if (ForwardingTable::EntriesArmed(fromAddr)) {
+                const MAddress to = ForwardingTable::FindTo(fromAddr);
+                return to == 0 ? nullptr : reinterpret_cast<BaseObject*>(to);
+            }
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         return space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
     }
@@ -585,11 +613,17 @@ public:
             return nullptr;
         }
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
-            const MAddress to = ForwardingTable::FindTo(fromAddr);
+            const MAddress to = ForwardingTable::LookupTo(fromAddr, &ans);
             if (to != 0) {
                 stored = reinterpret_cast<BaseObject*>(to);
+            }
+            if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
+                if (ans != ForwardingTable::ToAnswer::Unarmed) {
+                    return stored;
+                }
             }
         }
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(fromAddr);
