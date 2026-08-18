@@ -1927,6 +1927,26 @@ void WCollector::TraceHeap()
     } else {
         // Full collection starts young and old marking in the same pause, as
         // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
+        //
+        // The comment said "in the same pause" and there was no pause. ZGenerationYoung::mark_start
+        // opens with assert(SafepointSynchronize::is_at_safepoint()) (zGeneration.cpp:855-859), and
+        // ZGenerationOld::mark_start with the same assert (:1212-1213); both are the body of one VM
+        // operation (:583-605). The safepoint is not incidental -- flip_mark_start calls
+        // ZBarrierSet::assembler()->patch_barriers() (:644-648), which rewrites running barrier code.
+        //
+        // This was the live arm, and the only flip site in this collector without a stop. The
+        // sibling arm above holds one, but ConcurrentStackScanEnabled() reads a pinned-off env and
+        // is always false, so it never ran. No caller supplied a stop either: RunGarbageCollection
+        // takes ScopedSTWLock, which is a mutex that prevents *other* threads from stopping the
+        // world, not a stop -- and the ScopedStopTheWorld beside it is commented out.
+        //
+        // What that published to running mutators: the two flips are separate calls, each ending in
+        // its own set_good_masks(), which writes four plain non-atomic globals. So a mutator could
+        // execute a barrier against the pair (MarkedYoung advanced, MarkedOld not) -- a combination
+        // ZGC only ever publishes from inside a safepoint. Every other flip here already does the
+        // right thing: the minor at :7712-7715 flips inside ScopedStopTheWorld, and Preforward at
+        // :2722-2733 wraps both relocate-start flips in a ScopedLightSync for exactly this reason.
+        ScopedStopTheWorld stw("major mark start", false);
         flip_young_mark_start();
         flip_old_mark_start();
     }
