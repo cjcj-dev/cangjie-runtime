@@ -249,7 +249,14 @@ endif()
     # freshly built .so; the script self-skips via a stamp when neither the .so nor the suite moved,
     # and known_failures.txt keeps today's two standing failures from blocking while still blocking
     # anything new -- and blocking a listed test that starts passing, so the list cannot rot.
-    if (NOT CMAKE_CROSSCOMPILING AND NOT WINDOWS_FLAG MATCHES 1)
+    # Linux only: the gate script and run_standalone.sh hard-code libcangjie-runtime.so, so on macOS
+    # native builds the freshly-built product is libcangjie-runtime.dylib and the gate fails closed,
+    # taking the entire Apple CI matrix with it.  CMAKE_CROSSCOMPILING already skips iOS
+    # device/simulator, but a native macOS build is not a cross compile -- exclude the Apple flags
+    # here so the gate stays on Linux, which is the only place this runtime has a deterministic GC
+    # defect detector.
+    if (NOT CMAKE_CROSSCOMPILING AND NOT WINDOWS_FLAG MATCHES 1 AND NOT MACOS_FLAG MATCHES 1
+        AND NOT IOS_FLAG MATCHES 1 AND NOT IOS_SIMULATOR_FLAG MATCHES 1 AND NOT IOS_SIMULATOR_FLAG MATCHES 2)
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E env
                 "GCV2_RUNTIME_LIB_DIR=$<TARGET_FILE_DIR:cangjie-runtime>"
