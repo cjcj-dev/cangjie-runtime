@@ -24,6 +24,34 @@ struct PinRootTestAccess {
     {
         manager.oldPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::FULL_PINNED_REGION);
     }
+
+    // Reuses the friendship this file already has rather than adding another one to the product
+    // header: the region lists are private, and a second friend declaration is a permanent change
+    // to RegionManager for the sake of one test.
+    static void ParkOnThreadLocal(RegionManager& manager, RegionInfo* region)
+    {
+        manager.tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    }
+    static bool OnRecentFull(RegionManager& manager, const RegionInfo* region)
+    {
+        bool found = false;
+        manager.recentFullRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+            if (r == region) {
+                found = true;
+            }
+        });
+        return found;
+    }
+    static bool OnThreadLocal(RegionManager& manager, const RegionInfo* region)
+    {
+        bool found = false;
+        manager.tlRegionList.VisitAllRegions([&found, region](RegionInfo* r) {
+            if (r == region) {
+                found = true;
+            }
+        });
+        return found;
+    }
 };
 
 } // namespace MapleRuntime
@@ -84,4 +112,42 @@ GC_TEST(PinRoot, NativeHeldUnmarkedPinnedObjectSurvivesUntilRemove)
     GC_EXPECT_EQ(result.garbageWhilePinned, 0u);
     GC_EXPECT_EQ(result.countAfterRemove, 0);
     GC_EXPECT_EQ(result.garbageAfterRemove, reclaimableBytes);
+}
+
+// A region the forward path finishes with in place must still be reachable by a collection-set
+// builder afterwards.
+//
+// ZGC separates the two questions. A page is in _page_table from ZHeap::alloc_page
+// (zHeap.cpp:257) until ZHeap::free_page (:277), and select_relocation_set iterates that table
+// (zGeneration.cpp:205-212), so whether an allocator currently points at a page has nothing to do
+// with whether the collector can still see it. Ours answers both with list membership, and
+// compact-in-place used to drop the allocator side without moving the region: CompactRegion ends by
+// prepending it to tlRegionList, and AllocBuffer::ClearRegion only nulls tlRegion.
+//
+// Neither collection-set builder walks tlRegionList -- AssembleSmallGarbageCandidates and
+// PrepareYoungGarbageCandidates walk fromRegionList, recentFullRegionList and
+// unmovableFromRegionList -- so such a region could never be collected, and never allocated from
+// either, since AllocateThreadLocalRegion always takes a fresh one. It was simply retained.
+//
+// The existing suite could not have caught this: exactly one test in it ever puts a region on a
+// list, and it puts it on the list its own walker reads.
+GC_TEST(RegionRetirement, CompactInPlaceLeavesRegionOnAListACollectorWalks)
+{
+    GcHeapFixture fx;
+    RegionManager manager;
+    RegionInfo* region = fx.region0;
+
+    // Where CompactRegion leaves it, with no AllocBuffer owning it any more.
+    PinRootTestAccess::ParkOnThreadLocal(manager, region);
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
+                 static_cast<unsigned>(RegionInfo::RegionType::THREAD_LOCAL_REGION));
+
+    manager.RehomeCompactedInPlaceRegion(region);
+
+    // The invariant: it now sits on a list a collection-set builder reads, typed accordingly.
+    GC_EXPECT_EQ(static_cast<unsigned>(region->GetRegionType()),
+                 static_cast<unsigned>(RegionInfo::RegionType::RECENT_FULL_REGION));
+
+    GC_EXPECT_TRUE(PinRootTestAccess::OnRecentFull(manager, region));
+    GC_EXPECT_TRUE(!PinRootTestAccess::OnThreadLocal(manager, region));
 }

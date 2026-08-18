@@ -170,6 +170,9 @@ public:
     size_t RecordPinnedCrossGenEdges();
     void StampCensusBoundaries();
     void PromoteAllRegions();
+    // Put a region the forward path finished with in place back where a collection-set builder
+    // will find it; CompactRegion leaves it on tlRegionList, which no builder walks.
+    void RehomeCompactedInPlaceRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region);
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 

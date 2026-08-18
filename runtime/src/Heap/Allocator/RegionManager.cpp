@@ -2134,6 +2134,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
             toRegion1 = region;
             result = false;
             buffer->ClearRegion();
+            RehomeCompactedInPlaceRegion(region);
             DLOG(FORWARD, "route region %p@[%#zx+%zu, %#zx) => compact-in-place %p@[%#zx~%#zx, %#zx)",
                 region, region->GetRegionStart(), fromBytes, region->GetRegionEnd(), toRegion1,
                 toRegion1->GetRegionStart(), toRegion1->GetRegionStart() + fromBytes, toRegion1->GetRegionEnd());
@@ -2207,6 +2208,7 @@ bool RegionManager::RouteOrCompactRegionImpl(RegionInfo* region)
         toRegion2 = region; // region is partially compacted into itself.
         result = false;
         buffer->ClearRegion();
+        RehomeCompactedInPlaceRegion(region);
     }
     uint32_t toRegion2Idx = toRegion2->GetUnitIdx();
     // routedest: on the toRegion2 == nullptr path above, SetRouteInfo has already run once
@@ -2306,6 +2308,37 @@ void RegionManager::CompactRegion(RegionInfo* region)
             RegionInfo::RegionType::THREAD_LOCAL_REGION);
     }
     tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
+}
+
+// A region the forward path finished with in place has to stay reachable by a collection-set
+// builder, and CompactRegion leaves it on tlRegionList, which no builder walks.
+//
+// ZGC gets this structurally: a page is in _page_table from ZHeap::alloc_page (zHeap.cpp:257) until
+// ZHeap::free_page (:277), and select_relocation_set iterates that table
+// (zGeneration.cpp:205-212), so allocator ownership and collection visibility are separate
+// questions. Ours ties them together through a list, and the compact-in-place arm drops the
+// allocator side without moving the region: AllocBuffer::ClearRegion (AllocBuffer.h:36-44) only
+// nulls tlRegion, it does not unlink anything.
+//
+// The result is a region no path can reach again. It cannot be allocated from --
+// AllocateThreadLocalRegion always takes a fresh region -- and it cannot be collected, because
+// AssembleSmallGarbageCandidates and PrepareYoungGarbageCandidates walk fromRegionList,
+// recentFullRegionList and unmovableFromRegionList, and neither walks tlRegionList. It is simply
+// retained until the heap goes away.
+//
+// Same shape as the stay-young survivor that had to be re-homed earlier in this cycle: the work
+// finished, and nothing put the region back where the next cycle looks.
+void RegionManager::RehomeCompactedInPlaceRegion(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return;
+    }
+    if (region->GetRegionType() != RegionInfo::RegionType::THREAD_LOCAL_REGION) {
+        return;
+    }
+    tlRegionList.TryDeleteRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION,
+                                 RegionInfo::RegionType::RECENT_FULL_REGION);
+    recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
 }
 
 void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
