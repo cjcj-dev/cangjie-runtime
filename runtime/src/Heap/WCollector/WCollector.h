@@ -583,12 +583,27 @@ public:
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
             return nullptr;
         }
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
+        BaseObject* stored = nullptr;
+        if constexpr (ForwardingTable::kConsumeEntries) {
+            const MAddress to = ForwardingTable::FindTo(fromAddr);
+            if (to != 0) {
+                stored = reinterpret_cast<BaseObject*>(to);
+            }
+        }
+        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (fromRegionInfo == nullptr) {
-            return nullptr;
+            return stored;
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
-        return space.GetRegionManager().FindPublishedRoute(obj).dest;
+        BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
+        if (geometric != nullptr) {
+            ForwardingTable::NoteDestCompare(fromAddr, reinterpret_cast<MAddress>(geometric));
+        }
+        if constexpr (ForwardingTable::kConsumeEntries) {
+            return stored != nullptr ? stored : geometric;
+        }
+        return geometric;
     }
 
 protected:

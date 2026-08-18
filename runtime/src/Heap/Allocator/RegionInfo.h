@@ -1917,6 +1917,7 @@ public:
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.
         ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
+        ForwardingTable::EnsureEntries(this);
         // enrolphase: which side of the relocate-start flip does this enrolment land on?
         //
         // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
@@ -2331,6 +2332,7 @@ public:
         if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
             type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
             ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
+            ForwardingTable::EnsureEntries(this);
         } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
                    type == RegionType::TO_REGION) {
             // The ghost bit is part of membership and outlives the type change: all six residual
@@ -3247,6 +3249,7 @@ private:
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
         metadata.prevRegionIdx = NULLPTR_IDX;
