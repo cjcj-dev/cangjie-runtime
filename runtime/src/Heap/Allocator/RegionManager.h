@@ -174,6 +174,11 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
+    // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
+    // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
+    void EnlistStayYoungSurvivor(RegionInfo* region);
+    static void BumpYoungSurvivorAge(RegionInfo* region);
+    static void FinishStayYoungInPlace(RegionInfo* region);
 
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
     void DumpRegionInfo() const;
