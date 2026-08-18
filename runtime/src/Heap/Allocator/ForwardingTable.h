@@ -38,6 +38,10 @@ public:
     static void Remove(MAddress regionStart, size_t regionSize);
     static void EnsureEntries(RegionInfo* region);
     static void ClearEntries(MAddress regionStart, size_t regionSize);
+    // Unlinked-but-not-freed tables, and the point at which they actually go away. ZGC keeps the
+    // same gap by construction: entries live in an arena recycled a whole phase after the page dies.
+    static void Retire(ForwardingEntries* tab);
+    static void ReclaimRetired(const char* why);
 
     static RegionInfo* Get(MAddress addr);
     static ForwardingEntries* GetEntries(MAddress addr);

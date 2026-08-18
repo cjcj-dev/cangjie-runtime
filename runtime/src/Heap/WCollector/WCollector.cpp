@@ -8957,6 +8957,13 @@ void WCollector::DoYoungGarbageCollection()
 
 void WCollector::DoGarbageCollection()
 {
+    // Free the forwarding entry tables retired during the previous cycle. ZGC recycles its
+    // forwarding arena at the next cycle's ZRelocationSetInstallTask (zRelocationSet.cpp:91-96),
+    // one whole phase after ZHeap::free_page released the page the forwarding described; that gap
+    // is why ZForwarding::find may run holding no reference (zRelocate.cpp:382-393). Reclaiming at
+    // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
+    // of these pointers has been through a phase transition.
+    ForwardingTable::ReclaimRetired("cycle-start");
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();

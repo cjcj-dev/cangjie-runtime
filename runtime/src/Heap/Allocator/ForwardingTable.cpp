@@ -10,6 +10,8 @@
 #include <atomic>
 #include <cstdlib>
 #include <cstring>
+#include <vector>
+#include <mutex>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -182,15 +184,66 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
         g_map[first + i].entries.store(nullptr, std::memory_order_release);
     }
     // One table, many slots: EnsureEntries publishes the same pointer across every unit the region
-    // covers, so "I took a non-null pointer out of a slot" is not "I own it". Freeing on that alone
-    // frees a neighbour's live table, and the next region to clear frees it again -- which is
-    // exactly the crash this guard was added for: SIGSEGV inside __libc_free during post_trace,
-    // faulting on the chunk header of an address that had already been returned to the allocator.
+    // covers, so "I took a non-null pointer out of a slot" is not "I own it". The table records the
+    // address it was built for, so ownership is a comparison rather than a convention.
     //
-    // The table records the address it was built for, so ownership is a comparison, not a
-    // convention.
+    // Retired, not freed. ZGC's entries live in the ZForwardingAllocator arena and that arena is
+    // recycled only by the *next* cycle's ZRelocationSetInstallTask (zRelocationSet.cpp:91-96);
+    // ZHeap::free_page frees the page and nothing else (zRelocate.cpp:1041-1047), and
+    // reset_relocation_set runs destructors only (zRelocationSet.cpp:191-196). Page death and table
+    // death are a whole phase apart, and that gap is what licenses ZForwarding::find to run with no
+    // reference held -- which it does, before retain_page rather than after (zRelocate.cpp:382-393).
+    //
+    // Ours had no gap: region reuse was the free. ClearEntries is reached from InitRegionInfo, so a
+    // mutator allocating a fresh region called std::free on a table that FindToVersion was reading
+    // -- and FindToVersion sits on the mutator read barrier whenever kStaleGuard is on, holding
+    // nothing, gated only on IsHeapAddress. Deferring the free to a cycle boundary restores the gap
+    // instead of asking every reader to take a reference.
+    //
+    // It also removes a read-after-free that did not need concurrency at all: a small region is 32
+    // units, InitFreeUnits walks them one at a time, and each call landed here with count == 1.
+    // Iteration 0 freed the table; iterations 1..31 then evaluated tab->start() on freed storage.
     if (tab != nullptr && tab->start() == regionStart) {
+        Retire(tab);
+    }
+}
+
+// Tables unlinked from the map but not yet freed, and the count of frees deferred through them.
+// A pointer sitting here is unreachable through the map -- no new reader can find it -- but a reader
+// that loaded it before the unlink may still be inside find().
+namespace {
+std::mutex g_retiredLock;
+std::vector<ForwardingEntries*> g_retired;
+std::atomic<uint64_t> g_retiredTotal{ 0 };
+std::atomic<uint64_t> g_reclaimedTotal{ 0 };
+} // namespace
+
+void ForwardingTable::Retire(ForwardingEntries* tab)
+{
+    if (tab == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    g_retired.push_back(tab);
+    g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
+}
+
+void ForwardingTable::ReclaimRetired(const char* why)
+{
+    std::vector<ForwardingEntries*> victims;
+    {
+        std::lock_guard<std::mutex> lock(g_retiredLock);
+        victims.swap(g_retired);
+    }
+    for (ForwardingEntries* tab : victims) {
         tab->Destroy();
+    }
+    if (!victims.empty()) {
+        const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) +
+            victims.size();
+        LOG(RTLOG_ERROR, "[FWDTABLE][reclaim] why=%s freed=%zu retired_total=%lu reclaimed_total=%lu",
+            why == nullptr ? "?" : why, victims.size(),
+            g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
 
