@@ -131,6 +131,39 @@ public:
     {
         AbortUnimplemented("Collector::TryTagRefField");
     }
+    virtual Uptr CurrentRemapColourForProbe() const { return 0; }
+
+    virtual bool IsMarkedObjectForProbe(BaseObject*) const { return false; }
+
+    // healfp: lossy fingerprint of "this slot address was healed by the mark walk this process".
+    // Volume alone cannot answer whether a *particular* stale slot was ever visited -- TraceRefField
+    // heals >=524k slots per run, so a big number proves breadth, not coverage of the one slot that
+    // went stale.  A bit that is *clear* is strong evidence the slot was never healed; a bit that is
+    // set is weak (hash collisions), which is why the same query is also run on ordinary hand-outs
+    // to get the collision baseline.
+    static constexpr size_t kHealFpBits = 1u << 22; // 4 Mbit = 512 KiB
+    static uint64_t* HealFpTable()
+    {
+        static uint64_t table[kHealFpBits / 64] = {};
+        return table;
+    }
+    static size_t HealFpIndex(uintptr_t slot)
+    {
+        // slots are 8-byte aligned; mix the high bits down so regions do not alias wholesale
+        const uintptr_t h = (slot >> 3) ^ (slot >> 23) ^ (slot >> 41);
+        return static_cast<size_t>(h) & (kHealFpBits - 1);
+    }
+    static void HealFpMark(uintptr_t slot)
+    {
+        const size_t i = HealFpIndex(slot);
+        __atomic_fetch_or(&HealFpTable()[i / 64], uint64_t(1) << (i % 64), __ATOMIC_RELAXED);
+    }
+    static bool HealFpTest(uintptr_t slot)
+    {
+        const size_t i = HealFpIndex(slot);
+        return (__atomic_load_n(&HealFpTable()[i / 64], __ATOMIC_RELAXED) & (uint64_t(1) << (i % 64))) != 0;
+    }
+
     virtual RefField<> GetAndTryTagRefField(BaseObject*) const
     {
         AbortUnimplemented("Collector::GetAndTryTagRefField");

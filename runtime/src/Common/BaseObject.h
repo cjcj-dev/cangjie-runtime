@@ -90,7 +90,9 @@ protected:
     static inline BaseObject* SetClassInfo(MAddress address, TypeInfo* klass)
     {
         auto ref = from_alloc_addr(address);
-        ref->stateWord.SetTypeInfo(klass);
+        // Whole word, not just the address halves: this memory may have been a from-version, and
+        // SetTypeInfo would leave its stateCode behind (StateWord::InitTypeInfoAndState).
+        ref->stateWord.InitTypeInfoAndState(klass);
         return ref;
     }
 

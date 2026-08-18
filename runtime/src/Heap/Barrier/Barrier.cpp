@@ -9,6 +9,8 @@
 #include "Base/Macros.h"
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Verify/ZgcInvariants.h"
+#include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/HealPairDiag.h"
@@ -210,6 +212,107 @@ uint64_t Barrier::GetGenerationalBarrierRegionLookups()
 }
 #endif
 
+// valside: does a mutator ever hand the store barrier a value that is *not* a live to-version?
+//
+// OpenJDK makes this question unaskable by construction.  ZAddress::color() takes a `zaddress`,
+// and a `zaddress` is only obtainable from ZPointer::uncolor(), which asserts
+//     is_load_good(ptr) || is_null_any(ptr)   "Should be load good when handed out"
+// (zAddress.inline.hpp:609-614).  So a from-version address cannot reach a store: the type
+// system rejects it.  Our ABI cannot copy that -- the compiler calls the barrier with a raw
+// BaseObject* -- so the same invariant has to be *measured* instead of enforced by types.
+//
+// Two crash families both reduce to a slot that holds the current colour (hence load-good, hence
+// the read barrier never looks at it) while naming a target that is not a live object:
+//   family A  target reclaimed   -> StateWord typeInfo bits are 0    -> null base + field offset
+//                                   SIGSEGV si_code=1 si_addr=0x8/0x20/0x48
+//   family B  target from-version-> StateWord stateCode = FORWARDED  -> (3 << 48) enters the
+//                                   address, non-canonical, #GP: si_code=128 si_addr=(nil)
+// Family B decoded exactly: StateWord.h:174-178 lays the header out as typeInfoLow32(0-31),
+// typeInfoHigh16(32-47), objectState(48-63) with stateCode:2 at bits 48-49, and StateWord.h:22-30
+// gives FORWARDED = 3.  The observed rdi = 0x35bab81ce9e60 is exactly
+// (3 << 48) | 0x5bab81ce9e60, and the low 48 bits land in .cjmetadata like the three sibling
+// registers -- i.e. a perfectly good static TypeInfo pointer with a state code stapled on top.
+// Runtime reads are immune (StateWord::GetTypeInfo reads the two bitfields), but the
+// compiler-emitted `mov (%rbx),%rdi` takes the whole word.
+//
+// This counts the value side: every reference the mutator asks us to store whose target header
+// is already zeroed or already FORWARDED.  Non-zero means mutators do hold stale references
+// across a flip, which points at the missing frame-return barrier (E1) rather than at the
+// remset or the reclaim policy.
+//
+// ⛔ Compile-time gated: this is the hottest write path in the runtime.  One relaxed load, no
+// region lookup and no bitmap query -- the earlier version of this probe did two region lookups
+// per slow-path store and turned a 40s run into a 300s timeout.  Campaign convention is a
+// constant, never a new MRT_GCV2_ env var.
+constexpr bool kValSideProbe = true;
+static std::atomic<uint64_t> g_valSideStores{ 0 };
+static std::atomic<uint64_t> g_valSideBad{ 0 };
+
+static inline void NoteValueSideStore(BaseObject* ref, uint8_t phase)
+{
+    if (!kValSideProbe) {
+        return;
+    }
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return;
+    }
+    const uint64_t total = g_valSideStores.fetch_add(1, std::memory_order_relaxed) + 1;
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(ref), __ATOMIC_RELAXED);
+    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+    const uint64_t typeInfo = hdr & 0xffffffffffffull;
+    if (total == 1) {
+        // positive control: proves the probe is compiled in and reached, even if nothing is bad.
+        LOG(RTLOG_ERROR, "[VALSIDE] armed first_store hdr=0x%lx sc=%u phase=%u", hdr, stateCode, phase);
+    }
+    if (stateCode == 0 && typeInfo != 0) {
+        return;
+    }
+    const uint64_t bad = g_valSideBad.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((bad & (bad - 1)) != 0) { // powers of two only: the subject dies by SIGSEGV, so no atexit
+        return;
+    }
+    LOG(RTLOG_ERROR, "[VALSIDE] bad=%lu of total=%lu ref=%p sc=%u typeInfo=0x%lx phase=%u family=%s", bad, total,
+        static_cast<void*>(ref), stateCode, typeInfo, phase, (typeInfo == 0) ? "A-zeroed" : "B-forwarded");
+}
+
+// The value side alone is not yet a defect: our encoding is two-state (RefField carries a tag
+// meaning "evacuation in progress, resolve me"), so handing the barrier a from-version is legal
+// *provided the installed colour still demands resolution*.  The defect is the one case where it
+// does not: the slot ends up load-good -- so the read barrier's fast path hands it straight to
+// the mutator -- while naming a target whose header is zeroed or FORWARDED.  That is the shared
+// root of both crash families, and it is what OpenJDK forbids structurally: after
+// ZBarrier::store_barrier_on_heap_oop_field the slot holds ZAddress::color(zaddress, ...) and a
+// zaddress is by construction already remapped (zAddress.inline.hpp:609-614).
+static std::atomic<uint64_t> g_valSideInstalledBad{ 0 };
+
+static inline void NoteInstalledSlot(const RefField<false>& field, const Collector& collector, uint8_t phase)
+{
+    if (!kValSideProbe) {
+        return;
+    }
+    RefField<> now(field.GetFieldValue());
+    if (!collector.is_load_good(now)) {
+        return; // read barrier will resolve it -- this is the legal two-state case
+    }
+    BaseObject* target = to_object(now.GetTargetObject());
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+    const uint64_t typeInfo = hdr & 0xffffffffffffull;
+    if (stateCode == 0 && typeInfo != 0) {
+        return;
+    }
+    const uint64_t bad = g_valSideInstalledBad.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((bad & (bad - 1)) != 0) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[VALSIDE][installed] bad=%lu slot=%p target=%p sc=%u typeInfo=0x%lx phase=%u family=%s", bad,
+        static_cast<const void*>(&field), static_cast<void*>(target), stateCode, typeInfo, phase,
+        (typeInfo == 0) ? "A-zeroed" : "B-forwarded");
+}
+
 void Barrier::WriteI8(BaseObject* obj, Field<int8_t>& field, int8_t val) const { field.SetFieldValue(obj, val); }
 
 void Barrier::WriteI16(BaseObject* obj, Field<int16_t>& field, int16_t val) const { field.SetFieldValue(obj, val); }
@@ -229,9 +332,11 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
     // If the pre-store slot is already store-good for the same target, skip remset work
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
+    NoteInstalledSlot(field, theCollector, static_cast<uint8_t>(phase));
     if (!prevStoreGood) {
         NoteStoreSlowPath();
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -379,12 +484,250 @@ void Barrier::WriteStaticStruct(MAddress dst, size_t dstLen, MAddress src, size_
 #endif
 }
 
+// Splits origin from propagation.  NoteInstalledSlot proves the mutator installs load-good slots
+// naming FORWARDED targets, but it cannot say where the mutator got that value:
+//   read barrier handed it over  -> some slot was never fixed at the end of FORWARD, and once the
+//                                   phase retires the stale value is load-good forever (ref_fix
+//                                   completeness -- "mark and fix must enumerate the same roots")
+//   read barrier never saw it    -> the mutator carried it in a frame/register across the flip,
+//                                   which is the missing frame-return barrier (parity item E1,
+//                                   ops/design/E1_FRAME_RETURN_BARRIER.md)
+// OpenJDK has no phase in which a stale from-version looks good: relocation advances the remap
+// colour so every pre-relocation pointer is load-bad, and ZForwarding::detach_page blocks on
+// _ref_count == 0 before the virtual range can be re-used (zForwarding.cpp:171-181).
+static std::atomic<uint64_t> g_valSideReadBad{ 0 };
+static std::atomic<uint64_t> g_valSideNullOut{ 0 };
+
+// Control for holderMarked: at BarrierPhase::FORWARD the mark is long finished, so a bitmap that has
+// already been cleared or flipped for the next cycle would answer 0 for *every* object -- which
+// would make "22/22 holders unmarked" a statement about the query, not about the holders.  Sample
+// the same query on ordinary hand-outs, where the target is a perfectly good live object, and emit
+// on powers of two.  If those also read 0, the query is useless here and the finding is void.
+static std::atomic<uint64_t> g_markCtlSeen{ 0 };
+static std::atomic<uint64_t> g_markCtlMarked{ 0 };
+
+static inline void NoteMarkQueryControl(BaseObject* holder, const RefField<false>& field,
+                                       const Collector& collector, uint8_t phase)
+{
+    if (!kValSideProbe || holder == nullptr || !Heap::IsHeapAddress(holder)) {
+        return;
+    }
+    const bool marked = collector.IsMarkedObjectForProbe(holder);
+    (void)marked;
+    if (Collector::HealFpTest(reinterpret_cast<uintptr_t>(&field))) {
+        g_markCtlMarked.fetch_add(1, std::memory_order_relaxed);
+    }
+    const uint64_t n = g_markCtlSeen.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (marked) {
+        g_markCtlMarked.fetch_add(1, std::memory_order_relaxed);
+    }
+    if ((n & (n - 1)) != 0) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[MARKCTL] seen=%lu markedBaseline=%lu phase=%u", n,
+        g_markCtlMarked.load(std::memory_order_relaxed), phase);
+}
+
+static inline void NoteHandedOut(BaseObject* target, BaseObject* holder, const RefField<false>& field,
+                                 const Collector& collector, uint8_t phase)
+{
+    if (!kValSideProbe) {
+        return;
+    }
+    NoteMarkQueryControl(holder, field, collector, phase);
+    // nullout: the largest real-crash family is not a coloured pointer at all.  Resolving the
+    // symbol the runtime printed as `sym=none` (a local `t` symbol, hence the failure) gives
+    // cjcj.ast.Utils.AddCurFileImpl's closure, and the record decodes exactly:
+    //     insn 48 8b 43 20 = mov 0x20(%rbx),%rax   rbx = 0x0   si_addr = 0x20   si_code = 1
+    // i.e. a genuine null reached the mutator, in reclaim_satb_phase.  ForwardBarrier already
+    // guards one path ("tipnull: ForwardObject may null on soft miss; never hand null to mutator
+    // for a live non-null ref"), so the question is whether some other path does not.
+    //
+    // OpenJDK refuses this by construction in the same place: ZBarrier::self_heal starts with
+    //     if (!allow_null && is_null_assert_load_good(heal_ptr) && !is_null_any(ptr)) return;
+    // "Never heal with null since it interacts badly with reference processing" -- a mutator
+    // clearing an oop would look like Reference.clear() (zBarrier.inline.hpp:72-80).
+    if (target == nullptr) {
+        RefField<> slotNow(field.GetFieldValue());
+        if (!is_null(slotNow.GetFieldValue())) {
+            const uint64_t n = g_valSideNullOut.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR, "[NULLOUT] n=%lu slot=%p slotRaw=%#zx phase=%u", n,
+                    static_cast<const void*>(&field), raw(slotNow.GetFieldValue()), phase);
+            }
+        }
+        return;
+    }
+    if (!Heap::IsHeapAddress(target)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+    const uint64_t typeInfo = hdr & 0xffffffffffffull;
+    if (stateCode == 0 && typeInfo != 0) {
+        return;
+    }
+    const uint64_t bad = g_valSideReadBad.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((bad & (bad - 1)) != 0) {
+        return;
+    }
+    // Splits the remaining space in two, and only inside the powers-of-two branch: FindToVersion is
+    // a route lookup, and an earlier probe that ran two of them per slow-path store turned a 40s
+    // run into a 300s timeout.
+    //   to-version exists  -> the object really was forwarded and the barrier simply did not
+    //                         resolve it, i.e. the fast path trusted the colour (ZGC cannot reach
+    //                         this state: becoming load-good requires make_load_good, which does
+    //                         the ZForwarding lookup)
+    //   to-version missing  -> FORWARDED with nothing to forward to, i.e. the state word is stale
+    //                         bits left in re-used memory -- a different defect, and one that
+    //                         SetTypeInfo cannot clear because it writes only typeInfoLow32 /
+    //                         typeInfoHigh16 and never touches objectState (StateWord.h:106-116)
+    const bool hasTo = (collector.FindToVersion(target) != nullptr);
+    // Attributes the hand-out to a code path.  ForwardBarrier's unmovable arm (ForwardBarrier.cpp:150
+    // and :237) does no resolve at all -- it only calls a ToverFailDiag counter, whose body is empty
+    // (that whole subsystem is hollow), then hands `oldTarget` back and self-heals the slot load-good.
+    // Its own diagnostic call even passes `st == ObjectState::FORWARDED`, so the case was known.
+    const bool unmov = collector.IsUnmovableFromObject(target);
+    // ghostage: the recycling reading says these slots are stale across at least one relocation
+    // cycle -- painted with a colour that was good then, made load-bad by the flip, and made good
+    // again when the 4-value Remapped space came back around.  If that is what is happening, the
+    // targets should sit in *previous*-cycle from-space, which is what a ghost-from region is.
+    // OpenJDK does not rely on colour uniqueness either (it also has only four Remapped values);
+    // it relies on the from-page's address range not being handed out again until the forwarding
+    // retires -- ZForwarding::detach_page blocks on _ref_count == 0 (zForwarding.cpp:171-181).
+    const bool isGhost = collector.IsGhostFromObject(target);
+    const bool isFrom = collector.IsFromObject(target);
+    // inremset: A8 copies ZGC's Phase 8, which walks roots plus the remembered set and nothing else
+    // (ZRemapYoungRootsTask: ZRootsIteratorAllColored + ZRootsIteratorAllUncolored +
+    // young()->remap_current_remset).  ZGC can bound itself that way because those are the only
+    // places an old-generation slot may name young.  Whether the same holds here is not something
+    // to assume: if these slots are not in the remembered set, a remset-based remap pass cannot
+    // reach them and A8 would be built on a set that does not contain the defect.
+    const bool inRemset = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(&field));
+    // edgekind: 45% of these slots are outside the remembered set (measured, N=6), so a remap pass
+    // over roots + remset -- which is all ZGC's Phase 8 walks -- cannot reach them.  Which edge
+    // they are decides who *should* have fixed them: an old->young edge missing from the remset is
+    // a barrier-recording defect; a young->young or old->old edge is simply not remset business and
+    // needs whichever pass owns that generation.  holder == nullptr means a static/global field.
+    int holderGen = -1; // -1 static/non-heap, 0 old, 1 young
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+        holderGen = (hr == nullptr) ? -1 : (hr->IsYoungRegion() ? 1 : 0);
+    }
+    // holdermark: the theory that survives every falsification so far predicts safety -- an old->old
+    // pointer's target only moves in a major cycle, a major flips the old mask, and the major mark
+    // walks every live old field through TraceRefField, whose slow path heals (WCollector.cpp:1393
+    // make_load_good -> GetAndTryTagRefField -> HealSlot).  For a stale slot to survive that, its
+    // holder must not have been traced.  An unmarked holder that a mutator is actively reading from
+    // is itself a mark-completeness defect, so this distinguishes the two candidate stories rather
+    // than assuming either.
+    const unsigned healedFp = Collector::HealFpTest(reinterpret_cast<uintptr_t>(&field)) ? 1u : 0u;
+    int holderMarked = -1; // -1 unknown/non-heap, 0 unmarked, 1 marked
+    if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+        holderMarked = collector.IsMarkedObjectForProbe(holder) ? 1 : 0;
+    }
+    int targetGen = -1;
+    {
+        RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        targetGen = (tr == nullptr) ? -1 : (tr->IsYoungRegion() ? 1 : 0);
+    }
+    // Which side of the barrier produced this.  After flip_*_relocate_start every pre-flip pointer is
+    // load-bad (ours matches ZGC's arithmetic exactly: zAddress.cpp:138-152 vs WCollector.h), so a
+    // load-good slot naming a from-version can only have been written *after* the flip.
+    //   slot load-good -> the fast path returned without resolving, and the writer put a current
+    //                     colour on a from-version
+    //   slot load-bad  -> the slow path resolved and still handed back a from-version
+    RefField<> nowSlot(field.GetFieldValue());
+    const bool slotGood = collector.is_load_good(nowSlot);
+    // flipwitness: is_load_good matching ZGC's arithmetic is not the same as the flip having the
+    // effect ZGC gets from it.  A pointer painted before flip_*_relocate_start must come out
+    // load-bad afterwards; if a slot is load-good in FORWARD while naming a from-version, either it
+    // was painted after that flip (legitimate at the time, the object moved later) or the flip did
+    // not invalidate it.  Those two need different fixes, so record the slot's own remap bits next
+    // to the colour currently being handed out instead of inferring.
+    // The first version of this asked the collector through a new virtual and got 0 every time,
+    // which cannot be true: with currentRemapColour == 0 the load-bad mask would be
+    // TAGGED | (REMAP_COLOUR_MASK ^ 0), i.e. every remap bit bad, and no slot could have been
+    // judged load-good -- yet Remapped11 slots were.  The virtual was resolving to the base's
+    // `return 0`.  g_cjLoadBadMask is the value the barrier itself tests, so read that instead of
+    // asking anything: slotRemap & loadBad == 0 says the slot carries the colour being handed out
+    // right now, i.e. it was painted after the most recent flip.
+    const Uptr slotRemap = raw(nowSlot.GetFieldValue()) & REMAP_COLOUR_MASK;
+    const Uptr loadBad = static_cast<Uptr>(::g_cjLoadBadMask);
+    const unsigned paintedAfterFlip = ((slotRemap & loadBad) == 0) ? 1u : 0u;
+    LOG(RTLOG_ERROR, "[VALSIDE][handedout] bad=%lu target=%p sc=%u typeInfo=0x%lx phase=%u family=%s hasTo=%d unmov=%d slotGood=%d slotRemap=%#zx loadBad=%#zx afterFlip=%u ghost=%d from=%d inRemset=%d holderGen=%d targetGen=%d holderMarked=%d healedFp=%u", bad,
+        static_cast<void*>(target), stateCode, typeInfo, phase, (typeInfo == 0) ? "A-zeroed" : "B-forwarded",
+        hasTo ? 1 : 0, unmov ? 1 : 0, slotGood ? 1 : 0, slotRemap, loadBad, paintedAfterFlip, isGhost ? 1 : 0, isFrom ? 1 : 0, inRemset ? 1 : 0, holderGen, targetGen, holderMarked, healedFp);
+}
+
+// staleguard: a colour is not proof that a target is current.
+//
+// The remap space is four values and a flip is an xor, so a colour published at N is published
+// again at N+2 for that generation's mask.  ZGC lives with the same four values because in ZGC a
+// pointer can only *become* load-good by passing through a barrier, and a barrier relocates a
+// relocation-set address on the spot (ZGeneration::relocate_or_remap_object,
+// zGeneration.inline.hpp:131-140) -- so "load-good" there implies "already the to-version" and the
+// recycled colour never names a from-copy.  We have no equivalent guarantee, and the state census
+// shows the gap directly: of ~24M hand-outs, one tuple occurs that ZGC's design excludes --
+// colour == current good colour, target header FORWARDED, target in a ghost-from region -- caught
+// again inside the fast path itself with the accepted value (colourBits = Remapped00 = the current
+// good colour, flipSeq = 24, i.e. a colour that has come back around).
+//
+// This is not the barrier tolerating a stale value: it refuses to hand out an object whose own
+// header says it has moved, and resolves instead.  The cost is one relaxed header load on the
+// hand-out path, paid only where the colour said good.
+static constexpr bool kStaleGuard = true;
+
+// Two ways a handed-out target can be unusable, and they need different handling:
+//   FORWARDED   the object moved and its to-version exists -- resolvable, and the census shows the
+//               guard drives that tuple to zero
+//   zero header the object's payload was cleared by reclamation, so there is nothing to resolve;
+//               the mutator then loads a field out of it, gets 0, and dereferences that.  That is
+//               the crash actually left: 7 of 10 runs die at AddCurFileImpl's closure with
+//               `mov 0x20(%rbx),%rax`, rbx = 0, si_addr = 0x20.  Rare (3 zero-header vs 54
+//               forwarded in one run) but fatal every time.
+enum class TargetVerdict { Usable, Forwarded, ZeroHeader };
+
+static inline TargetVerdict JudgeTarget(BaseObject* target)
+{
+    if (!kStaleGuard || target == nullptr || !Heap::IsHeapAddress(target)) {
+        return TargetVerdict::Usable;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    if (((hdr >> 48) & 0x3u) == 3u) { // ObjectState::FORWARDED
+        return TargetVerdict::Forwarded;
+    }
+    if ((hdr & 0xffffffffffffull) == 0) {
+        return TargetVerdict::ZeroHeader;
+    }
+    return TargetVerdict::Usable;
+}
+
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     if (phase != BarrierPhase::STW) {
-        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+        BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadReference(obj, field);
         });
+        if (kStaleGuard) {
+            const TargetVerdict verdict = JudgeTarget(handed);
+            if (verdict != TargetVerdict::Usable) {
+                BaseObject* resolved = theCollector.FindToVersion(handed);
+                ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed);
+                if (resolved != nullptr) {
+                    handed = resolved;
+                }
+            }
+        }
+        // I1 is checked here because this is the single point every reference reaches the mutator:
+        // whatever the fast path decided, the value leaves through this return.
+        ZgcInvariants::CheckLoadGoodTarget(handed, theCollector, static_cast<uint8_t>(phase));
+        const uintptr_t slotRead1 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
+        const uintptr_t slotRead2 = static_cast<uintptr_t>(raw(field.GetFieldValue()));
+        ZgcInvariants::NoteState(slotRead1, slotRead2,
+                                 static_cast<uintptr_t>(::g_cjLoadBadMask) ^ REMAP_COLOUR_MASK, handed);
+        NoteHandedOut(handed, obj, field, theCollector, static_cast<uint8_t>(phase));
+        return handed;
     }
     BaseObject* toVersion = nullptr;
     if (theCollector.TryUpdateRefField(obj, field, toVersion)) {
@@ -945,16 +1288,31 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         return;
     }
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
-    if (!targetRegion->IsYoungRegion()) {
-        if (probeOn) {
-            NoteWrite(fieldAddress, phase, REASON_REF_NOT_YOUNG, false);
-        }
-        if (idleEdgeOn) {
-            IdleEdgeDiag::NoteBarrierDecision(fieldAddress, phase, false, genOfAddr(fieldAddress), kGenOld,
-                                              static_cast<uint8_t>(REASON_REF_NOT_YOUNG), holderObjGen);
-        }
-        return;
-    }
+    // ⛔⛔ Do NOT skip on "the target is not young right now".
+    //
+    // OpenJDK keys the remembered set on the *slot*, never on the target
+    // (zBarrier.inline.hpp:729-733):
+    //
+    //     inline void ZBarrier::remember(volatile zpointer* p) {
+    //       if (ZHeap::heap()->is_old(p)) { ZGeneration::young()->remember(p); }
+    //     }
+    //
+    // Where a slot lives is stable; which generation its target is in is not -- a region's
+    // young-ness changes with promotion, relocation and reuse.  Testing a moving property once,
+    // at store time, and never re-testing it is how an edge gets lost.
+    //
+    // Measured: with MRT_GCV2_MINOR_GC_ALOT forcing young collections, ProbeUnmarkedLive
+    // (WCollector.cpp:8579) reported on run 69
+    //     fullYoung=369904 markedYoung=369072 UNMARKED_LIVE=832
+    //     missingEdgeHolders=28 edgeInRemset=0 edgeNotInRemset=28 noIncomingOld=804
+    // -- every one of the 28 unmarked-live objects that had an incoming old->young edge had that
+    // edge *absent* from the remembered set, so the loss is on the recording side, not the
+    // consumption side.  Those objects are then reclaimed with knownEmpty=1 neverExam=1 and a
+    // live field keeps naming the zeroed memory, which is the si_addr=0x8 crash.
+    //
+    // Recording an edge whose target turns out to be old costs a remembered-set entry and one
+    // extra slot scan; not recording it loses the object.  ZGC picks the same side of that trade.
+    (void)targetRegion;
     // Heap holder: only record old→young (source not young).
     if (Heap::IsHeapAddress(fieldAddress)) {
         if (obj == nullptr || !Heap::IsHeapAddress(obj)) {

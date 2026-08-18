@@ -50,6 +50,7 @@
 #include "Heap/Verify/MarkWhyProbe.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDestHold.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/FwdInflight.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "Base/TimeUtils.h"
@@ -292,12 +293,45 @@ public:
 
     bool IsRoutingState() { return GetRouteState() == RouteState::ROUTING; }
 
+    // enroltime: when does a region actually join the relocation set?
+    //
+    // OpenJDK installs the whole set before the colour flips: ZRelocationSet::install runs in the
+    // concurrent select_relocation_set (zGeneration.cpp:254), and only afterwards does
+    // relocate_start -> flip_relocate_start run (:918 -> :922 -> :651).  Because of that ordering,
+    // "painted with the current colour, after the flip" is equivalent to "names an object that
+    // will not move this cycle", and ZGC's whole colour-epoch argument rests on that equivalence.
+    //
+    // Ours enrols lazily: RouteRegion drives each region's RouteState out of NORMAL as forwarding
+    // reaches it.  If that happens after the flip, the equivalence breaks -- a value painted
+    // store-good in between is load-good and later names a from-version, which is exactly the
+    // measured FORWARD population (afterFlip=1, slotGood=1, hasTo=1, 20/20) whose targets must have
+    // had RouteState == NORMAL when they were painted, since every non-NORMAL target is already
+    // caught by the staleness predicate (ROUTEASK: 105 triggers, 100% covered).
+    //
+    // GCPhase is the cheap witness: PREFORWARD/FORWARD mean the relocate-start flip has run.
+    static constexpr bool kEnrolTimeProbe = true;
+    static std::atomic<uint64_t>& EnrolBeforeFlip()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+    static std::atomic<uint64_t>& EnrolAfterFlip()
+    {
+        static std::atomic<uint64_t> n{ 0 };
+        return n;
+    }
+    void NoteEnrolPhase();
+
     bool TryLockRouting(RouteState curState)
     {
         if (IsRoutingState()) {
             return false;
         }
-        return CompareExchangeRouteState(curState, RouteState::ROUTING);
+        const bool locked = CompareExchangeRouteState(curState, RouteState::ROUTING);
+        if (kEnrolTimeProbe && locked && curState == RouteState::NORMAL) {
+            NoteEnrolPhase();
+        }
+        return locked;
     }
 
     // Probe-only: ghost preLiveBytes (product callers must hold a RouteTicket).
@@ -1879,6 +1913,27 @@ public:
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
         metadata.routeState = FORWARDABLE;
+        // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
+        // parallel with the region machinery so the two answers can be compared before either is
+        // trusted; nothing reads it for decisions yet.
+        ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
+        // enrolphase: which side of the relocate-start flip does this enrolment land on?
+        //
+        // OpenJDK installs the relocation set once, in the concurrent select_relocation_set
+        // (zGeneration.cpp:254 ZRelocationSet::install), and only then flips
+        // (relocate_start -> flip_relocate_start, :918 -> :922).  Post-flip the set is closed, so
+        // "painted with the current colour after the flip" implies "will not move this cycle".
+        //
+        // EvacuateYoungRegions calls PrepareForwardTable<Young> twice -- WCollector.cpp:6483 and
+        // again at :6952 -- with the young flip between them.  An enrolment on the far side leaves
+        // a window in which a region is still NORMAL while the current colour is already the new
+        // one, and a value painted there is load-good but names an object that is about to move.
+        // That matches the measured FORWARD population exactly (afterFlip=1, slotGood=1, hasTo=1,
+        // 20/20), and it is why moving only the first flip (kFlipAfterFromSpace) changed nothing.
+        //
+        // The staleness predicate is not the hole: over ~2^20 non-NORMAL targets per run, across
+        // six runs, zero escaped it.
+        NoteEnrolPhase();
         // sealcheck: snapshot is not yet sealed; geometry freeze is at RouteRegion ROUTING.
         SetMarkFaceSealed(false);
         SetUnitRole0(static_cast<UnitRole>(metadata.unitRole));
@@ -1959,6 +2014,10 @@ public:
         // for the whole body so that FreeCompactRouteTable below -- ZGC's free_page -- cannot
         // run while a retained reader is inside the route lookup or a mutator copy.
         DrainScope drain(this, MutatorRelocate::Retire::DISPEL_GHOST);
+        // PORT_ZFORWARDING step 1: the retirement edge.  ZGC's equivalent is refcount-driven
+        // (ZForwarding::detach_page waits for _ref_count == 0); recording the removal here first
+        // lets step 3 change *when* it happens without changing *where*.
+        ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
         dispelGhostCount.fetch_add(1, std::memory_order_relaxed);
         size_t nUnit = GetGhostRegionUnitCount();
         TraceClear::NoteRegionEvent(GetRegionStart(), nUnit * UNIT_SIZE, "dispel", this, GetLiveByteCount(),
@@ -2260,6 +2319,30 @@ public:
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
                                                     static_cast<uint8_t>(type));
+        // PORT_ZFORWARDING step 1, continued.  Inserting only at PrepareForwardableRegion left the
+        // table 15.6% short of what the region predicates answer (legacyOnly=2.6M of 16.8M), because
+        // membership of the relocation set is established at many scattered sites here --
+        // fromRegionList.PrependRegion(..., FROM_REGION) appears in AssembleSmallGarbageCandidates,
+        // PrepareYoungGarbageCandidates and several others -- while ZGC establishes it once, in
+        // ZRelocationSet::install.
+        //
+        // Rather than chase those sites one by one, hook the single place the type actually
+        // changes.  That is the convergence the port is for: one writer of membership instead of N.
+        if (type == RegionType::FROM_REGION || type == RegionType::LONE_FROM_REGION ||
+            type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION) {
+            ForwardingTable::Insert(GetRegionStart(), GetRegionSize(), this);
+        } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
+                   type == RegionType::TO_REGION) {
+            // The ghost bit is part of membership and outlives the type change: all six residual
+            // legacyOnly disagreements were rtype=14 (GARBAGE_REGION) with ghost still set, i.e.
+            // the type moved on while IsGhostFromObject still answered yes.  Dropping the entry
+            // there is exactly the "membership has no single source of truth" problem this port
+            // exists to remove, so keep it until the ghost is actually dispelled
+            // (DispelGhostFromRegion already calls Remove).
+            if (!IsGhostFromRegion()) {
+                ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
+            }
+        }
     }
     void SetTraceRegionFlag(uint8_t flag)
     {

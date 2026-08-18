@@ -39,6 +39,11 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     RegionInfo* region = fx.region0;
     BaseObject* obj = fx.obj0;
     region->SetRouteInfo(0x20000000u, 4096);
+    // ROUTED up front, not just before the positive arm: RegionInfo::GetRoute(RouteTicket) refuses
+    // any region still in NORMAL (RegionInfo.h:1806-1809), so with the state left at NORMAL the
+    // three rejections below would read green even if the domain gate admitted everything.  The
+    // gate under test is AdmitForRoute; give it the only state in which it can be observed.
+    region->SetRouteState(RegionInfo::ROUTED);
 
     // No ghost liveInfo0 → reject even if route geometry is set.
     GC_EXPECT_TRUE(region->GetRouteForProbe(obj) == nullptr);
@@ -57,12 +62,27 @@ GC_TEST(RouteInfo, MissingDomainReturnsNullNotGarbage)
     region->metadata.regionEnd0 = region->GetRegionEnd();
     GC_EXPECT_TRUE(region->GetRouteForProbe(sibling) == nullptr);
 
-    // Survivor in domain → product route geometry (RouteInfo::GetRoute via Admit+GetRoute).
+    // Positive control, and it needs the route to actually exist.  Geometry plus a survivor bit is
+    // not a forwarding: RegionInfo::GetRoute(RouteTicket) (RegionInfo.h:1806-1809) refuses unless
+    // the region has reached ROUTED or FORWARDED, because FreeCompactRouteTable publishes NORMAL
+    // before detaching a compact table and a reader that loses that race must soft-miss rather than
+    // read compact destinations as prefix-sum geometry.
+    //
+    // OpenJDK draws the same line structurally rather than by state check: ZForwarding::find returns
+    // `entry.populated() ? ... : zaddress::null` (zForwarding.inline.hpp:248-252), and a forwarding
+    // exists at all only for pages placed in the relocation set.  A region still in NORMAL has no
+    // forwarding to consult, so null is the right answer in both designs.
+    //
+    // This test previously stopped at the geometry and expected a destination anyway, which made it
+    // the only red test in the suite while the product was correct.  Keeping the arm rather than
+    // deleting it: without it the three rejections above would also pass if the gate simply always
+    // returned null.
     BaseObject* to = region->GetRouteForProbe(obj);
     GC_EXPECT_TRUE(to != nullptr);
     uintptr_t pre = region->GetPreLiveBytesInGhostRegionForProbe(reinterpret_cast<MAddress>(obj));
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(to), 0x20000000u + pre);
 
+    region->SetRouteState(RegionInfo::NORMAL);
     region->metadata.liveInfo0 = nullptr;
     region->metadata.liveInfo = nullptr;
     fx.FreePlanted(live);

@@ -1274,6 +1274,22 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
         return;
     }
 
+    // tracecov: is the mark's field walk broad enough to be the thing that keeps colours fresh?
+    // The mark-good fast path above returns without healing, which is correct because mark-good
+    // implies load-good; a stale field is therefore mark-bad and reaches the code below, which does
+    // heal (HealSlot at the end of this function).  So "stale slots survive" reduces to "the mark
+    // never visited that field".  Counting how much this path actually runs is the cheapest way to
+    // tell a narrow walk from a broad one -- and unlike IsMarkedObject<Old>, a counter here is
+    // valid at any phase (the mark-bitmap query answered 0 for 4.2M live objects at barrier time,
+    // which is why that measurement was void).
+    {
+        static std::atomic<uint64_t> slowEnter{ 0 };
+        const uint64_t n = slowEnter.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[TRACECOV] slow_enter=%lu", n);
+        }
+    }
+
     BaseObject* latest = make_load_good(oldField);
 
     // target object could be null or non-heap for some static variable.
@@ -1353,7 +1369,40 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
     RefField<> oldField(field);
-    if (is_mark_good(oldField)) {
+    // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
+    // implies "target is current".  It does not here.  mark-good is a superset of load-good, the
+    // remap space is four values and a flip is an xor, so a colour published at N is published
+    // again at N+2 -- a stale pointer whose colour has come back around passes this test and the
+    // one walk that would have repaired the slot skips it.  Both crash families reduce to that:
+    // the read barrier hands the value out (fixed by kStaleGuard in Barrier::ReadReference), and
+    // the mark never repairs the slot, so after the route retires FindToVersion can no longer
+    // answer and the slot is unrepairable for good.
+    //
+    // ZGC's mark has the same fast path (ZBarrier::barrier returns early on fast_path(o)), and it
+    // is safe there because staleness is bounded: ZGenerationOld runs Phase 8
+    // concurrent_remap_young_roots before old relocate start specifically so that no pointer
+    // accumulates two remap-bit errors (zGeneration.cpp:1503-1508).  We have no such phase, so the
+    // bound has to be enforced where the assumption is used.
+    //
+    // Cost: one relaxed header load on the mark's fast path, only for heap targets.
+    static constexpr bool kMarkStaleGuard = true;
+    bool staleTarget = false;
+    if (kMarkStaleGuard) {
+        BaseObject* t = to_object(oldField.GetTargetObject());
+        if (t != nullptr && Heap::IsHeapAddress(t)) {
+            const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(t), __ATOMIC_RELAXED);
+            const unsigned sc = static_cast<unsigned>((hdr >> 48) & 0x3u);
+            if (sc == 3u || (hdr & 0xffffffffffffull) == 0) {
+                staleTarget = true;
+                static std::atomic<uint64_t> markStaleHits{ 0 };
+                const uint64_t n = markStaleHits.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    LOG(RTLOG_ERROR, "[MARKSTALE] n=%lu target=%p sc=%u", n, static_cast<void*>(t), sc);
+                }
+            }
+        }
+    }
+    if (is_mark_good(oldField) && !staleTarget) {
         BaseObject* targetObj = to_object(oldField.GetTargetObject());
         // zbisect: plain non-heap (0x55–0x65) was admitted here → IsMarkedObject → GetUnitIdxAt OOB.
         // Skip field on reject — same as pre-zcolor7 slow path for plain non-heap.
@@ -1407,8 +1456,19 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
-    } else if (HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
-                        HealSite::WCollectorTraceRefField)) {
+    } else if ([&]() {
+                   const bool ok = HealSlot(field, oldField.GetFieldValue(), newField.GetFieldValue(),
+                                            HealSite::WCollectorTraceRefField);
+                   if (ok) {
+                       Collector::HealFpMark(reinterpret_cast<uintptr_t>(&field));
+                       static std::atomic<uint64_t> healed{ 0 };
+                       const uint64_t h = healed.fetch_add(1, std::memory_order_relaxed) + 1;
+                       if ((h & (h - 1)) == 0) {
+                           LOG(RTLOG_ERROR, "[TRACECOV] healed=%lu", h);
+                       }
+                   }
+                   return ok;
+               }()) {
         DLOG(TRACE, "trace obj %p ref@%p: %#zx => %#zx->%p<%p>(%zu)", obj, &field, raw(oldField.GetFieldValue()),
              raw(newField.GetFieldValue()), latest, latest->GetTypeInfo(), latest->GetSize());
     }
@@ -1824,9 +1884,27 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
         return;
     }
     BaseObject* fromObj = to_object(oldField.GetTargetObject());
-    BaseObject* latest = PlanRouteUnderStw(fromObj, stw).dest;
-    if (latest == nullptr) {
-        latest = fromObj;
+    // The non-heap arm below (:1845) already knows this field can hold a TypeInfo*, a binary
+    // constant or immortal metadata -- but it tested `latest`, i.e. after the route lookup had
+    // already run on `fromObj`. PlanRouteUnderStw -> PlanRoute -> PlanRouteLookup ->
+    // GetGhostFromRegionAt -> GetUnitIdxAt asserts OOB for an address outside the heap, so a
+    // non-heap old-tagged field aborts the process before the arm meant to handle it is reached:
+    //
+    //   F GetUnitIdxAt OOB addr=0x6282f2cd8c40 heap=[0x719247600000, 0x719257600000)
+    //     ra0=RegionManager::PlanRouteLookup  ra1=WCollector::FixOldTaggedRefField
+    //
+    // 0x6282f2... is the compiler's own image (the same range as start_ip in the SKIPPED_WHO
+    // lines of that run), not the heap.  Reproduced first try: cjcj::cjc --package
+    // packages/basic/src --output-type=staticlib on a coloured host runtime.
+    //
+    // The three sibling sites all gate before the lookup -- ResolveMinorReference (:2849),
+    // FindToVersion (WCollector.h:495) and ForwardUpdateRawRef (:1611).  This one did not.
+    BaseObject* latest = fromObj;
+    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+        BaseObject* dest = PlanRouteUnderStw(fromObj, stw).dest;
+        if (dest != nullptr) {
+            latest = dest;
+        }
     }
     // Non-heap targets (TypeInfo*, binary constants, immortal metadata): address is
     // outside the managed heap, so IsHeapAddress/IsValidObject are structurally false.
@@ -4887,15 +4965,20 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
     size_t btCurrentPtr = 0;
     size_t btClearHit = 0;
     size_t btRegionType[16] = { 0 };
-    // S1 A/B gate. Default OFF: the acceptance criterion fysminor proposed
-    // ("remembered= collapses across minors under FYS=0 + SKIP_PINNED_SCAN=1")
-    // does not reproduce on natural_wave_notime.O0 @256MB (5 runs x ~9 minors,
-    // floor stayed 2115). Ship the mechanism behind a switch and let the D1
-    // delta decide, rather than defaulting on against an unreproduced premise.
-    static const bool remsetReRemember = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_REREMEMBER */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
+    // On, unconditionally, because OpenJDK does it unconditionally: ZRemembered::scan_field
+    // (zRemembered.cpp:578-589) re-arms every scanned slot whose healed target is still young, and
+    // ZBarrier::remember (zBarrier.inline.hpp:729-733) conditions only on the slot being old.  The
+    // pair is the whole design: record cheaply at the barrier without loading the target, prune at
+    // scan time.  Drop either half and a long-lived old holder written once loses its record after
+    // the first minor drains it.
+    //
+    // This was previously off behind an A/B switch whose stated reason was that a proposed
+    // acceptance criterion -- "remembered= collapses across minors" -- did not reproduce.  That is a
+    // side-effect criterion, not a correctness one: ZGC's argument never claims the count collapses,
+    // and the count is free to grow when the old->young edge population genuinely grows.  Turning it
+    // on is also the conservative direction; it can only add entries, and a superfluous remset entry
+    // costs a scan while a missing one loses an object.
+    constexpr bool remsetReRemember = true;
     size_t reRemembered = 0;
     size_t originFound = 0;
     size_t originBoundsValid = 0;
@@ -5383,10 +5466,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
              typeInfoIndexShape.first, typeInfoIndexShape.second, scrubbedBadTarget, scrubbedStaleOldTag,
              rememberedSlots.size());
     }
-    if (remsetReRemember) {
-        VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu remembered=%zu env=MRT_GCV2_REMSET_REREMEMBER=1",
-             reRemembered, rememberedSlots.size());
-    }
+    // Printed every minor, including the zero: "re-arm never fired" and "re-arm is compiled out"
+    // read identically otherwise, and this campaign has already spent a turn on that confusion.
+    VLOG(REPORT, "[GCV2][remset-rearm] reRemembered=%zu scanned=%zu", reRemembered, rememberedSlots.size());
     if (remsetLifeProbe && scrubbedBadTarget != 0) {
         VLOG(REPORT,
              "[GCV2][remsetlife] badTarget=%zu noRegion=%zu beyondAlloc=%zu inAlloc=%zu word0Zero=%zu "
@@ -6407,10 +6489,38 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 
         // ZGC relocate_start (zGeneration.cpp:918-931): flip remap colour then
         // enter Relocate. Product path. MRT_GCV2_MINOR_YOUNG_FLIP=0 rolls back.
-        if (doYoungFlip) {
+        //
+        // fliporder: that citation covers only half of what ZGC does here.  ZGC installs the
+        // relocation set at zGeneration.cpp:254, inside the *concurrent* select_relocation_set,
+        // and only then runs pause_relocate_start -> relocate_start -> flip_relocate_start
+        // (:918 -> :922 -> :651).  So when ZGC's colour flips, the set of pages that will move is
+        // already fixed and published.
+        //
+        // Ours flipped first and prepared from-space afterwards (PrepareForwardTable<Young> below),
+        // which opens a window where the current remap colour is already the new one while no
+        // region is marked FROM yet.  Anything painted store-good in that window names an object
+        // whose region is about to become FROM: once it is copied the slot is load-good and names
+        // the from-version, so the read barrier's fast path hands it straight to the mutator with
+        // ObjectState::FORWARDED still in its header -- and the compiler reads that header as one
+        // 64-bit word, so (3 << 48) enters an address and faults non-canonically.
+        //
+        // Measured: BarrierPhase::FORWARD hand-outs are 100% hasTo=1, unmov=0, slotGood=1, i.e. the
+        // target really was forwarded, is not in an unmovable region, and the slot was load-good --
+        // which after a flip can only mean it was written after that flip.
+        //
+        // Our own major path already has the ZGC order: PrepareForwardTable<Old> at :2533 runs
+        // before flip_young/old_relocate_start at :2552-2553.  The two paths disagreed.
+        static constexpr bool kFlipAfterFromSpace = true;
+        const auto doFlip = [this]() {
+            // Arm self-check: "I edited the source" is not evidence that this arm ran.  One line,
+            // once per flip, naming which side of PrepareForwardTable<Young> we are on.
+            LOG(RTLOG_ERROR, "[FLIPORDER] young flip arm=%s", kFlipAfterFromSpace ? "after-fromspace" : "before");
             flip_young_relocate_start();
             CensusFrameColoursAfterFlip("young",
                 (ZPointerRemappedYoungMask ^ REMAP_COLOUR_MASK) & ZPointerRemappedOldMask);
+        };
+        if (doYoungFlip && !kFlipAfterFromSpace) {
+            doFlip();
         }
 
         if (refFixCoveredDedup) {
@@ -6435,6 +6545,10 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             // freezes liveByteCount so Ensure on liveobj edges is tooLate (iorsource 5/5 ROUTED).
             TransitionToGCPhase(GCPhase::GC_PHASE_POST_TRACE, true);
             fwdTable.PrepareForwardTable<Generation::Young>();
+            // fliporder: from-space is now published, so flip here -- ZGC's install-then-flip order.
+            if (doYoungFlip && kFlipAfterFromSpace) {
+                doFlip();
+            }
             TransitionToGCPhase(GCPhase::GC_PHASE_PREFORWARD, true);
             postEvacPoint("pre-fix-forwarded", false);
         }
@@ -7085,8 +7199,24 @@ void WCollector::ProbeUnmarkedLive(const MinorObjectSet& allocationRoots, const 
     // collect young objs reachable that way, compare to region mark bitmap after young-only mark.
     // For each unmarked-but-full-reachable young object, scan non-young holders for incoming
     // old→young edges and report whether that field is in the minor-acquired remset.
-    const char* enabled = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCMARKGAP_PROBE */;
-    if (enabled == nullptr || std::strcmp(enabled, "1") != 0) {
+    // This probe is what located the mark gap: with MRT_GCV2_MINOR_GC_ALOT forcing young
+    // collections, run 69 reported UNMARKED_LIVE=832 with edgeInRemset=0 edgeNotInRemset=28 --
+    // every unmarked-live object that had an incoming old->young edge had that edge missing from
+    // the remembered set, which is what sent the fix to RecordCrossGenEdge's target-generation
+    // test rather than to the consumption side.
+    // Off by default -- it retraces the whole heap from roots on every minor, so it is a
+    // verification instrument, not something to ship on.  But "off" here used to mean *unreachable*:
+    // the env read was pinned to nullptr, so nothing could turn it on without editing this file, and
+    // the one measurement that decides whether an old->young edge is being lost simply could not be
+    // taken.  A compile-time constant says the same thing while leaving the switch where a reader
+    // can find it.  (No new MRT_GCV2_ env var: those were cut 190 -> 3 on purpose.)
+    //
+    // Flip to true, rebuild, and read [GCV2][markgap] UNMARKED_LIVE / edgeInRemset /
+    // edgeNotInRemset.  That is the acceptance criterion for anything touching remembered-set
+    // recording -- not remembered-set size, which is a side effect and has already sent this
+    // campaign down one wrong path.
+    constexpr bool kMarkGapProbe = false;
+    if (!kMarkGapProbe) {
         return;
     }
 
@@ -9375,4 +9505,16 @@ void WCollector::CollectSmallSpace()
 }
 
 bool WCollector::ShouldIgnoreRequest(GCRequest& request) { return request.ShouldBeIgnored(); }
+} // namespace MapleRuntime
+
+namespace MapleRuntime {
+namespace ZgcInvariants {
+// flipseq bridge: keeps ZgcInvariants.cpp from having to include the collector header.
+uint64_t WCollectorFlipSeqForProbe() { return WCollector::FlipSeq().load(std::memory_order_relaxed); }
+BaseObject* ProbeFindToVersion(BaseObject* obj)
+{
+    Collector& c = Heap::GetHeap().GetCollector();
+    return c.FindToVersion(obj);
+}
+} // namespace ZgcInvariants
 } // namespace MapleRuntime

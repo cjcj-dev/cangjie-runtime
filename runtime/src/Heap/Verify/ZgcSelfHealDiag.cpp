@@ -313,6 +313,22 @@ void NotePreconditions(bool ptrFastPath, bool healFastPath, zpointer healPtr)
     }
 }
 
+// periodic: the only census this build ever printed was DumpCensusRaw("armed"), which runs inside
+// InstallOnce *before* the counter it precedes is incremented -- a t=0 baseline.  The end-of-run
+// census never appears because the workload dies by SIGSEGV and the runtime installs its own
+// SIGSEGV handler after InstallOnce, replacing CrashCensusHandler.  So every counter here read as
+// zero for reasons that had nothing to do with the mechanism, and that zero was briefly written up
+// as "the read barrier never self-heals" -- the opposite of what the data supports, since a
+// why=armed line can only be emitted from inside ZgcSelfHeal in the first place.
+//
+// Emitting on powers of two gives magnitudes that survive a crash without flooding the log.
+void NoteEnterPeriodicCensus(uint64_t n)
+{
+    if ((n & (n - 1)) == 0) {
+        DumpCensusRaw("periodic");
+    }
+}
+
 void NoteEnter()
 {
     if (!Enabled()) {
@@ -320,6 +336,7 @@ void NoteEnter()
     }
     InstallOnce();
     g_enter.fetch_add(1, std::memory_order_relaxed);
+    NoteEnterPeriodicCensus(g_enter.load(std::memory_order_relaxed));
 }
 
 void NoteNullSkip()

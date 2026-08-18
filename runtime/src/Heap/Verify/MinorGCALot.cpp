@@ -24,6 +24,12 @@ std::atomic<bool> g_intervalArmed{ false };
 
 size_t ParseInterval()
 {
+    // Forcing this to a small interval is how the mark-gap was found: ProbeUnmarkedLive lives
+    // inside DoYoungGarbageCollection, and a 900s compile of packages/basic ran no young
+    // collection at all -- its single young flip came from the major Preforward, which flips both
+    // generations.  ALot is a forensic recipe, never a performance one: with interval=2000 the
+    // same 900s budget covered 71 young cycles before the remset fix and 44 after it, so any
+    // cost measured under ALot is not a production number.
     const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_GC_ALOT */;
     if (v == nullptr || v[0] == '\0') {
         return 0;

@@ -17,6 +17,7 @@
 #include <unordered_set>
 
 #include "Allocator/RegionSpace.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Collector/CopyCollector.h"
 #include "Heap/Verify/DiffPathExplainer.h"
 #include "Heap/Verify/ToverFailDiag.h"
@@ -169,8 +170,21 @@ public:
     // same formula. Publication order and the set of published words are unchanged; the four
     // flip_* functions below and their six call sites are untouched on purpose -- a table
     // cannot see "a flip forgot to call set_good_masks", so that stays a separate change.
+    // flipseq: a monotonic count of colour publications.  The remap space is four values and a flip
+    // is an xor, so a colour that was good at publication N is good again at N+2 for that
+    // generation's mask -- "the slot recycled into good" and "the slot was painted after the target
+    // moved" produce identical colours and can only be told apart by *when*.  ZGC has the same
+    // four-value space (zAddress.hpp:59-130) so this is not a divergence by itself; it is the axis
+    // on which the two stories separate.
+    static std::atomic<uint64_t>& FlipSeq()
+    {
+        static std::atomic<uint64_t> seq{ 0 };
+        return seq;
+    }
+
     void set_good_masks()
     {
+        FlipSeq().fetch_add(1, std::memory_order_relaxed);
         const EpochColours e = current_epoch_colours();
         const BadMasks m = ComputeBadMasks(e);
         currentRemapColour = m.remapColour;
@@ -450,11 +464,61 @@ public:
     // BaseObject* ForwardFixRefField(RefField<>& field) const;
     BaseObject* ForwardUpdateRawRef(ObjectRef& ref);
 
+    // lonefrom: "is this object being relocated in this cycle" must not be asked as
+    // "is its region still typed FROM_REGION".  ForwardFromRegions takes each region off the
+    // from-list with TakeHeadRegion(RegionType::LONE_FROM_REGION) (RegionManager.cpp:1638), so a
+    // region is retyped the moment relocation of it starts.  IsFromRegion() tests FROM_REGION
+    // alone -- IsLoneFromRegion() is a separate predicate -- so for the whole window in which a
+    // region is actually being evacuated, its objects answer "not from".
+    //
+    // What that produces: an object in a LONE_FROM region that has not been copied yet answers
+    // false to all three staleness authorities (IsFromObject, IsGhostFromObject, IsForwarded --
+    // the last only becomes true after the copy), so GetAndTryTagRefField paints it the *current*
+    // remap colour.  The slot is then load-good; the object is copied a moment later; and the read
+    // barrier's fast path hands the from-version straight to the mutator, which reads its header
+    // as one 64-bit word and gets ObjectState::FORWARDED in bits 48-49.
+    //
+    // Measured before this change, N=5, BarrierPhase::FORWARD hand-outs: 20/20 carry
+    // afterFlip=1 (slot colour == current good colour, i.e. painted after the relocate-start flip),
+    // slotGood=1, hasTo=1 (a to-version exists), unmov=0 -- and unmov=0 is itself explained here,
+    // since IsUnmovableFromObject covers UNMOVABLE_FROM/RAW_POINTER_PINNED and not LONE_FROM.
+    //
+    // OpenJDK never asks a page-type enum this question.  Relocation-set membership is decided once
+    // when the set is installed (zGeneration.cpp:254) and answered per address through
+    // ZForwardingTable, so it cannot change under a concurrent reader the way a region type does.
+    static constexpr bool kLoneFromIsFrom = true;
+    mutable std::atomic<uint64_t> loneFromHits{ 0 };
+
+    // PORT_ZFORWARDING step 2: membership answered by address, the way ZGC answers it
+    // (ZGeneration::relocate_or_remap_object -> _forwarding_table.get(addr)).  Step 1 established
+    // the two answers are equivalent: 1.68e8 comparisons across 10 runs, tableOnly=0 legacyOnly=0.
+    //
+    // The old path stays as the control arm.  What changes is *which* answer is authoritative: a
+    // region type is rewritten as relocation progresses, and a predicate reading it can be right
+    // one instant and wrong the next -- that shape produced several of this session's dead ends.
+    // An address either is in the set or is not.
+    static constexpr bool kMembershipFromTable = false;
+
     bool IsFromObject(BaseObject* obj) const override
     {
+        if (kMembershipFromTable) {
+            if (!Heap::IsHeapAddress(obj)) {
+                return false;
+            }
+            return ForwardingTable::Get(reinterpret_cast<MAddress>(obj)) != nullptr;
+        }
         // filter const string object.
         if (Heap::IsHeapAddress(obj)) {
             auto regionInfo = RegionInfo::GetRegionInfoAt(reinterpret_cast<uintptr_t>(obj));
+            if (kLoneFromIsFrom && regionInfo->IsLoneFromRegion()) {
+                // Arm self-check: a null result from this change is only readable if the branch is
+                // known to fire.  Powers of two, so a hot predicate cannot flood the log.
+                const uint64_t n = loneFromHits.fetch_add(1, std::memory_order_relaxed) + 1;
+                if ((n & (n - 1)) == 0) {
+                    LOG(RTLOG_ERROR, "[LONEFROM] trigger n=%lu", n);
+                }
+                return true;
+            }
             return regionInfo->IsFromRegion();
         }
 
@@ -479,8 +543,32 @@ public:
         return space.GetRegionManager().FindPublishedRoute(fromObj, region).dest;
     }
 
+    // Refuses a non-heap address the way FindToVersion does below, and for the same reason:
+    // PlanRoute -> PlanRouteLookup -> GetGhostFromRegionAt -> GetUnitIdxAt has no heap range
+    // check and aborts the process on an address outside the heap.
+    //
+    // Old-tagged fields are exactly where non-heap payloads appear -- a TypeInfo*, a binary
+    // constant, immortal metadata: after Flip their colour is IsOldPointer while the payload is
+    // still the live non-heap pointer (FixOldTaggedRefField says so in its own comment).  Every
+    // caller's *load-good* arm gated on Heap::IsHeapAddress before looking the route up; none of
+    // the *old-tag* arms did.  Guarding here rather than at each arm is one fix instead of four:
+    //
+    //   FixOldTaggedRefField             ra1=FixOldTaggedRefField     (first abort seen)
+    //   ResolveMinorReference(RefField&) ra1=ResolveMinorReference    (where it moved to)
+    //   ResolveMinorReference(RootSlot&) same shape
+    //   RescanRememberedSet              same shape
+    //
+    // Reproduced 10/10 with cjcj::cjc --package packages/basic/src --output-type=staticlib on a
+    // coloured host runtime:
+    //   F GetUnitIdxAt OOB addr=0x6282f2cd8c40 heap=[0x719247600000, 0x719257600000)
+    // 0x6282f2... is the compiler's own image, the same range as start_ip in that run's stack-map
+    // lines.  Gating only the first site moved the abort to the second, which is what showed the
+    // population was the old-tag paths rather than one call site.
     RoutePlan PlanRouteUnderStw(BaseObject* fromObj, const ScopedStopTheWorld& stw) const
     {
+        if (fromObj == nullptr || !Heap::IsHeapAddress(fromObj)) {
+            return RoutePlan{ nullptr };
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         return space.GetRegionManager().PlanRoute(fromObj, stw.route_plan_token());
     }
@@ -523,29 +611,219 @@ protected:
     bool TryUpdateRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
     bool TryForwardRefField(BaseObject* obj, RefField<>& field, BaseObject*& newRef) const override;
 
+    // ── store value side: typed, mirroring ZGC ────────────────────────────────────────────
+    //
+    // ZGC colours only a zaddress -- ZAddress::color(zaddress addr, uintptr_t color) -- and the
+    // sole producer of a zaddress is ZPointer::uncolor, which asserts
+    //     is_load_good(ptr) || is_null_any(ptr)   "Should be load good when handed out"
+    // (zAddress.inline.hpp:609-614).  A from-version address therefore cannot reach a store: the
+    // type system rejects it, with no runtime check on the hot path.
+    //
+    // Our slots were typed by ad5c28b3 (HeapSlot/RootSlot/DerivedSlot) but the *value* side was
+    // not: everything took a bare BaseObject*, which means both "the live to-version" and "some
+    // managed pointer I happen to hold".  That is the same conflation MAddress = Uptr had, one
+    // level up, and it let the colouring code paint a from-version with the current remap colour.
+    // Measured, N=5 on cjcj::cjc --package packages/basic/src: every run installs load-good slots
+    // naming FORWARDED targets (>=1, >=16, >=16, >=16, >=32 by the powers-of-two sampler), 21 of
+    // 22 samples in BarrierPhase::TRACE.
+    //
+    // So the colouring code is now reachable only through this typed pair.  To paint the current
+    // colour a caller must hold a zaddress, and the only producer is ClassifyStoreValue below,
+    // which carries the proof.  "Paint a from-version store-good" no longer compiles.
+
+    // Sole colouring site for a value already proven to be the live to-version.
+    // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83).
+    RefField<> ColourStoreGood(zaddress live) const
+    {
+        const Uptr storeColour = currentRemapColour | currentMarkedYoung | currentMarkedOld | currentRemembered;
+        return RefField<>(to_object(live), storeColour);
+    }
+
+    // Sole colouring site for a value that is still a from-version.  Paints a *stale* remap
+    // one-hot so the slot stays load-bad and the read barrier must resolve it before handing the
+    // value to the mutator -- our two-state equivalent of ZGC's "remapped means the address is
+    // already the current location" (zAddress.hpp:60-128; mid-evacuation is not a pointer bit).
+    RefField<> ColourStaleLoadBad(zaddress_unsafe stale) const
+    {
+        const Uptr notCurrent = REMAP_COLOUR_MASK ^ currentRemapColour;
+        const Uptr staleOneHot = notCurrent & -notCurrent;
+        const Uptr storeColour = staleOneHot | currentMarkedYoung | currentMarkedOld | currentRemembered;
+        return RefField<>(from_region_addr(raw(stale)), storeColour);
+    }
+
+    // The ONE adapter from a raw managed pointer to the typed pair.  This is where the proof that
+    // ZPointer::uncolor asserts gets actually established, instead of being assumed by
+    // ColourTypes.h's from_object ("凭什么: a live BaseObject* in hand"), which checks nothing.
+    //
+    // ⭐ The authority is the object's own state word, not the region's type.  IsFromObject /
+    // IsGhostFromObject ask the *region* whether it is from-space, and a region type is a moving
+    // property: once the cycle retires the region becomes TO/RECENT_FULL while the from-version
+    // still sits in it with FORWARDED in its header (StateWord.h:22-30 FORWARDED = 3;
+    // StateWord.h:174-178 puts stateCode at bits 48-49, which is why a stale value read with the
+    // compiler's bare `mov (%rbx),%rdi` faults non-canonically as #GP rather than as a page
+    // fault).  Same defect shape as the remset condition fixed in abe3c4d8 -- a predicate testing
+    // a property that moves instead of the object's own authoritative state.  ZGC never asks the
+    // page either: is_load_good compares the pointer's colour to the global remap colour, and
+    // forwarding identity is a per-address ZForwarding lookup.
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
         // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        // Store-good colour: mark-good | current Remembered (OpenJDK zAddress.cpp:83).
-        // Mid-evacuation is not a pointer bit (zAddress.hpp:60-128). A from-address is
-        // resolved via the region table before it is painted current. If it is still
-        // from, paint a stale remap one-hot so the value stays load-bad (ZGC: remapped
-        // means the address is already the current location).
-        if (IsFromObject(target) || IsGhostFromObject(target)) {
+        if (IsStaleStoreValue(target)) {
             BaseObject* to = FindToVersion(target);
             if (to != nullptr) {
                 target = to;
             }
         }
-        const bool stillFrom = IsFromObject(target) || IsGhostFromObject(target);
-        const Uptr notCurrent = REMAP_COLOUR_MASK ^ currentRemapColour;
-        const Uptr staleOneHot = notCurrent & -notCurrent;
-        const Uptr remap = stillFrom ? staleOneHot : currentRemapColour;
-        const Uptr storeColour = remap | currentMarkedYoung | currentMarkedOld | currentRemembered;
-        return RefField<>(target, storeColour);
+        if (IsStaleStoreValue(target)) {
+            // 凭什么: classification just proved this is *not* a live to-version, which is exactly
+            // what zaddress_unsafe means ("uncoloured, NOT safe to dereference").
+            return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
+        }
+        // colourwho: installed-slot checking sits after Barrier::WriteReference, so it only sees the
+        // mutator store path.  That path now measures ~0 while the read barrier still hands out
+        // load-good slots naming from-versions, which means the writer is on the *collector* side --
+        // preforward/ref_fix/self-heal all colour through here too.  This is the single funnel for
+        // every coloured value in the runtime, so the count belongs here.
+        //
+        // Fires when we are about to paint the current (load-good) colour on a target whose own
+        // header already says FORWARDED, or whose header is zeroed.  Both are the crash families.
+        if (kColourWhoProbe) {
+            NoteColourStoreGoodOnBadTarget(target);
+        }
+        return ColourStoreGood(from_object(target));
+    }
+
+    // holdermark: probe-only view of the old-generation mark bit.
+    bool IsMarkedObjectForProbe(BaseObject* obj) const override
+    {
+        return IsMarkedObject<Generation::Old>(obj);
+    }
+
+    // flipwitness: the probe needs the colour currently handed out, without reaching into members.
+    Uptr CurrentRemapColourForProbe() const override { return currentRemapColour; }
+
+    // colourwho: compile-time gated -- this is the funnel every coloured write goes through.
+    static constexpr bool kColourWhoProbe = true;
+
+    void NoteColourStoreGoodOnBadTarget(BaseObject* target) const
+    {
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return;
+        }
+        const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+        const unsigned stateCode = static_cast<unsigned>((hdr >> 48) & 0x3u);
+        const uint64_t typeInfo = hdr & 0xffffffffffffull;
+        const uint64_t seen = colourWhoTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (seen == 1) {
+            // Positive control: a zero below must not be readable as a dead probe.
+            LOG(RTLOG_ERROR, "[COLOURWHO] armed first sc=%u", stateCode);
+        }
+        if (stateCode == 0 && typeInfo != 0) {
+            return;
+        }
+        const uint64_t bad = colourWhoBad.fetch_add(1, std::memory_order_relaxed) + 1;
+        if ((bad & (bad - 1)) != 0) {
+            return;
+        }
+        LOG(RTLOG_ERROR, "[COLOURWHO] bad=%lu of %lu target=%p sc=%u typeInfo=0x%lx isFrom=%d isGhost=%d phase=%d",
+            bad, seen, static_cast<void*>(target), stateCode, typeInfo, IsFromObject(target) ? 1 : 0,
+            IsGhostFromObject(target) ? 1 : 0, static_cast<int>(Heap::GetHeap().GetGCPhase()));
+    }
+    mutable std::atomic<uint64_t> colourWhoTotal{ 0 };
+    mutable std::atomic<uint64_t> colourWhoBad{ 0 };
+
+    // A store value is stale if *either* authority says so: the region it sits in is from-space,
+    // or the object's own state word says it has been forwarded.  Region type moves; the state
+    // word does not, so asking only the region is what let load-good slots name FORWARDED targets.
+    // kAskObjectState: compile-time arm switch, same reason as StateWord::kInitStateAtAlloc.
+    static constexpr bool kAskObjectState = true;
+
+    // routeask: OpenJDK never asks a region-type enum whether an object is being relocated.
+    // ZGeneration::relocate_or_remap_object (zGeneration.inline.hpp:131-140) asks the *address*:
+    //     ZForwarding* const forwarding = _forwarding_table.get(addr);
+    //     if (forwarding == nullptr) { return safe(addr); }
+    //     return _relocate.relocate_object(forwarding, addr);
+    // The table is installed once with the relocation set and does not change under a concurrent
+    // reader, and when the address *is* in it the load barrier relocates the object right there --
+    // so a caller can never come away holding a not-yet-relocated relocation-set object.
+    //
+    // Ours asks IsFromObject -> regionInfo->IsFromRegion(), a mutable enum that is false both
+    // before the region is enrolled and after ForwardFromRegions retypes it to LONE_FROM.  That is
+    // the same defect shape as the remset condition (abe3c4d8) and the stillFrom predicate: a
+    // question answered by a property that moves, rather than by the authority.
+    //
+    // This counts, without changing behaviour, how often we are about to paint the current colour
+    // on a target whose region already has a route state other than NORMAL -- i.e. exactly the
+    // objects ZGC's table would have caught.  Trigger count, not `armed`, is the evidence.
+    static constexpr bool kRouteAskProbe = true;
+    mutable std::atomic<uint64_t> routeAskHits{ 0 };
+
+    // Full counts, not a sample.  The previous version logged on powers of two and every one of the
+    // 105 sampled lines happened to be covered, which was written up as "100% covered" -- a
+    // population claim from a sample of the head of the distribution.  An escaping case is by
+    // definition rare, so sampling is exactly the wrong instrument for it: count both arms for
+    // every call and log only when the uncovered arm moves.
+    //
+    // routeState numbering matters here and I got it wrong once already:
+    // RegionInfo.h:136-143 is NORMAL=0, FORWARDABLE=1, ROUTING=2, ROUTED=3, COMPACTED=4,
+    // FORWARDED=5 -- so the enrolment mark is FORWARDABLE, set by PrepareForwardableRegion inside
+    // PrepareFromRegionList, which runs from PrepareForwardTable<Old> before the relocate flip.
+    mutable std::atomic<uint64_t> routeAskCovered{ 0 };
+    mutable std::atomic<uint64_t> routeAskEscaped{ 0 };
+
+    void NoteRouteAsk(BaseObject* target, bool predicateSaidStale) const
+    {
+        if (!kRouteAskProbe || target == nullptr || !Heap::IsHeapAddress(target)) {
+            return;
+        }
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (region == nullptr) {
+            return;
+        }
+        const RegionInfo::RouteState rs = region->GetRouteState();
+        if (rs == RegionInfo::RouteState::NORMAL) {
+            return;
+        }
+        if (predicateSaidStale) {
+            const uint64_t c = routeAskCovered.fetch_add(1, std::memory_order_relaxed) + 1;
+            if ((c & (c - 1)) == 0) {
+                // Positive control on the covered arm, so an escaped=0 cannot mean "probe dead".
+                LOG(RTLOG_ERROR, "[ROUTEASK] covered=%lu escaped=%lu", c,
+                    routeAskEscaped.load(std::memory_order_relaxed));
+            }
+            return;
+        }
+        const uint64_t e = routeAskEscaped.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR, "[ROUTEASK][ESCAPED] e=%lu covered=%lu target=%p routeState=%d isFrom=%d isGhost=%d fwd=%d",
+            e, routeAskCovered.load(std::memory_order_relaxed), static_cast<void*>(target),
+            static_cast<int>(rs), IsFromObject(target) ? 1 : 0, IsGhostFromObject(target) ? 1 : 0,
+            target->IsForwarded() ? 1 : 0);
+    }
+
+    bool IsStaleStoreValue(BaseObject* target) const
+    {
+        const bool stale = IsFromObject(target) || IsGhostFromObject(target) ||
+            (kAskObjectState && target->IsForwarded());
+        // PORT_ZFORWARDING step 1: compare the address-keyed answer against the region-keyed one at
+        // the busiest place both are meaningful.  Nothing acts on the table yet -- the point is the
+        // disagreement count.  legacyOnly > 0 would mean the port loses information and must be
+        // fixed before step 2; tableOnly > 0 is the interesting direction, since the table answers
+        // from an address and cannot be fooled by a region type that has since moved on.
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            // The baseline has to be the *whole* legacy answer.  Comparing against
+            // IsFromObject || IsGhostFromObject alone produced 1.2M tableOnly at rtype=5
+            // (UNMOVABLE_FROM_REGION) and 24k at rtype=9 (RAW_POINTER_PINNED_REGION) -- both of
+            // which the legacy side does recognise, just through a third predicate.  That was a
+            // defect in the comparison, not in the table.
+            ForwardingTable::NoteCompare(reinterpret_cast<MAddress>(target),
+                                         IsFromObject(target) || IsGhostFromObject(target) ||
+                                             IsUnmovableFromObject(target));
+        }
+        NoteRouteAsk(target, stale);
+        return stale;
     }
 
     // plainroots: root-slot write-back is plain (ZGC uncolored root); heap-slot write-back

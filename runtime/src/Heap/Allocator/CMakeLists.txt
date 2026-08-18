@@ -6,6 +6,7 @@
 
 set(SRC_LIST
     "Allocator.cpp"
+    "ForwardingTable.cpp"
     "MemMap.cpp"
     "RegionSpace.cpp"
     "RegionManager.cpp"

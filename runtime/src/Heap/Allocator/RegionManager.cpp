@@ -36,6 +36,7 @@
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/Zap.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
 #include "Mutator/Mutator.inline.h"
@@ -938,6 +939,9 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
     this->regionInfoStart = regionInfoAddr;
     this->regionHeapStart = regionInfoAddr + metadataSize;
     this->regionHeapEnd = regionHeapStart + nUnit * RegionInfo::UNIT_SIZE;
+    // PORT_ZFORWARDING step 1: the address-keyed table covers the same span the units do, so an
+    // index is (addr - base) / UNIT_SIZE with no probing -- ZGranuleMap's shape.
+    ForwardingTable::Initialize(regionHeapStart, nUnit * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
     this->inactiveZone = regionHeapStart;
     SetMaxUnitCountForRegion();
     SetMaxUnitCountForPinnedRegion();
@@ -2937,4 +2941,21 @@ template void RegionManager::ForwardFromRegions<Generation::Young>();
 template void RegionManager::ForwardFromRegions<Generation::Old>();
 template void RegionManager::ForwardRegion<Generation::Young>(RegionInfo*);
 template void RegionManager::ForwardRegion<Generation::Old>(RegionInfo*);
+} // namespace MapleRuntime
+
+namespace MapleRuntime {
+// enroltime: defined out of line so RegionInfo.h does not have to see Heap/GCPhase.
+void RegionInfo::NoteEnrolPhase()
+{
+    const GCPhase phase = Heap::GetHeap().GetGCPhase();
+    const bool afterFlip = (phase == GCPhase::GC_PHASE_PREFORWARD || phase == GCPhase::GC_PHASE_FORWARD);
+    std::atomic<uint64_t>& counter = afterFlip ? EnrolAfterFlip() : EnrolBeforeFlip();
+    const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if ((n & (n - 1)) != 0) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[ENROLTIME] afterFlip=%d n=%lu phase=%d before=%lu after=%lu", afterFlip ? 1 : 0, n,
+        static_cast<int>(phase), EnrolBeforeFlip().load(std::memory_order_relaxed),
+        EnrolAfterFlip().load(std::memory_order_relaxed));
+}
 } // namespace MapleRuntime

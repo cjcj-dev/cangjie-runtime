@@ -185,7 +185,22 @@ public:
 #endif
     }
 
-    void StoreColoured(zpointer value, std::memory_order order = std::memory_order_relaxed);
+    // puborder: publishing a reference is a *release*, not a plain store.
+    //
+    // The default was relaxed, which lets another thread observe the reference before it observes
+    // the header write that made the target a valid object.  The reader then hands out an object
+    // whose header word is still zero, and the mutator faults on the first field it loads out of
+    // it -- `mov 0x20(%rbx),%rax` with rbx = 0, si_addr = 0x20, which is 7 of 10 crashes here.
+    //
+    // The measurement that identified this: at the hand-out point, targets whose header is zero and
+    // which have no to-version to resolve to sit in regions typed THREAD_LOCAL (6) and RECENT_FULL
+    // (7) with garbage=0, free=0, ghost=0 -- live allocation regions, not reclaimed ones.  A zero
+    // header in a live allocation region is an object that has not been initialised yet, not one
+    // that was collected, which is why every reclaim-side hypothesis failed to explain it.
+    //
+    // OpenJDK does not need an explicit release here because safe publication is the Java memory
+    // model's job and C2 emits the barrier; in C++ the ordering has to be written down.
+    void StoreColoured(zpointer value, std::memory_order order = std::memory_order_release);
 
 private:
     template<bool atomic>

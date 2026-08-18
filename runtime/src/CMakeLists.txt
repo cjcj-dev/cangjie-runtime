@@ -236,6 +236,27 @@ endif()
         VERBATIM)
     add_dependencies(runtime check_heal_slot_writes)
     add_dependencies(cangjie-runtime check_heal_slot_writes)
+    add_custom_target(check_diag_not_hollow ALL
+        COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/check_diag_not_hollow.py"
+        COMMENT "Checking that a diagnostic documenting a gate is not an all-no-op implementation"
+        VERBATIM)
+    add_dependencies(runtime check_diag_not_hollow)
+    add_dependencies(cangjie-runtime check_diag_not_hollow)
+    # The GC unit suite is the only deterministic detector this runtime has: it names a defect in
+    # tens of seconds where the workload route needs a crash, a rate over N>=10 and a forensic read.
+    # It shipped behind MRT_GC_UNIT_TESTS:BOOL=OFF with a fail-closed gate script that nothing ever
+    # called, so it ran zero times.  POST_BUILD rather than add_dependencies because it links the
+    # freshly built .so; the script self-skips via a stamp when neither the .so nor the suite moved,
+    # and known_failures.txt keeps today's two standing failures from blocking while still blocking
+    # anything new -- and blocking a listed test that starts passing, so the list cannot rot.
+    if (NOT CMAKE_CROSSCOMPILING AND NOT WINDOWS_FLAG MATCHES 1)
+        add_custom_command(TARGET cangjie-runtime POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E env
+                "GCV2_RUNTIME_LIB_DIR=$<TARGET_FILE_DIR:cangjie-runtime>"
+                bash "${CMAKE_CURRENT_SOURCE_DIR}/../tests/gc_unit/gate_gc_unit.sh"
+            COMMENT "Running the deterministic GC unit suite against the runtime just built"
+            VERBATIM)
+    endif()
     if (WINDOWS_FLAG MATCHES 1)
         add_custom_command(TARGET cangjie-runtime POST_BUILD
             COMMAND python3 "${CMAKE_CURRENT_SOURCE_DIR}/../build/generate_windows_exports.py" check

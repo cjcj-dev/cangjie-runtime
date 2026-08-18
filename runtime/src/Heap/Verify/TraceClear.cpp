@@ -25,7 +25,11 @@ bool EnvIsOne(const char* name)
     return v != nullptr && std::strcmp(v, "1") == 0;
 }
 
-constexpr size_t kCap = 256;
+// 256 was sized for clears alone.  Adding the CollectRegion decision to the same ring roughly
+// tripled the traffic (total went 2235 -> ~6200 in the same workload) and every lookup started
+// answering no_in_last_256_clears -- the instrument stopped answering because of what the
+// instrument itself added, not because the address was absent.  Sized for the whole run instead.
+constexpr size_t kCap = 8192;
 constexpr size_t kKindLen = 16;
 constexpr unsigned int kUnknownRegionField = static_cast<unsigned int>(-1);
 
@@ -58,11 +62,25 @@ void RecordEntry(const Entry& entry)
 
 } // namespace
 
-bool TraceClear::Enabled()
-{
-    static const bool on = false /* pinned:MRT_GCV2_TRACE_CLEAR */ || false /* pinned:MRT_GCV2_F3_REGION */;
-    return on;
-}
+// gcfwdfix was built for exactly the question now in hand and then pinned off, so the ring, the
+// address lookup and the per-cycle lookup all already exist -- this only turns the gate back on.
+//
+// What it answers: the read barrier hands out targets whose header is zero and which have no
+// to-version to resolve to.  Asking the region what it is at that moment does not work -- region
+// type is a moving property and two samples of it gave contradictory answers (THREAD_LOCAL /
+// RECENT_FULL in one run, FREE past allocPtr in the next).  The ring records the clear *when it
+// happens*, so a hit is direct evidence of who zeroed that address rather than a guess from the
+// state it is in afterwards.
+//
+// Why this matters for the ZGC comparison: ZGC has no address quarantine either.  ZPageAllocator
+// ::free_page runs prepare_memory_for_free -> safe_destroy_page -> free_memory, and ZSafeDelete
+// only defers deleting the ZPage *metadata object* (zSafeDelete.inline.hpp schedule_delete), not
+// the heap memory.  So ZGC's protection against a stale pointer naming reused memory is not
+// keeping the address away -- it is that no reachable slot still holds a stale pointer.  Ours is
+// being dereferenced by a mutator, so it is reachable, so it should have been marked.
+constexpr bool kTraceClearOn = true;
+
+bool TraceClear::Enabled() { return kTraceClearOn; }
 
 void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore)
 {

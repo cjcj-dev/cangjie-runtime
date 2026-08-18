@@ -30,6 +30,7 @@
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
+#include "Heap/Verify/TraceClear.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/SealCheck.h"
@@ -369,6 +370,13 @@ public:
     {
         MarkView<G> view = region->GetRouteMarkView<G>();
         const bool knownEmpty = IsKnownEmptyForView(region, view);
+        // whoempty: record the *decision*, with the live-byte count it was made on, into the same
+        // ring ClearUnits writes to.  ClearUnits passes liveBefore as a literal 0
+        // (RegionInfo.h:1429 `TraceClear::NoteRange(unitAddress, size, "clear_units", nullptr, 0)`),
+        // so a `liveBefore=0` in a clear entry says nothing about the region -- it is a constant.
+        // This entry carries the real number, taken at the one edge where a region dies.
+        TraceClear::NoteRange(region->GetRegionStart(), region->GetRegionSize(),
+                              knownEmpty ? "coll_empty" : "coll_live", region, region->GetLiveByteCount());
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
@@ -390,10 +398,18 @@ public:
                                  knownEmpty ? 1U : 0U);
         // Probe: knownEmpty region still holds valid object headers (gcreclaim / B2 H1).
         {
-            static const bool probe = []() {
-                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCRECLAIM_PROBE */;
-                return v != nullptr && std::strcmp(v, "1") == 0;
-            }();
+            // gcreclaim was written for exactly the question now in hand -- does a region we are
+            // about to declare empty still contain valid object headers, and are any of them
+            // marked -- and then pinned off.  This is the fourth instrument this session that was
+            // already built and switched off (TraceClear, PermWhoAdmit, ToverFailDiag were the
+            // others), so the campaign's bottleneck is not writing probes.
+            //
+            // What it decides: 45 of 45 unusable zero-header targets sit in regions this call
+            // classified knownEmpty with a real GetLiveByteCount() of 0.  validObjs > 0 there means
+            // the region was not empty at all, and markedObjs separates the two causes -- objects
+            // present but unmarked (the mark closure missed them) from objects marked while the
+            // emptiness test still said empty (the test and the bitmap disagree).
+            static constexpr bool probe = true;
             if (probe && region != nullptr && knownEmpty) {
                 size_t start = region->GetRegionStart();
                 size_t alloc = region->GetRegionAllocPtr();
@@ -419,9 +435,21 @@ public:
                         pos += sz;
                     }
                 }
-                if (validObjs > 0) {
-                    VLOG(REPORT,
-                         "[GCRECLAIM][collect-empty] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
+                // A from-region that has finished evacuating legitimately looks like this: its
+                // from-copies are still readable and none of them are marked in the new view,
+                // because they moved.  35,498 of these were logged in one N=10 run, all with
+                // type=4 (LONE_FROM) route=5 (FORWARDED) markedObjs=0 -- correct behaviour, not a
+                // defect, and reporting it as one would have been a wrong conclusion drawn from a
+                // big number.  Narrow to the case that cannot be explained that way: a region
+                // holding valid objects that is not from-space at all.
+                const bool fromSpace = region->IsFromRegion() || region->IsLoneFromRegion() ||
+                    region->IsUnmovableFromRegion() || region->IsGhostFromRegion();
+                if (validObjs > 0 && !fromSpace) {
+                    // LOG rather than VLOG(REPORT): REPORT is gated on MRT_REPORT and lands in a
+                    // separate report.log.<pid> sink, which cost a turn earlier this session when a
+                    // probe looked silent because its output had gone somewhere else.
+                    LOG(RTLOG_ERROR,
+                         "[GCRECLAIM][empty-notfrom] region=%p start=%#zx alloc=%#zx end=%#zx type=%u young=%u "
                          "live=%zu residual=%zu validObjs=%zu markedObjs=%zu route=%u BYPASS=1",
                          region, start, alloc, end, region->GetRegionType(),
                          static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount(), residual,
@@ -764,7 +792,11 @@ public:
                 markQuarantinedBytes += bytes;
             }
         });
-        VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
+        // A7 cost baseline: deferring the dispel by one cycle would hold roughly this much extra,
+        // so the number has to be on the table before the change, not after.  LOG rather than
+        // VLOG(REPORT) for the same reason as the gcreclaim probe -- REPORT lands in a separate
+        // sink and a probe that looks silent has cost this campaign a turn before.
+        LOG(RTLOG_ERROR, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", retainedRegions, retainedBytes);
         VLOG(REPORT, "[MarkQuarantine] installed_regions=%zu installed_bytes=%zu held_units=%u",
              markQuarantinedRegions, markQuarantinedBytes, freeRegionManager.GetMarkQuarantineUnitCount());
 
