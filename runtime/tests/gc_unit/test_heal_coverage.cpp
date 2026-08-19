@@ -17,8 +17,20 @@
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
-using namespace MapleRuntime::HealCoverage;
-using namespace MapleRuntime::RemapYoungRootsLogic;
+using HealCoverage::Kind;
+using HealCoverage::Face;
+using HealCoverage::Counts;
+using HealCoverage::Classify;
+using HealCoverage::IsCoverageMiss;
+using HealCoverage::PaintStale;
+using HealCoverage::InjectStaleOnce;
+using HealCoverage::CensusWords;
+using HealCoverage::FaceOf;
+using RemapYoungRootsLogic::CurrentRemapBit;
+using RemapYoungRootsLogic::kYoungMask0;
+using RemapYoungRootsLogic::kOldMask0;
+using RemapYoungRootsLogic::ColourWrapsWithoutRemap;
+using RemapYoungRootsLogic::FlipYoungMask;
 
 namespace {
 constexpr uintptr_t kAddr = 0x00007f00'00001000ULL;
