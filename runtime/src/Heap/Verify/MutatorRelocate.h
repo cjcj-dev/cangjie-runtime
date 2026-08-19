@@ -72,6 +72,13 @@ constexpr bool kMutatorSelfRelocate = true;
 // naked from while ClearUnits ran on the same page.
 constexpr bool kUnpublishedMeansKeepFrom = true;
 constexpr int kInflightWaitSpins = 4096;
+// oraclecut §4 / cjpmnull5: movable ghost from is never handed out.
+// !regionPublished ⇒ bounded wait for the region-level publish
+// (FORWARDED / COMPACTED / kept). Region publish is reached every cycle;
+// this is not the object-level empty wait 47595a33 deleted.
+// Flip to false for gate ④ (crash returns in 1s).
+constexpr bool kWaitRegionPublish = true;
+constexpr int kRegionWaitSpins = 4096;
 
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
@@ -84,11 +91,20 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
     if (tableHit) {
         return UnpublishedAnswer::UseTo;
     }
-    if (retainRefused) {
-        return UnpublishedAnswer::Wait;
-    }
     if (regionPublished) {
         return UnpublishedAnswer::KeepFrom;
+    }
+    // !published: region has not reached FORWARDED/COMPACTED/kept this cycle.
+    // Wait for that region-level publish (oraclecut §4). retainRefused is
+    // one reason the page is unpublished (worker holds it); the wait covers
+    // that and every other unpublished state. After publish, a table miss
+    // is the VisitLive hole and KeepFrom is legal.
+    if constexpr (kWaitRegionPublish) {
+        (void)retainRefused;
+        return UnpublishedAnswer::Wait;
+    }
+    if (retainRefused) {
+        return UnpublishedAnswer::Wait;
     }
     return UnpublishedAnswer::KeepFrom;
 }
@@ -173,6 +189,13 @@ void NoteWaitEnter();   // entered WaitRoutedTipReady
 void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
 void NoteWaitReceipt(); // left it with a to-version
 void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL -- the 4096-spin FATAL leg
+// Region-level publish wait (oraclecut §4). Distinct from the retain-refused
+// object-FORWARDED spin: this one waits for FORWARDED/COMPACTED/kept.
+void NoteRegionWaitEnter();
+void NoteRegionWaitGot();            // published and table hit
+void NoteRegionWaitPublishedMiss();  // published, table miss → legal keep-from
+void NoteRegionWaitTimeout();        // spin bound, keep-from
+void NoteRegionWaitSpins(int spins);
 
 // --- pin / drain ------------------------------------------------------------------------
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended);

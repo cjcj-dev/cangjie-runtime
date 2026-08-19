@@ -429,10 +429,10 @@ public:
             }
             return to;
         }
-        // ③ table still empty. ZGC add_and_wait only after retain-ok+alloc-fail
-        // (zRelocate.cpp:403-409), then forward_object asserts find()!=null.
-        // Our hole is VisitLive never copied this from: miss means keep from
-        // (kUnpublishedMeansKeepFrom), not sched_yield for a publisher.
+        // ③ table still empty. oraclecut §4: wait for the region-level
+        // publish (FORWARDED/COMPACTED/kept). After publish, a miss is the
+        // VisitLive hole and keep-from is legal. Not the object-level empty
+        // wait 47595a33 deleted.
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }

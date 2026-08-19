@@ -9394,9 +9394,9 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     const bool regionPublished =
         rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
         forwarding->IsForwardingDone();
-    // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0),
-    // not "region not yet FORWARDED". The latter is the VisitLive hole and must
-    // keep from (survival_dense 256MB OOM when we waited 4096 yields on it).
+    // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0).
+    // oraclecut §4: unpublished (any reason) waits for the region-level publish;
+    // keep-from only after publish + table miss (VisitLive hole).
     bool retainRefused = false;
     if (!regionPublished && !forwarding->IsForwardingDone()) {
         if (forwarding->TryLockReadFromRegion()) {
@@ -9410,41 +9410,65 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
         return again;
     }
-    // retainRefused: worker holds the write lock and is copying. Bounded wait
-    // on this object's FORWARDED bit (narrowed old spin; permhole FATAL stays
-    // unused). Keep-from only after the page is published and the table still
-    // misses — the VisitLive hole (LEAD 0819-12:2x / zRelocate.cpp:403-416).
+    // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
+    // an object-level empty spin (47595a33). ExemptFromRegion publishes kept
+    // immediately so this wait is bounded every cycle.
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
-        static std::atomic<size_t> g_inflightWait{ 0 };
-        static std::atomic<size_t> g_inflightGot{ 0 };
-        const size_t wn = g_inflightWait.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (wn <= 8 || (wn & (wn - 1)) == 0) {
-            LOG(RTLOG_ERROR, "[GCV2][inflight-wait] n=%zu from=%p region=%p — wait FORWARDED",
-                wn, from, forwarding);
+        static std::atomic<size_t> g_regionWait{ 0 };
+        static std::atomic<size_t> g_regionGot{ 0 };
+        const size_t wn = g_regionWait.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteRegionWaitEnter();
         }
-        for (int spins = 0; spins < MutatorRelocate::kInflightWaitSpins; ++spins) {
-            if (from->IsForwarded() || forwarding->IsForwardingDone() ||
-                forwarding->GetRouteState() == RegionInfo::RouteState::FORWARDED ||
-                forwarding->GetRouteState() == RegionInfo::RouteState::COMPACTED) {
+        if (wn <= 8 || (wn & (wn - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][region-wait] n=%zu from=%p region=%p route=%u done=%u — wait region publish",
+                wn, from, forwarding, static_cast<unsigned>(rs),
+                static_cast<unsigned>(forwarding->IsForwardingDone()));
+        }
+        auto regionIsPublished = [&]() -> bool {
+            const RegionInfo::RouteState now = forwarding->GetRouteState();
+            return now == RegionInfo::RouteState::FORWARDED ||
+                now == RegionInfo::RouteState::COMPACTED || forwarding->IsForwardingDone();
+        };
+        const int spinCap = MutatorRelocate::kWaitRegionPublish ? MutatorRelocate::kRegionWaitSpins
+                                                                : MutatorRelocate::kInflightWaitSpins;
+        int spins = 0;
+        for (; spins < spinCap; ++spins) {
+            if (regionIsPublished()) {
                 BaseObject* ready = lookupTo();
                 if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
-                    g_inflightGot.fetch_add(1, std::memory_order_relaxed);
+                    g_regionGot.fetch_add(1, std::memory_order_relaxed);
                     if (MutatorRelocate::StatsOn()) {
+                        MutatorRelocate::NoteRegionWaitSpins(spins);
+                        MutatorRelocate::NoteRegionWaitGot();
                         MutatorRelocate::NoteWaitReceipt();
                     }
                     return ready;
                 }
+                // Published and table still misses: VisitLive hole. Keep-from is
+                // legal (cjpmnull2 Exempt: hole pages are not collected this cycle).
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::NoteRegionWaitSpins(spins);
+                    MutatorRelocate::NoteRegionWaitPublishedMiss();
+                    MutatorRelocate::NoteWaitGiveUp();
+                }
+                return from;
             }
             sched_yield();
         }
         BaseObject* last = lookupTo();
         if (last != nullptr && Heap::IsHeapAddress(last) && last->IsValidObject()) {
             if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteRegionWaitSpins(spins);
+                MutatorRelocate::NoteRegionWaitGot();
                 MutatorRelocate::NoteWaitReceipt();
             }
             return last;
         }
         if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteRegionWaitSpins(spins);
+            MutatorRelocate::NoteRegionWaitTimeout();
             MutatorRelocate::NoteWaitGiveUp();
         }
         return from;

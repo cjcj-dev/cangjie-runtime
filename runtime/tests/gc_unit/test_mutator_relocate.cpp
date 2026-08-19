@@ -22,11 +22,23 @@ using namespace MapleRuntime::GcUnit;
 // What is worth pinning is the decision the switch feeds, which holds either way.
 GC_TEST(MutatorRelocate, UnpublishedTargetIsKeptRatherThanWaitedFor)
 {
-    // The answer that replaced the spin: a target that is not published yet is not a reason to wait,
-    // because nothing was ever enqueued to make it appear. Keep the from-copy, which is what
-    // ZForwarding::find returning null means for a mutator (zForwarding.inline.hpp:248-252).
+    // Published + table miss = VisitLive hole. Keep-from is legal
+    // (zRelocate.cpp:403-416 / oraclecut §4).
     GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, true, false) ==
                    MutatorRelocate::UnpublishedAnswer::KeepFrom);
+}
+
+GC_TEST(MutatorRelocate, UnpublishedRegionWaitsForPublish)
+{
+    // oraclecut §4: !regionPublished ⇒ wait for the region-level publish
+    // (FORWARDED / COMPACTED / kept). Not the object-level empty wait
+    // 47595a33 deleted.
+    if (MutatorRelocate::kWaitRegionPublish) {
+        GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, false) ==
+                       MutatorRelocate::UnpublishedAnswer::Wait);
+        GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, true) ==
+                       MutatorRelocate::UnpublishedAnswer::Wait);
+    }
 }
 
 GC_TEST(MutatorRelocate, TwoThreadsInsertSameFromLoserTakesWinner)

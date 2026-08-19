@@ -1673,6 +1673,22 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
+    // oraclecut §4 / cjpmnull5: Exempt is a terminal region state this cycle.
+    // Publish immediately as kept (IsForwardingDone) so WaitRoutedTipReady's
+    // region-level wait can exit. Without this the wait never terminates
+    // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
+    // cycle (cjpmnull2 Exempt).
+    if (region != nullptr && !region->IsForwardingDone()) {
+        static std::atomic<size_t> g_exemptKept{ 0 };
+        const size_t n = g_exemptKept.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][exempt-kept] n=%zu region=%p start=%#zx route=%u live=%zu",
+                n, region, region->GetRegionStart(),
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+        }
+        region->MarkForwardingDone();
+    }
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
 
