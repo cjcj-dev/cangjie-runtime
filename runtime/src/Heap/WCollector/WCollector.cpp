@@ -6281,8 +6281,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
 {
     RegionManager& manager = reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager();
     auto postEvacPoint = [this](const char* point, bool runHeap = true) {
-        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-        if (postEvac == nullptr || std::strcmp(postEvac, "1") != 0) {
+        if (!kVerifyPostEvac) {
             return;
         }
         // Breadcrumb first (survives if VerifyHeap SEGV); force=true skips VERIFY_HEAP env.
@@ -6989,11 +6988,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
-        {
-            const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-                ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
-            }
+        if (kVerifyPostEvac) {
+            ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
         }
         {
             MRT_PHASE_TIMER("young.ref_fix_bulk");
@@ -7043,11 +7039,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
         postEvacPoint("post-forward-pre-reclaim", true);
-        {
-            const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-            if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-                ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
-            }
+        if (kVerifyPostEvac) {
+            ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
         }
     }
 
@@ -7703,14 +7696,11 @@ void WCollector::DoYoungGarbageCollection()
     // ("young collection stw time N us"). Body timers below exclude that wait.
     // Timeline probe (gcdirty): earliest STW point = mutator just handed control.
     // force via POST_EVAC so we do not need global VERIFY_HEAP (avoids pre-evac side effects).
-    {
-        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
-                 minorTotalRuns + 1, minorTotalRuns);
-            VerifyHeapObjects("stw-enter", true);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
-        }
+    if (kVerifyPostEvac) {
+        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=stw-enter run=%zu priorMinors=%zu",
+             minorTotalRuns + 1, minorTotalRuns);
+        VerifyHeapObjects("stw-enter", true);
+        VLOG(REPORT, "[GCV2][verify][post-evac] point=stw-enter run=%zu", minorTotalRuns + 1);
     }
     if (!concurrentStackScan) {
         TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
@@ -7738,14 +7728,11 @@ void WCollector::DoYoungGarbageCollection()
     // HotSpot g1HeapVerifier.cpp:424 verify_region_sets placement: after region accounting is stable.
     VerifyRegionSets("after-prepare-young");
     // Region-set verify after candidate construction (HotSpot verify_region_sets placement intent).
-    {
-        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
-                 minorTotalRuns + 1);
-            VerifyHeapObjects("post-prepare-young", true);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
-        }
+    if (kVerifyPostEvac) {
+        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-prepare-young run=%zu",
+             minorTotalRuns + 1);
+        VerifyHeapObjects("post-prepare-young", true);
+        VLOG(REPORT, "[GCV2][verify][post-evac] point=post-prepare-young run=%zu", minorTotalRuns + 1);
     }
     if (stats.candidateRegions == 0) {
         manager.ReassembleFromSpace();
@@ -8776,15 +8763,12 @@ void WCollector::DoYoungGarbageCollection()
     // Independent ForEachObj walk; gated by MRT_GCV2_VERIFY_HEAP (default off).
     // Timeline (gcdirty): also force as post-mark under POST_EVAC so first-dirty bracketing
     // does not require global VERIFY_HEAP.
-    {
-        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-            VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
-            VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
-        } else {
-            VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
-        }
+    if (kVerifyPostEvac) {
+        VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
+        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
+        VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
+    } else {
+        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
     }
 
     size_t liveBytes = 0;
@@ -8814,8 +8798,10 @@ void WCollector::DoYoungGarbageCollection()
     if (fullYoungScan) {
         // Run structural verify before mark-equivalence CHECK (may abort).
         VerifyRegionSets("after-young-mark");
-        ValidateYoungMarking(reachableVec, allocationRoots);
     }
+    // Self-gated by kVerifyYoungMarking. Do not hide it behind fullYoungScan:
+    // FYS is compile-time false, and IndependentVsBitmap does not need FYS.
+    ValidateYoungMarking(reachableVec, allocationRoots);
     // Always-available (gated) probe: full-heap independent reachability vs young-only bitmap.
     // Runs with FULL_YOUNG_SCAN=0 so B2 path is exercised. Default off.
     ProbeUnmarkedLive(allocationRoots, rememberedSlots);
@@ -8859,20 +8845,17 @@ void WCollector::DoYoungGarbageCollection()
     // Post-evacuate invariant P (HotSpot VerifyAfterGC analog for young): after
     // fix+forward+remset rebuild inside EvacuateYoungRegions, every live ref must
     // still be a legal object (VerifyHeap H) and remset must cover old→young (R).
-    // Gate default off: MRT_GCV2_VERIFY_POST_EVAC=1. force=true so this does not
+    // Gate default off: kVerifyPostEvac. force=true so this does not
     // require MRT_GCV2_VERIFY_HEAP/REMSET (avoids pre-evacuate side effects).
-    {
-        const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
-        if (postEvac != nullptr && std::strcmp(postEvac, "1") == 0) {
-            VerifyHeapObjects("post-evacuate", true);
-            std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
-            VerifyRememberedSetInvariant("post-evacuate", remsetSnap, true);
-            ValidateMinorReferences("post-evacuate", nullptr);
-            VLOG(REPORT,
-                 "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
-                 "env=MRT_GCV2_VERIFY_POST_EVAC=1 remsetSnap=%zu",
-                 minorTotalRuns + 1, remsetSnap.size());
-        }
+    if (kVerifyPostEvac) {
+        VerifyHeapObjects("post-evacuate", true);
+        std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
+        VerifyRememberedSetInvariant("post-evacuate", remsetSnap, true);
+        ValidateMinorReferences("post-evacuate", nullptr);
+        VLOG(REPORT,
+             "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
+             "kVerifyPostEvac=1 remsetSnap=%zu",
+             minorTotalRuns + 1, remsetSnap.size());
     }
 
     // ZRelocate::relocate tail (zRelocate.cpp:1303-1306): after concurrent copy,

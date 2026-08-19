@@ -25,6 +25,9 @@ namespace MapleRuntime {
 // Flip kVerifyYoungMarking (WCollector.cpp:ValidateYoungMarking) and rebuild.
 // No MRT_GCV2_* env: those were cut 190 -> 3; pinned getenv is a false-negative.
 constexpr bool kVerifyYoungMarking = false;
+// Flip kVerifyPostEvac (WCollector.cpp post-evac / stw-enter heap walk) and rebuild.
+// Replaces pinned-off MRT_GCV2_VERIFY_POST_EVAC. Default off.
+constexpr bool kVerifyPostEvac = false;
 
 enum class VerifyMarkSource : uint8_t {
     IndependentVsBitmap = 0,
