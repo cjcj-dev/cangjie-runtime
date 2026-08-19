@@ -423,14 +423,23 @@ public:
         LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return IsSurvivedObject(view, face, offset);
+            if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+                return true;
+            }
+            return false;
         }
         MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return IsSurvivedObject(view, face, offset);
+        if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
+        return false;
     }
 
     bool IsRouteMarkedObject(size_t offset)
     {
+        if (AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
@@ -1123,6 +1132,14 @@ public:
     static std::atomic<size_t> oneseqAuthNotEmpty;        // auth && !emptyByEpoch
     static std::atomic<size_t> oneseqNoAuthNotEmpty;      // !auth && !emptyByEpoch
     static std::atomic<bool> oneseqAtexitInstalled;
+    // cjpmnull2: ZGC empty = this-cycle marked ∧ live==0. Epoch mismatch / no face
+    // is "not marked this cycle", not empty (zPage.inline.hpp:223-225).
+    static std::atomic<size_t> ikeTrueEmpty;
+    static std::atomic<size_t> ikeConservativeKeep;
+    static std::atomic<size_t> ikeConservativeKeepBytes;
+    static std::atomic<size_t> ikeNullFaceKeep;
+    static std::atomic<size_t> ikeEpochKeep;
+    static std::atomic<bool> ikeAtexitInstalled;
 
     static bool MarkEpochAssertEnabled()
     {
@@ -1196,6 +1213,10 @@ public:
     bool IsMarkedObject(MarkView<G> view, const BaseObject* obj)
     {
         CHECK(view.GetRegion() == this);
+        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1;
         }
@@ -1212,7 +1233,6 @@ public:
         if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         return markBitmap->IsMarked(offset);
     }
 
@@ -1220,6 +1240,9 @@ public:
     bool IsMarkedObject(MarkView<G> view, size_t offset)
     {
         CHECK(view.GetRegion() == this);
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1;
         }
@@ -1242,6 +1265,9 @@ public:
     bool IsSurvivedObject(MarkView<G> view, size_t offset)
     {
         CHECK(view.GetRegion() == this);
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1 ||
                 (G == Generation::Old && metadata.isResurrected == 1);
@@ -1346,7 +1372,9 @@ public:
         // readable" finds out immediately.
         // genface: the independent young mark epoch costs 8 bytes per 4 KiB
         // unit (0.195% of heap capacity); both bitmap faces remain lazy.
-        static_assert(sizeof(UnitInfo) == 200, "per-unit metadata size changed; it is per-page, so price it");
+        // markwater: markStartAllocPtr sits next to regionEnd0 (same snapshot
+        // format). 8 bytes per 4 KiB unit is another 0.195% of heap capacity.
+        static_assert(sizeof(UnitInfo) == 208, "per-unit metadata size changed; it is per-page, so price it");
         if (RouteDestHold::AccountOn()) {
             LOG(RTLOG_ERROR,
                 "[GCV2][routedest] unit_metadata sizeof_UnitInfo=%zu unit_size=%zu overhead_permille=%zu",
@@ -1538,6 +1566,13 @@ public:
         } else {
             MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
             survived = IsSurvivedObject(view, ghostLiveInfo, offset);
+        }
+        // Compact packed dest is in compactRouteTable (not prefix-sum). A
+        // mark-start allocate-black object Compact copied must Admit so
+        // GetRoute can look up that dest. Routed prefix-sum has no slot for
+        // it, so water alone does not Admit on the ROUTED arm.
+        if (!survived && AllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
+            survived = true;
         }
         // Large region: single object at start; tip check is the start test for small.
         bool startOk = false;
@@ -2100,6 +2135,14 @@ public:
         }
         CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
                      "ClearLiveInfo must be called on a region head");
+        // ZGC mark-start allocation watermark (zPage is_allocating). Capture
+        // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
+        // see objects bumped after this point as implicitly live.
+        if (MarkStartAllocWaterEnabled()) {
+            metadata.markStartAllocPtr = GetRegionAllocPtr();
+        } else {
+            metadata.markStartAllocPtr = 0;
+        }
         // Clear a large face while the supplied view still names the current
         // epoch; only then publish the epoch bump that makes old views stale.
         if (IsLargeRegion()) {
@@ -2460,6 +2503,51 @@ public:
 
     MAddress GetRegionAllocPtr() const { return metadata.allocPtr; }
 
+    MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
+
+    // Product on. MRT_GCV2_MARKWATER_OFF=1 restores the pre-watermark trickle
+    // (perturbation for REPORT-oracleblack3 §4).
+    static bool MarkStartAllocWaterEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_MARKWATER_OFF");
+            return v == nullptr || !(v[0] == '1' && v[1] == '\0');
+        }();
+        return on;
+    }
+
+    // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
+    // bumped after that point are ZGC allocate-black / is_allocating.
+    // water == start means the region was empty at mark-start, so every
+    // object now in it was born after that snapshot.
+    bool AllocatedAfterMarkStart(size_t offset) const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        MAddress start = GetRegionStart();
+        if (water <= start) {
+            return true;
+        }
+        return offset >= static_cast<size_t>(water - start);
+    }
+
+    bool HasMarkStartAllocGap() const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        return GetRegionAllocPtr() > water;
+    }
+
     int32_t IncRawPointerObjectCount()
     {
         int32_t oldCount = __atomic_fetch_add(&metadata.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
@@ -2621,72 +2709,129 @@ public:
         return (__atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire) & LIVE_AUTHORITY_BIT) != 0;
     }
 
-    // ZGC zGeneration.cpp:205-225 / zPage.inline.hpp:223-225:
-    //   free iff !page->is_marked() where is_marked = livemap.seqnum == generation.seqnum.
-    // Ours: mark-period authority required (minor must not reclaim non-young on bare zero),
-    // then empty iff this region has no *current-cycle* mark face
-    // (liveInfo null/TEMPORARY, or LiveInfo.markEpoch != snapshotEpoch, or large isMarked==0).
-    // liveByteCount alone is NOT the reclaim predicate (ZGC live_bytes is relocation only).
+    // ZGC zGeneration.cpp:216-221 / zPage.inline.hpp:223-225:
+    //   is_marked = livemap.seqnum == generation.seqnum
+    //   register_empty_page iff !is_marked — but that is safe only because ZGC's mark
+    //   is complete for every relocatable page. Ours is not (GetRouteMarkView mints
+    //   epoch from liveInfo0; stale_read viewEpoch≠snapshotEpoch).
+    // cjpmnull2: empty = this-cycle marked ∧ live==0. Epoch mismatch / null face
+    // means "not marked this cycle", not "empty". Authority still required so a
+    // minor cannot reclaim non-young on a bare zero.
     bool IsKnownEmpty(MarkView<Generation::Old> view) const
     {
         CHECK(view.GetRegion() == this);
+        // ZGC allocate-black: a mark-start watermark gap means objects were
+        // born after ClearLiveInfo and are implicitly live. Do not treat the
+        // region empty, and do not AddLiveByteCount for them.
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
-        bool emptyByEpoch = false;
+        bool markedThisCycle = false;
+        bool keepNullFace = false;
+        bool keepEpoch = false;
         if (IsLargeRegion()) {
-            emptyByEpoch = GetMarkedRegionFlag(view) == 0;
+            if (view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
+                keepEpoch = true;
+            } else {
+                markedThisCycle = true;
+            }
         } else {
             LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
             if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
-                emptyByEpoch = true;
+                markedThisCycle = false;
+                keepNullFace = true;
             } else if (liveInfo->GetMarkFace<Generation::Old>().epoch.load(std::memory_order_acquire) !=
                            view.GetEpoch() ||
                        view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Old>()) {
-                // markepoch: stale face ⇒ unmarked (ZGC is_marked false before bit test).
-                emptyByEpoch = true;
+                markedThisCycle = false;
+                keepEpoch = true;
             } else {
-                // Current-cycle mark face present ⇒ ZGC is_marked true ⇒ not empty for reclaim.
-                emptyByEpoch = false;
+                markedThisCycle = true;
             }
         }
-        // oneseq: authority vs epoch-empty divergence (const path uses relaxed atomics only).
+        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
+            ? GetMarkedRegionFlag(view) == 0
+            : ((raw & LIVE_BYTES_MASK) == 0));
         if (OneseqDiagEnabled()) {
             oneseqIsKnownEmptyCalls.fetch_add(1, std::memory_order_relaxed);
-            if (!auth && emptyByEpoch) {
+            if (!auth && emptyByMark) {
                 oneseqAuthBlocksReclaim.fetch_add(1, std::memory_order_relaxed);
-            } else if (auth && emptyByEpoch) {
+            } else if (auth && emptyByMark) {
                 oneseqAuthAndEmpty.fetch_add(1, std::memory_order_relaxed);
-            } else if (auth && !emptyByEpoch) {
+            } else if (auth && !emptyByMark) {
                 oneseqAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
             } else {
                 oneseqNoAuthNotEmpty.fetch_add(1, std::memory_order_relaxed);
             }
         }
+        if (!ikeAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                std::fprintf(stderr,
+                             "[GCV2][ike-keep] atexit trueEmpty=%zu keep=%zu keepBytes=%zu "
+                             "nullFace=%zu epoch=%zu\n",
+                             ikeTrueEmpty.load(std::memory_order_relaxed),
+                             ikeConservativeKeep.load(std::memory_order_relaxed),
+                             ikeConservativeKeepBytes.load(std::memory_order_relaxed),
+                             ikeNullFaceKeep.load(std::memory_order_relaxed),
+                             ikeEpochKeep.load(std::memory_order_relaxed));
+                std::fflush(stderr);
+            });
+        }
         if (!auth) {
             return false;
         }
-        return emptyByEpoch;
+        if (emptyByMark) {
+            ikeTrueEmpty.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        if (keepNullFace || keepEpoch) {
+            size_t n = ikeConservativeKeep.fetch_add(1, std::memory_order_relaxed) + 1;
+            ikeConservativeKeepBytes.fetch_add(GetRegionSize(), std::memory_order_relaxed);
+            if (keepNullFace) {
+                ikeNullFaceKeep.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (keepEpoch) {
+                ikeEpochKeep.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][ike-keep] n=%zu region=%p start=%#zx nullFace=%u epoch=%u "
+                    "live=%llu — not empty (unmarked this cycle)",
+                    n, this, GetRegionStart(), static_cast<unsigned>(keepNullFace),
+                    static_cast<unsigned>(keepEpoch),
+                    static_cast<unsigned long long>(raw & LIVE_BYTES_MASK));
+            }
+        }
+        return false;
     }
 
     bool IsKnownYoungEmpty(MarkView<Generation::Young> view) const
     {
         CHECK(view.GetRegion() == this);
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
-        bool emptyByEpoch = false;
+        bool markedThisCycle = false;
         if (IsLargeRegion()) {
-            emptyByEpoch = GetMarkedRegionFlag(view) == 0;
+            markedThisCycle = view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
         } else {
             LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
             if (liveInfo == nullptr || reinterpret_cast<MAddress>(liveInfo) == LiveInfo::TEMPORARY_PTR) {
-                emptyByEpoch = true;
+                markedThisCycle = false;
             } else {
-                emptyByEpoch = liveInfo->GetMarkFace<Generation::Young>().epoch.load(std::memory_order_acquire) !=
-                                   view.GetEpoch() ||
-                    view.GetEpoch() != GetMarkSnapshotEpoch<Generation::Young>();
+                markedThisCycle = liveInfo->GetMarkFace<Generation::Young>().epoch.load(std::memory_order_acquire) ==
+                        view.GetEpoch() &&
+                    view.GetEpoch() == GetMarkSnapshotEpoch<Generation::Young>();
             }
         }
-        return auth && emptyByEpoch;
+        const bool emptyByMark = markedThisCycle && (IsLargeRegion()
+            ? GetMarkedRegionFlag(view) == 0
+            : ((raw & LIVE_BYTES_MASK) == 0));
+        return auth && emptyByMark;
     }
 
     bool IsSafeKnownEmpty(MarkView<Generation::Old> view)
@@ -2757,9 +2902,10 @@ public:
         const bool emptyByMark = G == Generation::Young
             ? IsKnownYoungEmpty(MarkView<Generation::Young>(this, view.GetEpoch()))
             : IsKnownEmpty(MarkView<Generation::Old>(this, view.GetEpoch()));
-        // Homology: liveBytes==0 ⇔ empty-by-mark (and vice versa) under authority.
+        // Homology only when this cycle marked the page. Unmarked ∧ live==0 is
+        // conservative-keep (cjpmnull2), not a book error (zPage.inline.hpp:223-225).
         const bool emptyByLive = (liveBytes == 0);
-        if (emptyByMark == emptyByLive) {
+        if (emptyByMark == emptyByLive || (!emptyByMark && emptyByLive)) {
             return;
         }
         size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -2990,7 +3136,7 @@ private:
         uint8_t routeDestHold = 0;
         // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
         // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
-        // stays 8-aligned. sizeof(UnitInfo) stays 200.
+        // stays 8-aligned. markStartAllocPtr sits next to regionEnd0 (+8).
         std::atomic<bool> fwdClaimed{ false };
         std::atomic<bool> fwdDone{ false };
         std::atomic<int32_t> fwdRefCount{ 0 };
@@ -3004,6 +3150,10 @@ private:
         void* compactRouteTable = nullptr;
 
         uintptr_t regionEnd0;
+        // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
+        // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
+        // is_allocating). Same snapshot format as regionEnd0. 0 = no mark-start yet.
+        uintptr_t markStartAllocPtr;
         RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
         uint64_t youngSnapshotEpoch = 0;
@@ -3252,6 +3402,9 @@ private:
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
+        // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
+        // not treat every object as allocate-black.
+        metadata.markStartAllocPtr = 0;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
         metadata.censusBoundaryOffset = 0;

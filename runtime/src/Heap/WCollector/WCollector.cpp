@@ -999,6 +999,15 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked;
     if (gcReason == GC_REASON_YOUNG) {
+        // oracleblack round 10, face b: the young cycle itself promotes regions (evac
+        // stay-young → PromoteYoungRegion); a later young-context mark of an object in a
+        // just-promoted region would bind the young view to an old region and trip
+        // GetMarkView's sole-constructor CHECK (RegionInfo.h:211). The old generation owns
+        // the region now: the young closure never traverses old targets, and the domain
+        // install that reaches here for promoted regions is moot — report already-marked.
+        if (UNLIKELY(!region->IsYoungRegion())) {
+            return true;
+        }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
         marked = region->MarkObject(view, obj, objectSize);
     } else {
@@ -2148,11 +2157,52 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
                 }
                 return;
             }
+        } else if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj->IsValidObject() &&
+                   latestRegion != nullptr && latestRegion->IsGhostFromRegion() &&
+                   !latestRegion->IsFreeRegion()) {
+            // cjpmnull / 47595a33: kUnpublishedMeansKeepFrom leaves live holders pointing
+            // at a from-copy whose region is already GARBAGE (CollectRegion after VisitLive).
+            // Linux keeps the mapping; the payload is still a ValidObject. Soft-null here
+            // zeros a keep-from slot (garbregion f3_liveGt0 == f3_garbage). Recolour from
+            // — same write as the non-heap arm. Not an IsValidObject / Plausible gate change.
+            static std::atomic<size_t> g_f3KeepFromGhost{ 0 };
+            size_t n = g_f3KeepFromGhost.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][F3-keep-from-ghost] n=%zu holder=%p field=%p from=%p latest=%p "
+                    "reason=%s rtype=%u — recolour from",
+                    n, holder, &field, fromObj, latest, reason, rtype);
+            }
+            latest = fromObj;
+            // Fall through to RootSlotWriteback(latest).
         } else {
             // True dead residue: soft-null by default (e8e092f6).
             // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
             // (no CAS null). Default path byte-identical soft-null when env unset.
             // f3weak: holder passed so weak_holder overlay can count IsWeakRef holders.
+            // oraclegate: layer true-dead by HOLDER liveness. Reachability: a marked (live)
+            // holder cannot hold a strong ref to a dead target -- when the classifier says it
+            // does, an earlier pass failed (mark hole / premature region free) and the slot is
+            // corruption evidence, not residue. Nulling it here is what turned that evidence
+            // into the delayed compiled-fast-path null crash (cjpm 1s: a live String's bytes
+            // slot nulled, read later with no barrier -- si_addr=0x10 movzbl 0x10(%r13,%r10)).
+            // Leave the old-tag: the reader slow path still gets FindTo -> FindRetiredTo (the
+            // retired generation may hold the true to-version) -- a real recovery path that a
+            // null destroys. Dead holders (the ~6.6k region_free bulk) keep the null: the F5
+            // no-stale-tags contract is unchanged where it matters, and in a correct heap this
+            // exemption set is empty by reachability, so it cannot retain true dead residue.
+            if (holder != nullptr && Heap::IsHeapAddress(holder) &&
+                IsMarkedObject<Generation::Old>(holder)) {
+                static std::atomic<size_t> g_f3LiveHole{ 0 };
+                size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (lh <= 16 || (lh & (lh - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
+                        "from=%p latest=%p — live holder, dead-classified target: keep slot",
+                        lh, reason, rtype, holder, &field, fromObj, latest);
+                }
+                return;
+            }
             const char* deadReason = NoteF3DeadarmHit(reason, holder);
             static std::atomic<size_t> g_f3DeadLogged{ 0 };
             size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
@@ -2922,8 +2972,15 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     bool alreadyInDomain = false;
     if (isGhost) {
         alreadyInDomain = region->IsRouteSurvivedObject(offset);
-    } else {
+    } else if (region->IsYoungRegion()) {
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        alreadyInDomain = region->IsSurvivedObject(view, face, offset);
+    } else {
+        // oracleblack round 10, face b: the nested young cycle can promote this region
+        // before its discharge walk resolves a slot into it. A promoted region is an old
+        // region now; binding the young view trips GetMarkView's sole-constructor CHECK
+        // (RegionInfo.h:211). Consult the old face for the same survivorship question.
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         alreadyInDomain = region->IsSurvivedObject(view, face, offset);
     }
     if (alreadyInDomain) {
@@ -6994,6 +7051,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
+            manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
@@ -7047,6 +7105,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     } else {
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
+        manager.FinishIncompleteFromRegions();
         postEvacPoint("post-forward-pre-reclaim", true);
         if (kVerifyPostEvac) {
             ValidateMinorReferences("post-forward-pre-reclaim", &reachableVec);
@@ -7072,6 +7131,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // moved to young.conc_promote_walk after STW3 release (zRelocate.cpp:1257-1306).
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
+                // markwater2: allocating pages never entered the route plan
+                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom;
+                // next PrepareYoung ClearLiveInfo re-snapshots the watermark.
+                if (region->HasMarkStartAllocGap()) {
+                    continue;
+                }
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 if (keepOneYoung && !keptOneYoung) {
                     keptOneYoung = true;
@@ -7131,6 +7196,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         fwdTable.PrepareForwardTable<Generation::Young>();
         }
         ValidateMinorReferences("after-dispel", nullptr);
+        // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
+        manager.FinishIncompleteFromRegions();
         manager.ReassembleFromSpace();
     }
 }
@@ -8937,12 +9004,32 @@ void WCollector::DoGarbageCollection()
         Collector::ReportMarkGoodHeapGateCounts();
         return;
     }
+    // oracleblack: a major is young + old, as in ZGC (zGeneration.cpp ZGenerationOld
+    // collections run the young generation first; a standalone old cycle does not exist).
+    // Ours ran old-only: under a config whose young trigger never fires (cjpm at 12GB,
+    // youngRegionTriggerBytes=32MB unreached), young regions were never marked by anyone,
+    // yet three separate paths (ForwardRegion knownEmpty, its unmarked arm, and
+    // Assemble->from-space route=5 collect) judged them by the OLD view and freed live
+    // young objects wholesale (f3-livehole census; TraceClear kind=coll_live).
+    // Running the young cycle first gives every young region a real examination each major.
+    //
+    // The nested young cycle must run under its own identity: CopyCollector::ForwardFromSpace
+    // (CopyCollector.cpp:189-193) and every other generation dispatch key on gcReason, so a
+    // young evacuation executed while gcReason==HEU instantiates the Old templates and trips
+    // GetRouteMarkView's generation CHECK on every young-enrolled region (RegionInfo.h:385).
+    {
+        const GCReason majorReason = gcReason;
+        gcReason = GC_REASON_YOUNG;
+        DoYoungGarbageCollection();
+        gcReason = majorReason;
+    }
     TraceHeap();
     PostTrace();
 
     Preforward();
 
     ForwardFromSpace();
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
 
     // Publish a clean full-GC buffer before mutators return to IDLE. The phase
     // transition is the grace period for writers that had already loaded the old
@@ -9380,11 +9467,121 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     const bool regionPublished =
         rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
         forwarding->IsForwardingDone();
-    const bool retainRefused = !forwarding->IsForwardingDone() && !regionPublished;
+    // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0).
+    // oraclecut §4: unpublished (any reason) waits for the region-level publish;
+    // keep-from only after publish + table miss (VisitLive hole).
+    bool retainRefused = false;
+    if (!regionPublished && !forwarding->IsForwardingDone()) {
+        if (forwarding->TryLockReadFromRegion()) {
+            forwarding->UnlockReadFromRegion();
+        } else {
+            retainRefused = true;
+        }
+    }
     const MutatorRelocate::UnpublishedAnswer ans =
         MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
         return again;
+    }
+    // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
+    // an object-level empty spin (47595a33). ExemptFromRegion publishes kept
+    // immediately so this wait is bounded every cycle.
+    //
+    // oracle r5: store-side waits after FORWARD (reclaim/idle) on ROUTED
+    // unpublished pages are structurally never-true (527/527 timeout).
+    // Only wait while a publisher still exists this cycle.
+    const GCPhase waitPhase = GetGCPhase();
+    // POST_TRACE already RouteRegion's (PrepareForwardTable); copy is still
+    // ahead. Skipping the wait there keep-froms a page ForwardFromSpace is
+    // about to empty (r5 n=64 phase=12 route=3). IDLE/FINISH/RECLAIM have
+    // no publisher — those are the structurally-false waits (oracle r5).
+    const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_POST_TRACE ||
+                               waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
+                               waitPhase == GCPhase::GC_PHASE_FORWARD) &&
+        forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
+    if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
+        static std::atomic<size_t> g_waitIneligible{ 0 };
+        const size_t n = g_waitIneligible.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][wait-ineligible] n=%zu from=%p region=%p phase=%d route=%u done=%u "
+                "free=%u garbage=%u — FindTo/FindRetiredTo/keep-from",
+                n, from, forwarding, static_cast<int>(waitPhase), static_cast<unsigned>(rs),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsForwardingDone()),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsFreeRegion()),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsGarbageRegion()));
+        }
+        BaseObject* retired = lookupTo();
+        if (retired != nullptr && Heap::IsHeapAddress(retired) && retired->IsValidObject()) {
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitReceipt();
+            }
+            return retired;
+        }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitGiveUp();
+        }
+        return from;
+    }
+    if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
+        static std::atomic<size_t> g_regionWait{ 0 };
+        static std::atomic<size_t> g_regionGot{ 0 };
+        const size_t wn = g_regionWait.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteRegionWaitEnter();
+        }
+        if (wn <= 8 || (wn & (wn - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][region-wait] n=%zu from=%p region=%p route=%u done=%u — wait region publish",
+                wn, from, forwarding, static_cast<unsigned>(rs),
+                static_cast<unsigned>(forwarding->IsForwardingDone()));
+        }
+        auto regionIsPublished = [&]() -> bool {
+            const RegionInfo::RouteState now = forwarding->GetRouteState();
+            return now == RegionInfo::RouteState::FORWARDED ||
+                now == RegionInfo::RouteState::COMPACTED || forwarding->IsForwardingDone();
+        };
+        const int spinCap = MutatorRelocate::kWaitRegionPublish ? MutatorRelocate::kRegionWaitSpins
+                                                                : MutatorRelocate::kInflightWaitSpins;
+        int spins = 0;
+        for (; spins < spinCap; ++spins) {
+            if (regionIsPublished()) {
+                BaseObject* ready = lookupTo();
+                if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
+                    g_regionGot.fetch_add(1, std::memory_order_relaxed);
+                    if (MutatorRelocate::StatsOn()) {
+                        MutatorRelocate::NoteRegionWaitSpins(spins);
+                        MutatorRelocate::NoteRegionWaitGot();
+                        MutatorRelocate::NoteWaitReceipt();
+                    }
+                    return ready;
+                }
+                // Published and table still misses: VisitLive hole. Keep-from is
+                // legal (cjpmnull2 Exempt: hole pages are not collected this cycle).
+                if (MutatorRelocate::StatsOn()) {
+                    MutatorRelocate::NoteRegionWaitSpins(spins);
+                    MutatorRelocate::NoteRegionWaitPublishedMiss();
+                    MutatorRelocate::NoteWaitGiveUp();
+                }
+                return from;
+            }
+            sched_yield();
+        }
+        BaseObject* last = lookupTo();
+        if (last != nullptr && Heap::IsHeapAddress(last) && last->IsValidObject()) {
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteRegionWaitSpins(spins);
+                MutatorRelocate::NoteRegionWaitGot();
+                MutatorRelocate::NoteWaitReceipt();
+            }
+            return last;
+        }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteRegionWaitSpins(spins);
+            MutatorRelocate::NoteRegionWaitTimeout();
+            MutatorRelocate::NoteWaitGiveUp();
+        }
+        return from;
     }
     if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
         if (MutatorRelocate::StatsOn()) {
@@ -9459,6 +9656,49 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
         return nullptr;
     }
     return toVersion;
+}
+
+BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
+{
+    // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
+    // color_store_good includes remap. A movable ghost-from value must go
+    // through the same relocate_or_remap funnel as the load barrier
+    // (zRelocate.cpp:382-416) before it is painted store-good.
+    // Flip false for the perturbation SO (W1 returns, crash returns).
+    static constexpr bool kResolveStoreValue = true;
+    if constexpr (!kResolveStoreValue) {
+        return ref;
+    }
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return ref;
+    }
+    const MAddress fromAddr = reinterpret_cast<MAddress>(ref);
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
+    if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
+        // oracle Q3 ④: resolve-time FREE is a lost reference. FindRetiredTo
+        // first (FindToVersion already walks the retired generation); miss
+        // keeps the value for ColourStaleLoadBad — never null, never store-good.
+        RegionInfo* live = RegionInfo::TryGetRegionInfoAt(fromAddr);
+        if (ghost == nullptr && (live == nullptr || live->IsFreeRegion())) {
+            BaseObject* retired = FindToVersion(ref);
+            if (retired != nullptr) {
+                return retired;
+            }
+            static std::atomic<size_t> g_lostRef{ 0 };
+            const size_t n = g_lostRef.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][lostref] n=%zu ref=%p region=%p free=%u — retired miss, keep load-bad",
+                    n, ref, live, static_cast<unsigned>(live != nullptr && live->IsFreeRegion()));
+            }
+        }
+        return ref;
+    }
+    BaseObject* resolved = relocate_or_remap_object(ref, ghost->generation_id());
+    if (resolved != nullptr) {
+        return resolved;
+    }
+    return ref;
 }
 
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
@@ -9562,6 +9802,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // 1. object has already been forwarded
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
+            if (toObj == nullptr) {
+                return nullptr;
+            }
             DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
             return toObj;
         }

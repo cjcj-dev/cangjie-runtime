@@ -33,6 +33,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <type_traits>
 #include <utility>
@@ -60,17 +61,72 @@ public:
 private:
     Collector& theCollector;
 };
+
+// oraclecut CUT-1: load-good must mean "current version" (ZGC heals only values the barrier
+// itself resolved -- zBarrier.inline.hpp:319-342 -- so a good colour can never name a
+// from-copy). A keep-from answer breaks that: it names an object a later FORWARD may still
+// copy, whose from-region CollectFromSpaceGarbage then legally clears (TraceClear
+// kind=coll_live). Painting such a value load-good hides the slot from every healer -- the
+// fast path passes it, InvalidateOldTaggedRefs tests only old-tag colours -- so the stale
+// from survives whole cycles and is eventually read out of zeroed storage: the cjpm crash
+// (staleguard zeroHeader unresolved). Hand the value to this one read, but leave the slot's
+// stale colour in place so the next read re-enters the barrier and resolves fresher state.
+// Heal is skipped for exactly three shapes, all unprovably-current:
+//   zero header      target payload already cleared by reclamation
+//   FORWARDED header the object moved; healing the from would launder a dead address
+//   movable ghost-from, not FORWARDED  keep-from of a relocation candidate not yet copied
+// Unmovable-from objects stay healable: their region is pinned for the cycle and the from
+// address is the object's real home (ForwardBarrier takes the same exemption on resolve).
+std::atomic<uint64_t> g_keepFromHealSkipTotal{ 0 };
+std::atomic<uint64_t> g_keepFromHealSkipSite[64] = {};
+
+bool SkipLaunderingHeal(Collector& collector, zpointer healPtr, HealSite site)
+{
+    RefField<> probe(healPtr);
+    BaseObject* target = to_object(probe.GetTargetObject());
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false; // null and non-heap values cannot dangle through region reuse
+    }
+    bool transient = false;
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    if ((hdr & 0xffffffffffffull) == 0) {
+        transient = true; // zero header: cleared storage, nothing current to publish
+    } else if (((hdr >> 48) & 0x3u) == 3u) { // ObjectState::FORWARDED, as JudgeTarget reads it
+        transient = true; // from-copy of a moved object
+    } else if (collector.IsGhostFromObject(target) && !collector.IsUnmovableFromObject(target)) {
+        transient = true; // keep-from of a movable relocation candidate
+    }
+    if (!transient) {
+        return false;
+    }
+    const uint64_t n = g_keepFromHealSkipTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    const size_t s = static_cast<size_t>(site);
+    if (s < 64) {
+        g_keepFromHealSkipSite[s].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (n <= 4 || (n & (n - 1)) == 0) {
+        LOG(RTLOG_ERROR, "[GCV2][keepfromheal] skipped=%llu site=%u target=%p",
+            static_cast<unsigned long long>(n), static_cast<unsigned>(site), static_cast<void*>(target));
+    }
+    return true;
+}
 } // namespace
 
 void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 
 void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 
@@ -105,6 +161,81 @@ std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
 // storegood: is_store_good fast/slow path enter counts (always on, cheap atomics).
 std::atomic<uint64_t> g_storeBarrierFastPath { 0 };
 std::atomic<uint64_t> g_storeBarrierSlowPath { 0 };
+
+// W1 (oraclecut F1 / cjpmnull5): store of a movable ghost-from value.
+// Default off — region lookup on every store. Flip to true for the
+// measurement SO: pre-fix >0, post-fix =0 is the F1 criterion.
+constexpr bool kW1GhostFromStoreProbe = true;
+std::atomic<uint64_t> g_w1StoreTotal{ 0 };
+std::atomic<uint64_t> g_w1GhostFrom{ 0 };
+// oraclecut R4: holder side. A store whose HOLDER is a movable ghost-from copy lands in
+// memory a worker may copy concurrently (lost write -> to keeps the pre-store null); a
+// holder already FORWARDED is a write into a dead copy, lost with certainty.
+std::atomic<uint64_t> g_w1HolderGhost{ 0 };
+std::atomic<uint64_t> g_w1HolderForwarded{ 0 };
+
+inline void NoteW1HolderStore(Collector& collector, BaseObject* obj)
+{
+    if constexpr (!kW1GhostFromStoreProbe) {
+        return;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(obj), __ATOMIC_RELAXED);
+    if (((hdr >> 48) & 0x3u) == 3u) {
+        const uint64_t n = g_w1HolderForwarded.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][w1-holder] forwarded=%llu obj=%p — store into dead from-copy",
+                static_cast<unsigned long long>(n), static_cast<void*>(obj));
+        }
+        return;
+    }
+    // Static region-metadata lookup, not the Collector virtual: the gc_unit harness runs on the
+    // base Collector whose IsGhostFromObject is an AbortUnimplemented stub, and this probe sits on
+    // the product store path the suite exercises. GetGhostFromRegionAt is null on the fake heap.
+    if (RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj)) != nullptr) {
+        const uint64_t n = g_w1HolderGhost.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][w1-holder] ghost=%llu obj=%p — store into movable from-copy",
+                static_cast<unsigned long long>(n), static_cast<void*>(obj));
+        }
+    }
+}
+
+inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
+{
+    if constexpr (!kW1GhostFromStoreProbe) {
+        return;
+    }
+    static std::atomic<bool> installed{ false };
+    bool expected = false;
+    if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][w1-store] atexit total=%llu ghostFrom=%llu\n",
+                         static_cast<unsigned long long>(g_w1StoreTotal.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_w1GhostFrom.load(std::memory_order_relaxed)));
+            std::fprintf(stderr, "[GCV2][w1-holder] atexit ghost=%llu forwarded=%llu\n",
+                         static_cast<unsigned long long>(g_w1HolderGhost.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_w1HolderForwarded.load(std::memory_order_relaxed)));
+            std::fflush(stderr);
+        });
+    }
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return;
+    }
+    g_w1StoreTotal.fetch_add(1, std::memory_order_relaxed);
+    // Static lookup for the same gc_unit-harness reason as the holder probe below.
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref));
+    if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
+        return;
+    }
+    const uint64_t n = g_w1GhostFrom.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 8 || (n & (n - 1)) == 0) {
+        LOG(RTLOG_ERROR, "[GCV2][w1-store] ghostFrom=%llu ref=%p — movable ghost stored",
+            static_cast<unsigned long long>(n), static_cast<void*>(ref));
+    }
+}
 
 inline void NoteStoreFastPath()
 {
@@ -333,7 +464,10 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
     // If the pre-store slot is already store-good for the same target, skip remset work
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    ref = theCollector.ResolveStoreValue(ref);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
+    NoteW1GhostFromStore(theCollector, ref);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
@@ -445,6 +579,7 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 
 void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
+    ref = theCollector.ResolveStoreValue(ref);
     if (phase != BarrierPhase::STW) {
         return DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.WriteStaticRef(field, ref);
@@ -795,6 +930,9 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    ref = theCollector.ResolveStoreValue(ref);
+    NoteW1GhostFromStore(theCollector, ref);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
@@ -830,6 +968,9 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     // storecov: gate on the actual pre-swap slot bits (not an "expected" value — swap has
     // none). Same shape as WriteReference / AtomicWriteReference: prev store-good for newRef
     // ⇒ edge already registered when the slot first became store-good.
+    newRef = theCollector.ResolveStoreValue(newRef);
+    NoteW1GhostFromStore(theCollector, newRef);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
@@ -889,6 +1030,9 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     // — not to oldRef. On success with prev already store-good for newRef, the write is a
     // same-target refresh (typically oldRef==newRef) and remset work is redundant.
     // Failed CAS stores nothing ⇒ no Record (unchanged).
+    newRef = theCollector.ResolveStoreValue(newRef);
+    NoteW1GhostFromStore(theCollector, newRef);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(std::memory_order_relaxed));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);

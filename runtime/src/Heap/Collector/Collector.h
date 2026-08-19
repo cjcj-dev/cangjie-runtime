@@ -115,6 +115,11 @@ public:
     // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
     virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
 
+    // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
+    // a stored reference must already be the current version (remap included).
+    // Default identity so gc_unit Collector stubs do not abort.
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref) const { return ref; }
+
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryUpdateRefField");
@@ -291,6 +296,16 @@ public:
     virtual bool IsOldPointer(RefField<>&) const { AbortUnimplemented("Collector::IsOldPointer"); }
     virtual bool IsCurrentPointer(RefField<>&) const { AbortUnimplemented("Collector::IsCurrentPointer"); }
     virtual void AddRawPointerObject(BaseObject*) { AbortUnimplemented("Collector::AddRawPointerObject"); }
+    // Pin for callers that hand the pinned payload out (MCC_AcquireRawData): the pin may
+    // resolve a movable from-copy to its to-version first, and the caller MUST adopt the
+    // returned pointer — Inc lands on the resolved object's region, so releasing through
+    // the original from payload would Dec a region that was never Inc'd (underflow) and
+    // hand C a payload the collector is about to relocate.
+    virtual BaseObject* PinRawPointerObject(BaseObject* obj)
+    {
+        AddRawPointerObject(obj);
+        return obj;
+    }
     virtual void RemoveRawPointerObject(BaseObject*)
     {
         AbortUnimplemented("Collector::RemoveRawPointerObject");

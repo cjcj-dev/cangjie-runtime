@@ -4,13 +4,10 @@
 //
 // See https://cangjie-lang.cn/pages/LICENSE for license information.
 
-// ⛔ HOLLOWED — the implementation in the matching .cpp is all no-ops: Enabled() returns false and
-// every sink body is empty.  The gate documented below therefore emits nothing, so a zero taken from
-// it is a false negative, not evidence that the arm never fires.  The contract, the gate name and the
-// product call sites were all left intact when the bodies were removed, which is precisely what makes
-// this readable as a live instrument.  Restore the sink you need first -- PermWhoAdmit.cpp shows the
-// shape: a compile-time constant gate (the campaign cut MRT_GCV2_* from 190 to 3) plus a line on the
-// zero case so a zero cannot be read as a dead probe.  Guard: runtime/tests/check_diag_not_hollow.py
+// cjpmnull3: NoteAttempt / NoteRetainOk / NoteSelfCopy / atexit DumpSummary restored
+// (PermWhoAdmit.cpp shape). Enabled() is still kMutatorSelfRelocate — counters do not
+// turn the leg off. A zero attempt with funnel_mut>0 would mean the remap path never
+// reached retain; a non-zero retain is the positive that self-relocate is live.
 #ifndef MRT_MUTATOR_RELOCATE_H
 #define MRT_MUTATOR_RELOCATE_H
 
@@ -68,14 +65,25 @@ namespace MutatorRelocate {
 
 // Compile-time on. zRelocate.cpp:382-410: mutator copies on the spot; no MRT_GCV2_* gate.
 constexpr bool kMutatorSelfRelocate = true;
-// Table miss after the page is done / retain refused = object was not copied. Keep from.
-// zRelocate.cpp:412-416 asserts find()!=null; our VisitLive/GetRoute hole makes miss mean
-// "never copied", not "wait". Product WaitRoutedTipReady must honour this.
+// zRelocate.cpp:382-416: find() miss after retain_page failed means the worker
+// holds the page and is copying — wait, do not keep from. Keep-from is only the
+// VisitLive hole: page already published and the table still has no entry.
+// ANALYSIS-crashoracle H1 / LEAD 0819-12:2x: (void)retainRefused handed out a
+// naked from while ClearUnits ran on the same page.
 constexpr bool kUnpublishedMeansKeepFrom = true;
+constexpr int kInflightWaitSpins = 4096;
+// oraclecut §4 / cjpmnull5: movable ghost from is never handed out.
+// !regionPublished ⇒ bounded wait for the region-level publish
+// (FORWARDED / COMPACTED / kept). Region publish is reached every cycle;
+// this is not the object-level empty wait 47595a33 deleted.
+// Flip to false for gate ④ (crash returns in 1s).
+constexpr bool kWaitRegionPublish = true;
+constexpr int kRegionWaitSpins = 4096;
 
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
     KeepFrom = 1,
+    Wait = 2,
 };
 
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
@@ -83,8 +91,21 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
     if (tableHit) {
         return UnpublishedAnswer::UseTo;
     }
-    (void)regionPublished;
-    (void)retainRefused;
+    if (regionPublished) {
+        return UnpublishedAnswer::KeepFrom;
+    }
+    // !published: region has not reached FORWARDED/COMPACTED/kept this cycle.
+    // Wait for that region-level publish (oraclecut §4). retainRefused is
+    // one reason the page is unpublished (worker holds it); the wait covers
+    // that and every other unpublished state. After publish, a table miss
+    // is the VisitLive hole and KeepFrom is legal.
+    if constexpr (kWaitRegionPublish) {
+        (void)retainRefused;
+        return UnpublishedAnswer::Wait;
+    }
+    if (retainRefused) {
+        return UnpublishedAnswer::Wait;
+    }
     return UnpublishedAnswer::KeepFrom;
 }
 
@@ -168,6 +189,13 @@ void NoteWaitEnter();   // entered WaitRoutedTipReady
 void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
 void NoteWaitReceipt(); // left it with a to-version
 void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL -- the 4096-spin FATAL leg
+// Region-level publish wait (oraclecut §4). Distinct from the retain-refused
+// object-FORWARDED spin: this one waits for FORWARDED/COMPACTED/kept.
+void NoteRegionWaitEnter();
+void NoteRegionWaitGot();            // published and table hit
+void NoteRegionWaitPublishedMiss();  // published, table miss → legal keep-from
+void NoteRegionWaitTimeout();        // spin bound, keep-from
+void NoteRegionWaitSpins(int spins);
 
 // --- pin / drain ------------------------------------------------------------------------
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended);

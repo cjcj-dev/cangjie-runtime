@@ -146,7 +146,7 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
         estimate = 1;
     }
     const uint32_t liveObjs = static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
-    ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base);
+    ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base, regionSize);
     if (created == nullptr) {
         return;
     }
@@ -214,8 +214,18 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
 namespace {
 std::mutex g_retiredLock;
 std::vector<ForwardingEntries*> g_retired;
+// oraclecut CUT-2: a second generation. f87e6f68 deferred the free by one cycle boundary,
+// which protects readers inside find() across one phase gap -- ZGC's arena argument
+// (zRelocationSet.cpp:91-96). But a stale good-coloured slot written before the ban in
+// Barrier.cpp SkipLaunderingHeal existed can surface a from-address up to two colour flips
+// later (the remap space is four values), and staleguard's FindToVersion is its only way
+// back to the to-version. Holding tables one extra full cycle turns those stragglers from
+// unresolvable (crash) into resolvable (self-heal): retired at cycle N, freed at the head
+// of cycle N+2.
+std::vector<ForwardingEntries*> g_retiredAged;
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
+std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
 } // namespace
 
 void ForwardingTable::Retire(ForwardingEntries* tab)
@@ -231,18 +241,27 @@ void ForwardingTable::Retire(ForwardingEntries* tab)
 void ForwardingTable::ReclaimRetired(const char* why)
 {
     std::vector<ForwardingEntries*> victims;
+    size_t heldNow = 0;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
-        victims.swap(g_retired);
+        // Free only the generation retired two cycle heads ago; age the fresh one.
+        victims.swap(g_retiredAged);
+        g_retiredAged.swap(g_retired);
+        heldNow = g_retiredAged.size();
+    }
+    uint64_t peak = g_retiredHeldPeak.load(std::memory_order_relaxed);
+    while (heldNow > peak && !g_retiredHeldPeak.compare_exchange_weak(peak, heldNow, std::memory_order_relaxed)) {
     }
     for (ForwardingEntries* tab : victims) {
         tab->Destroy();
     }
-    if (!victims.empty()) {
+    if (!victims.empty() || heldNow != 0) {
         const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) +
             victims.size();
-        LOG(RTLOG_ERROR, "[FWDTABLE][reclaim] why=%s freed=%zu retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(),
+        LOG(RTLOG_ERROR,
+            "[FWDTABLE][reclaim] why=%s freed=%zu aged_held=%zu held_peak=%lu retired_total=%lu reclaimed_total=%lu",
+            why == nullptr ? "?" : why, victims.size(), heldNow,
+            g_retiredHeldPeak.load(std::memory_order_relaxed),
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
@@ -288,13 +307,40 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
     return tab->insert(from, to);
 }
 
+static MAddress FindRetiredTo(MAddress from)
+{
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    auto scan = [&](const std::vector<ForwardingEntries*>& gens) -> MAddress {
+        for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
+            ForwardingEntries* tab = *it;
+            if (tab != nullptr && tab->covers(from)) {
+                const MAddress to = tab->find(from);
+                if (to != 0) {
+                    return to;
+                }
+            }
+        }
+        return 0;
+    };
+    const MAddress fresh = scan(g_retired);
+    if (fresh != 0) {
+        return fresh;
+    }
+    return scan(g_retiredAged);
+}
+
 MAddress ForwardingTable::FindTo(MAddress from)
 {
     ForwardingEntries* tab = GetEntries(from);
-    if (tab == nullptr) {
-        return 0;
+    if (tab != nullptr) {
+        const MAddress to = tab->find(from);
+        if (to != 0) {
+            return to;
+        }
     }
-    return tab->find(from);
+    // Reused region arms a fresh empty table; stragglers still need the
+    // retired generation (CUT-2 / Barrier.cpp:718). e57ae807.
+    return FindRetiredTo(from);
 }
 
 bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
@@ -302,24 +348,34 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
     ForwardingEntries* tab = GetEntries(from);
-    if (tab == nullptr) {
-        g_unarmed.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::Unarmed;
+    if (tab != nullptr) {
+        const MAddress to = tab->find(from);
+        if (to != 0) {
+            g_armedHit.fetch_add(1, std::memory_order_relaxed);
+            if (answer != nullptr) {
+                *answer = ToAnswer::ArmedHit;
+            }
+            return to;
         }
-        return 0;
     }
-    const MAddress to = tab->find(from);
-    if (to != 0) {
+    const MAddress retired = FindRetiredTo(from);
+    if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedHit;
         }
-        return to;
+        return retired;
     }
-    g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+    if (tab != nullptr) {
+        g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::ArmedMiss;
+        }
+        return 0;
+    }
+    g_unarmed.fetch_add(1, std::memory_order_relaxed);
     if (answer != nullptr) {
-        *answer = ToAnswer::ArmedMiss;
+        *answer = ToAnswer::Unarmed;
     }
     return 0;
 }

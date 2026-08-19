@@ -214,3 +214,34 @@ GC_TEST(LiveMap, YoungAndOldLargeFlagsAreIndependent)
     GC_EXPECT_EQ(region->GetMarkedRegionFlag(young), 0u);
     GC_EXPECT_EQ(region->GetMarkedRegionFlag(old), 1u);
 }
+
+// markwater: ClearLiveInfo snapshots allocPtr. Objects at offset ≥ water
+// are allocate-black (ZGC zPage is_allocating). A stale view must not
+// inherit that verdict (oracleblack2 b-face).
+GC_TEST(LiveMap, MarkStartAllocWaterIsImplicitLive)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    MAddress start = region->GetRegionStart();
+    region->SetRegionAllocPtr(start + 128);
+    GC_EXPECT_EQ(region->GetMarkStartAllocPtr(), 0u);
+
+    MarkView<Generation::Old> stale = region->GetMarkView<Generation::Old>();
+    region->ClearLiveInfo(stale);
+    GC_EXPECT_EQ(region->GetMarkStartAllocPtr(), start + 128);
+
+    region->SetRegionAllocPtr(start + 256);
+    MarkView<Generation::Old> current = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_TRUE(region->HasMarkStartAllocGap());
+    GC_EXPECT_FALSE(region->IsKnownEmpty(current));
+    GC_EXPECT_FALSE(region->AllocatedAfterMarkStart(64));
+    GC_EXPECT_TRUE(region->AllocatedAfterMarkStart(128));
+    GC_EXPECT_TRUE(region->AllocatedAfterMarkStart(192));
+    GC_EXPECT_FALSE(region->IsMarkedObject(current, static_cast<size_t>(64)));
+    GC_EXPECT_TRUE(region->IsMarkedObject(current, static_cast<size_t>(128)));
+    GC_EXPECT_TRUE(region->IsSurvivedObject(current, static_cast<size_t>(192)));
+    GC_EXPECT_TRUE(region->IsRouteSurvivedObject(128));
+    // Stale view (pre-ClearLiveInfo epoch) must not treat post-water as marked.
+    GC_EXPECT_FALSE(region->IsMarkedObject(stale, static_cast<size_t>(128)));
+    GC_EXPECT_FALSE(region->IsSurvivedObject(stale, static_cast<size_t>(192)));
+}

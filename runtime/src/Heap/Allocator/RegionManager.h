@@ -177,6 +177,10 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
+    // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
+    // relocation set is done. CONC_RELOCATE left ROUTED pages unpublished
+    // (oracle r5 regionTimeout=527/got=0). Finish them or publish kept.
+    void FinishIncompleteFromRegions();
     // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
     // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
     void EnlistStayYoungSurvivor(RegionInfo* region);
@@ -334,24 +338,7 @@ public:
         oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
     }
 
-    void CollectFromSpaceGarbage()
-    {
-#if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path for ordinary regions. A ghost carrier
-        // remains in the garbage list until PrepareFromRegionList dispels it.
-        RegionInfo* region = fromRegionList.TakeHeadRegion();
-        while (region != nullptr) {
-            if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-            } else {
-                ReclaimRegion(region);
-            }
-            region = fromRegionList.TakeHeadRegion();
-        }
-#else
-        garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
-#endif
-    }
+    void CollectFromSpaceGarbage();
 
     size_t GetThreadLocalRegionSize() const
     {
@@ -554,6 +541,10 @@ public:
     // Ignore dynamic pinned regions and from regions whose garbage objects are quite few, return the garbage size that
     // can be reclaimed.
     size_t ExemptFromRegions();
+    // ZGC zGeneration.cpp:211-213: drop is_allocating pages at CSet select (pre-flip).
+    // HasMarkStartAllocGap pages never enter the route plan. Stay on unmovableFrom;
+    // next cycle ClearLiveInfo re-snapshots the watermark.
+    size_t ExemptMarkStartAllocatingFromCSet();
     void ReassembleFromSpace();
 
     void ForEachObjUnsafe(const std::function<void(BaseObject*)>& visitor,
@@ -822,6 +813,12 @@ public:
         // the finalizer both reach a live region only through TakeReclaimableGarbageRegion,
         // and a held region never reaches garbageRegionList in the first place.
         ClearRouteDestHoldFlags();
+
+        // markwater2: ZGC select_relocation_set skips !is_relocatable (allocating)
+        // pages before install. Do this before PrepareForwardable so no ghost/route
+        // is published for a watermark-gap region (915e6348 ForwardRegion Exempt
+        // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
+        (void)ExemptMarkStartAllocatingFromCSet();
 
         fromRegionList.VisitAllRegions([](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),

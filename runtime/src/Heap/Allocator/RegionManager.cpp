@@ -109,6 +109,12 @@ std::atomic<size_t> RegionInfo::oneseqAuthAndEmpty { 0 };
 std::atomic<size_t> RegionInfo::oneseqAuthNotEmpty { 0 };
 std::atomic<size_t> RegionInfo::oneseqNoAuthNotEmpty { 0 };
 std::atomic<bool> RegionInfo::oneseqAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::ikeTrueEmpty { 0 };
+std::atomic<size_t> RegionInfo::ikeConservativeKeep { 0 };
+std::atomic<size_t> RegionInfo::ikeConservativeKeepBytes { 0 };
+std::atomic<size_t> RegionInfo::ikeNullFaceKeep { 0 };
+std::atomic<size_t> RegionInfo::ikeEpochKeep { 0 };
+std::atomic<bool> RegionInfo::ikeAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
 std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
 std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
@@ -1328,10 +1334,63 @@ void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
     regionList->DeleteRegionLocked(region);
 }
 
+// ZGC zGeneration.cpp:211-213: !is_relocatable (is_allocating) pages are not
+// registered with the selector. HasMarkStartAllocGap ≡ zPage.inline.hpp:180-185.
+// Called at CSet select (ExemptFromRegions) and again before PrepareForwardable
+// so a watermark-gap region never publishes a route (915e6348 ghost).
+size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
+{
+    static std::atomic<size_t> g_armed{ 0 };
+    static std::atomic<size_t> g_turned{ 0 };
+    static std::atomic<bool> atexitOn{ false };
+    if (!atexitOn.exchange(true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][markwater] atexit armed=%zu turned=%zu\n",
+                         g_armed.load(std::memory_order_relaxed),
+                         g_turned.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+    std::vector<RegionInfo*> snapshot;
+    fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
+    size_t armed = 0;
+    size_t turned = 0;
+    for (RegionInfo* fromRegion : snapshot) {
+        if (fromRegion == nullptr || !fromRegion->HasMarkStartAllocGap()) {
+            continue;
+        }
+        ++armed;
+        if (!fromRegion->IsFromRegion()) {
+            continue;
+        }
+        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) markwater skip CSet: %zu units, %zu live bytes",
+             fromRegion, fromRegion->GetRegionStart(), fromRegion->GetRegionAllocatedSize(),
+             fromRegion->GetRegionEnd(), fromRegion->GetUnitCount(), fromRegion->GetLiveByteCount());
+        fromRegion->PreserveRetainedLiveInfo();
+        RemoveRegionLocked(&fromRegionList, fromRegion);
+        ExemptFromRegion(fromRegion);
+        ++turned;
+    }
+    if (armed != 0) {
+        g_armed.fetch_add(armed, std::memory_order_relaxed);
+    }
+    if (turned != 0) {
+        g_turned.fetch_add(turned, std::memory_order_relaxed);
+    }
+    if (armed != 0 || turned != 0) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][markwater] cset-skip armed=%zu turned=%zu tot_armed=%zu tot_turned=%zu",
+            armed, turned, g_armed.load(std::memory_order_relaxed),
+            g_turned.load(std::memory_order_relaxed));
+    }
+    return turned;
+}
+
 // Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
 // Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
+    (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
@@ -1382,6 +1441,7 @@ size_t RegionManager::ExemptFromRegions()
         d.capacity = fromRegion->GetRegionSize();
         d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
         d.id = static_cast<uint32_t>(descs.size());
+        d.allocating = fromRegion->HasMarkStartAllocGap();
         descs.push_back(d);
         descRegions.push_back(fromRegion);
     }
@@ -1730,7 +1790,178 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
+    // oraclecut §4 / cjpmnull5: Exempt is a terminal region state this cycle.
+    // Publish immediately as kept (IsForwardingDone) so WaitRoutedTipReady's
+    // region-level wait can exit. Without this the wait never terminates
+    // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
+    // cycle (cjpmnull2 Exempt).
+    if (region != nullptr && !region->IsForwardingDone()) {
+        static std::atomic<size_t> g_exemptKept{ 0 };
+        const size_t n = g_exemptKept.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][exempt-kept] n=%zu region=%p start=%#zx route=%u live=%zu",
+                n, region, region->GetRegionStart(),
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+        }
+        region->MarkForwardingDone();
+    }
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+}
+
+namespace {
+bool IncompleteRouteUnpublished(RegionInfo* region)
+{
+    if (region == nullptr || region->IsFreeRegion()) {
+        return false;
+    }
+    if (region->IsForwardingDone()) {
+        return false;
+    }
+    const RegionInfo::RouteState rs = region->GetRouteState();
+    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+        rs == RegionInfo::RouteState::ROUTED;
+}
+} // namespace
+
+void RegionManager::FinishIncompleteFromRegions()
+{
+    // Flip false for gate ⑥ (regionTimeout / W1 return). Product default on.
+    // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
+    static constexpr bool kFinishIncompleteFromRegions = true;
+    if constexpr (!kFinishIncompleteFromRegions) {
+        return;
+    }
+
+    std::vector<RegionInfo*> snap;
+    auto push = [&snap](RegionInfo* region) {
+        if (region != nullptr) {
+            snap.push_back(region);
+        }
+    };
+    ghostFromRegionList.VisitAllGhostRegions(push);
+    fromRegionList.VisitAllRegions(push);
+    unmovableFromRegionList.VisitAllRegions(push);
+    garbageRegionList.VisitAllRegions(push);
+
+    std::sort(snap.begin(), snap.end());
+    snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
+
+    const bool young = Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    static std::atomic<size_t> g_zombieFinished{ 0 };
+    static std::atomic<size_t> g_zombieKept{ 0 };
+    size_t finished = 0;
+    size_t kept = 0;
+
+    for (RegionInfo* region : snap) {
+        if (!IncompleteRouteUnpublished(region)) {
+            continue;
+        }
+        if (region->IsUnmovableFromRegion()) {
+            region->MarkForwardingDone();
+            ++kept;
+            continue;
+        }
+        if (region->IsGarbageRegion()) {
+            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                              RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            ExemptFromRegion(region);
+            ++kept;
+            continue;
+        }
+        const bool wasFrom = region->IsFromRegion();
+        if (wasFrom) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::LONE_FROM_REGION);
+        }
+        const bool canForward = region->IsLoneFromRegion() ||
+            (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
+        if (canForward) {
+            if (young) {
+                ForwardRegion<Generation::Young>(region);
+            } else {
+                ForwardRegion<Generation::Old>(region);
+            }
+            if (!IncompleteRouteUnpublished(region)) {
+                ++finished;
+                continue;
+            }
+        }
+        // Residual: publish kept in place. Do not Prepend if the region is still
+        // on another live list (recentFull / TL) — that would double-link.
+        if (region->IsFromRegion()) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+        }
+        if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
+            ExemptFromRegion(region);
+        } else {
+            region->MarkForwardingDone();
+        }
+        ++kept;
+    }
+
+    if (finished != 0) {
+        g_zombieFinished.fetch_add(finished, std::memory_order_relaxed);
+    }
+    if (kept != 0) {
+        g_zombieKept.fetch_add(kept, std::memory_order_relaxed);
+    }
+    const size_t finTot = g_zombieFinished.load(std::memory_order_relaxed);
+    const size_t keptTot = g_zombieKept.load(std::memory_order_relaxed);
+    if (finished != 0 || kept != 0 || finTot != 0 || keptTot != 0) {
+        LOG(RTLOG_ERROR, "[GCV2][zombie] finished=%zu kept=%zu tot_finished=%zu tot_kept=%zu", finished, kept, finTot,
+            keptTot);
+    }
+
+    for (RegionInfo* region : snap) {
+        if (region == nullptr || region->IsFreeRegion()) {
+            continue;
+        }
+        CHECK_DETAIL(!IncompleteRouteUnpublished(region),
+                     "[GCV2][zombie] fourth state region=%p start=%#zx route=%u done=%u type=%u live=%zu "
+                     "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
+                     region, region->GetRegionStart(), static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(region->IsForwardingDone()),
+                     static_cast<unsigned>(region->GetRegionType()), region->GetLiveByteCount());
+    }
+}
+
+void RegionManager::CollectFromSpaceGarbage()
+{
+    // cjpmnull2 5b31efeb mirrored onto this second reclaim entry: a page still
+    // in the relocation set (route ∉ {FORWARDED,COMPACTED} and not Exempt-kept)
+    // must not be merged into garbage. ZGC free_page never runs while the page
+    // is in the relocation set (zGeneration.cpp:216-221).
+    static std::atomic<size_t> g_fromGarbageSkip{ 0 };
+    RegionInfo* region = fromRegionList.TakeHeadRegion();
+    while (region != nullptr) {
+        const RegionInfo::RouteState rs = region->GetRouteState();
+        const bool complete = rs == RegionInfo::RouteState::FORWARDED ||
+            rs == RegionInfo::RouteState::COMPACTED || region->IsForwardingDone();
+        if (!complete) {
+            const size_t n = g_fromGarbageSkip.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][from-garbage-skip] n=%zu region=%p start=%#zx route=%u done=%u live=%zu "
+                    "— skip CollectFromSpaceGarbage, Exempt",
+                    n, region, region->GetRegionStart(), static_cast<unsigned>(rs),
+                    static_cast<unsigned>(region->IsForwardingDone()), region->GetLiveByteCount());
+            }
+            ExemptFromRegion(region);
+        } else {
+#if defined(__OHOS__)
+            if (region->IsGhostFromRegion()) {
+                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            } else {
+                ReclaimRegion(region);
+            }
+#else
+            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+#endif
+        }
+        region = fromRegionList.TakeHeadRegion();
+    }
 }
 
 template<Generation G>
@@ -2675,60 +2906,83 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->GetRegionType(), region->GetLiveByteCount());
 
     bool youngRegion = region->IsYoungRegion();
-    if (IsKnownEmptyForView(region, markView)) {
-        // ClearLiveInfo arms LIVE_AUTHORITY|0 before mark. MarkObject is the only path that
-        // allocates the mark bitmap and raises live bytes. A region with allocated payload but
-        // no mark bitmap was never entered by MarkObject — under a correct mark that means
-        // nothing reachable points into it, so it is dead.
-        //
-        // hangfloor (0808): the young-only "fwd-empty-keep" arm (d6b77bc0) promoted every such
-        // region to unmovable-from instead of CollectRegion. Under PLAIN_ROOTS arm A' that was
-        // ~500 regions x 64KiB per minor with liveBytes~64 and reclaimedBytes~65KiB — young
-        // thrash (10/10 HANG, minor+major alternating, promoteReplay~420k). Full GC already
-        // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
-        // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
-        // young regions is what produces the hang.
-        bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
-            region->GetRegionAllocPtr() > region->GetRegionStart();
-        if (neverExamined) {
-            // Volume control, not detail reduction. This line fired 50,282 times in a 60s run
-            // (nwdiag 0808) and every one of them said the same thing, which buried the gate
-            // samples that explain *why*. Print the first few of each GC cycle, then only at
-            // power-of-four milestones so the final magnitude is still on the record.
-            static std::atomic<size_t> emptyCollectGc{ std::numeric_limits<size_t>::max() };
-            static std::atomic<size_t> emptyCollectSeq{ 0 };
-            size_t gcNow = g_gcCount.load(std::memory_order_relaxed);
-            if (emptyCollectGc.load(std::memory_order_relaxed) != gcNow) {
-                emptyCollectGc.store(gcNow, std::memory_order_relaxed);
-                emptyCollectSeq.store(0, std::memory_order_relaxed);
-            }
-            size_t seq = emptyCollectSeq.fetch_add(1, std::memory_order_relaxed) + 1;
-            bool milestone = (seq & (seq - 1)) == 0;   // 1,2,4,8,16,...
-            if (seq <= 8 || milestone) {
-                GCReason gcReason = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const char* reasonName =
-                    gcReason < GC_REASON_MAX ? g_gcRequests[gcReason].name : "invalid";
-                // markBitmap and allocPtr>start are the two inputs behind neverExamined; print
-                // them rather than only the verdict, and carry gc= so this stream can be joined
-                // against [GCV2][markfloor-obj-gate] REJECT lines from the same cycle.
-                VLOG(REPORT,
-                     "[GCRECLAIM][fwd-empty-collect] gc=%zu seq=%zu region=%p start=%#zx alloc=%#zx "
-                     "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
-                     gcNow, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                     region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
-                     region->GetLiveByteCount(), region->GetMarkBitmap(markView), reasonName,
-                     static_cast<int>(gcReason));
-            }
-        }
+    // oracleblack: the generational contract also guards this arm. The OLD pass stamps a
+    // current-epoch mark face on young regions it never actually examines, so
+    // "markedThisCycle ∧ live==0" holds vacuously for them and the residual f3-livehole
+    // census (~128/run after the unmarked-arm gate below) was fed from here. Only the
+    // YOUNG pass may prove a young region empty (zGeneration.cpp:216-221: each generation
+    // frees only pages its own mark examined).
+    if (IsKnownEmptyForView(region, markView) && !(youngRegion && G == Generation::Old)) {
+        // cjpmnull2: IsKnownEmpty is now ZGC-shaped (this-cycle marked ∧ live==0).
+        // Only those pages are empty; collect them (zGeneration.cpp:216-221).
         if (youngRegion) {
-            // No live objects → no out-edges; still retire the young face so a
-            // later reuse cannot inherit this cycle's young marks as old marks.
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             (void)region->PromoteYoungRegion(promotionView);
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion<G>(region);
         return;
+    }
+    // Unmarked this cycle is not empty (zPage.inline.hpp:223-225). Still do
+    // not keep every never-examined from-page: hangfloor showed young
+    // neverExamined × Collect-skip fills the heap (10/10 HANG). Keep only
+    // the two cjpmnull classes — residual live bytes, or a published plan
+    // that has not been copied (route=3). live==0 FORWARDABLE is true dead.
+    {
+        RegionInfo::RouteState rsKeep = region->GetRouteState();
+        const bool incompleteRoute = rsKeep == RegionInfo::RouteState::ROUTING ||
+            rsKeep == RegionInfo::RouteState::ROUTED;
+        const bool liveResidual = region->GetLiveByteCount() > 0;
+        // hangfloor: young neverExamined×keep fills the heap. Old from-pages
+        // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
+        //
+        // oracleblack: generational contract on the young arm. A young region's liveness is
+        // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
+        // after a minor really means empty and the collect below is legitimate. A MAJOR
+        // never examines young objects at all: under a workload whose config never fires a
+        // minor (cjpm at 12GB: youngRegionTriggerBytes=32MB unreached inside the crash
+        // window, cycles are HEU-only), every young region is permanently bitmap-less and
+        // the old arm collected them wholesale while marked old holders still referenced
+        // their objects (f3-livehole census: 64-512/run, reason=region_free, from==latest,
+        // targets clustered per region). ZGC: a page is freed only by the generation that
+        // proved it empty (zPage.inline.hpp:223-225 seqnum, zGeneration.cpp:216-221).
+        // Keep unexamined young in the OLD pass; the YOUNG pass keeps its collect right,
+        // so the hangfloor regression (young garbage never reclaimed) cannot return.
+        if (region->GetMarkBitmap(markView) == nullptr &&
+            region->GetRegionAllocPtr() > region->GetRegionStart() &&
+            (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
+        static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
+        size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
+                "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
+                n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+        }
+        if (youngRegion && StayYoungThisCycle(region)) {
+            EnlistStayYoungSurvivor(region);
+            return;
+        }
+        if (youngRegion) {
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+            region->PreserveRetainedLiveInfo();
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+                }
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
+            }
+            (void)region->PromoteYoungRegion(promotionView);
+        }
+        region->DispelGhostFromRegion();
+        ExemptFromRegion(region);
+        return;
+        }
     }
 
     // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so

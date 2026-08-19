@@ -103,6 +103,7 @@ public:
     void FollowPartialArray(BaseObject* entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    BaseObject* ResolveStoreValue(BaseObject* ref) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -429,10 +430,10 @@ public:
             }
             return to;
         }
-        // ③ table still empty. ZGC add_and_wait only after retain-ok+alloc-fail
-        // (zRelocate.cpp:403-409), then forward_object asserts find()!=null.
-        // Our hole is VisitLive never copied this from: miss means keep from
-        // (kUnpublishedMeansKeepFrom), not sched_yield for a publisher.
+        // ③ table still empty. oraclecut §4: wait for the region-level
+        // publish (FORWARDED/COMPACTED/kept). After publish, a miss is the
+        // VisitLive hole and keep-from is legal. Not the object-level empty
+        // wait 47595a33 deleted.
         if (funnel) {
             waitCount.fetch_add(1, std::memory_order_relaxed);
         }
@@ -455,8 +456,38 @@ public:
 
     void AddRawPointerObject(BaseObject* obj) override
     {
+        (void)PinRawPointerObject(obj);
+        // ⚠ Callers of this void form (Sync futures/mutexes) keep using the pointer they
+        // passed in. If that pointer was a movable from-copy resolved above, their later
+        // RemoveRawPointerObject would Dec the from region — same pairing hazard as
+        // oracleblack face c. Sync objects are pinned at creation (never from) today;
+        // adopting the resolved pointer there is a tracked follow-up, not done here.
+    }
+
+    BaseObject* PinRawPointerObject(BaseObject* obj) override
+    {
+        // oracle R4 / RegionManager.h:507: do not pin a movable from-copy
+        // during PREFORWARD/FORWARD (CHECK would fire). Resolve to `to` first;
+        // a true VisitLive hole is already Exempt-kept, TryDeleteRegion(FROM)
+        // fails and the else arm is taken. CHECK is not relaxed.
+        //
+        // oracleblack round 10, face c: the resolved pointer MUST flow back to the
+        // caller. Inc lands on region(to); MCC_ReleaseRawData Decs the region of the
+        // payload pointer the caller kept. Pinning to while handing out from both
+        // underflowed the from region's count and gave C a payload the young cycle
+        // was about to relocate.
+        if (obj != nullptr) {
+            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
+                const GCPhase p = GetGCPhase();
+                if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
+                    obj = ResolveStoreValue(obj);
+                }
+            }
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.AddRawPointerObject(obj);
+        return obj;
     }
 
     void RemoveRawPointerObject(BaseObject* obj) override
@@ -704,6 +735,19 @@ protected:
         // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
+        }
+        if (Heap::IsHeapAddress(target)) {
+            RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (live == nullptr || live->IsFreeRegion()) {
+                BaseObject* to = FindToVersion(target);
+                if (to != nullptr) {
+                    target = to;
+                } else {
+                    // oracle Q3 ④: FREE + retired miss = poison. Paint load-bad
+                    // (⛔ null = silent drop; ⛔ store-good = delayed bomb).
+                    return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
+                }
+            }
         }
         if (IsStaleStoreValue(target)) {
             BaseObject* to = FindToVersion(target);
