@@ -9396,7 +9396,17 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     const bool regionPublished =
         rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED ||
         forwarding->IsForwardingDone();
-    const bool retainRefused = !forwarding->IsForwardingDone() && !regionPublished;
+    // LEAD 12:2x: retain refused = worker holds the page (retain_page n<0 / n==0),
+    // not "region not yet FORWARDED". The latter is the VisitLive hole and must
+    // keep from (survival_dense 256MB OOM when we waited 4096 yields on it).
+    bool retainRefused = false;
+    if (!regionPublished && !forwarding->IsForwardingDone()) {
+        if (forwarding->TryLockReadFromRegion()) {
+            forwarding->UnlockReadFromRegion();
+        } else {
+            retainRefused = true;
+        }
+    }
     const MutatorRelocate::UnpublishedAnswer ans =
         MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
