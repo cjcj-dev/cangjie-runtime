@@ -7,7 +7,9 @@
 
 #include "SatbBuffer.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/TracingCollector.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Heap.h"
 
 #include "Base/ImmortalWrapper.h"
 
@@ -140,6 +142,20 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
 {
     if (UNLIKELY(obj == nullptr)) {
         return false;
+    }
+    // Young concurrent mark paints the Young face (ClearLiveInfo<Young> at
+    // PrepareYoungGarbageCandidates). SATB used the Old face unconditionally, so a
+    // stale major mark on a still-young object skipped enqueue — the current-face
+    // target then showed up as Stw2CurrentAudit uncovered (REPORT-youngconcstw2).
+    // ZGC heap_store_slow_path marks the *new* address (zBarrier.cpp:253-261 /
+    // zBarrier.inline.hpp:735-739 mark_and_remember). Using the Young face during
+    // GC_REASON_YOUNG is the SATB equivalent of that keep-alive.
+    Collector& collector = Heap::GetHeap().GetCollector();
+    if (collector.GetGCPhase() == GCPhase::GC_PHASE_TRACE ||
+        collector.GetGCPhase() == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
+        if (static_cast<TracingCollector&>(collector).GetGCReason() == GC_REASON_YOUNG) {
+            return RegionSpace::ShouldEnqueue<Generation::Young>(obj);
+        }
     }
     return RegionSpace::ShouldEnqueue<Generation::Old>(obj);
 }

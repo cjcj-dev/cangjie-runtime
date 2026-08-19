@@ -459,6 +459,7 @@ protected:
     }
 
     inline void SetGCReason(const GCReason reason) { gcReason = reason; }
+    inline GCReason GetGCReason() const { return gcReason; }
 
     GCThreadPool* GetThreadPool() const { return collectorResources.GetThreadPool(); }
     // enum all common roots.
