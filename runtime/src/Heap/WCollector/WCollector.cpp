@@ -9379,8 +9379,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
     };
     BaseObject* again = lookupTo();
-    if (again != nullptr && Heap::IsHeapAddress(again) &&
-        (from->IsForwarded() || forwarding->IsCompacted()) && again->IsValidObject()) {
+    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
         if (diagOn) {
             tipReadyCount.fetch_add(1, std::memory_order_relaxed);
         }

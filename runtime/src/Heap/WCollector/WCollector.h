@@ -399,8 +399,6 @@ public:
                 }
                 return to;
             }
-            // 4e85d0dc: admit on from->IsForwarded() (acquire), not to->IsValidObject()
-            // (TypeInfo word only — mid-copy reservation looks valid after 8B).
             if ((obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
                 if (funnel) {
                     receiptCount.fetch_add(1, std::memory_order_relaxed);
@@ -425,9 +423,7 @@ public:
             return self;
         }
         to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
-        // Same receipt as the first consume. IsValidObject alone is the Walker-half hole.
-        if (to != nullptr && Heap::IsHeapAddress(to) &&
-            (obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
+        if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
             if (funnel) {
                 receiptCount.fetch_add(1, std::memory_order_relaxed);
             }
