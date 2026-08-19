@@ -84,11 +84,7 @@ public:
 
     Mutator* GetMutator() const { return fpMutator; }
 
-    void NotifyToReclaimGarbage()
-    {
-        shouldReclaimHeapGarbage.store(true);
-        Notify();
-    }
+    void NotifyToReclaimGarbage() { shouldReclaimHeapGarbage.store(true); }
     void NotifyToFeedAllocBuffers()
     {
         shouldFeedHungryBuffers.store(true, std::memory_order_release);
