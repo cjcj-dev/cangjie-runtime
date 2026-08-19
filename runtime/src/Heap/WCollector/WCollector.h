@@ -103,6 +103,7 @@ public:
     void FollowPartialArray(BaseObject* entry, WorkStack& workStack) override;
     BaseObject* GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefField<>& field) override;
     BaseObject* ForwardObject(BaseObject* fromVersion) override;
+    BaseObject* ResolveStoreValue(BaseObject* ref) const override;
     void PostResolveCycleTask();
     void PrepareCycleRef()
     {
@@ -455,6 +456,13 @@ public:
 
     void AddRawPointerObject(BaseObject* obj) override
     {
+        // oracle R4 / RegionManager.h:507: do not pin a movable from-copy
+        // during PREFORWARD/FORWARD (CHECK would fire). Resolve to `to` first;
+        // a true VisitLive hole is already Exempt-kept, TryDeleteRegion(FROM)
+        // fails and the else arm is taken. CHECK is not relaxed.
+        if (obj != nullptr) {
+            obj = ResolveStoreValue(obj);
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.AddRawPointerObject(obj);
     }
@@ -705,12 +713,10 @@ protected:
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        if (IsStaleStoreValue(target)) {
-            BaseObject* to = FindToVersion(target);
-            if (to != nullptr) {
-                target = to;
-            }
-        }
+        // Store-good includes remap (zBarrier.inline.hpp:695-716). Table-only
+        // FindToVersion missed unpublished copies; ResolveStoreValue is the
+        // same funnel as the read barrier (self-copy + region wait + keep-from).
+        target = ResolveStoreValue(target);
         if (IsStaleStoreValue(target)) {
             // 凭什么: classification just proved this is *not* a live to-version, which is exactly
             // what zaddress_unsafe means ("uncoloured, NOT safe to dereference").

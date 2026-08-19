@@ -115,6 +115,11 @@ public:
     // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
     virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
 
+    // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
+    // a stored reference must already be the current version (remap included).
+    // Default identity so gc_unit Collector stubs do not abort.
+    virtual BaseObject* ResolveStoreValue(BaseObject* ref) const { return ref; }
+
     virtual bool TryUpdateRefField(BaseObject*, RefField<>&, BaseObject*&) const
     {
         AbortUnimplemented("Collector::TryUpdateRefField");

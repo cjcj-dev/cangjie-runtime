@@ -226,7 +226,8 @@ inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
     }
     g_w1StoreTotal.fetch_add(1, std::memory_order_relaxed);
     // Static lookup for the same gc_unit-harness reason as the holder probe below.
-    if (RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref)) == nullptr) {
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref));
+    if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
         return;
     }
     const uint64_t n = g_w1GhostFrom.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -463,6 +464,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // Our colour is applied by WriteReferenceImpl (GetAndTryTagRefField → store-good colour).
     // If the pre-store slot is already store-good for the same target, skip remset work
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
+    ref = theCollector.ResolveStoreValue(ref);
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
@@ -577,6 +579,7 @@ void Barrier::WriteStructImpl(BaseObject* obj, MAddress dst, size_t dstLen, MAdd
 
 void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
+    ref = theCollector.ResolveStoreValue(ref);
     if (phase != BarrierPhase::STW) {
         return DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.WriteStaticRef(field, ref);
@@ -927,6 +930,7 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    ref = theCollector.ResolveStoreValue(ref);
     NoteW1GhostFromStore(theCollector, ref);
     NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
@@ -964,6 +968,9 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     // storecov: gate on the actual pre-swap slot bits (not an "expected" value — swap has
     // none). Same shape as WriteReference / AtomicWriteReference: prev store-good for newRef
     // ⇒ edge already registered when the slot first became store-good.
+    newRef = theCollector.ResolveStoreValue(newRef);
+    NoteW1GhostFromStore(theCollector, newRef);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
@@ -1023,6 +1030,9 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     // — not to oldRef. On success with prev already store-good for newRef, the write is a
     // same-target refresh (typically oldRef==newRef) and remset work is redundant.
     // Failed CAS stores nothing ⇒ no Record (unchanged).
+    newRef = theCollector.ResolveStoreValue(newRef);
+    NoteW1GhostFromStore(theCollector, newRef);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(std::memory_order_relaxed));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);

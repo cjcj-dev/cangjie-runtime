@@ -9548,6 +9548,31 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
     return toVersion;
 }
 
+BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
+{
+    // zBarrier.inline.hpp:695-716 store_barrier_on_heap_oop_field:
+    // color_store_good includes remap. A movable ghost-from value must go
+    // through the same relocate_or_remap funnel as the load barrier
+    // (zRelocate.cpp:382-416) before it is painted store-good.
+    // Flip false for the perturbation SO (W1 returns, crash returns).
+    static constexpr bool kResolveStoreValue = true;
+    if constexpr (!kResolveStoreValue) {
+        return ref;
+    }
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return ref;
+    }
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref));
+    if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
+        return ref;
+    }
+    BaseObject* resolved = relocate_or_remap_object(ref, ghost->generation_id());
+    if (resolved != nullptr) {
+        return resolved;
+    }
+    return ref;
+}
+
 BaseObject* WCollector::ForwardObject(BaseObject* obj)
 {
     // markfloor: stack/reg roots may hold RawArray+8 interiors (tip=length). Do not

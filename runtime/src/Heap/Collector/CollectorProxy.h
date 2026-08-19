@@ -42,6 +42,10 @@ public:
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
     BaseObject* FindToVersion(BaseObject* obj) const override { return currentCollector->FindToVersion(obj); }
+    BaseObject* ResolveStoreValue(BaseObject* ref) const override
+    {
+        return currentCollector->ResolveStoreValue(ref);
+    }
 
     bool IsOldPointer(RefField<>& ref) const override { return currentCollector->IsOldPointer(ref); }
     bool IsCurrentPointer(RefField<>& ref) const override { return currentCollector->IsCurrentPointer(ref); }
