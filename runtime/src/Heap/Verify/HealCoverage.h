@@ -194,7 +194,7 @@ inline void InjectStaleOnce(uintptr_t* slot, uintptr_t currentRemap)
     *slot = PaintStale(addr, currentRemap);
 }
 
-void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq);
+void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq, const char* site);
 
 } // namespace HealCoverage
 } // namespace MapleRuntime

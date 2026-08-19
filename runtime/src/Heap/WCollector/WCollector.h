@@ -206,7 +206,7 @@ public:
         // Gate is a compile-time constant so the product rec=stw arm pays no walk.
         if (HealCoverage::kHealCoverageCensus) {
             HealCoverage::CensusAfterPublication(
-                currentRemapColour, FlipSeq().load(std::memory_order_relaxed));
+                currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "flip-young");
         }
     }
 
@@ -216,7 +216,7 @@ public:
         set_good_masks();
         if (HealCoverage::kHealCoverageCensus) {
             HealCoverage::CensusAfterPublication(
-                currentRemapColour, FlipSeq().load(std::memory_order_relaxed));
+                currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "flip-old");
         }
     }
 

@@ -29,7 +29,7 @@ static Face ClassifyFace(BaseObject* holder, BaseObject* target)
     return FaceOf(holderYoung, holderPinned, holderFrom, targetYoung);
 }
 
-void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq)
+void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq, const char* site)
 {
     if (!kHealCoverageCensus) {
         (void)currentRemap;
@@ -81,9 +81,10 @@ void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq)
     const uint64_t n = g_censusN.fetch_add(1, std::memory_order_relaxed) + 1;
     g_lastStale.store(c.stale, std::memory_order_relaxed);
     LOG(RTLOG_ERROR,
-        "[HEALCOV] n=%llu flipSeq=%llu remap=%#lx loadBad=%#lx "
+        "[HEALCOV] site=%s n=%llu flipSeq=%llu remap=%#lx loadBad=%#lx "
         "null=%zu plain=%zu loadGood=%zu stale=%zu "
         "face young=%zu o2y=%zu o2o=%zu pin=%zu from=%zu unk=%zu inject=%zu",
+        site == nullptr ? "?" : site,
         static_cast<unsigned long long>(n), static_cast<unsigned long long>(flipSeq),
         static_cast<unsigned long>(currentRemap), static_cast<unsigned long>(loadBad),
         c.nulls, c.plains, c.loadGood, c.stale, c.youngHolder, c.oldToYoung, c.oldToOld,
