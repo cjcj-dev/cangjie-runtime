@@ -106,11 +106,7 @@ GC_TEST(GcTrigger, YoungTriggerHoldsFloorWhenDeadYoungIsSmallFractionOfHeap)
     in.lastYoungPromotedBytes = 1 * 1024 * 1024;
     in.lastYoungCollectedBytes = 31 * 1024 * 1024;
     const size_t got = ComputeYoungTriggerBytes(in, false);
-    const size_t youngSmall = static_cast<size_t>(
-        static_cast<double>(in.capacityBytes) * kGcTriggerYoungSmallPercent / 100.0);
-    GC_EXPECT_TRUE(got >= kGcTriggerYoungFixedBytes);
-    GC_EXPECT_TRUE(got <= std::max(in.heapThresholdBytes, youngSmall));
-    GC_EXPECT_TRUE(got != in.capacityBytes);
+    GC_EXPECT_EQ(got, kGcTriggerYoungFixedBytes);
 }
 
 GC_TEST(GcTrigger, DirectorMinorIgnoresRaisedWatermark)

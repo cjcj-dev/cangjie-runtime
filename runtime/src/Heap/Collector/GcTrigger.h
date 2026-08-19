@@ -99,7 +99,10 @@ inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 
     }
     const size_t youngSmall =
         static_cast<size_t>(static_cast<double>(in.capacityBytes) * kGcTriggerYoungSmallPercent / 100.0);
-    size_t floorBytes = std::max(youngSmall, kGcTriggerYoungFixedBytes);
+    // Occupancy floor stays at 32MB. zDirector.cpp:296-306 uses 5% as a now-gate
+    // on the current young set, not as the next occupancy line. max(5% heap, 32MB)
+    // raised the 1GB line to 51MB and left RSS at 1.23× after the latch fix.
+    size_t floorBytes = kGcTriggerYoungFixedBytes;
     size_t ceilingBytes = in.heapThresholdBytes == 0 ? in.capacityBytes : in.heapThresholdBytes;
     if (ceilingBytes < floorBytes) {
         ceilingBytes = floorBytes;
