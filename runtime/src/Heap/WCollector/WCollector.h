@@ -461,7 +461,13 @@ public:
         // a true VisitLive hole is already Exempt-kept, TryDeleteRegion(FROM)
         // fails and the else arm is taken. CHECK is not relaxed.
         if (obj != nullptr) {
-            obj = ResolveStoreValue(obj);
+            RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+            if (ghost != nullptr && !ghost->IsUnmovableFromRegion()) {
+                const GCPhase p = GetGCPhase();
+                if (p == GCPhase::GC_PHASE_PREFORWARD || p == GCPhase::GC_PHASE_FORWARD) {
+                    obj = ResolveStoreValue(obj);
+                }
+            }
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         space.AddRawPointerObject(obj);
@@ -713,10 +719,12 @@ protected:
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        // Store-good includes remap (zBarrier.inline.hpp:695-716). Table-only
-        // FindToVersion missed unpublished copies; ResolveStoreValue is the
-        // same funnel as the read barrier (self-copy + region wait + keep-from).
-        target = ResolveStoreValue(target);
+        if (IsStaleStoreValue(target)) {
+            BaseObject* to = FindToVersion(target);
+            if (to != nullptr) {
+                target = to;
+            }
+        }
         if (IsStaleStoreValue(target)) {
             // 凭什么: classification just proved this is *not* a live to-version, which is exactly
             // what zaddress_unsafe means ("uncoloured, NOT safe to dereference").
