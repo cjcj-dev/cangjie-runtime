@@ -109,6 +109,29 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
     return UnpublishedAnswer::KeepFrom;
 }
 
+// ForwardObjectImpl LOCKED wait (WCollector.cpp). zRelocate.cpp:386-389 find() hit
+// is "already relocated" and does not wait for the copier's lock; insert is the
+// publish (zRelocate.cpp:371) and precedes UnlockObject(FORWARDED). A yield-only
+// loop on IsLockedWord hung gc-main at the old :9570 while the mutator sat in
+// SuspendForSync (REPORT-llstore hang_live). Page is_done (zForwarding.cpp:138-151)
+// is the same exit as a published region: leftover LOCKED is not a live copier.
+enum class LockedWaiterAnswer : uint32_t {
+    UseTo = 0,
+    UsePlanned = 1,
+    Yield = 2,
+};
+
+inline LockedWaiterAnswer AnswerLockedWaiter(bool tableHit, bool pagePublished)
+{
+    if (tableHit) {
+        return LockedWaiterAnswer::UseTo;
+    }
+    if (pagePublished) {
+        return LockedWaiterAnswer::UsePlanned;
+    }
+    return LockedWaiterAnswer::Yield;
+}
+
 // Which retire edge drained. Mirrors FwdInflight::Retire, which measured the same edges.
 enum class Retire : uint32_t {
     DISPEL_GHOST = 0, // RegionInfo::DispelGhostFromRegion
