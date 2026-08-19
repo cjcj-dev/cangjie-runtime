@@ -2618,11 +2618,19 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         CollectRegion<G>(region);
         return;
     }
-    // Unmarked this cycle + still has payload: not empty (zPage.inline.hpp:223-225).
-    // Do not Route/Visit/Collect — keep-from readers still name this from-page
-    // (47595a33). Exempt like the incomplete-copy abandon arm.
-    if (region->GetMarkBitmap(markView) == nullptr &&
-        region->GetRegionAllocPtr() > region->GetRegionStart()) {
+    // Unmarked this cycle is not empty (zPage.inline.hpp:223-225). Still do
+    // not keep every never-examined from-page: hangfloor showed young
+    // neverExamined × Collect-skip fills the heap (10/10 HANG). Keep only
+    // the two cjpmnull classes — residual live bytes, or a published plan
+    // that has not been copied (route=3). live==0 FORWARDABLE is true dead.
+    {
+        RegionInfo::RouteState rsKeep = region->GetRouteState();
+        const bool incompleteRoute = rsKeep == RegionInfo::RouteState::ROUTING ||
+            rsKeep == RegionInfo::RouteState::ROUTED;
+        const bool liveResidual = region->GetLiveByteCount() > 0;
+        if (region->GetMarkBitmap(markView) == nullptr &&
+            region->GetRegionAllocPtr() > region->GetRegionStart() &&
+            (incompleteRoute || liveResidual)) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
         size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {
@@ -2654,6 +2662,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->DispelGhostFromRegion();
         ExemptFromRegion(region);
         return;
+        }
     }
 
     // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
