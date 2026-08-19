@@ -1692,6 +1692,161 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
 
+namespace {
+bool IncompleteRouteUnpublished(RegionInfo* region)
+{
+    if (region == nullptr || region->IsFreeRegion()) {
+        return false;
+    }
+    if (region->IsForwardingDone()) {
+        return false;
+    }
+    const RegionInfo::RouteState rs = region->GetRouteState();
+    return rs == RegionInfo::RouteState::FORWARDABLE || rs == RegionInfo::RouteState::ROUTING ||
+        rs == RegionInfo::RouteState::ROUTED;
+}
+} // namespace
+
+void RegionManager::FinishIncompleteFromRegions()
+{
+    // Flip false for gate ⑥ (regionTimeout / W1 return). Product default on.
+    // zRelocate.cpp:1041-1047: relocate() does not return with a half-copied page.
+    static constexpr bool kFinishIncompleteFromRegions = true;
+    if constexpr (!kFinishIncompleteFromRegions) {
+        return;
+    }
+
+    std::vector<RegionInfo*> snap;
+    auto push = [&snap](RegionInfo* region) {
+        if (region != nullptr) {
+            snap.push_back(region);
+        }
+    };
+    ghostFromRegionList.VisitAllGhostRegions(push);
+    fromRegionList.VisitAllRegions(push);
+    unmovableFromRegionList.VisitAllRegions(push);
+    garbageRegionList.VisitAllRegions(push);
+
+    std::sort(snap.begin(), snap.end());
+    snap.erase(std::unique(snap.begin(), snap.end()), snap.end());
+
+    const bool young = Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
+    static std::atomic<size_t> g_zombieFinished{ 0 };
+    static std::atomic<size_t> g_zombieKept{ 0 };
+    size_t finished = 0;
+    size_t kept = 0;
+
+    for (RegionInfo* region : snap) {
+        if (!IncompleteRouteUnpublished(region)) {
+            continue;
+        }
+        if (region->IsUnmovableFromRegion()) {
+            region->MarkForwardingDone();
+            ++kept;
+            continue;
+        }
+        if (region->IsGarbageRegion()) {
+            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                              RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+            ExemptFromRegion(region);
+            ++kept;
+            continue;
+        }
+        const bool wasFrom = region->IsFromRegion();
+        if (wasFrom) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::LONE_FROM_REGION);
+        }
+        const bool canForward = region->IsLoneFromRegion() ||
+            (region->IsThreadLocalRegion() && (region->IsRoutingState() || region->IsCompacted()));
+        if (canForward) {
+            if (young) {
+                ForwardRegion<Generation::Young>(region);
+            } else {
+                ForwardRegion<Generation::Old>(region);
+            }
+            if (!IncompleteRouteUnpublished(region)) {
+                ++finished;
+                continue;
+            }
+        }
+        // Residual: publish kept in place. Do not Prepend if the region is still
+        // on another live list (recentFull / TL) — that would double-link.
+        if (region->IsFromRegion()) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                           RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+        }
+        if (region->IsLoneFromRegion() || region->IsFromRegion()) {
+            ExemptFromRegion(region);
+        } else {
+            region->MarkForwardingDone();
+        }
+        ++kept;
+    }
+
+    if (finished != 0) {
+        g_zombieFinished.fetch_add(finished, std::memory_order_relaxed);
+    }
+    if (kept != 0) {
+        g_zombieKept.fetch_add(kept, std::memory_order_relaxed);
+    }
+    const size_t finTot = g_zombieFinished.load(std::memory_order_relaxed);
+    const size_t keptTot = g_zombieKept.load(std::memory_order_relaxed);
+    if (finished != 0 || kept != 0 || finTot != 0 || keptTot != 0) {
+        LOG(RTLOG_ERROR, "[GCV2][zombie] finished=%zu kept=%zu tot_finished=%zu tot_kept=%zu", finished, kept, finTot,
+            keptTot);
+    }
+
+    for (RegionInfo* region : snap) {
+        if (region == nullptr || region->IsFreeRegion()) {
+            continue;
+        }
+        CHECK_DETAIL(!IncompleteRouteUnpublished(region),
+                     "[GCV2][zombie] fourth state region=%p start=%#zx route=%u done=%u type=%u live=%zu "
+                     "— cycle-end from-page not in {FORWARDED,COMPACTED,Exempt-kept}",
+                     region, region->GetRegionStart(), static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(region->IsForwardingDone()),
+                     static_cast<unsigned>(region->GetRegionType()), region->GetLiveByteCount());
+    }
+}
+
+void RegionManager::CollectFromSpaceGarbage()
+{
+    // cjpmnull2 5b31efeb mirrored onto this second reclaim entry: a page still
+    // in the relocation set (route ∉ {FORWARDED,COMPACTED} and not Exempt-kept)
+    // must not be merged into garbage. ZGC free_page never runs while the page
+    // is in the relocation set (zGeneration.cpp:216-221).
+    static std::atomic<size_t> g_fromGarbageSkip{ 0 };
+    RegionInfo* region = fromRegionList.TakeHeadRegion();
+    while (region != nullptr) {
+        const RegionInfo::RouteState rs = region->GetRouteState();
+        const bool complete = rs == RegionInfo::RouteState::FORWARDED ||
+            rs == RegionInfo::RouteState::COMPACTED || region->IsForwardingDone();
+        if (!complete) {
+            const size_t n = g_fromGarbageSkip.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][from-garbage-skip] n=%zu region=%p start=%#zx route=%u done=%u live=%zu "
+                    "— skip CollectFromSpaceGarbage, Exempt",
+                    n, region, region->GetRegionStart(), static_cast<unsigned>(rs),
+                    static_cast<unsigned>(region->IsForwardingDone()), region->GetLiveByteCount());
+            }
+            ExemptFromRegion(region);
+        } else {
+#if defined(__OHOS__)
+            if (region->IsGhostFromRegion()) {
+                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+            } else {
+                ReclaimRegion(region);
+            }
+#else
+            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
+#endif
+        }
+        region = fromRegionList.TakeHeadRegion();
+    }
+}
+
 template<Generation G>
 void RegionManager::ForwardFromRegions()
 {

@@ -177,6 +177,10 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
+    // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
+    // relocation set is done. CONC_RELOCATE left ROUTED pages unpublished
+    // (oracle r5 regionTimeout=527/got=0). Finish them or publish kept.
+    void FinishIncompleteFromRegions();
     // zRelocate.cpp:1346-1352 flip_survived: keep the page, reset age, leave young.
     // Must not remain LONE_FROM / FROM after TakeHead — barriers treat those as from-space.
     void EnlistStayYoungSurvivor(RegionInfo* region);
@@ -334,24 +338,7 @@ public:
         oldPinnedRegionList.MergeRegionList(rawPointerPinnedRegionList, RegionInfo::RegionType::FULL_PINNED_REGION);
     }
 
-    void CollectFromSpaceGarbage()
-    {
-#if defined(__OHOS__)
-        // OHOS keeps the low-fragmentation path for ordinary regions. A ghost carrier
-        // remains in the garbage list until PrepareFromRegionList dispels it.
-        RegionInfo* region = fromRegionList.TakeHeadRegion();
-        while (region != nullptr) {
-            if (region->IsGhostFromRegion()) {
-                garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-            } else {
-                ReclaimRegion(region);
-            }
-            region = fromRegionList.TakeHeadRegion();
-        }
-#else
-        garbageRegionList.MergeRegionList(fromRegionList, RegionInfo::RegionType::GARBAGE_REGION);
-#endif
-    }
+    void CollectFromSpaceGarbage();
 
     size_t GetThreadLocalRegionSize() const
     {

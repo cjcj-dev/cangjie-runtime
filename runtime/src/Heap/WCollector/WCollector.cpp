@@ -7135,6 +7135,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         fwdTable.PrepareForwardTable<Generation::Young>();
         }
         ValidateMinorReferences("after-dispel", nullptr);
+        // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
+        manager.FinishIncompleteFromRegions();
         manager.ReassembleFromSpace();
     }
 }
@@ -8957,6 +8959,7 @@ void WCollector::DoGarbageCollection()
     Preforward();
 
     ForwardFromSpace();
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
 
     // Publish a clean full-GC buffer before mutators return to IDLE. The phase
     // transition is the grace period for writers that had already loaded the old
