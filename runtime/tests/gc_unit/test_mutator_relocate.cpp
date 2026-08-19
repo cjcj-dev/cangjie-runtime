@@ -74,13 +74,14 @@ GC_TEST(MutatorRelocate, ForwardedRegionNoEntryKeepsFrom)
     tab->Destroy();
 }
 
-GC_TEST(MutatorRelocate, RefcountZeroRetainRefusesThenKeepFrom)
+GC_TEST(MutatorRelocate, RefcountZeroRetainRefusesThenWait)
 {
     std::atomic<int32_t> ref{ 0 };
     std::atomic<bool> claimed{ false };
     std::atomic<bool> done{ false };
     ZForwardingLife::ResetIdle(ref, claimed, done);
     GC_EXPECT_FALSE(ZForwardingLife::retain_page(ref, done));
+    // retain refused = worker mid-copy, not "never copied" (LEAD 0819-12:2x).
     GC_EXPECT_TRUE(MutatorRelocate::AnswerUnpublished(false, false, true) ==
-                   MutatorRelocate::UnpublishedAnswer::KeepFrom);
+                   MutatorRelocate::UnpublishedAnswer::Wait);
 }

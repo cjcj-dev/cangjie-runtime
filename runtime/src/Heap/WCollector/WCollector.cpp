@@ -8946,6 +8946,7 @@ void WCollector::DoGarbageCollection()
     // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
     // of these pointers has been through a phase transition.
     ForwardingTable::ReclaimRetired("cycle-start");
+    RegionInfo::ApplyDeferredClears("cycle-start");
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
@@ -9400,6 +9401,47 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         MutatorRelocate::AnswerUnpublished(tableHit, regionPublished, retainRefused);
     if (ans == MutatorRelocate::UnpublishedAnswer::UseTo && again != nullptr) {
         return again;
+    }
+    // retainRefused: worker holds the write lock and is copying. Bounded wait
+    // on this object's FORWARDED bit (narrowed old spin; permhole FATAL stays
+    // unused). Keep-from only after the page is published and the table still
+    // misses — the VisitLive hole (LEAD 0819-12:2x / zRelocate.cpp:403-416).
+    if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
+        static std::atomic<size_t> g_inflightWait{ 0 };
+        static std::atomic<size_t> g_inflightGot{ 0 };
+        const size_t wn = g_inflightWait.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (wn <= 8 || (wn & (wn - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][inflight-wait] n=%zu from=%p region=%p — wait FORWARDED",
+                wn, from, forwarding);
+        }
+        for (int spins = 0; spins < MutatorRelocate::kInflightWaitSpins; ++spins) {
+            if (from->IsForwarded() || forwarding->IsForwardingDone() ||
+                forwarding->GetRouteState() == RegionInfo::RouteState::FORWARDED ||
+                forwarding->GetRouteState() == RegionInfo::RouteState::COMPACTED) {
+                BaseObject* ready = lookupTo();
+                if (ready != nullptr && Heap::IsHeapAddress(ready) &&
+                    (from->IsForwarded() || forwarding->IsCompacted()) && ready->IsValidObject()) {
+                    g_inflightGot.fetch_add(1, std::memory_order_relaxed);
+                    if (MutatorRelocate::StatsOn()) {
+                        MutatorRelocate::NoteWaitReceipt();
+                    }
+                    return ready;
+                }
+            }
+            sched_yield();
+        }
+        BaseObject* last = lookupTo();
+        if (last != nullptr && Heap::IsHeapAddress(last) &&
+            (from->IsForwarded() || forwarding->IsCompacted()) && last->IsValidObject()) {
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitReceipt();
+            }
+            return last;
+        }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitGiveUp();
+        }
+        return from;
     }
     if constexpr (MutatorRelocate::kUnpublishedMeansKeepFrom) {
         if (MutatorRelocate::StatsOn()) {

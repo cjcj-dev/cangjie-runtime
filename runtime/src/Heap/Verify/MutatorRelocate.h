@@ -65,14 +65,18 @@ namespace MutatorRelocate {
 
 // Compile-time on. zRelocate.cpp:382-410: mutator copies on the spot; no MRT_GCV2_* gate.
 constexpr bool kMutatorSelfRelocate = true;
-// Table miss after the page is done / retain refused = object was not copied. Keep from.
-// zRelocate.cpp:412-416 asserts find()!=null; our VisitLive/GetRoute hole makes miss mean
-// "never copied", not "wait". Product WaitRoutedTipReady must honour this.
+// zRelocate.cpp:382-416: find() miss after retain_page failed means the worker
+// holds the page and is copying — wait, do not keep from. Keep-from is only the
+// VisitLive hole: page already published and the table still has no entry.
+// ANALYSIS-crashoracle H1 / LEAD 0819-12:2x: (void)retainRefused handed out a
+// naked from while ClearUnits ran on the same page.
 constexpr bool kUnpublishedMeansKeepFrom = true;
+constexpr int kInflightWaitSpins = 4096;
 
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
     KeepFrom = 1,
+    Wait = 2,
 };
 
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
@@ -80,8 +84,12 @@ inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, 
     if (tableHit) {
         return UnpublishedAnswer::UseTo;
     }
-    (void)regionPublished;
-    (void)retainRefused;
+    if (retainRefused) {
+        return UnpublishedAnswer::Wait;
+    }
+    if (regionPublished) {
+        return UnpublishedAnswer::KeepFrom;
+    }
     return UnpublishedAnswer::KeepFrom;
 }
 
