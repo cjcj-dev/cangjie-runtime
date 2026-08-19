@@ -1302,7 +1302,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     while (oldRegion != nullptr) {
         RegionInfo* next = oldRegion->GetNextRegion();
         fromRegionList.DeleteRegion(oldRegion);
-        ExemptFromRegion(oldRegion);
+        ParkUnmovableFromRegion(oldRegion);
         oldRegion = next;
     }
 
@@ -1446,6 +1446,22 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
+        // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
+        // freed at select, not entered into the relocation set. IsKnownEmpty
+        // is this-cycle marked ∧ live==0 (cjpmnull2). Young pages stay for the
+        // nested minor. Do not CollectRegion here — GetRouteMarkView is only
+        // valid after PrepareForwardable.
+        if (rawPtrCnt == 0 && !fromRegion->IsYoungRegion()) {
+            MarkView<Generation::Old> emptyView = fromRegion->GetMarkView<Generation::Old>();
+            if (fromRegion->IsKnownEmpty(emptyView)) {
+                RegionInfo* del = fromRegion;
+                CHECK(del->IsFromRegion());
+                RemoveRegionLocked(&fromRegionList, del);
+                ScrubRememberedSetForRegion(del);
+                garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
+                continue;
+            }
+        }
         if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
@@ -1824,6 +1840,20 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
     }
 }
 
+void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
+{
+    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
+    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
+    // can still sit on garbageRegionList (the CHECK at
+    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
+    // rehome below so the garbage list cannot name a non-GARBAGE region.
+    if (region != nullptr && region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    }
+    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+}
+
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
     // oraclecut §4 / cjpmnull5: Exempt is a terminal region state this cycle.
@@ -1842,16 +1872,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
         }
         region->MarkForwardingDone();
     }
-    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
-    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
-    // can still sit on garbageRegionList (the CHECK at
-    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
-    // rehome below so the garbage list cannot name a non-GARBAGE region.
-    if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    }
-    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    ParkUnmovableFromRegion(region);
 }
 
 namespace {
@@ -3032,12 +3053,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
-        //
-        // ikekeep: do NOT Collect unmarked live==0 in this arm. VisitLive copies
-        // nothing, then FORWARDED+Collect makes keep-from (table miss after
-        // publish) point into a freed page — NW 256MB SEGV pc=0x8aa8
-        // reclaim_satb. Same-cycle hole pages stay Exempt (cjpmnull2).
-        // ExpireKeptFromPreviousCycle lets them re-enter mark next cycle.
+        // live==0 after THIS cycle's mark is freed at ExemptFromRegions
+        // (zGeneration.cpp:216-221), before the page is FORWARDABLE. Do not
+        // Collect here: VisitLive copies nothing then FORWARDED+Collect is
+        // the NW 256MB keep-from UAF (pc=0x8aa8 reclaim_satb).
         //
         // oracleblack: generational contract on the young arm. A young region's liveness is
         // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
