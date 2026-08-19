@@ -8978,6 +8978,15 @@ void WCollector::DoGarbageCollection()
         Collector::ReportMarkGoodHeapGateCounts();
         return;
     }
+    // oracleblack: a major is young + old, as in ZGC (zGeneration.cpp ZGenerationOld
+    // collections run the young generation first; a standalone old cycle does not exist).
+    // Ours ran old-only: under a config whose young trigger never fires (cjpm at 12GB,
+    // youngRegionTriggerBytes=32MB unreached), young regions were never marked by anyone,
+    // yet three separate paths (ForwardRegion knownEmpty, its unmarked arm, and
+    // Assemble->from-space route=5 collect) judged them by the OLD view and freed live
+    // young objects wholesale (f3-livehole census; TraceClear kind=coll_live).
+    // Running the young cycle first gives every young region a real examination each major.
+    DoYoungGarbageCollection();
     TraceHeap();
     PostTrace();
 

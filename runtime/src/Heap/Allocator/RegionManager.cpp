@@ -2778,7 +2778,13 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         region->GetRegionType(), region->GetLiveByteCount());
 
     bool youngRegion = region->IsYoungRegion();
-    if (IsKnownEmptyForView(region, markView)) {
+    // oracleblack: the generational contract also guards this arm. The OLD pass stamps a
+    // current-epoch mark face on young regions it never actually examines, so
+    // "markedThisCycle ∧ live==0" holds vacuously for them and the residual f3-livehole
+    // census (~128/run after the unmarked-arm gate below) was fed from here. Only the
+    // YOUNG pass may prove a young region empty (zGeneration.cpp:216-221: each generation
+    // frees only pages its own mark examined).
+    if (IsKnownEmptyForView(region, markView) && !(youngRegion && G == Generation::Old)) {
         // cjpmnull2: IsKnownEmpty is now ZGC-shaped (this-cycle marked ∧ live==0).
         // Only those pages are empty; collect them (zGeneration.cpp:216-221).
         if (youngRegion) {
@@ -2801,9 +2807,22 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
+        //
+        // oracleblack: generational contract on the young arm. A young region's liveness is
+        // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
+        // after a minor really means empty and the collect below is legitimate. A MAJOR
+        // never examines young objects at all: under a workload whose config never fires a
+        // minor (cjpm at 12GB: youngRegionTriggerBytes=32MB unreached inside the crash
+        // window, cycles are HEU-only), every young region is permanently bitmap-less and
+        // the old arm collected them wholesale while marked old holders still referenced
+        // their objects (f3-livehole census: 64-512/run, reason=region_free, from==latest,
+        // targets clustered per region). ZGC: a page is freed only by the generation that
+        // proved it empty (zPage.inline.hpp:223-225 seqnum, zGeneration.cpp:216-221).
+        // Keep unexamined young in the OLD pass; the YOUNG pass keeps its collect right,
+        // so the hangfloor regression (young garbage never reclaimed) cannot return.
         if (region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
-            (incompleteRoute || liveResidual || !youngRegion)) {
+            (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
         size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {
