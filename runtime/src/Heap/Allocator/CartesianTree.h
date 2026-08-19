@@ -97,13 +97,11 @@ public:
     // true when insertion succeeded, false otherwise
     // if [idx, idx + num) clashes with existing node, it fails
     // if num is 0U, it always fails
-    bool MergeInsert(Index idx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs = 0)
+    bool MergeInsert(Index idx, Count num, bool refreshRegionInfo)
     {
-        if (lastUsedNs == 0) {
-            lastUsedNs = TimeUtil::NanoSeconds();
-        }
+        lastUsedNs = TimeUtil::NanoSeconds();
         if (root == nullptr) {
-            root = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo, lastUsedNs);
+            root = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo);
             CTREE_ASSERT(root != nullptr, "failed to allocate a new node");
             IncTotalCount(num);
             return true;
@@ -113,7 +111,7 @@ public:
             return false;
         }
 
-        return MergeInsertInternal(idx, num, refreshRegionInfo, lastUsedNs);
+        return MergeInsertInternal(idx, num, refreshRegionInfo);
     }
 
     // find a node with at least 'num' units
@@ -137,8 +135,7 @@ public:
     }
 
     struct Node {
-        Node(Index idx, Count num, bool refreshRegionInfo, uint64_t usedNs = 0)
-            : l(nullptr), r(nullptr), index(idx), count(num), lastUsedNs(usedNs == 0 ? TimeUtil::NanoSeconds() : usedNs)
+        Node(Index idx, Count num, bool refreshRegionInfo) : l(nullptr), r(nullptr), index(idx), count(num)
         {
             if (refreshRegionInfo) {
                 RefreshFreeRegionInfo();
@@ -183,15 +180,6 @@ public:
             return (count >= leftCount && count >= rightCount);
         }
 
-        inline uint64_t GetLastUsedNs() const { return lastUsedNs; }
-
-        inline void RaiseLastUsedNs(uint64_t usedNs)
-        {
-            if (usedNs > lastUsedNs) {
-                lastUsedNs = usedNs;
-            }
-        }
-
         void RefreshFreeRegionInfo();
         void ReleaseMemory();
 
@@ -201,10 +189,7 @@ public:
     private:
         Index index;
         Count count;
-        uint64_t lastUsedNs;
     };
-
-    bool TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& idx, Count& num);
 
     // Iterator is defined specifically for releasing physical pages.
     // It provides a "backwards" level-order traversal with right child node visited first
@@ -277,6 +262,8 @@ public:
 
     inline bool Empty() const { return root == nullptr; }
     inline const Node* RootNode() const { return root; }
+    inline uint64_t GetLastUsedNs() const { return lastUsedNs; }
+    bool TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& idx, Count& num);
     size_t GetNodeCount() const;
 
     // root node records the largest block of memory.
@@ -294,6 +281,7 @@ public:
 
 private:
     Count totalCount = 0u; // sum of all node counts.
+    uint64_t lastUsedNs = 0;
     Node* root = nullptr;
     SingleUseDeque<Node**> sud;
     SingleUseDeque<Node*> traversalSud;
@@ -314,18 +302,18 @@ private:
         MERGE_ERROR        // error, operation aborted
     };
 
-    MergeResult MergeAt(Node& n, Index idx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs)
+    MergeResult MergeAt(Node& n, Index idx, Count num, bool refreshRegionInfo)
     {
         Index endIdx = idx + num;
 
         // try to merge the inserted node to the right of n
         if (idx == n.GetIndex() + n.GetCount()) {
-            return MergeToRight(n, endIdx, num, refreshRegionInfo, lastUsedNs);
+            return MergeToRight(n, endIdx, num, refreshRegionInfo);
         }
 
         // try to merge the inserted node to the left of n
         if (endIdx == n.GetIndex()) {
-            return MergeToLeft(n, idx, num, refreshRegionInfo, lastUsedNs);
+            return MergeToLeft(n, idx, num, refreshRegionInfo);
         }
 
         return MergeResult::MERGE_MISS;
@@ -333,7 +321,7 @@ private:
 
     // merge free units to the right of the node. free units in the new merged node ends with endIdx,
     // and we should also try to merge the nearest right node to the new node if possible.
-    MergeResult MergeToRight(Node& n, Index endIdx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs)
+    MergeResult MergeToRight(Node& n, Index endIdx, Count num, bool refreshRegionInfo)
     {
         // find the nearest right n of the new merged n which ends with endIdx.
         Node* parent = &n; // the parent of the *nearest* node.
@@ -355,12 +343,10 @@ private:
         }
 
         n.IncCount(num, refreshRegionInfo);
-        n.RaiseLastUsedNs(lastUsedNs);
         IncTotalCount(num);
 
         if (nearest != nullptr) {
             n.IncCount(nearest->GetCount(), refreshRegionInfo);
-            n.RaiseLastUsedNs(nearest->GetLastUsedNs());
 
             // now the node doesn't have left child, so we can fast remove it.
             if (parent == &n) {
@@ -376,7 +362,7 @@ private:
 
     // merge free units to the left of the node n. free units in the new merged node starts with startIdx,
     // and we should also try to merge the nearest left node to the new merged node if possible.
-    MergeResult MergeToLeft(Node& n, Index startIdx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs)
+    MergeResult MergeToLeft(Node& n, Index startIdx, Count num, bool refreshRegionInfo)
     {
         Node* parent = &n; // the parent of the *nearest* node.
         Node* nearest = n.l;
@@ -397,7 +383,6 @@ private:
         }
 
         n.UpdateNode(startIdx, n.GetCount() + num, refreshRegionInfo);
-        n.RaiseLastUsedNs(lastUsedNs);
         IncTotalCount(num);
 
         if (nearest != nullptr) {
@@ -408,7 +393,6 @@ private:
                 parent->r = nearest->l;
             }
             n.UpdateNode(nearest->GetIndex(), n.GetCount() + nearest->GetCount(), refreshRegionInfo);
-            n.RaiseLastUsedNs(nearest->GetLastUsedNs());
             nodeAllocator.Deallocate(nearest);
         }
         CTREE_CHECK_PARENT_AND_LCHILD(&n);
@@ -416,7 +400,7 @@ private:
     }
 
     // see the public MergeInsert()
-    bool MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs);
+    bool MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo);
 
     // rotate the node and its left child to maintain heap property
     inline Node* RotateLeftChild(Node& n) const

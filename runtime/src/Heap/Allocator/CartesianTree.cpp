@@ -10,7 +10,7 @@
 #include "Allocator/RegionInfo.h"
 
 namespace MapleRuntime {
-bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo, uint64_t lastUsedNs)
+bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshRegionInfo)
 {
     //     +-------------+       +--------------+
     //     | parent node |  n--> | current node |
@@ -29,13 +29,13 @@ bool CartesianTree::MergeInsertInternal(Index idx, Count num, bool refreshRegion
     // this loop insert the new node (idx, num) at the proper place
     do {
         if (n == nullptr) {
-            n = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo, lastUsedNs);
+            n = new (nodeAllocator.Allocate()) Node(idx, num, refreshRegionInfo);
             CTREE_ASSERT(n != nullptr, "failed to allocate a new node");
             *pn = n;
             IncTotalCount(num);
             break;
         }
-        MergeResult res = MergeAt(*n, idx, num, refreshRegionInfo, lastUsedNs);
+        MergeResult res = MergeAt(*n, idx, num, refreshRegionInfo);
         if (res == MergeResult::MERGE_SUCCESS) {
             break;
         } else if (UNLIKELY(res == MergeResult::MERGE_ERROR)) {
@@ -147,37 +147,17 @@ size_t CartesianTree::GetNodeCount() const
 
 bool CartesianTree::TakeIdleUnits(uint64_t idleBeforeNs, Count maxCount, Index& idx, Count& num)
 {
-    if (root == nullptr || maxCount == 0) {
+    if (root == nullptr || maxCount == 0 || lastUsedNs > idleBeforeNs) {
         return false;
     }
-    ForwardIterator it(*this);
-    Node** chosen = nullptr;
-    Node** nodePtr = nullptr;
-    while ((nodePtr = it.Next()) != nullptr) {
-        Node* node = *nodePtr;
-        if (node != nullptr && node->GetCount() > 0 && node->GetLastUsedNs() <= idleBeforeNs) {
-            chosen = nodePtr;
-            break;
-        }
+    Count want = maxCount;
+    if (root->GetCount() < want) {
+        want = root->GetCount();
     }
-    if (chosen == nullptr) {
+    if (!TakeUnitsImpl(want, idx, true)) {
         return false;
     }
-    Node* node = *chosen;
-    Count count = node->GetCount();
-    if (count <= maxCount) {
-        idx = node->GetIndex();
-        num = count;
-        RemoveNode(*chosen);
-        return true;
-    }
-    idx = node->GetIndex() + count - maxCount;
-    num = maxCount;
-    node->UpdateNode(node->GetIndex(), count - maxCount, true);
-    DecTotalCount(maxCount);
-    LowerNonZeroNode(*chosen);
-    CTREE_CHECK_PARENT_AND_LCHILD(*chosen);
-    CTREE_CHECK_PARENT_AND_RCHILD(*chosen);
+    num = want;
     return true;
 }
 
