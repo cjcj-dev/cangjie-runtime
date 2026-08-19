@@ -131,7 +131,9 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
              gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, static_cast<unsigned long long>(gcTimeNs),
              static_cast<unsigned long long>(heuMinInterval), maxCapacity / 4);
     } else {
-        gcStats.RecordMajorGCFinish(finishTime);
+        gcStats.RecordMajorGCFinish(finishTime, gcTimeNs, Heap::GetHeap().GetAllocatedSize(),
+                                    gcStats.collectedBytes,
+                                    static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)));
         gcStats.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
         const uint32_t warmupDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
         if (warmupDone < kGcTriggerWarmupCycles) {
@@ -189,6 +191,21 @@ void CopyCollector::ForwardFromSpace()
                 if (activeHelpers != previousActiveHelpers) {
                     copyPool->SetMaxActiveThreadNum(activeHelpers);
                     restoreActiveHelpers = true;
+                }
+            }
+        }
+        if constexpr (kGcTriggerDynamicWorkersEnabled) {
+            if (!forceSerial && copyPool != nullptr) {
+                // zDirector.cpp:783-793 — apply the cycle's selected worker count.
+                const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
+                if (selected >= 1 && selected < static_cast<uint32_t>(maxWorkers)) {
+                    workers = static_cast<int32_t>(selected);
+                    previousActiveHelpers = copyPool->GetMaxActiveThreadNum();
+                    const int32_t activeHelpers = std::max(workers - 1, 0);
+                    if (activeHelpers != previousActiveHelpers) {
+                        copyPool->SetMaxActiveThreadNum(activeHelpers);
+                        restoreActiveHelpers = true;
+                    }
                 }
             }
         }

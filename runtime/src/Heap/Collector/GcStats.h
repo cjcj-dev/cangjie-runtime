@@ -61,9 +61,11 @@ public:
 
     void RecordMajorGCFinish(uint64_t timestamp)
     {
-        youngHeuDeferralUsed = false;
-        SetPrevGCFinishTime(timestamp);
+        RecordMajorGCFinish(timestamp, 0, 0, 0, 0);
     }
+
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
+                             size_t collectedBytes, uint32_t totalCollections);
 
     static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
@@ -115,6 +117,18 @@ public:
     std::atomic<bool> isWarm{ false };
     std::atomic<bool> isTimeTrustable{ false };
     std::atomic<uint64_t> lastGcDurationNs{ 0 };
+    // zDirector R4 snapshots. Static so GCStats (embedded in HeapImpl next
+    // to barriers) stays the 13d5fee2 size. TruncatedSeq windows live in
+    // GcStats.cpp and only publish these atomics at cycle end.
+    static std::atomic<uint64_t> lastOldDurationNs;
+    static std::atomic<uint64_t> lastMajorFinishNs;
+    static std::atomic<uint32_t> collectionsAtLastMajor;
+    static std::atomic<size_t> usedAtLastMajorEnd;
+    static std::atomic<size_t> oldLiveAtMarkEnd;
+    static std::atomic<double> reclaimedPerYoungAvg;
+    static std::atomic<double> reclaimedPerOldAvg;
+    static std::atomic<double> lastYoungGcDurationAvgSec;
+    static std::atomic<double> lastOldGcDurationAvgSec;
 
     void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
                           size_t maxCapacity);
