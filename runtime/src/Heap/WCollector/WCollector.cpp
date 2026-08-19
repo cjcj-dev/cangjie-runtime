@@ -9008,6 +9008,10 @@ void WCollector::DoGarbageCollection()
     // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
     // of these pointers has been through a phase transition.
     ForwardingTable::ReclaimRetired("cycle-start");
+    // ZGC: not-selected pages are ordinary candidates next cycle
+    // (zRelocationSetSelector.cpp:114-196). Expire last cycle's Exempt-kept
+    // before Assemble / PrepareYoung so they re-enter the selector.
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
