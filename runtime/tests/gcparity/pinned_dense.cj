@@ -20,7 +20,7 @@ class PinHolder {
 }
 
 main(): Int64 {
-    let nHolders: Int64 = 4096
+    let nHolders: Int64 = 8192
     var holders = Array<PinHolder>(nHolders, {i => PinHolder(i)})
     var checksum: Int64 = 0
     for (wave in 0..8) {
@@ -41,7 +41,7 @@ main(): Int64 {
             holders[i].kid = kid
             checksum = checksum + kid.id
         }
-        var junk = Array<PinKid>(80000, {j => PinKid(-(j + 1))})
+        var junk = Array<PinKid>(400000, {j => PinKid(-(j + 1))})
         checksum = checksum + junk[0].id
         println("PINNED_WAVE wave=${wave} checksum=${checksum}")
     }

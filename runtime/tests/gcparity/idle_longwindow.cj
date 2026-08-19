@@ -21,7 +21,7 @@ main(): Int64 {
     for (i in 0..nHolders) {
         checksum = checksum + holders[i].id
     }
-    var junk = Array<IdleKid>(200000, {j => IdleKid(-(j + 1))})
+    var junk = Array<IdleKid>(400000, {j => IdleKid(-(j + 1))})
     checksum = checksum + junk[0].id
     junk = Array<IdleKid>(1, {_ => IdleKid(0)})
     println("IDLE_AGED checksum=${checksum}")
@@ -32,7 +32,7 @@ main(): Int64 {
         checksum = checksum + kid.id
     }
     println("IDLE_WRITTEN checksum=${checksum}")
-    junk = Array<IdleKid>(200000, {j => IdleKid(-(200000 + j))})
+    junk = Array<IdleKid>(1200000, {j => IdleKid(-(300000 + j))})
     checksum = checksum + junk[0].id
     println("IDLE_LONGWINDOW_OK checksum=${checksum} holder0=${holders[0].id}")
     return 0
