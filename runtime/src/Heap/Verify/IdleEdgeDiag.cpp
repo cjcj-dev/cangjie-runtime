@@ -251,13 +251,7 @@ void EnsureStampTable()
         }
         return;
     }
-    size_t bits = EnvSizeT("MRT_GCV2_IDLEEDGE_STAMP_BITS", 18);
-    if (bits < 16) {
-        bits = 16;
-    }
-    if (bits > 22) {
-        bits = 22;
-    }
+    size_t bits = 22;
     g_stampCap = size_t(1) << bits;
     g_stampMask = g_stampCap - 1;
     g_stamps = new (std::nothrow) StampSlot[g_stampCap];
@@ -431,13 +425,7 @@ void EnsurePromoteStampTable()
         }
         return;
     }
-    size_t bits = EnvSizeT("MRT_GCV2_IDLEEDGE_STAMP_BITS", 18);
-    if (bits < 16) {
-        bits = 16;
-    }
-    if (bits > 22) {
-        bits = 22;
-    }
+    size_t bits = 22;
     g_promoteStampCap = size_t(1) << bits;
     g_promoteStampMask = g_promoteStampCap - 1;
     g_promoteStamps = new (std::nothrow) PromoteStampSlot[g_promoteStampCap];
