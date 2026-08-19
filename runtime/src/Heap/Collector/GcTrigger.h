@@ -21,9 +21,15 @@ constexpr bool kGcTriggerAllocRateEnabled = true;
 // L1 perturbation: pin the young watermark back to 32MB (zDirector still runs).
 constexpr bool kGcTriggerPinYoung32MB = false;
 // zDirector.cpp:331-363 / :365-381 — alloc-rate and high-usage re-evaluate
-// every tick; they are not latched off by a raised young watermark.
-// Flip false to restore the gctrigger2 gate (MINOR && young >= watermark).
-constexpr bool kGcTriggerDirectorMinorIgnoresWatermark = true;
+// every tick. Product keeps the occupancy watermark gate (gctrigger2): a
+// high-survival young set still latches occupancy young off so HEU takes over.
+// Flip true to let director MINOR ignore that latch (survival wall regresses).
+constexpr bool kGcTriggerDirectorMinorIgnoresWatermark = false;
+// gctrigger2 latched occupancy to cap when last collected ≤5% of heap.
+// That treated a fully-dead 32MB young set on a 1GB heap as "not worth it".
+// Product requires the young set itself to still be live. Flip true to restore
+// the 1GB RSS regression.
+constexpr bool kGcTriggerLatchOnSmallCollect = false;
 constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
@@ -112,8 +118,9 @@ inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 
     // (zDirector.cpp:303-306). Fully-dead young stays on the floor / 5% line.
     constexpr double highSurvival = 1.0 - (kGcTriggerYoungSmallPercent / 100.0);
     constexpr double stillLive = kGcTriggerYoungSmallPercent / 100.0;
+    const bool smallCollect = in.lastYoungCollectedBytes <= youngSmall;
     if (survival >= highSurvival ||
-        (in.lastYoungCollectedBytes <= youngSmall && survival >= stillLive)) {
+        (smallCollect && (kGcTriggerLatchOnSmallCollect || survival >= stillLive))) {
         return in.capacityBytes;
     }
     const double reclaim = 1.0 - survival;

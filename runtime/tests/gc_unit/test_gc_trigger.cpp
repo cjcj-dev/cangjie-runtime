@@ -29,7 +29,8 @@ GC_TEST(GcTrigger, SwitchDefaultOn)
 {
     GC_EXPECT_EQ(kGcTriggerAllocRateEnabled, true);
     GC_EXPECT_EQ(kGcTriggerPinYoung32MB, false);
-    GC_EXPECT_EQ(kGcTriggerDirectorMinorIgnoresWatermark, true);
+    GC_EXPECT_EQ(kGcTriggerDirectorMinorIgnoresWatermark, false);
+    GC_EXPECT_EQ(kGcTriggerLatchOnSmallCollect, false);
 }
 
 GC_TEST(GcTrigger, YoungTriggerPinsAt32WhenAsked)
