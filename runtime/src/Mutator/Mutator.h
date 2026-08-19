@@ -555,6 +555,10 @@ public:
 
     void ReleaseForeignThread();
 
+    // Observe-only: in-flight SATB node (not yet FlushQueue'd). STW2 CLEAR_SATB
+    // flushes before Census; peek still covers a node that HandleGCPhase missed.
+    SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
+
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func);

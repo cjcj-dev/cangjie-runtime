@@ -36,6 +36,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
@@ -284,4 +285,93 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 1u);
     GC_EXPECT_TRUE(records.count(reinterpret_cast<MAddress>(field)) == 1);
+}
+
+// Peek must not consume the grey-list MergeYoungAllocBlack still owns (Stw2CurrentAudit).
+GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
+{
+    GcHeapFixture fx;
+    auto* buf = new AllocBuffer();
+    buf->PushYoungAllocBlack(fx.obj0);
+    std::vector<BaseObject*> peeked;
+    buf->PeekYoungAllocBlack(peeked);
+    GC_EXPECT_EQ(peeked.size(), 1u);
+    std::vector<BaseObject*> merged;
+    buf->MergeYoungAllocBlack(merged);
+    GC_EXPECT_EQ(merged.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(merged[0]), reinterpret_cast<uintptr_t>(fx.obj0));
+}
+
+// Positive control: ArmInject forces uncovered+=1 so a zero cannot mean dead probe.
+GC_TEST(YoungConc, Stw2CurrentInjectForcesUncovered)
+{
+    const size_t before = Stw2CurrentAudit::Uncovered();
+    Stw2CurrentAudit::ArmInject();
+    std::unordered_set<MAddress> empty;
+    Stw2CurrentAudit::Census(empty, nullptr);
+    GC_EXPECT_EQ(Stw2CurrentAudit::Uncovered(), before + 1);
+}
+
+GC_TEST(YoungConc, ClassifyWaterBeatsMark)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region0->metadata.markStartAllocPtr = reinterpret_cast<uintptr_t>(fx.obj0);
+    std::unordered_set<BaseObject*> none;
+    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
+                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Water));
+}
+
+GC_TEST(YoungConc, ClassifyMarkedWhenNoWater)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region0->metadata.markStartAllocPtr = 0;
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
+    size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    MarkView<Generation::Young> view = fx.region0->GetMarkView<Generation::Young>();
+    bool first = fx.region0->GetMarkBitmap(view)->MarkBits(off, 8, fx.region0->GetRegionSize());
+    GC_EXPECT_FALSE(first);
+    std::unordered_set<BaseObject*> none;
+    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
+                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Marked));
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+GC_TEST(YoungConc, ClassifyAllocBlackWhenUnmarked)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region0->metadata.markStartAllocPtr = 0;
+    std::unordered_set<BaseObject*> allocBlack;
+    allocBlack.insert(fx.obj0);
+    std::unordered_set<BaseObject*> none;
+    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, allocBlack, none)),
+                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::AllocBlack));
+}
+
+GC_TEST(YoungConc, ClassifyUncoveredYoung)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    fx.region0->metadata.markStartAllocPtr = 0;
+    std::unordered_set<BaseObject*> none;
+    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
+                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Uncovered));
+}
+
+GC_TEST(YoungConc, ClassifySkipOldHolderTarget)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region0->metadata.markStartAllocPtr = 0;
+    std::unordered_set<BaseObject*> none;
+    GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
+                 static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Skip));
 }

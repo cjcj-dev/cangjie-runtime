@@ -65,6 +65,17 @@ public:
             }
         }
 
+        // Observe-only: STW2 current-face audit peeks SATB without retiring the node.
+        template<typename F>
+        void PeekEntries(F&& f) const
+        {
+            for (size_t i = index; i < CONTAINER_CAPACITY; ++i) {
+                const Entry& entry = entryContainer[i];
+                BaseObject* objectToMark = entry.knownBase != nullptr ? entry.knownBase : entry.target;
+                f(objectToMark);
+            }
+        }
+
     private:
         // SATB deletion barriers may observe a HeapSlot containing host+offset. Preserve the
         // producer's validated host until remark; consumers mark knownBase, never the interior.
@@ -130,6 +141,8 @@ public:
             return old;
         }
 
+        T* PeekHead() const { return head.load(std::memory_order_acquire); }
+
     private:
         std::atomic<T*> head;
     };
@@ -175,8 +188,14 @@ public:
             return old;
         }
 
+        T* PeekHead() const
+        {
+            std::lock_guard<std::mutex> lg(safeLock);
+            return head;
+        }
+
     private:
-        std::mutex safeLock;
+        mutable std::mutex safeLock;
         T* head;
     };
 
@@ -250,6 +269,15 @@ public:
             head = head->next;
             oldHead->Clear();
             freeNodes.Push(oldHead);
+        }
+    }
+
+    // Observe-only: walk retired SATB without PopAll (Stw2CurrentAudit).
+    template<typename F>
+    void PeekRetired(F&& f) const
+    {
+        for (Node* n = retiredNodes.PeekHead(); n != nullptr; n = n->next) {
+            n->PeekEntries(f);
         }
     }
 
