@@ -79,6 +79,18 @@ GC_TEST(GcTrigger, YoungTriggerHoldsFloorOnLowSurvival)
     GC_EXPECT_TRUE(got <= in.heapThresholdBytes);
 }
 
+GC_TEST(GcTrigger, YoungTriggerRaisesWhenLastMinorFreedLessThanFivePercent)
+{
+    YoungTriggerInputs in;
+    in.capacityBytes = 256 * 1024 * 1024;
+    in.heapThresholdBytes = 64 * 1024 * 1024;
+    in.hasYoungSample = true;
+    in.lastYoungCandidateBytes = 32 * 1024 * 1024;
+    in.lastYoungPromotedBytes = 28 * 1024 * 1024;
+    in.lastYoungCollectedBytes = 4 * 1024 * 1024;
+    GC_EXPECT_EQ(ComputeYoungTriggerBytes(in, false), in.capacityBytes);
+}
+
 GC_TEST(TruncatedSeq, EmptyIsZero)
 {
     TruncatedSeq seq(100);

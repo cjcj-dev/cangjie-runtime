@@ -99,10 +99,11 @@ inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 
     }
     const double survival = static_cast<double>(in.lastYoungPromotedBytes) /
         static_cast<double>(in.lastYoungCandidateBytes);
-    // zDirector.cpp:296-306 — young that cannot free much is not worth a minor.
-    // High survival: raise the young line past HEU so occupancy falls through to major.
+    // zDirector.cpp:296-306 — if young cannot free 5% of the heap, skip minor.
+    // survival_dense reclaims ~4MB of a 256MB heap (1.5%) at 86% survival; the
+    // 95% survival cut alone left the 32MB floor in place and kept interleaving.
     constexpr double highSurvival = 1.0 - (kGcTriggerYoungSmallPercent / 100.0);
-    if (survival >= highSurvival) {
+    if (survival >= highSurvival || in.lastYoungCollectedBytes <= youngSmall) {
         return in.capacityBytes;
     }
     const double reclaim = 1.0 - survival;
