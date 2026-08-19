@@ -2231,27 +2231,6 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
             }
             latest = fromObj;
             // Fall through to RootSlotWriteback(latest).
-        } else if (HolderObjectIsLive(holder) && fromObj != nullptr && Heap::IsHeapAddress(fromObj) &&
-                   fromObj->IsValidObject()) {
-            static std::atomic<size_t> g_f3LiveHole{ 0 };
-            size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (lh <= 16 || (lh & (lh - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
-                    "from=%p latest=%p — live holder, dead-classified target: recolour from",
-                    lh, reason, rtype, holder, &field, fromObj, latest);
-            }
-            latest = fromObj;
-        } else if (HolderObjectIsLive(holder)) {
-            static std::atomic<size_t> g_f3LiveHoleSkip{ 0 };
-            size_t lh = g_f3LiveHoleSkip.fetch_add(1, std::memory_order_relaxed) + 1;
-            if (lh <= 16 || (lh & (lh - 1)) == 0) {
-                LOG(RTLOG_ERROR,
-                    "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
-                    "from=%p latest=%p — live holder, from not valid: leave old-tag",
-                    lh, reason, rtype, holder, &field, fromObj, latest);
-            }
-            return;
         } else {
             // True dead residue: soft-null by default (e8e092f6).
             // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
@@ -2268,6 +2247,17 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
             // null destroys. Dead holders (the ~6.6k region_free bulk) keep the null: the F5
             // no-stale-tags contract is unchanged where it matters, and in a correct heap this
             // exemption set is empty by reachability, so it cannot retain true dead residue.
+            if (HolderObjectIsLive(holder)) {
+                static std::atomic<size_t> g_f3LiveHole{ 0 };
+                size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (lh <= 16 || (lh & (lh - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
+                        "from=%p latest=%p — live holder, dead-classified target: keep slot",
+                        lh, reason, rtype, holder, &field, fromObj, latest);
+                }
+                return;
+            }
             const char* deadReason = NoteF3DeadarmHit(reason, holder);
             static std::atomic<size_t> g_f3DeadLogged{ 0 };
             size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
@@ -3269,10 +3259,6 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
     if (SlotHeldByLiveObject(&field)) {
-        if (object != nullptr && Heap::IsHeapAddress(object) && object->IsValidObject()) {
-            (void)CasInstallResolvedTarget(field, expected, object,
-                                           HealSite::WCollectorMinorResolveOldIdentity);
-        }
         return object;
     }
     NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
