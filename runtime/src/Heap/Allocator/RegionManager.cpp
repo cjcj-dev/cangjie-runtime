@@ -1132,6 +1132,42 @@ void RegionManager::ReassembleFromSpace()
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 }
 
+void RegionManager::ExpireKeptFromPreviousCycle()
+{
+    // Flip false for gate ⑥ (256MB OOM returns). Product default on.
+    // zRelocationSetSelector.cpp:114-196 rebuilds the set every cycle; pages
+    // carry no cross-cycle exemption. zGeneration.cpp:205-213 iterates the
+    // whole page table.
+    static constexpr bool kExpireKeptAtCycleStart = true;
+    if constexpr (!kExpireKeptAtCycleStart) {
+        return;
+    }
+
+    size_t expired = 0;
+    size_t expiredBytes = 0;
+    auto expireList = [&expired, &expiredBytes](RegionList& list) {
+        list.VisitAllRegions([&expired, &expiredBytes](RegionInfo* region) {
+            if (region == nullptr || !region->IsForwardingDone()) {
+                return;
+            }
+            const RegionInfo::RouteState rs = region->GetRouteState();
+            if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+                return;
+            }
+            ++expired;
+            expiredBytes += region->GetRegionSize();
+            region->ExpireKeptPublish();
+        });
+    };
+    expireList(unmovableFromRegionList);
+    expireList(fromRegionList);
+    expireList(recentFullRegionList);
+    expireList(tlRegionList);
+    if (expired != 0) {
+        LOG(RTLOG_ERROR, "[GCV2][expire-kept] n=%zu bytes=%zu", expired, expiredBytes);
+    }
+}
+
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -1266,7 +1302,7 @@ YoungCollectionStats RegionManager::PrepareYoungGarbageCandidates(const std::fun
     while (oldRegion != nullptr) {
         RegionInfo* next = oldRegion->GetNextRegion();
         fromRegionList.DeleteRegion(oldRegion);
-        ExemptFromRegion(oldRegion);
+        ParkUnmovableFromRegion(oldRegion);
         oldRegion = next;
     }
 
@@ -1410,6 +1446,23 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
+        // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
+        // freed at select, not entered into the relocation set. Post-mark
+        // live==0 is that class (OOM dump: kept-publish 3942 live=0 hole=258MB).
+        // Young pages stay — major old mark never examines them (oracleblack).
+        // Free here, before PrepareForwardable, so they never become
+        // FORWARDABLE (NW keep-from UAF was ForwardRegion Collect after Route).
+        // Flip false: 256MB OOM returns (expire-off still green — this is the reclaim).
+        static constexpr bool kFreeEmptyAtCSetSelect = true;
+        if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
+            !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
+            RegionInfo* del = fromRegion;
+            CHECK(del->IsFromRegion());
+            RemoveRegionLocked(&fromRegionList, del);
+            ScrubRememberedSetForRegion(del);
+            garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
+            continue;
+        }
         if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
@@ -1788,6 +1841,20 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
     }
 }
 
+void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
+{
+    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
+    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
+    // can still sit on garbageRegionList (the CHECK at
+    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
+    // rehome below so the garbage list cannot name a non-GARBAGE region.
+    if (region != nullptr && region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    }
+    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+}
+
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
     // oraclecut §4 / cjpmnull5: Exempt is a terminal region state this cycle.
@@ -1806,16 +1873,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
         }
         region->MarkForwardingDone();
     }
-    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
-    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
-    // can still sit on garbageRegionList (the CHECK at
-    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
-    // rehome below so the garbage list cannot name a non-GARBAGE region.
-    if (region != nullptr && region->IsGarbageRegion()) {
-        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
-                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    }
-    unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    ParkUnmovableFromRegion(region);
 }
 
 namespace {
@@ -2155,6 +2213,32 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     size_t fromSize = fromUnits * RegionInfo::UNIT_SIZE;
     size_t allocFromSize = fromRegionList.GetAllocatedSize();
 
+    size_t unmovableRegions = unmovableFromRegionList.GetRegionCount();
+    size_t unmovableUnits = unmovableFromRegionList.GetUnitCount();
+    size_t unmovableSize = unmovableUnits * RegionInfo::UNIT_SIZE;
+    size_t allocUnmovableSize = unmovableFromRegionList.GetAllocatedSize();
+
+    size_t keptRegions = 0;
+    size_t keptUnits = 0;
+    size_t keptSize = 0;
+    size_t keptLive = 0;
+    auto censusKept = [&keptRegions, &keptUnits, &keptSize, &keptLive](RegionInfo* region) {
+        if (region == nullptr || !region->IsForwardingDone()) {
+            return;
+        }
+        const RegionInfo::RouteState rs = region->GetRouteState();
+        if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+            return;
+        }
+        ++keptRegions;
+        keptUnits += region->GetUnitCount();
+        keptSize += region->GetRegionSize();
+        keptLive += region->GetLiveByteCount();
+    };
+    fromRegionList.VisitAllRegions(censusKept);
+    unmovableFromRegionList.VisitAllRegions(censusKept);
+    recentFullRegionList.VisitAllRegions(censusKept);
+
     size_t recentFullRegions = recentFullRegionList.GetRegionCount();
     size_t recentFullUnits = recentFullRegionList.GetUnitCount();
     size_t recentFullSize = recentFullUnits * RegionInfo::UNIT_SIZE;
@@ -2229,6 +2313,10 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     DUMP_REGION_STATS_LOG("\ttl-regions %zu: %zu units (%zu B, alloc %zu)", tlRegions,  tlUnits, tlSize, allocTLSize);
     DUMP_REGION_STATS_LOG("\tfrom-regions %zu: %zu units (%zu B, alloc %zu)", fromRegions,  fromUnits, fromSize,
                           allocFromSize);
+    DUMP_REGION_STATS_LOG("\tunmovable-from regions %zu: %zu units (%zu B, alloc %zu)", unmovableRegions,
+                          unmovableUnits, unmovableSize, allocUnmovableSize);
+    DUMP_REGION_STATS_LOG("\tkept-publish regions %zu: %zu units (%zu B, live %zu, hole %zu)", keptRegions, keptUnits,
+                          keptSize, keptLive, keptSize > keptLive ? keptSize - keptLive : 0);
     DUMP_REGION_STATS_LOG("\trecent-full regions %zu: %zu units (%zu B, alloc %zu)",
                           recentFullRegions, recentFullUnits, recentFullSize, allocRecentFullSize);
     DUMP_REGION_STATS_LOG("\tgarbage regions %zu: %zu units (%zu B, alloc %zu)",
@@ -2966,6 +3054,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
+        // live==0 after THIS cycle's mark is freed at ExemptFromRegions
+        // (zGeneration.cpp:216-221), before the page is FORWARDABLE. Do not
+        // Collect here: VisitLive copies nothing then FORWARDED+Collect is
+        // the NW 256MB keep-from UAF (pc=0x8aa8 reclaim_satb).
         //
         // oracleblack: generational contract on the young arm. A young region's liveness is
         // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
