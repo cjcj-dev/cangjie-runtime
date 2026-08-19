@@ -349,6 +349,62 @@ std::atomic<size_t> g_f3DeadarmUnknown{ 0 };
 std::atomic<size_t> g_f3DeadarmWeakHolder{ 0 };
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
+namespace {
+// ZGC zPage.inline.hpp:254-256: is_object_live = is_allocating || livemap.
+// zBarrier.inline.hpp:73-78: never heal a non-null slot with null.
+// 4fcf746a used IsMarkedObject<Old> only — post-flip to-space and young
+// holders have no Old face, so F3 / Resolve / Scrub planted null into live
+// Array slots (nwreclaim: pc_off=0x29589 mov 0x8(%rcx) rcx=0).
+bool RegionIsAllocatingPage(const RegionInfo* region)
+{
+    if (region == nullptr) {
+        return false;
+    }
+    const RegionInfo::RegionType type = region->GetRegionType();
+    return region->IsToRegion() || region->IsThreadLocalRegion() ||
+        type == RegionInfo::RegionType::RECENT_FULL_REGION ||
+        type == RegionInfo::RegionType::RECENT_LARGE_REGION ||
+        type == RegionInfo::RegionType::TL_RAW_POINTER_REGION ||
+        type == RegionInfo::RegionType::TL_LARGE_RAW_POINTER_REGION ||
+        region->IsPinnedRegion() || region->HasMarkStartAllocGap();
+}
+
+bool HolderObjectIsLive(BaseObject* holder)
+{
+    if (holder == nullptr || !Heap::IsHeapAddress(holder) || !holder->IsValidObject()) {
+        return false;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
+        return false;
+    }
+    if (RegionIsAllocatingPage(region)) {
+        return true;
+    }
+    if (region->IsYoungRegion()) {
+        return RegionSpace::IsMarkedObject<Generation::Young>(holder);
+    }
+    return RegionSpace::IsMarkedObject<Generation::Old>(holder);
+}
+
+bool SlotHeldByLiveObject(const void* slot)
+{
+    if (slot == nullptr || !Heap::IsHeapAddress(slot)) {
+        return false;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(slot));
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
+        return false;
+    }
+    if (RegionIsAllocatingPage(region)) {
+        return true;
+    }
+    BaseObject* holder = Collector::TryRecoverInteriorBase(
+        reinterpret_cast<BaseObject*>(const_cast<void*>(slot)));
+    return HolderObjectIsLive(holder);
+}
+} // namespace
+
 bool F3DeadarmAssertEnabled()
 {
     static const bool on = []() {
@@ -2191,8 +2247,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
             // null destroys. Dead holders (the ~6.6k region_free bulk) keep the null: the F5
             // no-stale-tags contract is unchanged where it matters, and in a correct heap this
             // exemption set is empty by reachability, so it cannot retain true dead residue.
-            if (holder != nullptr && Heap::IsHeapAddress(holder) &&
-                IsMarkedObject<Generation::Old>(holder)) {
+            if (HolderObjectIsLive(holder)) {
                 static std::atomic<size_t> g_f3LiveHole{ 0 };
                 size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (lh <= 16 || (lh & (lh - 1)) == 0) {
@@ -3203,6 +3258,9 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
              "(drop; full-GC remset/root residue after Flip)",
              &field, static_cast<size_t>(raw(value.GetFieldValue())), object, to);
     }
+    if (SlotHeldByLiveObject(&field)) {
+        return object;
+    }
     NoteNullslotWrite("fix_resolve_cas", nullptr, &field, object, to, &g_nullslotResolve);
     (void)CasInstallResolvedTarget(field, expected, nullptr, HealSite::WCollectorMinorResolveDead,
                                    HealNull::Allow);
@@ -3799,6 +3857,9 @@ bool ScrubMinorFreeTarget(RefField<>& field, BaseObject* target, bool fromFix)
     const bool isFree = region->IsFreeRegion();
     const bool isGarbage = region->IsGarbageRegion();
     if (!isFree && !isGarbage) {
+        return false;
+    }
+    if (SlotHeldByLiveObject(&field)) {
         return false;
     }
     RefField<> oldField(field);
@@ -5505,6 +5566,9 @@ void WCollector::RescanRememberedSet(WorkStack& workStack, const MinorSlotSet& r
             // Do not CAS-null — slot may be RO; drop remset edge only via fall-through scrub.
             if (to == nullptr && !fromLive &&
                 (rawTarget == nullptr || Heap::IsHeapAddress(rawTarget))) {
+                if (SlotHeldByLiveObject(field)) {
+                    continue;
+                }
                 ++scrubbedStaleOldTag;
                 // N2: CAS null install (same slot may race with ResolveMinorReference under FYS=1).
                 NoteNullslotWrite("remset_stale_oldtag", nullptr, field, rawTarget, to, &g_nullslotRemset);
@@ -5880,6 +5944,9 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                              tgtName, tgtRaw, tgtYoung, rs, liveBytes, off, live0, marked);
                 std::fflush(stderr);
             }
+        }
+        if (SlotHeldByLiveObject(&field)) {
+            return false;
         }
         MAddress oldVal = raw(field.GetFieldValue());
         (void)HealSlot(field, to_zpointer(oldVal), zpointer::null,
