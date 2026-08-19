@@ -7,7 +7,6 @@
 
 #include "SatbBuffer.h"
 #include "Heap/Collector/Collector.h"
-#include "Heap/Collector/TracingCollector.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
 
@@ -153,7 +152,8 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     Collector& collector = Heap::GetHeap().GetCollector();
     if (collector.GetGCPhase() == GCPhase::GC_PHASE_TRACE ||
         collector.GetGCPhase() == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
-        if (static_cast<TracingCollector&>(collector).GetGCReason() == GC_REASON_YOUNG) {
+        // RegionManager.cpp:1859 already keys young vs major on GetGCStats().reason.
+        if (collector.GetGCStats().reason == GC_REASON_YOUNG) {
             return RegionSpace::ShouldEnqueue<Generation::Young>(obj);
         }
     }
