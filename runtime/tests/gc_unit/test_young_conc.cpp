@@ -36,6 +36,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/CollectorResources.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -63,6 +64,18 @@ public:
 class TestBarrier final : public Barrier {
 public:
     TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
+
+protected:
+    void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
+    {
+        field.StoreColoured(to_zpointer(reinterpret_cast<MAddress>(ref)));
+    }
+};
+
+class TestTraceBarrier final : public Barrier {
+public:
+    TestTraceBarrier(Collector& collector, RememberedSet& rememberedSet)
+        : Barrier(collector, rememberedSet, BarrierPhase::TRACE) {}
 
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
@@ -305,6 +318,83 @@ GC_TEST(YoungConc, OldToYoungStillRecorded)
     rs.DrainForMinor(records);
     GC_EXPECT_EQ(records.size(), 1u);
     GC_EXPECT_TRUE(records.count(reinterpret_cast<MAddress>(field)) == 1);
+}
+
+// mark_and_remember mark half (zBarrier.inline.hpp:735-739): TRACE + young GC
+// paints the new young target. STW/Idle TestBarrier must not (phase gate).
+// gc_unit never Heap::Init; IsGcStarted is the same fixture latch SATB uses.
+GC_TEST(YoungConc, TraceStoreMarksNewYoungTarget)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestTraceBarrier barrier(collector, rs);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    // RecordCrossGenEdge is the remember half; TRACE phase adds the mark half.
+    // Do not WriteReference: DispatchPhase would static_cast to product TraceBarrier
+    // and SATB-push with a null mutator (gc_unit has no Mutator).
+    barrier.RecordCrossGenEdge(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+
+    MarkView<Generation::Young> view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_TRUE(fx.region1->IsMarkedObject(view, fx.obj1));
+    std::unordered_set<MAddress> records;
+    rs.DrainForMinor(records);
+    GC_EXPECT_EQ(records.size(), 1u);
+
+    fx.region1->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(0);
+    fx.region1->SetYoungRegionFlag(1);
+    fx.region1->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region1);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region1->GetRegionSize());
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    TestCollector collector;
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    TestBarrier barrier(collector, rs);
+
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    const bool startedBefore = resources.IsGcStarted();
+    const GCReason reasonBefore = resources.GetGCStats().reason;
+    resources.SetGcStarted(true);
+    resources.GetGCStats().reason = GC_REASON_YOUNG;
+
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
+    barrier.RecordCrossGenEdge(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
+
+    resources.SetGcStarted(startedBefore);
+    resources.GetGCStats().reason = reasonBefore;
+
+    MarkView<Generation::Young> view = fx.region1->GetMarkView<Generation::Young>();
+    GC_EXPECT_FALSE(fx.region1->IsMarkedObject(view, fx.obj1));
+
+    fx.region1->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
 }
 
 // Peek must not consume the grey-list MergeYoungAllocBlack still owns (Stw2CurrentAudit).
