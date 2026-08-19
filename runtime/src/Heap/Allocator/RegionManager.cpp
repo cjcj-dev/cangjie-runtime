@@ -1513,6 +1513,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         }
         size_t youngAllocated = GetYoungAllocatedSize();
         size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
+        // Occupancy young stays on the latched line (survival). Director uses the
+        // 32MB now-gate so a new wave after a high-survival latch still minors
+        // (12-wave NW). zDirector.cpp:296-306 / :331-381.
+        const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
         bool requested = false;
         if (kGcTriggerAllocRateEnabled && !disableMinor) {
             MutatorAllocRateStats rate = MutatorAllocRate::stats();
@@ -1543,10 +1547,12 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                      static_cast<int>(d.rule), allocated, in.capacityBytes);
                 collector.RequestGC(GC_REASON_HEU, true);
                 requested = true;
-            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, youngRegionTriggerBytes)) {
+            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, directorMinorBytes)) {
                 // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
-                // the occupancy watermark has been raised. is_young_small is already
-                // inside RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
+                // the occupancy watermark has been raised. Occupancy young still uses
+                // the latched line; director uses the 5%/32MB now-gate so a new young
+                // wave is collected (12-wave NW). is_young_small is already inside
+                // RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
                 g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
                 NoteGcTriggerRule(d.rule);
                 DLOG(ALLOC, "request young gc via DecideGcTrigger rule=%d young=%zu trigger=%zu",
@@ -2611,6 +2617,17 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region)
 void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
 {
     FinishStayYoungInPlace(region);
+    // evac_finish calls this on FROM regions still linked in fromRegionList.
+    // PrependRegion overwrites next/prev without unlinking — later
+    // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
+    // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
+    if (region->IsFromRegion()) {
+        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                       RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::RECENT_FULL_REGION);
+    }
     recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
 }
 

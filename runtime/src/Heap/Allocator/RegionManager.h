@@ -481,9 +481,7 @@ public:
             ReclaimRegion(region);
         }
 #else
-        if (!region->IsGarbageRegion()) {
-            garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
-        }
+        garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
 #endif
         region->UnlockWriteRegion();
 
@@ -957,7 +955,7 @@ private:
              region = region->GetNextRegion()) {
             if (region->IsGhostFromRegion()) {
                 bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr && region->IsGarbageRegion() &&
+            } else if (candidate == nullptr &&
                        !RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_GARBAGE)) {
                 // routedest: defence in depth. A held region should never have reached
                 // garbageRegionList — the two Assemble gates and the two young gates refuse
