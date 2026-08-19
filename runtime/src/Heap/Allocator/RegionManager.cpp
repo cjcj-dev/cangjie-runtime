@@ -2635,17 +2635,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                         static_cast<unsigned>(rs), region->GetLiveByteCount());
                 }
-                // Same shape as the abandon arm (:2945-2950): keep from in place.
-                // Do not VisitLive — the route face is the stale one that made
-                // IsKnownEmpty true, so VisitLive would copy 0 objects and still
-                // CollectRegion (fix_r1: keep fired, F3 still 4180 region_garbage).
-                if (youngRegion) {
-                    MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-                    (void)region->PromoteYoungRegion(promotionView);
-                }
-                region->DispelGhostFromRegion();
-                ExemptFromRegion(region);
-                return;
+                // Fall through to Route/Visit. Exempt+Dispel (fe40952c) moved the
+                // crash into forward/preforward and broke cjpm package graph
+                // (fix3 r1/r4 rc=1). F3 keep-from-ghost (0b050e0a) already stops
+                // the postflip soft-null; do not paper the mark hole with Exempt.
+                // Fall through.
             } else {
         bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
