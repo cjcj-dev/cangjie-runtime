@@ -33,6 +33,7 @@
 #include "Sanitizer/SanitizerInterface.h"
 #endif
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <type_traits>
 #include <utility>
@@ -160,6 +161,42 @@ std::atomic<uint64_t> generationalBarrierRegionLookups { 0 };
 // storegood: is_store_good fast/slow path enter counts (always on, cheap atomics).
 std::atomic<uint64_t> g_storeBarrierFastPath { 0 };
 std::atomic<uint64_t> g_storeBarrierSlowPath { 0 };
+
+// W1 (oraclecut F1 / cjpmnull5): store of a movable ghost-from value.
+// Default off — region lookup on every store. Flip to true for the
+// measurement SO: pre-fix >0, post-fix =0 is the F1 criterion.
+constexpr bool kW1GhostFromStoreProbe = false;
+std::atomic<uint64_t> g_w1StoreTotal{ 0 };
+std::atomic<uint64_t> g_w1GhostFrom{ 0 };
+
+inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
+{
+    if constexpr (!kW1GhostFromStoreProbe) {
+        return;
+    }
+    static std::atomic<bool> installed{ false };
+    bool expected = false;
+    if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][w1-store] atexit total=%llu ghostFrom=%llu\n",
+                         static_cast<unsigned long long>(g_w1StoreTotal.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_w1GhostFrom.load(std::memory_order_relaxed)));
+            std::fflush(stderr);
+        });
+    }
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return;
+    }
+    g_w1StoreTotal.fetch_add(1, std::memory_order_relaxed);
+    if (!collector.IsGhostFromObject(ref) || collector.IsUnmovableFromObject(ref)) {
+        return;
+    }
+    const uint64_t n = g_w1GhostFrom.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 8 || (n & (n - 1)) == 0) {
+        LOG(RTLOG_ERROR, "[GCV2][w1-store] ghostFrom=%llu ref=%p — movable ghost stored",
+            static_cast<unsigned long long>(n), static_cast<void*>(ref));
+    }
+}
 
 inline void NoteStoreFastPath()
 {
@@ -389,6 +426,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // If the pre-store slot is already store-good for the same target, skip remset work
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
+    NoteW1GhostFromStore(theCollector, ref);
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
@@ -850,6 +888,7 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 // barrier for atomic operation.
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
+    NoteW1GhostFromStore(theCollector, ref);
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
