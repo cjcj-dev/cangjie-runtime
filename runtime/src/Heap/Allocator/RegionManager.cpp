@@ -1458,6 +1458,72 @@ size_t RegionManager::ExemptFromRegions()
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             CHECK(del->IsFromRegion());
+            // LEAD 05:3x: holder page freed at CSet empty-select while live
+            // slots still name it (keepgate null+8). Classify residual
+            // headers vs this-cycle mark vs remset before the page dies.
+            // ZGC register_empty_page (zGeneration.cpp:216-221) is only
+            // sound when mark is complete (zPage.inline.hpp:223-225).
+            {
+                const unsigned rs = static_cast<unsigned>(del->GetRouteState());
+                const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
+                size_t residual = 0;
+                size_t marked = 0;
+                const uintptr_t start = del->GetRegionStart();
+                const uintptr_t alloc = del->GetRegionAllocPtr();
+                if (alloc > start && !del->IsLargeRegion()) {
+                    uintptr_t pos = start;
+                    while (pos < alloc) {
+                        BaseObject* o = from_region_addr(pos);
+                        if (!o->IsValidObject()) {
+                            break;
+                        }
+                        const size_t sz = o->GetSize();
+                        if (sz == 0) {
+                            break;
+                        }
+                        ++residual;
+                        if (del->IsMarkedObject(del->GetMarkView<Generation::Old>(), o)) {
+                            ++marked;
+                        }
+                        pos += sz;
+                    }
+                }
+                static std::atomic<size_t> gCsetEmpty{ 0 };
+                static std::atomic<size_t> gCsetEmptyResidual{ 0 };
+                static std::atomic<size_t> gCsetEmptyMarked{ 0 };
+                static std::atomic<bool> gCsetEmptyAtexit{ false };
+                const size_t n = gCsetEmpty.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (residual != 0) {
+                    gCsetEmptyResidual.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (marked != 0) {
+                    gCsetEmptyMarked.fetch_add(1, std::memory_order_relaxed);
+                }
+                if (!gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
+                    std::atexit([]() {
+                        std::fprintf(stderr,
+                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu\n",
+                                     gCsetEmpty.load(std::memory_order_relaxed),
+                                     gCsetEmptyResidual.load(std::memory_order_relaxed),
+                                     gCsetEmptyMarked.load(std::memory_order_relaxed));
+                        std::fflush(stderr);
+                    });
+                }
+                if (n <= 8 || (n & (n - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
+                        "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu marked=%zu "
+                        "route=%u ke=%u ghost=%u alloc=%u reason=%u",
+                        n, del, start, liveBytes, residual, marked, rs, ke,
+                        static_cast<unsigned>(del->IsGhostFromRegion()),
+                        static_cast<unsigned>(del->HasMarkStartAllocGap()),
+                        static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason));
+                }
+                RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
+                TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
+                                      residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
+                                      static_cast<unsigned>(Generation::Old),
+                                      RegionLifeDiag::PATH_CSET_EMPTY);
+            }
             RemoveRegionLocked(&fromRegionList, del);
             ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
