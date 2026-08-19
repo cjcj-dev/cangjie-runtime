@@ -31,6 +31,7 @@ GC_TEST(GcTrigger, SwitchDefaultOn)
     GC_EXPECT_EQ(kGcTriggerPinYoung32MB, false);
     GC_EXPECT_EQ(kGcTriggerDirectorMinorIgnoresWatermark, false);
     GC_EXPECT_EQ(kGcTriggerLatchOnSmallCollect, false);
+    GC_EXPECT_EQ(kGcTriggerWarmupRequestsGc, false);
 }
 
 GC_TEST(GcTrigger, YoungTriggerPinsAt32WhenAsked)
@@ -235,8 +236,13 @@ GC_TEST(GcTrigger, WarmupAtTenPercent)
     in.usedBytes = 100 * 1024 * 1024;
     in.allocRateAvgBps = 0.0;
     const GcTriggerDecision d = DecideGcTrigger(in);
-    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::WARMUP));
-    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::MAJOR));
+    // Product RuleWarmup is off (kGcTriggerWarmupRequestsGc=false): a copying
+    // full-heap MAJOR at 10/20/30% used OOMs the 12-wave NW shape.
+    GC_EXPECT_EQ(kGcTriggerWarmupRequestsGc, false);
+    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::NONE));
+    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::NONE));
+    GC_EXPECT_TRUE(RuleWarmup(in) == false);
+    GC_EXPECT_TRUE(RuleWarmup(in, true) == true);
 }
 
 GC_TEST(GcTrigger, WarmupBelowTenPercentSilent)

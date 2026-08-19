@@ -30,6 +30,12 @@ constexpr bool kGcTriggerDirectorMinorIgnoresWatermark = false;
 // Product requires the young set itself to still be live. Flip true to restore
 // the 1GB RSS regression.
 constexpr bool kGcTriggerLatchOnSmallCollect = false;
+// zDirector.cpp:401-424 warmup is a ZGC *old* collection (duration sample).
+// Our MAJOR is a copying full-heap GC. Firing it at 10/20/30% used on the
+// 12-wave NW shape OOMs, then ReclaimGarbageMemory walks a mixed garbage list
+// and SEGV in DeleteRegionLocked. Product does not consume the warmup rule.
+// Flip true only to restore the three early full GCs.
+constexpr bool kGcTriggerWarmupRequestsGc = false;
 constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
@@ -181,8 +187,12 @@ inline bool RuleTimer(const GcTriggerInputs& in)
     return in.timeSinceLastGcSec >= in.collectionIntervalSec;
 }
 
-inline bool RuleWarmup(const GcTriggerInputs& in)
+inline bool RuleWarmup(const GcTriggerInputs& in, bool requestGc = kGcTriggerWarmupRequestsGc)
 {
+    // zDirector.cpp:401-424. Product does not consume this as a copying full GC.
+    if (!requestGc) {
+        return false;
+    }
     if (in.isWarm || in.capacityBytes == 0) {
         return false;
     }

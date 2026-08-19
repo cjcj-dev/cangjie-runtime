@@ -787,7 +787,7 @@ void RegionList::DeleteRegionLocked(RegionInfo* del)
             listTail = nullptr;
             return;
         }
-    } else {
+    } else if (pre != nullptr) {
         pre->SetNextRegion(next);
     }
 
@@ -798,8 +798,12 @@ void RegionList::DeleteRegionLocked(RegionInfo* del)
             listHead = nullptr;
             return;
         }
-    } else {
+    } else if (next != nullptr) {
         next->SetPrevRegion(pre);
+    } else if (pre != nullptr) {
+        // next was stolen (region re-homed onto another list) while this list
+        // still named it. Treat del as the last node we still own.
+        listTail = pre;
     }
 }
 
