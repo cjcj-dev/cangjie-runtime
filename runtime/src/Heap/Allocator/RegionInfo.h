@@ -1571,10 +1571,7 @@ public:
         // mark-start allocate-black object Compact copied must Admit so
         // GetRoute can look up that dest. Routed prefix-sum has no slot for
         // it, so water alone does not Admit on the ROUTED arm.
-        // ZGC allocate-black: offset ≥ mark-start water is live. Compact
-        // records a packed dest; ROUTED prefix-sum places it after bitmap
-        // live bytes (GetPreLiveBytesInGhostRegion).
-        if (!survived && AllocatedAfterMarkStart(offset)) {
+        if (!survived && AllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
             survived = true;
         }
         // Large region: single object at start; tip check is the start test for small.
@@ -2551,24 +2548,6 @@ public:
         return GetRegionAllocPtr() > water;
     }
 
-    size_t GetMarkStartAllocGapBytes() const
-    {
-        if (!HasMarkStartAllocGap()) {
-            return 0;
-        }
-        return static_cast<size_t>(GetRegionAllocPtr() - metadata.markStartAllocPtr);
-    }
-
-    size_t MarkStartWaterOffset() const
-    {
-        uintptr_t water = metadata.markStartAllocPtr;
-        MAddress start = GetRegionStart();
-        if (water <= start) {
-            return 0;
-        }
-        return static_cast<size_t>(water - start);
-    }
-
     int32_t IncRawPointerObjectCount()
     {
         int32_t oldCount = __atomic_fetch_add(&metadata.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
@@ -3005,24 +2984,8 @@ private:
     // callers cannot reach preLiveBytes without a ticket (ROUTE_DOMAIN.md §2).
     size_t GetPreLiveBytesInGhostRegion(MAddress address)
     {
-        size_t offset = GetAddressOffset(address);
-        // Allocate-black tail sits after the bitmap prefix-sum (dense bump after
-        // mark-start). preLive = marked-bytes-before-water + (offset - water).
-        if (AllocatedAfterMarkStart(offset)) {
-            size_t waterOff = MarkStartWaterOffset();
-            size_t preWater = 0;
-            if (metadata.liveInfo0 != nullptr) {
-                if (GetRouteMarkGeneration() == Generation::Young) {
-                    MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-                    preWater = metadata.liveInfo0->GetPreLiveBytes(view, waterOff, GetGhostRegionSize());
-                } else {
-                    MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-                    preWater = metadata.liveInfo0->GetPreLiveBytes(view, waterOff, GetGhostRegionSize());
-                }
-            }
-            return preWater + (offset - waterOff);
-        }
         DCHECK(metadata.liveInfo0 != nullptr);
+        size_t offset = GetAddressOffset(address);
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
             return metadata.liveInfo0->GetPreLiveBytes(view, offset, GetGhostRegionSize());
