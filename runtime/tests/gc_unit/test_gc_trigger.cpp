@@ -344,7 +344,7 @@ GC_TEST(GcTrigger, MajorAllocRateAmortizesExtraYoungTime)
     in.lastOldGcDurationSec = 0.20;
     in.totalCollections = 8;
     in.collectionsAtLastMajor = 5;
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
     GC_EXPECT_TRUE(!RuleMajorAllocRate(in, false));
 }
 
@@ -360,7 +360,7 @@ GC_TEST(GcTrigger, MajorAllocRateOldGarbageCheaper)
     in.lastOldGcDurationSec = 0.10;
     in.totalCollections = 1;
     in.collectionsAtLastMajor = 1;
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
 }
 
 GC_TEST(GcTrigger, MajorAllocRateUrgentWhenYoungSmallAndHighUsage)
@@ -378,7 +378,7 @@ GC_TEST(GcTrigger, MajorAllocRateUrgentWhenYoungSmallAndHighUsage)
     in.totalCollections = 1;
     in.collectionsAtLastMajor = 1;
     GC_EXPECT_TRUE(GcTriggerMajorUrgent(in));
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
 }
 
 GC_TEST(GcTrigger, MajorAllocRateDisabledWhenNotTrustable)
