@@ -699,16 +699,17 @@ public:
                 g_pubTable.fetch_add(1, std::memory_order_relaxed);
                 return true;
             }
+            // Object FORWARDED is UnlockObject after Copy+Insert (WCollector.cpp:9635).
+            // Table miss + FORWARDED = insert overflow, not "not yet copied".
+            // Region FORWARDED alone is the plan — do not admit on it.
+            if (fromObj->IsForwarded()) {
+                g_pubTable.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
             if (ForwardingTable::EntriesArmed(fromAddr) &&
                 (fromRegionInfo == nullptr || !fromRegionInfo->IsCompacted())) {
                 g_pubArmedMiss.fetch_add(1, std::memory_order_relaxed);
                 return false;
-            }
-            if (fromObj->IsForwarded() && fromRegionInfo != nullptr) {
-                RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
-                if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::ROUTED) {
-                    return !ForwardingTable::EntriesArmed(fromAddr);
-                }
             }
         }
         if (fromRegionInfo != nullptr && fromRegionInfo->IsCompacted()) {
