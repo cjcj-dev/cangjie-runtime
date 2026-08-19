@@ -155,7 +155,10 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     // young TRACE window it is true; otherwise keep the Old-face legacy.
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     if (resources.IsGcStarted() && resources.GetGCStats().reason == GC_REASON_YOUNG) {
-        return RegionSpace::ShouldEnqueue<Generation::Young>(obj);
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+        if (region != nullptr && region->IsYoungRegion()) {
+            return RegionSpace::ShouldEnqueue<Generation::Young>(obj);
+        }
     }
     return RegionSpace::ShouldEnqueue<Generation::Old>(obj);
 }
