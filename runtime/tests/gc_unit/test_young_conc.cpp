@@ -386,17 +386,11 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
     TestBarrier barrier(collector, rs);
 
-    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    const bool startedBefore = resources.IsGcStarted();
-    const GCReason reasonBefore = resources.GetGCStats().reason;
-    resources.SetGcStarted(true);
-    resources.GetGCStats().reason = GC_REASON_YOUNG;
-
+    // Do not SetGcStarted: heap-phase fallback would Heap::GetGCPhase() against
+    // a null CollectorProxy::currentCollector (gc_unit never Init). Phase STW
+    // plus !IsGcStarted is the product Idle/STW gate.
     field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
     barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
-
-    resources.SetGcStarted(startedBefore);
-    resources.GetGCStats().reason = reasonBefore;
 
     MarkView<Generation::Young> view = fx.region1->GetMarkView<Generation::Young>();
     GC_EXPECT_FALSE(fx.region1->IsMarkedObject(view, fx.obj1));

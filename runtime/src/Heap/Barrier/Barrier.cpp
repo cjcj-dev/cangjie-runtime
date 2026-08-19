@@ -286,15 +286,24 @@ inline bool HasYoungRegionsForRecording()
 // because TraceYoungClosure already owns the object.
 void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
 {
-    if (barrierPhase != BarrierPhase::TRACE) {
-        return;
-    }
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return;
     }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
     if (!resources.IsGcStarted() || resources.GetGCStats().reason != GC_REASON_YOUNG) {
         return;
+    }
+    // FOLLOW publishes TRACE on the heap then handshakes mutators
+    // (WCollector.cpp:8042). Until the handshake, Heap::GetBarrier() is still
+    // Idle/Enum (phase != TRACE) while concurrent old→young stores already land
+    // on the remset current face. Same heap-phase fallback as SATB G3b
+    // (Mutator.h:588-597). gc_unit never Init — IsGcStarted is false, so this
+    // does not call GetGCPhase (CollectorProxy::currentCollector is null).
+    if (barrierPhase != BarrierPhase::TRACE) {
+        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
+        if (heapPhase != GCPhase::GC_PHASE_TRACE && heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
+            return;
+        }
     }
     if (!Collector::PlausibleManagedObjectGate("mark_and_remember", ref)) {
         return;
