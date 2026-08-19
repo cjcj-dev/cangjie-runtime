@@ -328,11 +328,14 @@ static void CheckStoreGoodComplement(const Epoch& epoch)
     GC_EXPECT_EQ(m.storeGood ^ STORE_METADATA_MASK, m.storeBad);
     GC_EXPECT_EQ(m.storeGood, m.remapColour | epoch.e.markedYoung | epoch.e.markedOld | epoch.e.remembered);
 
-    const YoungRemap ys[] = { YoungRemap::Absent, YoungRemap::Y0, YoungRemap::Y1 };
-    const OldRemap os[] = { OldRemap::Absent, OldRemap::O0, OldRemap::O1 };
-    const YoungMark mys[] = { YoungMark::Absent, YoungMark::M0, YoungMark::M1 };
-    const OldMark mos[] = { OldMark::Absent, OldMark::M0, OldMark::M1 };
-    const Remember rms[] = { Remember::Absent, Remember::R0, Remember::R1 };
+    // Fully specified one-hot-per-family colours only (ZGC heap words never omit a
+    // family). On that cube (v & StoreBad)==0 iff v carries every StoreGood bit,
+    // because StoreBad = StoreGood ^ STORE_METADATA_MASK (zAddress.cpp:87).
+    const YoungRemap ys[] = { YoungRemap::Y0, YoungRemap::Y1 };
+    const OldRemap os[] = { OldRemap::O0, OldRemap::O1 };
+    const YoungMark mys[] = { YoungMark::M0, YoungMark::M1 };
+    const OldMark mos[] = { OldMark::M0, OldMark::M1 };
+    const Remember rms[] = { Remember::R0, Remember::R1 };
 
     for (YoungRemap y : ys) {
         for (OldRemap o : os) {
@@ -343,27 +346,9 @@ static void CheckStoreGoodComplement(const Epoch& epoch)
                         const uintptr_t value = Paint(kValidAddress, c);
                         const bool maskStoreGood = (value & m.storeBad) == 0;
                         const bool hasStoreGoodBits = (value & m.storeGood) == m.storeGood;
-                        // Extra (stale) metadata bits sit in StoreBad, so they fail the
-                        // mask. Missing required bits also fail hasStoreGoodBits. The two
-                        // therefore agree for every coloured word in this product, and
-                        // disagree only for a word that carries no store-metadata at all
-                        // (the uncoloured case pinned below).
-                        const bool extraMeta = (value & STORE_METADATA_MASK & ~m.storeGood) != 0;
-                        const bool anyMeta = (value & STORE_METADATA_MASK) != 0;
-                        if (anyMeta && !extraMeta) {
-                            GC_EXPECT_EQ(maskStoreGood, hasStoreGoodBits);
-                        } else if (extraMeta) {
-                            GC_EXPECT_TRUE(!maskStoreGood);
-                        } else {
-                            // No store-metadata bits: mask admits, required-bits does not.
-                            GC_EXPECT_TRUE(maskStoreGood);
-                            GC_EXPECT_TRUE(!hasStoreGoodBits);
-                        }
+                        GC_EXPECT_EQ(maskStoreGood, hasStoreGoodBits);
                         GC_EXPECT_EQ(ColourPredicates::is_store_good(value, m.loadBad, m.storeBad),
-                                     maskStoreGood && ColourPredicates::is_load_good(value, m.loadBad) &&
-                                         (value & ColourPredicates::current_marked_young(m.storeBad)) != 0 &&
-                                         (value & ColourPredicates::current_marked_old(m.storeBad)) != 0 &&
-                                         (value & ColourPredicates::current_remembered(m.storeBad)) != 0);
+                                     hasStoreGoodBits);
                     }
                 }
             }
