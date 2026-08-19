@@ -1698,19 +1698,13 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 
 void RegionManager::ExemptFromRegion(RegionInfo* region)
 {
-    // PrependRegion rewrites next/prev without unlinking. A LONE_FROM has already
-    // been taken off fromRegionList; FROM/GARBAGE still sit on those lists until
-    // TryDelete. Leaving them linked while the type becomes UNMOVABLE is the
-    // TryTakeGarbageRegionAfterDispel CHECK (RegionManager.h:984): the garbage
-    // walk still names the region, but IsGarbageRegion() is now false.
-    // zHeap.cpp:277 free_page is one owner transition; this is that unlink.
-    const RegionInfo::RegionType type = region->GetRegionType();
-    if (type == RegionInfo::RegionType::FROM_REGION) {
-        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                       RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
-        region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
-    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+    // Callers (PrepareYoungGarbageCandidates, ExemptFromRegions) already
+    // DeleteRegion / RemoveRegionLocked the FROM node — type stays FROM.
+    // TryDelete FROM here would DecCounts a second time (regionCount=0,
+    // "error count 1-0 16-0"). LONE_FROM was TakeHeadRegion'd. Only a
+    // GARBAGE node can still sit on garbageRegionList (the CHECK at
+    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984).
+    if (region->IsGarbageRegion()) {
         garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                           RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
     }
