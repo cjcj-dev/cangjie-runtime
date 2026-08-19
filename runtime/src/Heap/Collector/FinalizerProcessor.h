@@ -84,7 +84,11 @@ public:
 
     Mutator* GetMutator() const { return fpMutator; }
 
-    void NotifyToReclaimGarbage() { shouldReclaimHeapGarbage.store(true); }
+    void NotifyToReclaimGarbage()
+    {
+        shouldReclaimHeapGarbage.store(true);
+        Notify();
+    }
     void NotifyToFeedAllocBuffers()
     {
         shouldFeedHungryBuffers.store(true, std::memory_order_release);
@@ -98,6 +102,7 @@ private:
     void ProcessFinalizables();
     void ProcessFinalizableList();
     void ReclaimHeapGarbage();
+    void UncommitIdleMemory();
     void FeedHungryBuffers();
 
     std::mutex wakeLock;

@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+#include "Collector/Uncommitter.h"
 #if defined(__linux__) || defined(hongmeng)
 #include <sched.h>
 #endif
@@ -70,6 +71,12 @@ void CollectorResources::Init()
     finalizerProcessor.Start();
     gcStats.Init();
     MutatorAllocRate::initialize();
+    if (Uncommitter::Enabled()) {
+        LOG(RTLOG_INFO, "Uncommit: Enabled delay=%zus tick=%ums",
+            static_cast<size_t>(Uncommitter::DelayNs() / SECOND_TO_NANO_SECOND), Uncommitter::TickMs());
+    } else {
+        LOG(RTLOG_INFO, "Uncommit: Disabled");
+    }
 }
 
 void CollectorResources::Fini()

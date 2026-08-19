@@ -35,6 +35,7 @@ set(GC_UNIT_SOURCES
     test_stay_young.cpp
     test_gc_trigger.cpp
     test_mutator_relocate.cpp
+    test_uncommitter.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})

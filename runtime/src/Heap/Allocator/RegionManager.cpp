@@ -868,6 +868,33 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     return releasedBytes;
 }
 
+size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs)
+{
+    ScopedEnterSaferegion enterSaferegion(true);
+    if (maxBytes < RegionInfo::UNIT_SIZE) {
+        return 0;
+    }
+    size_t uncommittedBytes = 0;
+    while (uncommittedBytes + RegionInfo::UNIT_SIZE <= maxBytes) {
+        std::lock_guard<std::mutex> lock1(dirtyUnitTreeMutex);
+        UnitIndex idx = 0;
+        UnitCount num = 0;
+        UnitCount remain = static_cast<UnitCount>((maxBytes - uncommittedBytes) / RegionInfo::UNIT_SIZE);
+        if (remain == 0 || !dirtyUnitTree.TakeIdleUnits(idleBeforeNs, remain, idx, num)) {
+            break;
+        }
+        RegionInfo::ReleaseUnits(idx, num);
+        std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
+        CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true),
+                     "tid %d: failed to uncommit idle units[%u+%u, %u)", GetTid(), idx, num, idx + num);
+        uncommittedBytes += num * RegionInfo::UNIT_SIZE;
+    }
+    if (uncommittedBytes > 0) {
+        VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
+    }
+    return uncommittedBytes;
+}
+
 void RegionManager::SetMaxUnitCountForRegion()
 {
     maxUnitCountPerRegion = CangjieRuntime::GetHeapParam().regionSize * KB / RegionInfo::UNIT_SIZE;

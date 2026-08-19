@@ -7,9 +7,12 @@
 
 #include "Collector/FinalizerProcessor.h"
 
+#include <algorithm>
 #include "Base/Macros.h"
+#include "Collector/Uncommitter.h"
 #include "Common/ScopedObjectAccess.h"
 #include "ExceptionManager.inline.h"
+#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MObject.h"
 #include "CjScheduler.h"
@@ -69,7 +72,9 @@ FinalizerProcessor::FinalizerProcessor()
 {
     started = false;
     running = false;
-    iterationWaitTime = DEFAULT_FINALIZER_TIMEOUT_MS;
+    uint32_t uncommitTickMs = Uncommitter::TickMs();
+    iterationWaitTime = uncommitTickMs == 0 ? DEFAULT_FINALIZER_TIMEOUT_MS :
+        std::min(DEFAULT_FINALIZER_TIMEOUT_MS, uncommitTickMs);
     timeProcessorBegin = 0;
     timeProcessUsed = 0;
     timeCurrentProcessBegin = 0;
@@ -88,6 +93,7 @@ void FinalizerProcessor::Run()
         bool hasPendingFeedHungryBuffers = false;
         {
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
+            bool waited = false;
             while (running) {
                 hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
                 hasPendingReclaimHeapGarbage =
@@ -97,7 +103,11 @@ void FinalizerProcessor::Run()
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
+                if (waited && Uncommitter::Enabled()) {
+                    break;
+                }
                 Wait(iterationWaitTime);
+                waited = true;
             }
         }
 
@@ -105,7 +115,8 @@ void FinalizerProcessor::Run()
             break;
         }
 
-        if (UNLIKELY(!finalizerCJThreadInitialized)) {
+        if (UNLIKELY(!finalizerCJThreadInitialized) &&
+            (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers)) {
             // Delay finalizer CJThread creation until the worker really has something to do,
             // but make all finalizer-side job types share the same one-time initialization.
             InitFinalizerCJThread();
@@ -125,6 +136,8 @@ void FinalizerProcessor::Run()
         if (hasPendingReclaimHeapGarbage) {
             ReclaimHeapGarbage();
         }
+
+        UncommitIdleMemory();
     }
     Fini();
 }
@@ -335,6 +348,14 @@ void FinalizerProcessor::ReclaimHeapGarbage()
 {
     ScopedEntryTrace trace("CJRT_GC_RECLAIM");
     Heap::GetHeap().GetAllocator().ReclaimGarbageMemory(false);
+}
+
+void FinalizerProcessor::UncommitIdleMemory()
+{
+    if (!Uncommitter::Enabled()) {
+        return;
+    }
+    Heap::GetHeap().GetAllocator().UncommitIdleMemory();
 }
 
 void FinalizerProcessor::FeedHungryBuffers()

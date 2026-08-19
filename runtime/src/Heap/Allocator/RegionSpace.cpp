@@ -13,6 +13,9 @@
 
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
+#include "Collector/GcTrigger.h"
+#include "Collector/Uncommitter.h"
+#include "Base/TimeUtils.h"
 #if defined(CANGJIE_SANITIZER_SUPPORT) || defined(CANGJIE_GWPASAN_SUPPORT)
 #include "Sanitizer/SanitizerInterface.h"
 #endif
@@ -159,6 +162,31 @@ MAddress RegionSpace::Allocate(size_t size, AllocType allocType)
 #endif
     return internalAddr + HEADER_SIZE;
 }
+
+size_t RegionSpace::UncommitIdleMemory()
+{
+    if (!Uncommitter::Enabled()) {
+        return 0;
+    }
+    if (Heap::GetHeap().IsGcStarted()) {
+        return 0;
+    }
+    uint64_t delayNs = Uncommitter::DelayNs();
+    uint64_t now = TimeUtil::NanoSeconds();
+    if (now < delayNs) {
+        return 0;
+    }
+    size_t usedBytes = regionManager.GetUsedRegionSize();
+    size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+    size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
+    size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
+    size_t flush = Uncommitter::FlushBytes(usedBytes, dirtyBytes, minCapacity, chunk);
+    if (flush == 0) {
+        return 0;
+    }
+    return regionManager.UncommitIdleUnits(flush, now - delayNs);
+}
+
 void RegionSpace::Init(const HeapParam& vmHeapParam)
 {
     MemMap::Option opt = MemMap::DEFAULT_OPTIONS;

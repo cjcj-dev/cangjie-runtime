@@ -15,6 +15,7 @@ set(SRC_LIST
     "MarkPartialArray.cpp"
     "TaskQueue.cpp"
     "FinalizerProcessor.cpp"
+    "Uncommitter.cpp"
     "CopyCollector.cpp"
     "LiveInfo.cpp"
     "ForwardDataManager.cpp"

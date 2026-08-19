@@ -215,6 +215,7 @@ public:
 
     size_t CalculateBytesToRelease() const;
     size_t ReleaseGarbageRegions(size_t targetCachedSize);
+    size_t UncommitIdleUnits(size_t maxBytes, uint64_t idleBeforeNs);
 
 private:
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
