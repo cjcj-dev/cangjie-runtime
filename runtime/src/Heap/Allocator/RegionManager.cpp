@@ -107,6 +107,12 @@ std::atomic<size_t> RegionInfo::oneseqAuthAndEmpty { 0 };
 std::atomic<size_t> RegionInfo::oneseqAuthNotEmpty { 0 };
 std::atomic<size_t> RegionInfo::oneseqNoAuthNotEmpty { 0 };
 std::atomic<bool> RegionInfo::oneseqAtexitInstalled { false };
+std::atomic<size_t> RegionInfo::ikeTrueEmpty { 0 };
+std::atomic<size_t> RegionInfo::ikeConservativeKeep { 0 };
+std::atomic<size_t> RegionInfo::ikeConservativeKeepBytes { 0 };
+std::atomic<size_t> RegionInfo::ikeNullFaceKeep { 0 };
+std::atomic<size_t> RegionInfo::ikeEpochKeep { 0 };
+std::atomic<bool> RegionInfo::ikeAtexitInstalled { false };
 std::atomic<size_t> RegionInfo::liveCrossMismatchCount { 0 };
 std::atomic<size_t> RegionInfo::liveCrossCheckCount { 0 };
 std::atomic<bool> RegionInfo::liveCrossAtexitInstalled { false };
@@ -2602,88 +2608,52 @@ void RegionManager::ForwardRegion(RegionInfo* region)
 
     bool youngRegion = region->IsYoungRegion();
     if (IsKnownEmptyForView(region, markView)) {
-        // ClearLiveInfo arms LIVE_AUTHORITY|0 before mark. MarkObject is the only path that
-        // allocates the mark bitmap and raises live bytes. A region with allocated payload but
-        // no mark bitmap was never entered by MarkObject — under a correct mark that means
-        // nothing reachable points into it, so it is dead.
-        //
-        // hangfloor (0808): the young-only "fwd-empty-keep" arm (d6b77bc0) promoted every such
-        // region to unmovable-from instead of CollectRegion. Under PLAIN_ROOTS arm A' that was
-        // ~500 regions x 64KiB per minor with liveBytes~64 and reclaimedBytes~65KiB — young
-        // thrash (10/10 HANG, minor+major alternating, promoteReplay~420k). Full GC already
-        // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
-        // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
-        // young regions is what produces the hang.
-        //
-        // cjpmnull: ZGC register_empty_page / free_page only after mark (zGeneration.cpp:216-221)
-        // and never while the page is still in the relocation set. GetRouteMarkView mints its
-        // epoch from liveInfo0's face; IsKnownEmpty then treats view.epoch != snapshotEpoch as
-        // empty (RegionInfo.h:2642-2646). A FORWARDABLE/ROUTING/ROUTED region has not been
-        // copied — CollectRegion here makes F3 soft-null live holders (garbregion: route=3
-        // slots>0). Fall through to Route/Visit like a live page.
-        {
-            RegionInfo::RouteState rs = region->GetRouteState();
-            const bool stillInRelocationSet = rs == RegionInfo::RouteState::FORWARDABLE ||
-                rs == RegionInfo::RouteState::ROUTING || rs == RegionInfo::RouteState::ROUTED;
-            if (stillInRelocationSet && region->GetRegionAllocPtr() > region->GetRegionStart()) {
-                static std::atomic<size_t> g_fwdEmptyKeepReloc{ 0 };
-                size_t n = g_fwdEmptyKeepReloc.fetch_add(1, std::memory_order_relaxed) + 1;
-                if (n <= 8 || (n & (n - 1)) == 0) {
-                    LOG(RTLOG_ERROR,
-                        "[GCRECLAIM][fwd-empty-keep-reloc] n=%zu region=%p start=%#zx alloc=%#zx "
-                        "route=%u live=%zu knownEmpty=1 — ExemptFromRegion",
-                        n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                        static_cast<unsigned>(rs), region->GetLiveByteCount());
-                }
-                // Fall through to Route/Visit. Exempt+Dispel (fe40952c) moved the
-                // crash into forward/preforward and broke cjpm package graph
-                // (fix3 r1/r4 rc=1). F3 keep-from-ghost (0b050e0a) already stops
-                // the postflip soft-null; do not paper the mark hole with Exempt.
-                // Fall through.
-            } else {
-        bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
-            region->GetRegionAllocPtr() > region->GetRegionStart();
-        if (neverExamined) {
-            // Volume control, not detail reduction. This line fired 50,282 times in a 60s run
-            // (nwdiag 0808) and every one of them said the same thing, which buried the gate
-            // samples that explain *why*. Print the first few of each GC cycle, then only at
-            // power-of-four milestones so the final magnitude is still on the record.
-            static std::atomic<size_t> emptyCollectGc{ std::numeric_limits<size_t>::max() };
-            static std::atomic<size_t> emptyCollectSeq{ 0 };
-            size_t gcNow = g_gcCount.load(std::memory_order_relaxed);
-            if (emptyCollectGc.load(std::memory_order_relaxed) != gcNow) {
-                emptyCollectGc.store(gcNow, std::memory_order_relaxed);
-                emptyCollectSeq.store(0, std::memory_order_relaxed);
-            }
-            size_t seq = emptyCollectSeq.fetch_add(1, std::memory_order_relaxed) + 1;
-            bool milestone = (seq & (seq - 1)) == 0;   // 1,2,4,8,16,...
-            if (seq <= 8 || milestone) {
-                GCReason gcReason = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const char* reasonName =
-                    gcReason < GC_REASON_MAX ? g_gcRequests[gcReason].name : "invalid";
-                // markBitmap and allocPtr>start are the two inputs behind neverExamined; print
-                // them rather than only the verdict, and carry gc= so this stream can be joined
-                // against [GCV2][markfloor-obj-gate] REJECT lines from the same cycle.
-                VLOG(REPORT,
-                     "[GCRECLAIM][fwd-empty-collect] gc=%zu seq=%zu region=%p start=%#zx alloc=%#zx "
-                     "end=%#zx young=%u live=%zu bitmap=%p neverExamined=1 reason=%s(%d) — CollectRegion",
-                     gcNow, seq, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                     region->GetRegionEnd(), static_cast<unsigned>(youngRegion),
-                     region->GetLiveByteCount(), region->GetMarkBitmap(markView), reasonName,
-                     static_cast<int>(gcReason));
-            }
-        }
+        // cjpmnull2: IsKnownEmpty is now ZGC-shaped (this-cycle marked ∧ live==0).
+        // Only those pages are empty; collect them (zGeneration.cpp:216-221).
         if (youngRegion) {
-            // No live objects → no out-edges; still retire the young face so a
-            // later reuse cannot inherit this cycle's young marks as old marks.
             MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
             (void)region->PromoteYoungRegion(promotionView);
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion<G>(region);
         return;
-            }
+    }
+    // Unmarked this cycle + still has payload: not empty (zPage.inline.hpp:223-225).
+    // Do not Route/Visit/Collect — keep-from readers still name this from-page
+    // (47595a33). Exempt like the incomplete-copy abandon arm.
+    if (region->GetMarkBitmap(markView) == nullptr &&
+        region->GetRegionAllocPtr() > region->GetRegionStart()) {
+        static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
+        size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
+                "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
+                n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
         }
+        if (youngRegion && StayYoungThisCycle(region)) {
+            EnlistStayYoungSurvivor(region);
+            return;
+        }
+        if (youngRegion) {
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+            region->PreserveRetainedLiveInfo();
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+                }
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
+            }
+            (void)region->PromoteYoungRegion(promotionView);
+        }
+        region->DispelGhostFromRegion();
+        ExemptFromRegion(region);
+        return;
     }
 
     // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
