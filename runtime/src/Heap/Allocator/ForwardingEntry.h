@@ -84,7 +84,8 @@ public:
         return p;
     }
 
-    static ForwardingEntries* Create(uint32_t liveObjects, MAddress start, MAddress heapBase)
+    static ForwardingEntries* Create(uint32_t liveObjects, MAddress start, MAddress heapBase,
+                                     size_t regionSize = 0)
     {
         const uint32_t n = NEntries(liveObjects);
         auto* self = static_cast<ForwardingEntries*>(std::malloc(sizeof(ForwardingEntries)));
@@ -94,6 +95,7 @@ public:
         self->length_ = n;
         self->start_ = start;
         self->heapBase_ = heapBase;
+        self->size_ = regionSize;
         self->words_ = static_cast<std::atomic<uint64_t>*>(std::calloc(n, sizeof(std::atomic<uint64_t>)));
         if (self->words_ == nullptr) {
             std::free(self);
@@ -111,6 +113,15 @@ public:
 
     uint32_t length() const { return length_; }
     MAddress start() const { return start_; }
+    size_t regionSize() const { return size_; }
+    bool covers(MAddress addr) const
+    {
+        return size_ != 0 && addr >= start_ && addr < start_ + size_;
+    }
+    size_t tableBytes() const
+    {
+        return sizeof(ForwardingEntries) + static_cast<size_t>(length_) * sizeof(uint64_t);
+    }
 
     uintptr_t index(MAddress from) const { return static_cast<uintptr_t>((from - start_) >> kAlignShift); }
 
@@ -245,6 +256,7 @@ private:
     uint32_t length_ = 0;
     MAddress start_ = 0;
     MAddress heapBase_ = 0;
+    size_t size_ = 0;
     std::atomic<uint64_t>* words_ = nullptr;
 };
 

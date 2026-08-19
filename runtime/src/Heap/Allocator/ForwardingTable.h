@@ -41,10 +41,16 @@ public:
     // Unlinked-but-not-freed tables, and the point at which they actually go away. ZGC keeps the
     // same gap by construction: entries live in an arena recycled a whole phase after the page dies.
     static void Retire(ForwardingEntries* tab);
+    // CUT-2: free only tables retired before the previous cycle (f87a lag + 1).
+    // Stragglers that miss this cycle's map still resolve via FindTo on the
+    // retired generation (Barrier.cpp:718 staleguard).
     static void ReclaimRetired(const char* why);
+    static uint64_t RetiredLiveBytes();
+    static uint64_t RetiredLivePeakBytes();
 
     static RegionInfo* Get(MAddress addr);
     static ForwardingEntries* GetEntries(MAddress addr);
+    // After ClearEntries unlinks the map, still answer from the retired generation.
 
     // After copy: zRelocate.cpp:367-372
     static MAddress InsertMapping(MAddress from, MAddress to);

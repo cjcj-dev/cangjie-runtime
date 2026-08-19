@@ -146,7 +146,7 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
         estimate = 1;
     }
     const uint32_t liveObjs = static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
-    ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base);
+    ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base, regionSize);
     if (created == nullptr) {
         return;
     }
@@ -208,14 +208,38 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     }
 }
 
-// Tables unlinked from the map but not yet freed, and the count of frees deferred through them.
-// A pointer sitting here is unreachable through the map -- no new reader can find it -- but a reader
-// that loaded it before the unlink may still be inside find().
+// Tables unlinked from the map but not yet freed. f87a retired at the next
+// cycle-start; CUT-2 keeps that generation one more cycle so a straggler
+// FindToVersion (Barrier.cpp:718) still hits after the map slot is null.
 namespace {
+struct RetiredGen {
+    ForwardingEntries* tab;
+    uint64_t gen;
+};
+
 std::mutex g_retiredLock;
-std::vector<ForwardingEntries*> g_retired;
+std::vector<RetiredGen> g_retired;
+uint64_t g_retireGen{ 0 };
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
+std::atomic<uint64_t> g_retiredLiveBytes{ 0 };
+std::atomic<uint64_t> g_retiredLivePeak{ 0 };
+
+void NoteLiveDelta(int64_t delta)
+{
+    uint64_t cur = g_retiredLiveBytes.load(std::memory_order_relaxed);
+    for (;;) {
+        uint64_t next = delta >= 0 ? cur + static_cast<uint64_t>(delta)
+                                   : cur - static_cast<uint64_t>(-delta);
+        if (g_retiredLiveBytes.compare_exchange_weak(cur, next, std::memory_order_relaxed)) {
+            uint64_t peak = g_retiredLivePeak.load(std::memory_order_relaxed);
+            while (next > peak &&
+                   !g_retiredLivePeak.compare_exchange_weak(peak, next, std::memory_order_relaxed)) {
+            }
+            return;
+        }
+    }
+}
 } // namespace
 
 void ForwardingTable::Retire(ForwardingEntries* tab)
@@ -224,8 +248,9 @@ void ForwardingTable::Retire(ForwardingEntries* tab)
         return;
     }
     std::lock_guard<std::mutex> lock(g_retiredLock);
-    g_retired.push_back(tab);
+    g_retired.push_back(RetiredGen{ tab, g_retireGen });
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
+    NoteLiveDelta(static_cast<int64_t>(tab->tableBytes()));
 }
 
 void ForwardingTable::ReclaimRetired(const char* why)
@@ -233,18 +258,47 @@ void ForwardingTable::ReclaimRetired(const char* why)
     std::vector<ForwardingEntries*> victims;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
-        victims.swap(g_retired);
+        ++g_retireGen;
+        auto it = g_retired.begin();
+        while (it != g_retired.end()) {
+            // Free only tables retired before the previous cycle (lag + 1).
+            if (g_retireGen - it->gen >= 2) {
+                victims.push_back(it->tab);
+                it = g_retired.erase(it);
+            } else {
+                ++it;
+            }
+        }
     }
+    uint64_t freedBytes = 0;
     for (ForwardingEntries* tab : victims) {
+        freedBytes += tab->tableBytes();
         tab->Destroy();
+    }
+    if (freedBytes != 0) {
+        NoteLiveDelta(-static_cast<int64_t>(freedBytes));
     }
     if (!victims.empty()) {
         const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) +
             victims.size();
-        LOG(RTLOG_ERROR, "[FWDTABLE][reclaim] why=%s freed=%zu retired_total=%lu reclaimed_total=%lu",
+        LOG(RTLOG_ERROR,
+            "[FWDTABLE][reclaim] why=%s freed=%zu retired_total=%lu reclaimed_total=%lu "
+            "liveBytes=%lu peakBytes=%lu",
             why == nullptr ? "?" : why, victims.size(),
-            g_retiredTotal.load(std::memory_order_relaxed), done);
+            g_retiredTotal.load(std::memory_order_relaxed), done,
+            g_retiredLiveBytes.load(std::memory_order_relaxed),
+            g_retiredLivePeak.load(std::memory_order_relaxed));
     }
+}
+
+uint64_t ForwardingTable::RetiredLiveBytes()
+{
+    return g_retiredLiveBytes.load(std::memory_order_relaxed);
+}
+
+uint64_t ForwardingTable::RetiredLivePeakBytes()
+{
+    return g_retiredLivePeak.load(std::memory_order_relaxed);
 }
 
 RegionInfo* ForwardingTable::Get(MAddress addr)
@@ -288,13 +342,25 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
     return tab->insert(from, to);
 }
 
+static MAddress FindRetiredTo(MAddress from)
+{
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    for (auto it = g_retired.rbegin(); it != g_retired.rend(); ++it) {
+        ForwardingEntries* tab = it->tab;
+        if (tab != nullptr && tab->covers(from)) {
+            return tab->find(from);
+        }
+    }
+    return 0;
+}
+
 MAddress ForwardingTable::FindTo(MAddress from)
 {
     ForwardingEntries* tab = GetEntries(from);
-    if (tab == nullptr) {
-        return 0;
+    if (tab != nullptr) {
+        return tab->find(from);
     }
-    return tab->find(from);
+    return FindRetiredTo(from);
 }
 
 bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
@@ -303,6 +369,14 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
     ForwardingEntries* tab = GetEntries(from);
     if (tab == nullptr) {
+        const MAddress retired = FindRetiredTo(from);
+        if (retired != 0) {
+            g_armedHit.fetch_add(1, std::memory_order_relaxed);
+            if (answer != nullptr) {
+                *answer = ToAnswer::ArmedHit;
+            }
+            return retired;
+        }
         g_unarmed.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::Unarmed;

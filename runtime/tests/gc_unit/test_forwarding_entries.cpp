@@ -8,6 +8,7 @@
 // setup / find_empty / find_full / find_every_other.
 
 #include "Heap/Allocator/ForwardingEntry.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -254,4 +255,27 @@ GC_TEST(ZForwardingEntries, TableKnowsWhichRegionItWasBuiltFor)
 
     a->Destroy();
     b->Destroy();
+}
+
+GC_TEST(ZForwardingEntries, CoversUsesRecordedRegionSize)
+{
+    ForwardingEntries* tab = ForwardingEntries::Create(4, 0x1000, 0, 0x100);
+    GC_EXPECT_TRUE(tab->covers(0x1000));
+    GC_EXPECT_TRUE(tab->covers(0x10f0));
+    GC_EXPECT_FALSE(tab->covers(0x1100));
+    GC_EXPECT_FALSE(tab->covers(0x0fff));
+    tab->Destroy();
+}
+
+GC_TEST(ForwardingTable, ReclaimLagsOneCycle)
+{
+    ForwardingEntries* tab = ForwardingEntries::Create(4, 0x1000, 0, 0x100);
+    const uint64_t bytes = tab->tableBytes();
+    const uint64_t before = ForwardingTable::RetiredLiveBytes();
+    ForwardingTable::Retire(tab);
+    GC_EXPECT_EQ(ForwardingTable::RetiredLiveBytes(), before + bytes);
+    ForwardingTable::ReclaimRetired("test-lag1");
+    GC_EXPECT_EQ(ForwardingTable::RetiredLiveBytes(), before + bytes);
+    ForwardingTable::ReclaimRetired("test-lag2");
+    GC_EXPECT_EQ(ForwardingTable::RetiredLiveBytes(), before);
 }
