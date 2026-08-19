@@ -423,14 +423,23 @@ public:
         LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-            return IsSurvivedObject(view, face, offset);
+            if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+                return true;
+            }
+            return false;
         }
         MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-        return IsSurvivedObject(view, face, offset);
+        if (IsSurvivedObject(view, face, offset) || AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
+        return false;
     }
 
     bool IsRouteMarkedObject(size_t offset)
     {
+        if (AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         LiveInfo* face = metadata.liveInfo0 != nullptr ? metadata.liveInfo0 : GetLiveInfo();
         if (GetRouteMarkGeneration() == Generation::Young) {
             MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
@@ -1204,6 +1213,10 @@ public:
     bool IsMarkedObject(MarkView<G> view, const BaseObject* obj)
     {
         CHECK(view.GetRegion() == this);
+        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1;
         }
@@ -1220,7 +1233,6 @@ public:
         if (markBitmap == nullptr || reinterpret_cast<MAddress>(markBitmap) == LiveInfo::TEMPORARY_PTR) {
             return false;
         }
-        size_t offset = GetAddressOffset(reinterpret_cast<MAddress>(obj));
         return markBitmap->IsMarked(offset);
     }
 
@@ -1228,6 +1240,9 @@ public:
     bool IsMarkedObject(MarkView<G> view, size_t offset)
     {
         CHECK(view.GetRegion() == this);
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1;
         }
@@ -1250,6 +1265,9 @@ public:
     bool IsSurvivedObject(MarkView<G> view, size_t offset)
     {
         CHECK(view.GetRegion() == this);
+        if (view.GetEpoch() == GetMarkSnapshotEpoch<G>() && AllocatedAfterMarkStart(offset)) {
+            return true;
+        }
         if (IsLargeRegion()) {
             return GetMarkedRegionFlag(view) == 1 ||
                 (G == Generation::Old && metadata.isResurrected == 1);
@@ -1354,7 +1372,9 @@ public:
         // readable" finds out immediately.
         // genface: the independent young mark epoch costs 8 bytes per 4 KiB
         // unit (0.195% of heap capacity); both bitmap faces remain lazy.
-        static_assert(sizeof(UnitInfo) == 200, "per-unit metadata size changed; it is per-page, so price it");
+        // markwater: markStartAllocPtr sits next to regionEnd0 (same snapshot
+        // format). 8 bytes per 4 KiB unit is another 0.195% of heap capacity.
+        static_assert(sizeof(UnitInfo) == 208, "per-unit metadata size changed; it is per-page, so price it");
         if (RouteDestHold::AccountOn()) {
             LOG(RTLOG_ERROR,
                 "[GCV2][routedest] unit_metadata sizeof_UnitInfo=%zu unit_size=%zu overhead_permille=%zu",
@@ -1546,6 +1566,13 @@ public:
         } else {
             MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
             survived = IsSurvivedObject(view, ghostLiveInfo, offset);
+        }
+        // Compact packed dest is in compactRouteTable (not prefix-sum). A
+        // mark-start allocate-black object Compact copied must Admit so
+        // GetRoute can look up that dest. Routed prefix-sum has no slot for
+        // it, so water alone does not Admit on the ROUTED arm.
+        if (!survived && AllocatedAfterMarkStart(offset) && LoadCompactRouteTable() != nullptr) {
+            survived = true;
         }
         // Large region: single object at start; tip check is the start test for small.
         bool startOk = false;
@@ -2108,6 +2135,14 @@ public:
         }
         CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
                      "ClearLiveInfo must be called on a region head");
+        // ZGC mark-start allocation watermark (zPage is_allocating). Capture
+        // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
+        // see objects bumped after this point as implicitly live.
+        if (MarkStartAllocWaterEnabled()) {
+            metadata.markStartAllocPtr = GetRegionAllocPtr();
+        } else {
+            metadata.markStartAllocPtr = 0;
+        }
         // Clear a large face while the supplied view still names the current
         // epoch; only then publish the epoch bump that makes old views stale.
         if (IsLargeRegion()) {
@@ -2468,6 +2503,51 @@ public:
 
     MAddress GetRegionAllocPtr() const { return metadata.allocPtr; }
 
+    MAddress GetMarkStartAllocPtr() const { return metadata.markStartAllocPtr; }
+
+    // Product on. MRT_GCV2_MARKWATER_OFF=1 restores the pre-watermark trickle
+    // (perturbation for REPORT-oracleblack3 §4).
+    static bool MarkStartAllocWaterEnabled()
+    {
+        static const bool on = []() {
+            const char* v = std::getenv("MRT_GCV2_MARKWATER_OFF");
+            return v == nullptr || !(v[0] == '1' && v[1] == '\0');
+        }();
+        return on;
+    }
+
+    // offset ≥ mark-start allocPtr (exclusive end at ClearLiveInfo). Objects
+    // bumped after that point are ZGC allocate-black / is_allocating.
+    // water == start means the region was empty at mark-start, so every
+    // object now in it was born after that snapshot.
+    bool AllocatedAfterMarkStart(size_t offset) const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        MAddress start = GetRegionStart();
+        if (water <= start) {
+            return true;
+        }
+        return offset >= static_cast<size_t>(water - start);
+    }
+
+    bool HasMarkStartAllocGap() const
+    {
+        if (!MarkStartAllocWaterEnabled()) {
+            return false;
+        }
+        uintptr_t water = metadata.markStartAllocPtr;
+        if (water == 0) {
+            return false;
+        }
+        return GetRegionAllocPtr() > water;
+    }
+
     int32_t IncRawPointerObjectCount()
     {
         int32_t oldCount = __atomic_fetch_add(&metadata.rawPointerObjectCount, 1, __ATOMIC_SEQ_CST);
@@ -2640,6 +2720,12 @@ public:
     bool IsKnownEmpty(MarkView<Generation::Old> view) const
     {
         CHECK(view.GetRegion() == this);
+        // ZGC allocate-black: a mark-start watermark gap means objects were
+        // born after ClearLiveInfo and are implicitly live. Do not treat the
+        // region empty, and do not AddLiveByteCount for them.
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
         bool markedThisCycle = false;
@@ -2724,6 +2810,9 @@ public:
     bool IsKnownYoungEmpty(MarkView<Generation::Young> view) const
     {
         CHECK(view.GetRegion() == this);
+        if (HasMarkStartAllocGap()) {
+            return false;
+        }
         uint64_t raw = __atomic_load_n(&metadata.liveByteCount, std::memory_order_acquire);
         const bool auth = (raw & LIVE_AUTHORITY_BIT) != 0;
         bool markedThisCycle = false;
@@ -3047,7 +3136,7 @@ private:
         uint8_t routeDestHold = 0;
         // ZForwarding.hpp:66-69. Fits the 6-byte hole after routeDestHold:
         // hold(1)+claimed(1)+done(1)+pad(1)+ref(4) = 8, then retainedMarkWords
-        // stays 8-aligned. sizeof(UnitInfo) stays 200.
+        // stays 8-aligned. markStartAllocPtr sits next to regionEnd0 (+8).
         std::atomic<bool> fwdClaimed{ false };
         std::atomic<bool> fwdDone{ false };
         std::atomic<int32_t> fwdRefCount{ 0 };
@@ -3061,6 +3150,10 @@ private:
         void* compactRouteTable = nullptr;
 
         uintptr_t regionEnd0;
+        // ZGC zPage allocate-black: objects at offset >= this allocPtr, snapshotted
+        // at ClearLiveInfo / mark-start, are implicitly live (zPage.inline.hpp:180-185
+        // is_allocating). Same snapshot format as regionEnd0. 0 = no mark-start yet.
+        uintptr_t markStartAllocPtr;
         RouteInfo routeInfo;
         uint64_t snapshotEpoch = 0;
         uint64_t youngSnapshotEpoch = 0;
@@ -3309,6 +3402,9 @@ private:
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
+        // Unset until ClearLiveInfo starts a mark. 0 so idle / test regions do
+        // not treat every object as allocate-black.
+        metadata.markStartAllocPtr = 0;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
         metadata.censusBoundaryOffset = 0;
