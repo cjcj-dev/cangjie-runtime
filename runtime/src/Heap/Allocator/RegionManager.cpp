@@ -2630,6 +2630,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
+        // Do not Promote: PrepareYoungGarbageCandidates skips !IsYoungRegion, so a
+        // promoted keep-from never re-enters minor mark (ike-keep 256MB OOM).
+        // Next minor (young) / major Assemble (old) covers them — zGeneration mark.
         if (region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
             (incompleteRoute || liveResidual || !youngRegion)) {
@@ -2638,28 +2641,14 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         if (n <= 8 || (n & (n - 1)) == 0) {
             LOG(RTLOG_ERROR,
                 "[GCV2][fwd-unmarked-keep] n=%zu region=%p start=%#zx alloc=%#zx "
-                "route=%u live=%zu — ExemptFromRegion (not marked this cycle)",
+                "route=%u live=%zu young=%u — ExemptFromRegion (not marked this cycle)",
                 n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount());
+                static_cast<unsigned>(region->GetRouteState()), region->GetLiveByteCount(),
+                static_cast<unsigned>(youngRegion));
         }
         if (youngRegion && StayYoungThisCycle(region)) {
             EnlistStayYoungSurvivor(region);
             return;
-        }
-        if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            region->PreserveRetainedLiveInfo();
-            {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool doReg = (r == GC_REASON_YOUNG);
-                if (doReg) {
-                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
-                }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
-                size_t recEdges = RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
-            }
-            (void)region->PromoteYoungRegion(promotionView);
         }
         region->DispelGhostFromRegion();
         ExemptFromRegion(region);

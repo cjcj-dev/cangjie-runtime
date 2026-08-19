@@ -9377,7 +9377,8 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
         return space.GetRegionManager().FindPublishedRoute(from, forwarding).dest;
     };
     BaseObject* again = lookupTo();
-    if (again != nullptr && Heap::IsHeapAddress(again) && again->IsValidObject()) {
+    if (again != nullptr && Heap::IsHeapAddress(again) &&
+        (from->IsForwarded() || forwarding->IsCompacted()) && again->IsValidObject()) {
         if (diagOn) {
             tipReadyCount.fetch_add(1, std::memory_order_relaxed);
         }
@@ -9576,6 +9577,9 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
         // 1. object has already been forwarded
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
+            if (toObj == nullptr) {
+                return nullptr;
+            }
             DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
             return toObj;
         }

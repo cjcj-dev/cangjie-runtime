@@ -7,6 +7,7 @@
 #ifndef MRT_REGION_MANAGER_H
 #define MRT_REGION_MANAGER_H
 
+#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <list>
@@ -671,16 +672,50 @@ public:
 
     bool RouteOrCompactRegionImpl(RegionInfo* region);
 
+    // zForwarding.inline.hpp:267-273: a to-address is published only after copy
+    // (insert). Region ROUTED/FORWARDED is the plan, not a per-object receipt —
+    // using it here handed out reservation zeros (ReadRefField si_addr=0x8).
+    // Stale ObjectState::FORWARDED after abandon+re-route is the same shape
+    // (PermWhoAdmit.h): IsForwarded() + a new plan ⇒ unfilled to.
     static bool RouteIsPublished(BaseObject* fromObj, RegionInfo* fromRegionInfo)
     {
-        if (fromObj != nullptr && fromObj->IsForwarded()) {
+        static std::atomic<size_t> g_pubTable{ 0 };
+        static std::atomic<size_t> g_pubCompact{ 0 };
+        static std::atomic<size_t> g_pubArmedMiss{ 0 };
+        static std::atomic<bool> g_pubAtexit{ false };
+        if (!g_pubAtexit.exchange(true, std::memory_order_relaxed)) {
+            std::atexit([]() {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][pub-receipt] atexit table=%zu compact=%zu armedMiss=%zu "
+                    "— table/compact are copy receipts; armedMiss keeps from",
+                    g_pubTable.load(std::memory_order_relaxed),
+                    g_pubCompact.load(std::memory_order_relaxed),
+                    g_pubArmedMiss.load(std::memory_order_relaxed));
+            });
+        }
+        if (fromObj != nullptr) {
+            const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
+            if (ForwardingTable::FindTo(fromAddr) != 0) {
+                g_pubTable.fetch_add(1, std::memory_order_relaxed);
+                return true;
+            }
+            if (ForwardingTable::EntriesArmed(fromAddr) &&
+                (fromRegionInfo == nullptr || !fromRegionInfo->IsCompacted())) {
+                g_pubArmedMiss.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+            if (fromObj->IsForwarded() && fromRegionInfo != nullptr) {
+                RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
+                if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::ROUTED) {
+                    return !ForwardingTable::EntriesArmed(fromAddr);
+                }
+            }
+        }
+        if (fromRegionInfo != nullptr && fromRegionInfo->IsCompacted()) {
+            g_pubCompact.fetch_add(1, std::memory_order_relaxed);
             return true;
         }
-        if (fromRegionInfo == nullptr) {
-            return false;
-        }
-        RegionInfo::RouteState rs = fromRegionInfo->GetRouteState();
-        return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
+        return false;
     }
 
     RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
