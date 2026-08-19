@@ -43,10 +43,13 @@ void CensusAfterPublication(uintptr_t currentRemap, uint64_t flipSeq)
 #define MRT_HEAL_COVERAGE_INJECT 0
 #endif
     if (MRT_HEAL_COVERAGE_INJECT != 0) {
+        // Synthetic stale word, not a heap mutate (StoreColoured would trip
+        // AssertColouredWrite). gc_unit InjectStaleOnce is the slot-shaped
+        // positive control; this proves the census line itself can ring.
         const uintptr_t injected = PaintStale(0x00007f00'00001000ULL, currentRemap);
-        Add(c, Classify(injected, loadBad));
         if (IsCoverageMiss(Classify(injected, loadBad))) {
             ++c.injectHits;
+            ++c.stale;
         }
     }
 
