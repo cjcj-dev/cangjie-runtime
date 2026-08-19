@@ -8,8 +8,7 @@
 
 #include <cstdio>
 #include <cstdlib>
-
-#include "Common/ScopedObjectAccess.h"
+#include <sched.h>
 
 namespace MapleRuntime {
 
@@ -39,13 +38,12 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     if (refCount.load(std::memory_order_acquire) == expect) {
         return;
     }
-    // Mutator must be in a saferegion: cv.wait is a handshake point.
-    // Without it STW waits for this thread while this thread waits for a
-    // publisher that only runs after STW (fifth-face all-futex hang).
-    ScopedEnterSaferegion enterSaferegion(true);
-    std::unique_lock<std::mutex> guard(Lock().mu);
+    // Yield, do not park on the process-wide cv: a mutator in cv.wait is
+    // not in a saferegion and blocks STW (fifth-face all-futex hang).
+    // NotifyAll still exists for mark_done / release_page; the waiter
+    // observes the published word via acquire load.
     while (refCount.load(std::memory_order_acquire) != expect) {
-        Lock().cv.wait(guard);
+        sched_yield();
     }
 }
 
@@ -57,10 +55,8 @@ void ZForwardingLife::WaitUntilDone(std::atomic<int32_t>& refCount, const std::a
     if (done.load(std::memory_order_acquire) || refCount.load(std::memory_order_acquire) == 0) {
         return;
     }
-    ScopedEnterSaferegion enterSaferegion(true);
-    std::unique_lock<std::mutex> guard(Lock().mu);
     while (!done.load(std::memory_order_acquire) && refCount.load(std::memory_order_acquire) != 0) {
-        Lock().cv.wait(guard);
+        sched_yield();
     }
 }
 
