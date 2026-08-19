@@ -9419,8 +9419,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
                 forwarding->GetRouteState() == RegionInfo::RouteState::FORWARDED ||
                 forwarding->GetRouteState() == RegionInfo::RouteState::COMPACTED) {
                 BaseObject* ready = lookupTo();
-                if (ready != nullptr && Heap::IsHeapAddress(ready) &&
-                    (from->IsForwarded() || forwarding->IsCompacted()) && ready->IsValidObject()) {
+                if (ready != nullptr && Heap::IsHeapAddress(ready) && ready->IsValidObject()) {
                     g_inflightGot.fetch_add(1, std::memory_order_relaxed);
                     if (MutatorRelocate::StatsOn()) {
                         MutatorRelocate::NoteWaitReceipt();
@@ -9431,8 +9430,7 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
             sched_yield();
         }
         BaseObject* last = lookupTo();
-        if (last != nullptr && Heap::IsHeapAddress(last) &&
-            (from->IsForwarded() || forwarding->IsCompacted()) && last->IsValidObject()) {
+        if (last != nullptr && Heap::IsHeapAddress(last) && last->IsValidObject()) {
             if (MutatorRelocate::StatsOn()) {
                 MutatorRelocate::NoteWaitReceipt();
             }
