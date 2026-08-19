@@ -255,3 +255,22 @@ GC_TEST(ZForwardingEntries, TableKnowsWhichRegionItWasBuiltFor)
     a->Destroy();
     b->Destroy();
 }
+
+// e57ae807: reused-region empty-table miss still needs the retired generation.
+// covers() is the predicate FindRetiredTo uses to pick the right unlinked table.
+GC_TEST(ZForwardingEntries, CoversRecordsRegionSpan)
+{
+    constexpr MAddress kStart = 0x10000;
+    constexpr size_t kSize = 0x1000;
+    ForwardingEntries* tab = ForwardingEntries::Create(4, kStart, 0, kSize);
+    GC_EXPECT_TRUE(tab != nullptr);
+    GC_EXPECT_TRUE(tab->covers(kStart));
+    GC_EXPECT_TRUE(tab->covers(kStart + kSize - 8));
+    GC_EXPECT_FALSE(tab->covers(kStart + kSize));
+    GC_EXPECT_FALSE(tab->covers(kStart - 8));
+    ForwardingEntries* bare = ForwardingEntries::Create(4, kStart, 0);
+    GC_EXPECT_TRUE(bare != nullptr);
+    GC_EXPECT_FALSE(bare->covers(kStart));
+    tab->Destroy();
+    bare->Destroy();
+}
