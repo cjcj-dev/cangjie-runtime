@@ -1447,20 +1447,19 @@ size_t RegionManager::ExemptFromRegions()
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
-        // freed at select, not entered into the relocation set. IsKnownEmpty
-        // is this-cycle marked ∧ live==0 (cjpmnull2). Young pages stay for the
-        // nested minor. Do not CollectRegion here — GetRouteMarkView is only
-        // valid after PrepareForwardable.
-        if (rawPtrCnt == 0 && !fromRegion->IsYoungRegion()) {
-            MarkView<Generation::Old> emptyView = fromRegion->GetMarkView<Generation::Old>();
-            if (fromRegion->IsKnownEmpty(emptyView)) {
-                RegionInfo* del = fromRegion;
-                CHECK(del->IsFromRegion());
-                RemoveRegionLocked(&fromRegionList, del);
-                ScrubRememberedSetForRegion(del);
-                garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
-                continue;
-            }
+        // freed at select, not entered into the relocation set. Post-mark
+        // live==0 is that class (OOM dump: kept-publish 3942 live=0 hole=258MB).
+        // IsKnownEmpty would miss null-face pages (cjpmnull2 keep). Young pages
+        // stay for the nested minor. Do not CollectRegion — GetRouteMarkView
+        // is only valid after PrepareForwardable.
+        if (liveBytes == 0 && rawPtrCnt == 0 && !fromRegion->HasMarkStartAllocGap() &&
+            !fromRegion->IsYoungRegion()) {
+            RegionInfo* del = fromRegion;
+            CHECK(del->IsFromRegion());
+            RemoveRegionLocked(&fromRegionList, del);
+            ScrubRememberedSetForRegion(del);
+            garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
+            continue;
         }
         if (rawPtrCnt > 0) {
             RegionInfo* del = fromRegion;
