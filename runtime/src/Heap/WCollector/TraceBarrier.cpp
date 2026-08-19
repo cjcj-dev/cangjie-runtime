@@ -7,7 +7,6 @@
 
 #include "TraceBarrier.h"
 #include "Heap/Allocator/RegionSpace.h"
-#include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -26,12 +25,6 @@ void RememberNewReference(Mutator* mutator, BaseObject* ref)
     // Keep the tracing closure for references inserted after their owner may have been scanned.
     // ShouldEnqueue filters trace-region and already marked objects and deduplicates the rest.
     mutator->RememberObjectInSatbBuffer(ref);
-    // ZGC mark_and_remember (zBarrier.inline.hpp:735-739): SATB is the deletion
-    // barrier on prev; the stored new value must be painted too. MarkNewObject
-    // no-ops outside ENUM/TRACE/CLEAR (and the heap-phase handshake window).
-    if (Heap::IsHeapAddress(ref)) {
-        Heap::GetHeap().GetCollector().MarkNewObject(ref);
-    }
 }
 } // namespace
 

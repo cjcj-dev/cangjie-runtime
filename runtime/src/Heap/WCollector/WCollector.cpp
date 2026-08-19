@@ -9158,14 +9158,8 @@ void WCollector::DoGarbageCollection()
 void WCollector::MarkNewObject(BaseObject* obj)
 {
     GCPhase mutatorPhase = Mutator::GetMutator()->GetMutatorPhase();
-    GCPhase heapPhase = GetGCPhase();
-    // Same handshake window as RememberObjectImpl: heap TRACE may be live
-    // before the mutator flips. ZGC mark_and_remember paints regardless
-    // (zBarrier.inline.hpp:735-739).
-    const bool marking = mutatorPhase == GCPhase::GC_PHASE_ENUM || mutatorPhase == GCPhase::GC_PHASE_TRACE ||
-        mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER || heapPhase == GCPhase::GC_PHASE_ENUM ||
-        heapPhase == GCPhase::GC_PHASE_TRACE || heapPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
-    if (UNLIKELY(marking)) {
+    if (UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_ENUM) || UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_TRACE) ||
+        UNLIKELY(mutatorPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER)) {
         MarkObject(obj);
     }
 }
