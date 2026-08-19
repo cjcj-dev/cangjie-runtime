@@ -10,42 +10,29 @@ class Node {
     }
 }
 
+struct ArrBox<T> {
+    var arr: Array<T>
+    var marker: Int64
+    public init(arr: Array<T>, marker: Int64) {
+        this.arr = arr
+        this.marker = marker
+    }
+}
+
+foreign func nwdrift_dump_node(rawArray: UInt64, slot: Int64, got: Int64, exp: Int64): Unit
+
 let NW_ROOTS: Int64 = 512
 let NW_SIDE: Int64 = 2048
 let NW_ROUNDS_PER_WAVE: Int64 = 300
 let NW_WAVES: Int64 = 12
 let NW_DUMP_CAP: Int64 = 32
 
-func hexU64(v: UInt64): String {
-    var buf = Array<UInt8>(18, repeat: UInt8(48))
-    buf[0] = UInt8(48)
-    buf[1] = UInt8(120)
-    var x: UInt64 = v
-    var i: Int64 = 17
-    while (i >= 2) {
-        let d = Int64(x % 16)
-        if (d < 10) {
-            buf[i] = UInt8(48 + d)
-        } else {
-            buf[i] = UInt8(87 + d)
-        }
-        x = x / 16
-        i = i - 1
-    }
-    unsafe { String.fromUtf8Unchecked(buf) }
-}
-
-func nodeAddr(n: Node): UInt64 {
+func arrayRawAddr<T>(arr: Array<T>): UInt64 {
+    var box = ArrBox<T>(arr, 0)
     unsafe {
-        let p = CPointer<Int64>(inout n.id)
-        UInt64((CPointer<Byte>(p) - 8).toUIntNative())
-    }
-}
-
-func nodeHeader(n: Node): UInt64 {
-    unsafe {
-        let p = CPointer<Int64>(inout n.id)
-        CPointer<UInt64>(CPointer<Byte>(p) - 8).read()
+        let mp = CPointer<Int64>(inout box.marker)
+        let base = CPointer<UInt64>(CPointer<Byte>(mp) - 24)
+        base.read(0)
     }
 }
 
@@ -86,28 +73,20 @@ func expectedWaveChecksum(wave: Int64): Int64 {
     1327163996318400
 }
 
-func dumpNode(tag: String, slot: Int64, n: Node, expected: Int64): Unit {
-    let addr = nodeAddr(n)
-    let hdr = nodeHeader(n)
-    let state = (hdr >> 48) & UInt64(3)
-    let ti = hdr & UInt64(281474976710655)
-    eprintln(
-        "${tag} slot=${slot} got=${n.id} exp=${expected} d=${expected - n.id} addr=${hexU64(addr)} hdr=${hexU64(hdr)} state=${state} ti=${hexU64(ti)}")
-}
-
-func dumpLiveCohort(roots: Array<Node>, side: Array<Node>, chain: ?Node, wave: Int64, checksum: Int64, expected: Int64): Unit {
+func dumpLiveCohort(roots: Array<Node>, raw: UInt64, wave: Int64, checksum: Int64, expected: Int64): Unit {
     let delta = expected - checksum
     let lastRound = wave * NW_ROUNDS_PER_WAVE + (NW_ROUNDS_PER_WAVE - 1)
     eprintln("NW_DRIFT_WAVE wave=${wave} checksum=${checksum} expected=${expected} delta=${delta} lastRound=${lastRound}")
     var mismatch: Int64 = 0
     var dumped: Int64 = 0
+    let rootsExp = lastRound * 1000
     for (rk in 0..64) {
         let exp = lastRound * 1000 + rk
         let got = roots[rk].id
         if (got != exp) {
             mismatch = mismatch + 1
             if (dumped < NW_DUMP_CAP) {
-                dumpNode("NW_DRIFT_ROOT", rk, roots[rk], exp)
+                unsafe { nwdrift_dump_node(raw, rk, got, exp) }
                 dumped = dumped + 1
             }
         }
@@ -117,23 +96,13 @@ func dumpLiveCohort(roots: Array<Node>, side: Array<Node>, chain: ?Node, wave: I
         if (roots[tk].id != tk) {
             staleTail = staleTail + 1
             if (dumped < NW_DUMP_CAP) {
-                dumpNode("NW_DRIFT_TAIL", tk, roots[tk], tk)
+                unsafe { nwdrift_dump_node(raw, tk, roots[tk].id, tk) }
                 dumped = dumped + 1
             }
         }
     }
-    var chainLen: Int64 = 0
-    var cur = chain
-    while (true) {
-        if (let Some(n) <- cur) {
-            chainLen = chainLen + 1
-            cur = n.next
-        } else {
-            break
-        }
-    }
     eprintln(
-        "NW_DRIFT_SCAN rootLiveMismatch=${mismatch} tailMismatch=${staleTail} chainLen=${chainLen} roots0=${roots[0].id} roots0exp=${lastRound * 1000} side0=${side[0].id}")
+        "NW_DRIFT_SCAN rootLiveMismatch=${mismatch} tailMismatch=${staleTail} dumped=${dumped} roots0=${roots[0].id} roots0exp=${rootsExp}")
 }
 
 main(): Int64 {
@@ -141,7 +110,8 @@ main(): Int64 {
     var side: Array<Node> = Array<Node>(NW_SIDE, {_ => Node(0)})
     var chain: ?Node = None
     var checksum: Int64 = 0
-    var dumpedDrift: Bool = false
+    var dumpedProbe: Bool = false
+    var dumpedWave: Bool = false
 
     for (wave in 0..NW_WAVES) {
         for (roundInWave in 0..NW_ROUNDS_PER_WAVE) {
@@ -172,13 +142,22 @@ main(): Int64 {
                     chain = c.next
                 }
             }
-            checksum = checksum + roots[0].id
+            let got0 = roots[0].id
+            let exp0 = round * 1000
+            checksum = checksum + got0
+            if (got0 != exp0 && !dumpedProbe) {
+                let raw = arrayRawAddr(roots)
+                eprintln("NW_DRIFT_PROBE wave=${wave} round=${round} got=${got0} exp=${exp0} d=${exp0 - got0}")
+                unsafe { nwdrift_dump_node(raw, 0, got0, exp0) }
+                dumpedProbe = true
+            }
         }
         println("WAVE_DONE wave=${wave} checksum=${checksum}")
         let expected = expectedWaveChecksum(wave)
-        if (checksum != expected && !dumpedDrift) {
-            dumpLiveCohort(roots, side, chain, wave, checksum, expected)
-            dumpedDrift = true
+        if (checksum != expected && !dumpedWave) {
+            let raw = arrayRawAddr(roots)
+            dumpLiveCohort(roots, raw, wave, checksum, expected)
+            dumpedWave = true
         }
     }
 

@@ -8,42 +8,29 @@ class SurvivalNode {
     }
 }
 
+struct ArrBox<T> {
+    var arr: Array<T>
+    var marker: Int64
+    public init(arr: Array<T>, marker: Int64) {
+        this.arr = arr
+        this.marker = marker
+    }
+}
+
+foreign func sddrift_dump_node(rawArray: UInt64, slot: Int64, got: Int64, exp: Int64): Unit
+
 let SD_ROOTS: Int64 = 1200000
 let SD_ROUNDS_PER_WAVE: Int64 = 400
 let SD_ALLOCS_PER_ROUND: Int64 = 3200
 let SD_WAVES: Int64 = 12
 let SD_DUMP_CAP: Int64 = 32
 
-func hexU64(v: UInt64): String {
-    var buf = Array<UInt8>(18, repeat: UInt8(48))
-    buf[0] = UInt8(48)
-    buf[1] = UInt8(120)
-    var x: UInt64 = v
-    var i: Int64 = 17
-    while (i >= 2) {
-        let d = Int64(x % 16)
-        if (d < 10) {
-            buf[i] = UInt8(48 + d)
-        } else {
-            buf[i] = UInt8(87 + d)
-        }
-        x = x / 16
-        i = i - 1
-    }
-    unsafe { String.fromUtf8Unchecked(buf) }
-}
-
-func nodeAddr(n: SurvivalNode): UInt64 {
+func arrayRawAddr<T>(arr: Array<T>): UInt64 {
+    var box = ArrBox<T>(arr, 0)
     unsafe {
-        let p = CPointer<Int64>(inout n.id)
-        UInt64((CPointer<Byte>(p) - 8).toUIntNative())
-    }
-}
-
-func nodeHeader(n: SurvivalNode): UInt64 {
-    unsafe {
-        let p = CPointer<Int64>(inout n.id)
-        CPointer<UInt64>(CPointer<Byte>(p) - 8).read()
+        let mp = CPointer<Int64>(inout box.marker)
+        let base = CPointer<UInt64>(CPointer<Byte>(mp) - 24)
+        base.read(0)
     }
 }
 
@@ -95,16 +82,7 @@ func expectedWaveChecksum(wave: Int64): Int64 {
     368685940367600
 }
 
-func dumpNode(slot: Int64, n: SurvivalNode, expected: Int64): Unit {
-    let addr = nodeAddr(n)
-    let hdr = nodeHeader(n)
-    let state = (hdr >> 48) & UInt64(3)
-    let ti = hdr & UInt64(281474976710655)
-    eprintln(
-        "SD_DRIFT_NODE slot=${slot} got=${n.id} exp=${expected} d=${expected - n.id} addr=${hexU64(addr)} hdr=${hexU64(hdr)} state=${state} ti=${hexU64(ti)}")
-}
-
-func dumpRootCohort(roots: Array<SurvivalNode>, cursor: Int64, wave: Int64, checksum: Int64, expected: Int64): Unit {
+func dumpRootCohort(roots: Array<SurvivalNode>, raw: UInt64, cursor: Int64, wave: Int64, checksum: Int64, expected: Int64): Unit {
     let delta = expected - checksum
     eprintln("SD_DRIFT_WAVE wave=${wave} checksum=${checksum} expected=${expected} delta=${delta} cursor=${cursor}")
     var mismatch: Int64 = 0
@@ -145,7 +123,7 @@ func dumpRootCohort(roots: Array<SurvivalNode>, cursor: Int64, wave: Int64, chec
             let got = roots[ds].id
             let exp = expectedRootId(ds, cursor)
             if (got != exp) {
-                dumpNode(ds, roots[ds], exp)
+                unsafe { sddrift_dump_node(raw, ds, got, exp) }
                 dumped = dumped + 1
                 if (dumped >= SD_DUMP_CAP) {
                     break
@@ -157,13 +135,11 @@ func dumpRootCohort(roots: Array<SurvivalNode>, cursor: Int64, wave: Int64, chec
 }
 
 main(): Int64 {
-    // The rotating set is intentionally large.  New objects remain directly
-    // rooted for 1.2 million later allocations, so they survive collection
-    // boundaries instead of becoming same-iteration garbage.
     var roots = Array<SurvivalNode>(SD_ROOTS, {i => SurvivalNode(i)})
     var cursor: Int64 = 0
     var checksum: Int64 = 0
-    var dumpedDrift: Bool = false
+    var dumpedProbe: Bool = false
+    var dumpedWave: Bool = false
 
     for (wave in 0..SD_WAVES) {
         for (roundInWave in 0..SD_ROUNDS_PER_WAVE) {
@@ -177,13 +153,23 @@ main(): Int64 {
                 cursor = cursor + 1
             }
             let probe = Int64((cursor + Int64(round)) % Int64(roots.size))
-            checksum = checksum + roots[probe].id
+            let got = roots[probe].id
+            let expProbe = expectedRootId(probe, cursor)
+            checksum = checksum + got
+            if (got != expProbe && !dumpedProbe) {
+                let raw = arrayRawAddr(roots)
+                eprintln(
+                    "SD_DRIFT_PROBE wave=${wave} round=${round} probe=${probe} got=${got} exp=${expProbe} d=${expProbe - got} cursor=${cursor}")
+                unsafe { sddrift_dump_node(raw, probe, got, expProbe) }
+                dumpedProbe = true
+            }
         }
         println("SURVIVAL_WAVE wave=${wave} checksum=${checksum}")
         let expected = expectedWaveChecksum(wave)
-        if (checksum != expected && !dumpedDrift) {
-            dumpRootCohort(roots, cursor, wave, checksum, expected)
-            dumpedDrift = true
+        if (checksum != expected && !dumpedWave) {
+            let raw = arrayRawAddr(roots)
+            dumpRootCohort(roots, raw, cursor, wave, checksum, expected)
+            dumpedWave = true
         }
     }
 
