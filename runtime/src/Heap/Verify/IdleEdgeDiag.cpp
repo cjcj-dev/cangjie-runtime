@@ -19,6 +19,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/MClass.h"
 #include "ObjectModel/RefField.h"
@@ -881,9 +882,9 @@ void ClassifyMiss(CensusStats& stats, MAddress fieldAddress, BaseObject* holder,
 
 } // namespace
 
-// Compile-time gate: getenv MRT_GCV2_* is pinned-off. Census arm of A-V3
-// (ZGC_CONVERGENCE_PLAN.md §A.6 / Z-2) must actually run.
-constexpr bool kIdleEdge = true;
+// Compile-time gate: getenv MRT_GCV2_* is pinned-off. Flip true to census.
+// Product default off — CensusPrePinnedStamp walks every non-young holder.
+constexpr bool kIdleEdge = false;
 
 bool Enabled()
 {
@@ -970,6 +971,9 @@ void CensusPrePinnedStamp(size_t minorRunIndex)
 
     uint64_t startNs = TimeUtil::NanoSeconds();
     CensusStats stats;
+    // kBufferStoreBarriers buffers 32 Records; snapshot before FlushAll
+    // would count pending edges as remsetMiss (false Z-2).
+    StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
     std::unordered_set<MAddress> remsetSnap = Heap::GetHeap().GetRememberedSet().Snapshot();
     stats.remsetSize = remsetSnap.size();
 

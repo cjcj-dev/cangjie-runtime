@@ -7748,9 +7748,8 @@ void WCollector::DoYoungGarbageCollection()
     // fast-path (phase < ENUM) is a bare store — old→young edges never hit remset.
     // Stamp them before Acquire so pre-evacuate verify and young mark both see them.
     // idleedge: census remset-miss old→young BEFORE pinned stamp fills those gaps.
-    // Flush store-barrier buffer first (kBufferStoreBarriers=true, 32 slots) so
-    // pending Record()s are visible as remset hits — else they look like Z-2 misses.
-    StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
+    // Flush of the store-barrier buffer lives inside CensusPrePinnedStamp so the
+    // product path does not pay it when kIdleEdge is off.
     IdleEdgeDiag::CensusPrePinnedStamp(minorTotalRuns + 1);
     // fysaudit: full non-young O→Y vs mutator remset (D1/D2/D3). Observe only.
     FysAuditDiag::OnMinorBegin(minorTotalRuns + 1);
