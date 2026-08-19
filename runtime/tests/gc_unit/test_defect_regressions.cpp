@@ -415,6 +415,37 @@ GC_TEST(DefectRegress, ExportHandleDoubleRemoveNoAlias)
     GC_EXPECT_FALSE(table.CheckActiveState(pa, objB));
 }
 
+// nwreclaim: 4fcf746a keep-slot used IsMarkedObject<Old> only. Post-flip to-space
+// and young holders have no Old face (zPage.inline.hpp:254-256 is_object_live =
+// is_allocating || livemap). Soft-null then planted rcx=0 for Array.ix (pc_off=0x29589).
+bool ModelHolderIsLive(bool isHeap, bool valid, bool freeOrGarbage, bool allocating, bool youngRegion,
+                       bool youngMarked, bool oldMarked)
+{
+    if (!isHeap || !valid || freeOrGarbage) {
+        return false;
+    }
+    if (allocating) {
+        return true;
+    }
+    return youngRegion ? youngMarked : oldMarked;
+}
+
+GC_TEST(DefectRegress, LiveHolderOnAllocatingPageKeepsSlot)
+{
+    // to-space / TL / recent-full: allocating ⇒ live, even with Old mark=false.
+    GC_EXPECT_TRUE(ModelHolderIsLive(true, true, false, true, false, false, false));
+    GC_EXPECT_TRUE(ModelHolderIsLive(true, true, false, true, true, false, false));
+    // young marked, not allocating.
+    GC_EXPECT_TRUE(ModelHolderIsLive(true, true, false, false, true, true, false));
+    // old marked, not allocating.
+    GC_EXPECT_TRUE(ModelHolderIsLive(true, true, false, false, false, false, true));
+    // 4fcf746a shape: Old-only miss on a live young / to-space holder.
+    GC_EXPECT_FALSE(ModelHolderIsLive(true, true, false, false, true, false, false));
+    // dead holder (free/garbage) still eligible for soft-null.
+    GC_EXPECT_FALSE(ModelHolderIsLive(true, true, true, false, false, false, true));
+    GC_EXPECT_FALSE(ModelHolderIsLive(false, true, false, true, false, false, false));
+}
+
 GC_TEST(DefectRegress, ExportHandleStaleReuseDoesNotTouchNewOccupant)
 {
     ExportRootTable table;
