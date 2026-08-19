@@ -2837,6 +2837,34 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         CollectRegion<G>(region);
         return;
     }
+    // ZGC zPage.inline.hpp:180-185: is_allocating pages are not relocatable.
+    // Objects bumped after ClearLiveInfo's markStartAllocPtr have no mark bit
+    // and no prefix-sum dest. VisitLive sees them; collecting the from-page
+    // after copying only the bitmap set is the coll_live trickle.
+    if (region->HasMarkStartAllocGap()) {
+        if (youngRegion && StayYoungThisCycle(region)) {
+            EnlistStayYoungSurvivor(region);
+            return;
+        }
+        if (youngRegion) {
+            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+            region->PreserveRetainedLiveInfo();
+            {
+                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
+                const bool doReg = (r == GC_REASON_YOUNG);
+                if (doReg) {
+                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
+                }
+                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
+                size_t recEdges = RecordPromotedCrossGenEdges(region);
+                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
+            }
+            (void)region->PromoteYoungRegion(promotionView);
+        }
+        region->DispelGhostFromRegion();
+        ExemptFromRegion(region);
+        return;
+    }
     // Unmarked this cycle is not empty (zPage.inline.hpp:223-225). Still do
     // not keep every never-examined from-page: hangfloor showed young
     // neverExamined × Collect-skip fills the heap (10/10 HANG). Keep only
