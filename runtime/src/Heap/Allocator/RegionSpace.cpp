@@ -176,7 +176,6 @@ size_t RegionSpace::UncommitIdleMemory()
     if (now < delayNs) {
         return 0;
     }
-    regionManager.ReclaimGarbageRegions();
     size_t total = 0;
     const uint64_t idleBefore = now - delayNs;
     while (!Heap::GetHeap().IsGcStarted()) {
