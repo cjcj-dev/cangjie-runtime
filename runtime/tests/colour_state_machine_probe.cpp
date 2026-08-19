@@ -51,6 +51,7 @@ using MapleRuntime::REMAP_COLOUR_SHIFT;
 using MapleRuntime::REMEMBERED_0;
 using MapleRuntime::REMEMBERED_1;
 using MapleRuntime::REMEMBERED_MASK;
+using MapleRuntime::STORE_METADATA_MASK;
 using MapleRuntime::TAGGED_BITS_MASK;
 using MapleRuntime::ZPointerRemapped00;
 using MapleRuntime::ZPointerRemapped01;
