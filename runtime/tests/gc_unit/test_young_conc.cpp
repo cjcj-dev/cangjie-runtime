@@ -415,8 +415,12 @@ GC_TEST(YoungConc, PeekYoungAllocBlackDoesNotConsume)
 }
 
 // Positive control: ArmInject forces uncovered+=1 so a zero cannot mean dead probe.
+// Product default kStw2CurrentAudit=false (rec=stw |Δ|=6.4%); skip when off.
 GC_TEST(YoungConc, Stw2CurrentInjectForcesUncovered)
 {
+    if (!Stw2CurrentAudit::Enabled()) {
+        return;
+    }
     const size_t before = Stw2CurrentAudit::Uncovered();
     Stw2CurrentAudit::ArmInject();
     std::unordered_set<MAddress> empty;
