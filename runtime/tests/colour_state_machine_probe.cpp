@@ -51,6 +51,7 @@ using MapleRuntime::REMAP_COLOUR_SHIFT;
 using MapleRuntime::REMEMBERED_0;
 using MapleRuntime::REMEMBERED_1;
 using MapleRuntime::REMEMBERED_MASK;
+using MapleRuntime::STORE_METADATA_MASK;
 using MapleRuntime::TAGGED_BITS_MASK;
 using MapleRuntime::ZPointerRemapped00;
 using MapleRuntime::ZPointerRemapped01;
@@ -95,7 +96,7 @@ constexpr BadMasks WitnessBadMasks(EpochColours e)
 #else
         TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ (e.remappedYoungMask & e.remappedOldMask)),
 #endif
-        0, 0
+        0, 0, 0
     };
 }
 
@@ -110,12 +111,20 @@ constexpr uintptr_t WitnessStoreBad(EpochColours e)
     return WitnessMarkBad(e) | (REMEMBERED_MASK & ~e.remembered);
 }
 
+constexpr uintptr_t WitnessStoreGood(EpochColours e)
+{
+    return (e.remappedYoungMask & e.remappedOldMask) | e.markedYoung | e.markedOld | e.remembered;
+}
+
 constexpr bool MaskEquivAt(unsigned i)
 {
     return ComputeBadMasks(EpochAt(i)).remapColour == WitnessBadMasks(EpochAt(i)).remapColour &&
         ComputeBadMasks(EpochAt(i)).loadBad == WitnessBadMasks(EpochAt(i)).loadBad &&
         ComputeBadMasks(EpochAt(i)).markBad == WitnessMarkBad(EpochAt(i)) &&
-        ComputeBadMasks(EpochAt(i)).storeBad == WitnessStoreBad(EpochAt(i));
+        ComputeBadMasks(EpochAt(i)).storeBad == WitnessStoreBad(EpochAt(i)) &&
+        ComputeBadMasks(EpochAt(i)).storeGood == WitnessStoreGood(EpochAt(i)) &&
+        (ComputeBadMasks(EpochAt(i)).storeGood ^ STORE_METADATA_MASK) ==
+            ComputeBadMasks(EpochAt(i)).storeBad;
 }
 
 constexpr bool MaskEquivAllEpochs()
