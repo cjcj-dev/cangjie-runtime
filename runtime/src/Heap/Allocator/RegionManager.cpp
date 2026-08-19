@@ -1539,9 +1539,10 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                      static_cast<int>(d.rule), allocated, in.capacityBytes);
                 collector.RequestGC(GC_REASON_HEU, true);
                 requested = true;
-            } else if (d.kind == GcTriggerKind::MINOR && youngAllocated >= youngRegionTriggerBytes) {
-                // zDirector.cpp:296-306 — do not start a minor the young set cannot pay for.
-                // Below the adaptive watermark, fall through to occupancy HEU.
+            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, youngRegionTriggerBytes)) {
+                // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
+                // the occupancy watermark has been raised. is_young_small is already
+                // inside RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
                 g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
                 NoteGcTriggerRule(d.rule);
                 DLOG(ALLOC, "request young gc via DecideGcTrigger rule=%d young=%zu trigger=%zu",

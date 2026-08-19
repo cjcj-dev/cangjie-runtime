@@ -20,6 +20,10 @@ namespace MapleRuntime {
 constexpr bool kGcTriggerAllocRateEnabled = true;
 // L1 perturbation: pin the young watermark back to 32MB (zDirector still runs).
 constexpr bool kGcTriggerPinYoung32MB = false;
+// zDirector.cpp:331-363 / :365-381 — alloc-rate and high-usage re-evaluate
+// every tick; they are not latched off by a raised young watermark.
+// Flip false to restore the gctrigger2 gate (MINOR && young >= watermark).
+constexpr bool kGcTriggerDirectorMinorIgnoresWatermark = true;
 constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
@@ -99,11 +103,17 @@ inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 
     }
     const double survival = static_cast<double>(in.lastYoungPromotedBytes) /
         static_cast<double>(in.lastYoungCandidateBytes);
-    // zDirector.cpp:296-306 — if young cannot free 5% of the heap, skip minor.
-    // survival_dense reclaims ~4MB of a 256MB heap (1.5%) at 86% survival; the
-    // 95% survival cut alone left the 32MB floor in place and kept interleaving.
+    // zDirector.cpp:296-306 is a NOW gate (young_used <= 5% of heap → skip this
+    // minor), not a latch. Raising the occupancy watermark to cap when last
+    // collected <= 5% of heap latched young off on allocation/1GB: a fully-dead
+    // 32MB young set is 3% of 1GB but ~100% of young. Only latch that occupancy
+    // line when the young set itself came back at least 5% live — then another
+    // floor-sized minor cannot be expected to free 5% of the heap
+    // (zDirector.cpp:303-306). Fully-dead young stays on the floor / 5% line.
     constexpr double highSurvival = 1.0 - (kGcTriggerYoungSmallPercent / 100.0);
-    if (survival >= highSurvival || in.lastYoungCollectedBytes <= youngSmall) {
+    constexpr double stillLive = kGcTriggerYoungSmallPercent / 100.0;
+    if (survival >= highSurvival ||
+        (in.lastYoungCollectedBytes <= youngSmall && survival >= stillLive)) {
         return in.capacityBytes;
     }
     const double reclaim = 1.0 - survival;
@@ -241,6 +251,20 @@ inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
         return { GcTriggerKind::MAJOR, GcTriggerRule::HIGH_USAGE };
     }
     return { GcTriggerKind::NONE, GcTriggerRule::NONE };
+}
+
+// zDirector.cpp:331-381 — director minor is not gated by a raised watermark.
+// The occupancy young path in TakeRegion still uses the watermark.
+inline bool ShouldRequestDirectorMinor(GcTriggerKind kind, size_t youngAllocated, size_t watermark,
+                                       bool ignoreWatermark = kGcTriggerDirectorMinorIgnoresWatermark)
+{
+    if (kind != GcTriggerKind::MINOR) {
+        return false;
+    }
+    if (ignoreWatermark) {
+        return true;
+    }
+    return youngAllocated >= watermark;
 }
 
 } // namespace MapleRuntime

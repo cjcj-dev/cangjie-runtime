@@ -29,6 +29,7 @@ GC_TEST(GcTrigger, SwitchDefaultOn)
 {
     GC_EXPECT_EQ(kGcTriggerAllocRateEnabled, true);
     GC_EXPECT_EQ(kGcTriggerPinYoung32MB, false);
+    GC_EXPECT_EQ(kGcTriggerDirectorMinorIgnoresWatermark, true);
 }
 
 GC_TEST(GcTrigger, YoungTriggerPinsAt32WhenAsked)
@@ -89,6 +90,38 @@ GC_TEST(GcTrigger, YoungTriggerRaisesWhenLastMinorFreedLessThanFivePercent)
     in.lastYoungPromotedBytes = 28 * 1024 * 1024;
     in.lastYoungCollectedBytes = 4 * 1024 * 1024;
     GC_EXPECT_EQ(ComputeYoungTriggerBytes(in, false), in.capacityBytes);
+}
+
+GC_TEST(GcTrigger, YoungTriggerHoldsFloorWhenDeadYoungIsSmallFractionOfHeap)
+{
+    // allocation/1GB: a fully-dead 32MB young set is 3% of heap but 97% of young.
+    // zDirector.cpp:296-306 would skip only while young_used is still ≤5%; it
+    // does not latch the occupancy watermark to cap after one cheap minor.
+    YoungTriggerInputs in;
+    in.capacityBytes = 1024 * 1024 * 1024;
+    in.heapThresholdBytes = 200 * 1024 * 1024;
+    in.hasYoungSample = true;
+    in.lastYoungCandidateBytes = 32 * 1024 * 1024;
+    in.lastYoungPromotedBytes = 1 * 1024 * 1024;
+    in.lastYoungCollectedBytes = 31 * 1024 * 1024;
+    const size_t got = ComputeYoungTriggerBytes(in, false);
+    const size_t youngSmall = static_cast<size_t>(
+        static_cast<double>(in.capacityBytes) * kGcTriggerYoungSmallPercent / 100.0);
+    GC_EXPECT_TRUE(got >= kGcTriggerYoungFixedBytes);
+    GC_EXPECT_TRUE(got <= std::max(in.heapThresholdBytes, youngSmall));
+    GC_EXPECT_TRUE(got != in.capacityBytes);
+}
+
+GC_TEST(GcTrigger, DirectorMinorIgnoresRaisedWatermark)
+{
+    GC_EXPECT_TRUE(ShouldRequestDirectorMinor(GcTriggerKind::MINOR, 4 * 1024 * 1024,
+                                              1024 * 1024 * 1024, true));
+    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::MINOR, 4 * 1024 * 1024,
+                                               1024 * 1024 * 1024, false));
+    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::MAJOR, 4 * 1024 * 1024,
+                                               32 * 1024 * 1024, true));
+    GC_EXPECT_TRUE(!ShouldRequestDirectorMinor(GcTriggerKind::NONE, 64 * 1024 * 1024,
+                                               32 * 1024 * 1024, true));
 }
 
 GC_TEST(TruncatedSeq, EmptyIsZero)
