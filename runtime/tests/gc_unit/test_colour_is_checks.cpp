@@ -343,15 +343,21 @@ static void CheckStoreGoodComplement(const Epoch& epoch)
                         const uintptr_t value = Paint(kValidAddress, c);
                         const bool maskStoreGood = (value & m.storeBad) == 0;
                         const bool hasStoreGoodBits = (value & m.storeGood) == m.storeGood;
-                        // A value that already carries some other metadata bit (a stale
-                        // remap/mark/rem) fails the mask even if it also has every current
-                        // good bit. The "carries the required bits" half is therefore only
-                        // equivalent when no extra store-metadata bit is set.
+                        // Extra (stale) metadata bits sit in StoreBad, so they fail the
+                        // mask. Missing required bits also fail hasStoreGoodBits. The two
+                        // therefore agree for every coloured word in this product, and
+                        // disagree only for a word that carries no store-metadata at all
+                        // (the uncoloured case pinned below).
                         const bool extraMeta = (value & STORE_METADATA_MASK & ~m.storeGood) != 0;
-                        if (!extraMeta) {
+                        const bool anyMeta = (value & STORE_METADATA_MASK) != 0;
+                        if (anyMeta && !extraMeta) {
                             GC_EXPECT_EQ(maskStoreGood, hasStoreGoodBits);
-                        } else {
+                        } else if (extraMeta) {
                             GC_EXPECT_TRUE(!maskStoreGood);
+                        } else {
+                            // No store-metadata bits: mask admits, required-bits does not.
+                            GC_EXPECT_TRUE(maskStoreGood);
+                            GC_EXPECT_TRUE(!hasStoreGoodBits);
                         }
                         GC_EXPECT_EQ(ColourPredicates::is_store_good(value, m.loadBad, m.storeBad),
                                      maskStoreGood && ColourPredicates::is_load_good(value, m.loadBad) &&
