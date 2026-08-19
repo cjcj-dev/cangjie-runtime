@@ -33,7 +33,7 @@
 #endif
 #include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
-#include "Heap/Collector/GcTrigger.h"
+#include "Heap/Collector/GcTriggerFlags.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
@@ -4836,7 +4836,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
             }
         }
     }
-    if (kGcTriggerDynamicWorkersEnabled) {
+    if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
         if (selected >= 1 && selected < static_cast<uint32_t>(workers)) {

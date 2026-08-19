@@ -13,12 +13,30 @@
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
 #include "Heap/Collector/GcTrigger.h"
+#include "Heap/Collector/TruncatedSeq.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
 std::atomic<size_t> g_gcCount{ 0 };
 std::atomic<uint64_t> g_gcTotalTimeUs{ 0 };
 std::atomic<size_t> g_gcCollectedTotalBytes{ 0 };
+
+std::atomic<uint64_t> GCStats::lastOldDurationNs{ 0 };
+std::atomic<uint64_t> GCStats::lastMajorFinishNs{ 0 };
+std::atomic<uint32_t> GCStats::collectionsAtLastMajor{ 0 };
+std::atomic<size_t> GCStats::usedAtLastMajorEnd{ 0 };
+std::atomic<size_t> GCStats::oldLiveAtMarkEnd{ 0 };
+std::atomic<double> GCStats::reclaimedPerYoungAvg{ 0.0 };
+std::atomic<double> GCStats::reclaimedPerOldAvg{ 0.0 };
+std::atomic<double> GCStats::lastYoungGcDurationAvgSec{ 0.0 };
+std::atomic<double> GCStats::lastOldGcDurationAvgSec{ 0.0 };
+
+namespace {
+TruncatedSeq g_youngDurationSeq{ 10 };
+TruncatedSeq g_oldDurationSeq{ 10 };
+TruncatedSeq g_youngReclaimedSeq{ 10 };
+TruncatedSeq g_oldReclaimedSeq{ 10 };
+} // namespace
 
 std::atomic<uint64_t> GCStats::prevGcStartTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
 std::atomic<uint64_t> GCStats::prevGcFinishTime{ TimeUtil::NanoSeconds() - LONG_MIN_HEU_GC_INTERVAL_NS };
@@ -73,10 +91,10 @@ void GCStats::Init()
     reclaimedPerOldAvg.store(0.0, std::memory_order_relaxed);
     lastYoungGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
     lastOldGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
-    youngDurationSeq.reset();
-    oldDurationSeq.reset();
-    youngReclaimedSeq.reset();
-    oldReclaimedSeq.reset();
+    g_youngDurationSeq.reset();
+    g_oldDurationSeq.reset();
+    g_youngReclaimedSeq.reset();
+    g_oldReclaimedSeq.reset();
 
     const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
     const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
@@ -149,10 +167,10 @@ void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size
     in.hasYoungSample = true;
     const size_t trigger = ComputeYoungTriggerBytes(in);
     youngTriggerBytes.store(trigger, std::memory_order_release);
-    youngDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
-    youngReclaimedSeq.add(static_cast<double>(collectedBytes));
-    lastYoungGcDurationAvgSec.store(youngDurationSeq.avg(), std::memory_order_relaxed);
-    reclaimedPerYoungAvg.store(youngReclaimedSeq.avg(), std::memory_order_relaxed);
+    g_youngDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
+    g_youngReclaimedSeq.add(static_cast<double>(collectedBytes));
+    lastYoungGcDurationAvgSec.store(g_youngDurationSeq.avg(), std::memory_order_relaxed);
+    reclaimedPerYoungAvg.store(g_youngReclaimedSeq.avg(), std::memory_order_relaxed);
     VLOG(REPORT,
          "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
          candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());
@@ -169,12 +187,12 @@ void GCStats::RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_
     usedAtLastMajorEnd.store(usedAfter, std::memory_order_relaxed);
     oldLiveAtMarkEnd.store(usedAfter, std::memory_order_relaxed);
     if (durationNs > 0) {
-        oldDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
-        lastOldGcDurationAvgSec.store(oldDurationSeq.avg(), std::memory_order_relaxed);
+        g_oldDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
+        lastOldGcDurationAvgSec.store(g_oldDurationSeq.avg(), std::memory_order_relaxed);
     }
     if (collectedBytes > 0 || durationNs > 0) {
-        oldReclaimedSeq.add(static_cast<double>(collectedBytes));
-        reclaimedPerOldAvg.store(oldReclaimedSeq.avg(), std::memory_order_relaxed);
+        g_oldReclaimedSeq.add(static_cast<double>(collectedBytes));
+        reclaimedPerOldAvg.store(g_oldReclaimedSeq.avg(), std::memory_order_relaxed);
     }
 }
 

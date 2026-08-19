@@ -15,6 +15,7 @@
 #include <limits>
 
 #include "Base/Globals.h"
+#include "Heap/Collector/GcTriggerFlags.h"
 
 namespace MapleRuntime {
 
@@ -38,18 +39,6 @@ constexpr bool kGcTriggerLatchOnSmallCollect = false;
 // and SEGV in DeleteRegionLocked. Product does not consume the warmup rule.
 // Flip true only to restore the three early full GCs.
 constexpr bool kGcTriggerWarmupRequestsGc = false;
-// zDirector.cpp:550-605 / z_globals.hpp:48 — ZProactive default true.
-constexpr bool kGcTriggerProactiveEnabled = true;
-// zDirector.cpp:470-519 + :830-833 — upgrade a would-be minor into major.
-// Product off: our MAJOR is a copying full-heap GC (same trap as warmup,
-// zDirector.cpp:401-424 / gctrigger4). ZGC's major is a concurrent old
-// collection. Enabling this on 12-wave NW upgraded ~3000 minors and SEGV.
-// Flip true only for the old-filling positive control.
-constexpr bool kGcTriggerMajorAllocRateEnabled = false;
-// zDirector.cpp:100-145 / :783-793 — select workers from predicted duration.
-// Default off: our copying MAJOR/shared pool is not ZGC's concurrent generations;
-// A/B decides whether to flip this on.
-constexpr bool kGcTriggerDynamicWorkersEnabled = false;
 constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
@@ -455,8 +444,6 @@ extern std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRateArmed;
 extern std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRate;
 extern std::atomic<uint64_t> g_gcTriggerRuleProactiveArmed;
 extern std::atomic<uint64_t> g_gcTriggerRuleProactive;
-extern std::atomic<uint32_t> g_gcTriggerYoungWorkers;
-extern std::atomic<uint32_t> g_gcTriggerOldWorkers;
 
 inline void NoteGcTriggerRule(GcTriggerRule rule)
 {
@@ -487,9 +474,11 @@ inline void NoteGcTriggerRule(GcTriggerRule rule)
 inline GcTriggerDecision MaybeUpgradeMinorToMajor(const GcTriggerInputs& in, GcTriggerRule minorRule)
 {
     // zDirector.cpp:830-833 — merge minor into major when rule_major_allocation_rate.
-    g_gcTriggerRuleMajorAllocRateArmed.fetch_add(1, std::memory_order_relaxed);
-    if (RuleMajorAllocRate(in)) {
-        return { GcTriggerKind::MAJOR, GcTriggerRule::MAJOR_ALLOC_RATE };
+    if constexpr (kGcTriggerMajorAllocRateEnabled) {
+        g_gcTriggerRuleMajorAllocRateArmed.fetch_add(1, std::memory_order_relaxed);
+        if (RuleMajorAllocRate(in)) {
+            return { GcTriggerKind::MAJOR, GcTriggerRule::MAJOR_ALLOC_RATE };
+        }
     }
     return { GcTriggerKind::MINOR, minorRule };
 }
@@ -504,9 +493,11 @@ inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
     if (RuleWarmup(in)) {
         return { GcTriggerKind::MAJOR, GcTriggerRule::WARMUP };
     }
-    g_gcTriggerRuleProactiveArmed.fetch_add(1, std::memory_order_relaxed);
-    if (RuleMajorProactive(in)) {
-        return { GcTriggerKind::MAJOR, GcTriggerRule::PROACTIVE };
+    if constexpr (kGcTriggerProactiveEnabled) {
+        g_gcTriggerRuleProactiveArmed.fetch_add(1, std::memory_order_relaxed);
+        if (RuleMajorProactive(in)) {
+            return { GcTriggerKind::MAJOR, GcTriggerRule::PROACTIVE };
+        }
     }
     if (RuleAllocRate(in)) {
         return MaybeUpgradeMinorToMajor(in, GcTriggerRule::ALLOC_RATE);
