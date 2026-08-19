@@ -7902,7 +7902,7 @@ void WCollector::DoYoungGarbageCollection()
     // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
     // STW2 = concurrent remset drain + re-enum + evacuate.
     static const bool youngConcMark = []() {
-        const char* v = static_cast<const char*>("1") /* pinned-on:MRT_GCV2_YOUNG_CONC_MARK */;
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     // portyoungconc L2 (ZGC zGeneration.cpp:665-669 concurrent_mark = mark_roots + mark_follow;
