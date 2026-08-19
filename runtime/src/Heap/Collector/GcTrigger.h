@@ -8,14 +8,19 @@
 #define MRT_GC_TRIGGER_H
 
 #include <algorithm>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
+#include "Base/Globals.h"
+
 namespace MapleRuntime {
 
-// Product stays on occupancy + interval triggers until mutrelo closes.
-// Flip to true only after wiring a sampler; do not add MRT_GCV2_* env.
-constexpr bool kGcTriggerAllocRateEnabled = false;
+// L3: product consumes DecideGcTrigger. Flip false to restore occupancy+interval.
+constexpr bool kGcTriggerAllocRateEnabled = true;
+// L1 perturbation: pin the young watermark back to 32MB (zDirector still runs).
+constexpr bool kGcTriggerPinYoung32MB = false;
+constexpr size_t kGcTriggerYoungFixedBytes = 32 * MB;
 
 // zDirector.cpp:39 — P(sample outside CI) ≈ 1/1000 for a normal.
 constexpr double kGcTriggerOneIn1000 = 3.290527;
@@ -61,6 +66,53 @@ struct GcTriggerDecision {
     GcTriggerKind kind = GcTriggerKind::NONE;
     GcTriggerRule rule = GcTriggerRule::NONE;
 };
+
+struct YoungTriggerInputs {
+    size_t capacityBytes = 0;
+    size_t heapThresholdBytes = 0;
+    size_t lastYoungCandidateBytes = 0;
+    size_t lastYoungPromotedBytes = 0;
+    size_t lastYoungCollectedBytes = 0;
+    bool hasYoungSample = false;
+};
+
+// zDirector.cpp:331-363 — convert soft/hard minor rules into a young watermark.
+// Soft: keep collecting while last minor reclaimed enough. Hard: if survival is
+// high, raise the line to the HEU budget so young/HEU stop interleaving.
+inline size_t ComputeYoungTriggerBytes(const YoungTriggerInputs& in, bool pin32 = kGcTriggerPinYoung32MB)
+{
+    if (pin32) {
+        return kGcTriggerYoungFixedBytes;
+    }
+    if (in.capacityBytes == 0) {
+        return kGcTriggerYoungFixedBytes;
+    }
+    const size_t youngSmall =
+        static_cast<size_t>(static_cast<double>(in.capacityBytes) * kGcTriggerYoungSmallPercent / 100.0);
+    size_t floorBytes = std::max(youngSmall, kGcTriggerYoungFixedBytes);
+    size_t ceilingBytes = in.heapThresholdBytes == 0 ? in.capacityBytes : in.heapThresholdBytes;
+    if (ceilingBytes < floorBytes) {
+        ceilingBytes = floorBytes;
+    }
+    if (!in.hasYoungSample || in.lastYoungCandidateBytes == 0) {
+        return floorBytes;
+    }
+    const double survival = static_cast<double>(in.lastYoungPromotedBytes) /
+        static_cast<double>(in.lastYoungCandidateBytes);
+    // zDirector.cpp:296-306 — young that cannot free much is not worth a minor.
+    // High survival: raise the young line past HEU so occupancy falls through to major.
+    constexpr double highSurvival = 1.0 - (kGcTriggerYoungSmallPercent / 100.0);
+    if (survival >= highSurvival) {
+        return in.capacityBytes;
+    }
+    const double reclaim = 1.0 - survival;
+    size_t adaptive = in.lastYoungCollectedBytes;
+    if (reclaim > 0.0) {
+        adaptive = static_cast<size_t>(static_cast<double>(in.lastYoungCollectedBytes) / reclaim);
+    }
+    adaptive = std::max(adaptive, floorBytes);
+    return std::min(adaptive, ceilingBytes);
+}
 
 inline double GcTriggerMaxAllocRateBps(const GcTriggerInputs& in)
 {
@@ -143,6 +195,33 @@ inline bool RuleHighUsage(const GcTriggerInputs& in)
 
 // zDirector.cpp:820-840 — major rules first (timer/warmup), then minor
 // (alloc-rate before high-usage). Two hits: first match in that order wins.
+extern std::atomic<uint64_t> g_gcTriggerArmed;
+extern std::atomic<uint64_t> g_gcTriggerTurned;
+extern std::atomic<uint64_t> g_gcTriggerRuleTimer;
+extern std::atomic<uint64_t> g_gcTriggerRuleWarmup;
+extern std::atomic<uint64_t> g_gcTriggerRuleAllocRate;
+extern std::atomic<uint64_t> g_gcTriggerRuleHighUsage;
+
+inline void NoteGcTriggerRule(GcTriggerRule rule)
+{
+    switch (rule) {
+        case GcTriggerRule::TIMER:
+            g_gcTriggerRuleTimer.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case GcTriggerRule::WARMUP:
+            g_gcTriggerRuleWarmup.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case GcTriggerRule::ALLOC_RATE:
+            g_gcTriggerRuleAllocRate.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case GcTriggerRule::HIGH_USAGE:
+            g_gcTriggerRuleHighUsage.fetch_add(1, std::memory_order_relaxed);
+            break;
+        default:
+            break;
+    }
+}
+
 inline GcTriggerDecision DecideGcTrigger(const GcTriggerInputs& in)
 {
     if (RuleTimer(in)) {

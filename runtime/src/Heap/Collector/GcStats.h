@@ -103,6 +103,22 @@ public:
 
     std::atomic<size_t> heapThreshold{ 0 };
 
+    // L1: last minor feeds the young watermark (CopyCollector.cpp skipped UpdateGCStats).
+    std::atomic<size_t> lastYoungCandidateBytes{ 0 };
+    std::atomic<size_t> lastYoungPromotedBytes{ 0 };
+    std::atomic<size_t> lastYoungCollectedBytes{ 0 };
+    std::atomic<uint64_t> lastYoungDurationNs{ 0 };
+    std::atomic<bool> hasYoungSample{ false };
+    std::atomic<size_t> youngTriggerBytes{ 32 * MB };
+
+    std::atomic<uint32_t> warmupCyclesDone{ 0 };
+    std::atomic<bool> isWarm{ false };
+    std::atomic<bool> isTimeTrustable{ false };
+    std::atomic<uint64_t> lastGcDurationNs{ 0 };
+
+    void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
+                          size_t maxCapacity);
+
 private:
     // A minor may extend the HEU finish-time throttle once after a major. A
     // second consecutive minor must leave the clock alone so a major cannot be
