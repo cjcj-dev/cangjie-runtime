@@ -67,17 +67,17 @@ void MutatorAllocRate::initialize()
     bool expected = false;
     if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
         std::atexit([]() {
-            VLOG(REPORT,
-                 "[GCV2][gctrigger] atexit armed=%llu turned=%llu timer=%llu warmup=%llu alloc_rate=%llu "
-                 "high_usage=%llu samples=%llu granule=%zu",
-                 static_cast<unsigned long long>(g_gcTriggerArmed.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_gcTriggerTurned.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_gcTriggerRuleTimer.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_gcTriggerRuleWarmup.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_gcTriggerRuleAllocRate.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_gcTriggerRuleHighUsage.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(MutatorAllocRate::sample_count()),
-                 MutatorAllocRate::sampling_granule());
+            std::fprintf(stderr,
+                         "[GCV2][gctrigger] atexit armed=%llu turned=%llu timer=%llu warmup=%llu "
+                         "alloc_rate=%llu high_usage=%llu samples=%llu granule=%zu\n",
+                         static_cast<unsigned long long>(g_gcTriggerArmed.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerTurned.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleTimer.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleWarmup.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleAllocRate.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleHighUsage.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(MutatorAllocRate::sample_count()),
+                         MutatorAllocRate::sampling_granule());
         });
     }
 }

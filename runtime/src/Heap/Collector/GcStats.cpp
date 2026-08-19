@@ -134,7 +134,11 @@ void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size
     in.lastYoungPromotedBytes = promotedBytes;
     in.lastYoungCollectedBytes = collectedBytes;
     in.hasYoungSample = true;
-    youngTriggerBytes.store(ComputeYoungTriggerBytes(in), std::memory_order_release);
+    const size_t trigger = ComputeYoungTriggerBytes(in);
+    youngTriggerBytes.store(trigger, std::memory_order_release);
+    VLOG(REPORT,
+         "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
+         candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());
 }
 
 const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
