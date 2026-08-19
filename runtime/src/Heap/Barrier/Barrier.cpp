@@ -60,17 +60,72 @@ public:
 private:
     Collector& theCollector;
 };
+
+// oraclecut CUT-1: load-good must mean "current version" (ZGC heals only values the barrier
+// itself resolved -- zBarrier.inline.hpp:319-342 -- so a good colour can never name a
+// from-copy). A keep-from answer breaks that: it names an object a later FORWARD may still
+// copy, whose from-region CollectFromSpaceGarbage then legally clears (TraceClear
+// kind=coll_live). Painting such a value load-good hides the slot from every healer -- the
+// fast path passes it, InvalidateOldTaggedRefs tests only old-tag colours -- so the stale
+// from survives whole cycles and is eventually read out of zeroed storage: the cjpm crash
+// (staleguard zeroHeader unresolved). Hand the value to this one read, but leave the slot's
+// stale colour in place so the next read re-enters the barrier and resolves fresher state.
+// Heal is skipped for exactly three shapes, all unprovably-current:
+//   zero header      target payload already cleared by reclamation
+//   FORWARDED header the object moved; healing the from would launder a dead address
+//   movable ghost-from, not FORWARDED  keep-from of a relocation candidate not yet copied
+// Unmovable-from objects stay healable: their region is pinned for the cycle and the from
+// address is the object's real home (ForwardBarrier takes the same exemption on resolve).
+std::atomic<uint64_t> g_keepFromHealSkipTotal{ 0 };
+std::atomic<uint64_t> g_keepFromHealSkipSite[64] = {};
+
+bool SkipLaunderingHeal(Collector& collector, zpointer healPtr, HealSite site)
+{
+    RefField<> probe(healPtr);
+    BaseObject* target = to_object(probe.GetTargetObject());
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return false; // null and non-heap values cannot dangle through region reuse
+    }
+    bool transient = false;
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(target), __ATOMIC_RELAXED);
+    if ((hdr & 0xffffffffffffull) == 0) {
+        transient = true; // zero header: cleared storage, nothing current to publish
+    } else if (((hdr >> 48) & 0x3u) == 3u) { // ObjectState::FORWARDED, as JudgeTarget reads it
+        transient = true; // from-copy of a moved object
+    } else if (collector.IsGhostFromObject(target) && !collector.IsUnmovableFromObject(target)) {
+        transient = true; // keep-from of a movable relocation candidate
+    }
+    if (!transient) {
+        return false;
+    }
+    const uint64_t n = g_keepFromHealSkipTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    const size_t s = static_cast<size_t>(site);
+    if (s < 64) {
+        g_keepFromHealSkipSite[s].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (n <= 4 || (n & (n - 1)) == 0) {
+        LOG(RTLOG_ERROR, "[GCV2][keepfromheal] skipped=%llu site=%u target=%p",
+            static_cast<unsigned long long>(n), static_cast<unsigned>(site), static_cast<void*>(target));
+    }
+    return true;
+}
 } // namespace
 
 void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 
 void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    if (SkipLaunderingHeal(theCollector, healPtr, site)) {
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 
