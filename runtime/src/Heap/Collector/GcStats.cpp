@@ -12,6 +12,7 @@
 
 #include "Base/GcLog.h"
 #include "Base/LogFile.h"
+#include "Heap/Collector/GcTrigger.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -52,6 +53,17 @@ void GCStats::Init()
 
     garbageRatio = 0.0;
     collectionRate = 0.0;
+
+    lastYoungCandidateBytes.store(0, std::memory_order_relaxed);
+    lastYoungPromotedBytes.store(0, std::memory_order_relaxed);
+    lastYoungCollectedBytes.store(0, std::memory_order_relaxed);
+    lastYoungDurationNs.store(0, std::memory_order_relaxed);
+    hasYoungSample.store(false, std::memory_order_relaxed);
+    youngTriggerBytes.store(kGcTriggerYoungFixedBytes, std::memory_order_relaxed);
+    warmupCyclesDone.store(0, std::memory_order_relaxed);
+    isWarm.store(false, std::memory_order_relaxed);
+    isTimeTrustable.store(false, std::memory_order_relaxed);
+    lastGcDurationNs.store(0, std::memory_order_relaxed);
 
     const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
     const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
@@ -104,6 +116,29 @@ GCStats::YoungHeuThrottleDecision GCStats::RecordYoungGCFinish(uint64_t timestam
     youngHeuDeferralUsed = true;
     SetPrevGCFinishTime(timestamp);
     return YoungHeuThrottleDecision::REFRESHED;
+}
+
+void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
+                              size_t maxCapacity)
+{
+    lastYoungCandidateBytes.store(candidateBytes, std::memory_order_relaxed);
+    lastYoungPromotedBytes.store(promotedBytes, std::memory_order_relaxed);
+    lastYoungCollectedBytes.store(collectedBytes, std::memory_order_relaxed);
+    lastYoungDurationNs.store(durationNs, std::memory_order_relaxed);
+    lastGcDurationNs.store(durationNs, std::memory_order_relaxed);
+    hasYoungSample.store(true, std::memory_order_relaxed);
+    YoungTriggerInputs in;
+    in.capacityBytes = maxCapacity;
+    in.heapThresholdBytes = GetThreshold();
+    in.lastYoungCandidateBytes = candidateBytes;
+    in.lastYoungPromotedBytes = promotedBytes;
+    in.lastYoungCollectedBytes = collectedBytes;
+    in.hasYoungSample = true;
+    const size_t trigger = ComputeYoungTriggerBytes(in);
+    youngTriggerBytes.store(trigger, std::memory_order_release);
+    VLOG(REPORT,
+         "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
+         candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());
 }
 
 const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
