@@ -103,6 +103,7 @@ class RegionManager {
     friend class VerifyRegions;
     friend class TagReuseProbe;
     friend struct PinRootTestAccess;
+    friend struct IkeKeepTestAccess;
 
 public:
     /* region memory layout:
@@ -177,6 +178,10 @@ public:
     void CompactRegion(RegionInfo* region, RegionInfo* toRegion1);
 
     void ExemptFromRegion(RegionInfo* region);
+    // ZGC zRelocationSetSelector.cpp:114-196 / zGeneration.cpp:205-213: a page
+    // not in this cycle's relocation set is an ordinary candidate next cycle.
+    // Kept (IsForwardingDone via Exempt) is in-cycle only.
+    void ExpireKeptFromPreviousCycle();
     // zRelocate.cpp:1041-1047: relocate() returns only after every page in the
     // relocation set is done. CONC_RELOCATE left ROUTED pages unpublished
     // (oracle r5 regionTimeout=527/got=0). Finish them or publish kept.

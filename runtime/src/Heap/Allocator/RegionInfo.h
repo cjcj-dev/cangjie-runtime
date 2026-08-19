@@ -2277,6 +2277,23 @@ public:
 
     bool IsForwardingDone() const { return ZForwardingLife::is_done(metadata.fwdDone); }
 
+    // ZGC has no terminal kept: a page not selected this cycle is an ordinary
+    // candidate next cycle (zRelocationSetSelector.cpp:114-196 rebuilds from
+    // the page table; zGeneration.cpp:205-213). Drop the in-cycle publish so
+    // WaitRoutedTipReady cannot treat last cycle's Exempt as this cycle's done.
+    void ExpireKeptPublish()
+    {
+        if (IsGhostFromRegion()) {
+            DispelGhostFromRegion();
+        } else {
+            const RouteState rs = GetRouteState();
+            if (rs != RouteState::FORWARDED && rs != RouteState::COMPACTED && rs != RouteState::NORMAL) {
+                SetRouteState(NORMAL);
+            }
+        }
+        ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+    }
+
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
     void UnlockWriteRegion() { metadata.rwLock.UnlockWrite(); }

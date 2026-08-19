@@ -1132,6 +1132,42 @@ void RegionManager::ReassembleFromSpace()
     fromRegionList.MergeRegionList(unmovableFromRegionList, RegionInfo::RegionType::FROM_REGION);
 }
 
+void RegionManager::ExpireKeptFromPreviousCycle()
+{
+    // Flip false for gate ⑥ (256MB OOM returns). Product default on.
+    // zRelocationSetSelector.cpp:114-196 rebuilds the set every cycle; pages
+    // carry no cross-cycle exemption. zGeneration.cpp:205-213 iterates the
+    // whole page table.
+    static constexpr bool kExpireKeptAtCycleStart = true;
+    if constexpr (!kExpireKeptAtCycleStart) {
+        return;
+    }
+
+    size_t expired = 0;
+    size_t expiredBytes = 0;
+    auto expireList = [&expired, &expiredBytes](RegionList& list) {
+        list.VisitAllRegions([&expired, &expiredBytes](RegionInfo* region) {
+            if (region == nullptr || !region->IsForwardingDone()) {
+                return;
+            }
+            const RegionInfo::RouteState rs = region->GetRouteState();
+            if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+                return;
+            }
+            ++expired;
+            expiredBytes += region->GetRegionSize();
+            region->ExpireKeptPublish();
+        });
+    };
+    expireList(unmovableFromRegionList);
+    expireList(fromRegionList);
+    expireList(recentFullRegionList);
+    expireList(tlRegionList);
+    if (expired != 0) {
+        LOG(RTLOG_ERROR, "[GCV2][expire-kept] n=%zu bytes=%zu", expired, expiredBytes);
+    }
+}
+
 void RegionManager::CountLiveObject(const BaseObject* obj)
 {
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -2155,6 +2191,32 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     size_t fromSize = fromUnits * RegionInfo::UNIT_SIZE;
     size_t allocFromSize = fromRegionList.GetAllocatedSize();
 
+    size_t unmovableRegions = unmovableFromRegionList.GetRegionCount();
+    size_t unmovableUnits = unmovableFromRegionList.GetUnitCount();
+    size_t unmovableSize = unmovableUnits * RegionInfo::UNIT_SIZE;
+    size_t allocUnmovableSize = unmovableFromRegionList.GetAllocatedSize();
+
+    size_t keptRegions = 0;
+    size_t keptUnits = 0;
+    size_t keptSize = 0;
+    size_t keptLive = 0;
+    auto censusKept = [&keptRegions, &keptUnits, &keptSize, &keptLive](RegionInfo* region) {
+        if (region == nullptr || !region->IsForwardingDone()) {
+            return;
+        }
+        const RegionInfo::RouteState rs = region->GetRouteState();
+        if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
+            return;
+        }
+        ++keptRegions;
+        keptUnits += region->GetUnitCount();
+        keptSize += region->GetRegionSize();
+        keptLive += region->GetLiveByteCount();
+    };
+    fromRegionList.VisitAllRegions(censusKept);
+    unmovableFromRegionList.VisitAllRegions(censusKept);
+    recentFullRegionList.VisitAllRegions(censusKept);
+
     size_t recentFullRegions = recentFullRegionList.GetRegionCount();
     size_t recentFullUnits = recentFullRegionList.GetUnitCount();
     size_t recentFullSize = recentFullUnits * RegionInfo::UNIT_SIZE;
@@ -2229,6 +2291,10 @@ void RegionManager::DumpRegionStats(const char* msg, bool dumpToError) const
     DUMP_REGION_STATS_LOG("\ttl-regions %zu: %zu units (%zu B, alloc %zu)", tlRegions,  tlUnits, tlSize, allocTLSize);
     DUMP_REGION_STATS_LOG("\tfrom-regions %zu: %zu units (%zu B, alloc %zu)", fromRegions,  fromUnits, fromSize,
                           allocFromSize);
+    DUMP_REGION_STATS_LOG("\tunmovable-from regions %zu: %zu units (%zu B, alloc %zu)", unmovableRegions,
+                          unmovableUnits, unmovableSize, allocUnmovableSize);
+    DUMP_REGION_STATS_LOG("\tkept-publish regions %zu: %zu units (%zu B, live %zu, hole %zu)", keptRegions, keptUnits,
+                          keptSize, keptLive, keptSize > keptLive ? keptSize - keptLive : 0);
     DUMP_REGION_STATS_LOG("\trecent-full regions %zu: %zu units (%zu B, alloc %zu)",
                           recentFullRegions, recentFullUnits, recentFullSize, allocRecentFullSize);
     DUMP_REGION_STATS_LOG("\tgarbage regions %zu: %zu units (%zu B, alloc %zu)",
@@ -2966,6 +3032,9 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
+        // live==0 FORWARDABLE is true dead (this comment's original contract):
+        // Exempting those old pages was the 256MB ike-keep OOM (from-regions
+        // 3944 / 258MB at dump, keepBytes ≫ heap).
         //
         // oracleblack: generational contract on the young arm. A young region's liveness is
         // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
@@ -2981,7 +3050,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // so the hangfloor regression (young garbage never reclaimed) cannot return.
         if (region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
-            (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
+            (incompleteRoute || liveResidual || (youngRegion && G == Generation::Old))) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
         size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {

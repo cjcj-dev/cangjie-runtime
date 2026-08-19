@@ -112,7 +112,7 @@ public:
         return CountAllocatedSize();
     }
 
-    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor)
+    void VisitAllRegions(const std::function<void(RegionInfo*)>& visitor) const
     {
         std::lock_guard<std::mutex> lock(listMutex);
         RegionInfo* node = listHead;
@@ -175,7 +175,7 @@ public:
     }
 
 protected:
-    std::mutex listMutex;
+    mutable std::mutex listMutex;
     size_t regionCount = 0;
     size_t unitCount = 0;
     RegionInfo* listHead = nullptr; // the start region for iteration, i.e., the first region
