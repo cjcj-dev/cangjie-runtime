@@ -3604,22 +3604,22 @@ void WCollector::PushYoungObject(BaseObject* object, WorkStack& workStack, const
 
 // R3 markpar: STW-parallel young.mark_closure — sibling of ConcurrentMarkingWork
 // (TracingCollector.cpp ConcurrentMarkingWork). Claim = MarkObject atomic bit;
-// per-worker reachableVec/slots/weaks merged after pool barrier. Env:
-// MRT_GCV2_MARKPAR_WORKERS / FORCE_SERIAL / INJECT_DISPEL / STRIPED.
+// per-worker reachableVec/slots/weaks merged after pool barrier.
 //
-// Flag coupling, as merged (b27351e8) — read this before measuring:
-//   MRT_GCV2_MARKPAR_WORKERS carries two unrelated meanings at once.
-//     presence  = the opt-in switch for ANY parallel young marking (markparoff 58ee51e7)
-//     value     = a cap on worker count; default is pool capacity and the env can only
-//                 lower it (want < workers), so WORKERS=<big> is a no-op as a value.
-//   MRT_GCV2_MARKPAR_STRIPED=1 selects the striped path, but the test is nested under
-//   useParallel, so STRIPED=1 ALONE IS A NO-OP — both must be set:
-//     MRT_GCV2_MARKPAR_WORKERS=<n> MRT_GCV2_MARKPAR_STRIPED=1
-//   This coupling was not designed. 58ee51e7 (WORKERS gate) and 1ced7b2f (striped path)
-//   were written on branches that did not contain each other; both touched this decision
-//   point, the merge was textually clean, and the nesting is the artifact. zstripe's
-//   1.143x was measured on 1ced7b2f, where STRIPED=1 alone did reach the striped path.
-//   Also note WORKERS=1 opts in and then falls back to serial (workers==1 apparatus).
+// Two young-parallel paths:
+//   TraceYoungClosureParallel — old stack-split steal (markpar). Still behind the
+//     pinned-off WORKERS getenv; product never takes it (6× slower under FYS1).
+//   TraceYoungClosureStriped  — address-striped (zstripe 1ced7b2f, ZGC zMark.cpp:94-120).
+//     Independent constexpr kMarkStriped, NOT nested under WORKERS.
+//
+// History of the nesting this commit undoes: 58ee51e7 (WORKERS gate) and 1ced7b2f
+// (striped path) both touched this decision on branches that did not contain each
+// other. The merge was textually clean; the nesting was leftover, not design.
+// Both env gates were later pinned-off, which made the nested striped test dead.
+// zstripe's 1.143× was measured on 1ced7b2f, where STRIPED=1 alone reached the path.
+//
+// kMarkStriped=false keeps current product behaviour (serial). Flip after the two
+// verifiers are green. armed = decision taken; turned = workers>1 striped ran.
 // Port of fix/markpar@3f869baa onto setbitmap ledger (reachableVec + useBitmapLedger).
 namespace {
 // MarkStack::size() counts buffers (64 objs each), not objects. Major uses 16/8 for
@@ -3631,6 +3631,11 @@ constexpr size_t kMarkStripeShift = 20; // 1 MiB address chunks, from zstripe ph
 constexpr size_t kMarkStripeMultiplier = 4;
 constexpr size_t kMarkStripeLocalCapacity = 64;
 constexpr size_t kMarkStripeMax = 64;
+// Independent of the WORKERS getenv. false = current serial default.
+constexpr bool kMarkStriped = false;
+
+std::atomic<size_t> g_markStripeArmed{ 0 };
+std::atomic<size_t> g_markStripeTurned{ 0 };
 
 // FYS raw workStack.push_back used to skip PushYoungObject recover + StartWho.
 // Admit the same host that FYS=0 would have pushed; never enqueue an interior.
@@ -4816,6 +4821,7 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                                           MinorSlotSet& weakSlots, bool useBitmapLedger, GCThreadPool* threadPool,
                                           const MinorSlotSet* reachableSlotDomain)
 {
+    g_markStripeArmed.fetch_add(1, std::memory_order_relaxed);
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
     {
         const char* inject = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_INJECT_DISPEL */;
@@ -4841,10 +4847,13 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
                                 useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
              "[GCV2][markpar][striped] workers_active=1 workers_scheduled=1 stripes=1 stripe_shift=%zu "
-             "objects_marked=[%zu] reachable_n=%zu parallel=0",
-             kMarkStripeShift, reachableVec.size(), reachableVec.size());
+             "objects_marked=[%zu] reachable_n=%zu parallel=0 armed=%zu turned=%zu",
+             kMarkStripeShift, reachableVec.size(), reachableVec.size(),
+             g_markStripeArmed.load(std::memory_order_relaxed),
+             g_markStripeTurned.load(std::memory_order_relaxed));
         return;
     }
+    g_markStripeTurned.fetch_add(1, std::memory_order_relaxed);
 
     const size_t stripeCount = MarkStripeCount(static_cast<size_t>(workers));
     YoungStripedShared shared;
@@ -4924,8 +4933,10 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
 
     VLOG(REPORT,
          "[GCV2][markpar][striped] workers_active=%zu workers_scheduled=%d stripes=%zu stripe_shift=%zu "
-         "objects_marked=[%s] reachable_n=%zu parallel=1",
-         active, workers, stripeCount, kMarkStripeShift, markedStr.c_str(), reachableVec.size());
+         "objects_marked=[%s] reachable_n=%zu parallel=1 armed=%zu turned=%zu",
+         active, workers, stripeCount, kMarkStripeShift, markedStr.c_str(), reachableVec.size(),
+         g_markStripeArmed.load(std::memory_order_relaxed),
+         g_markStripeTurned.load(std::memory_order_relaxed));
 }
 
 void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
@@ -4941,14 +4952,18 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_FORCE_SERIAL */;
         return value != nullptr && std::strcmp(value, "1") == 0;
     }();
-    static const bool stripedEnv = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_STRIPED */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
     // markperf probe only instruments serial path; force serial when MARK_COST≠0.
     const bool forceSerialForCost = MarkInternalCost::Mode() != 0;
     const bool workersEnvSet = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARKPAR_WORKERS */ != nullptr;
-    const bool useParallel = threadPool != nullptr && workersEnvSet && !forceSerialEnv && !forceSerialForCost;
+    const bool serialOverride = forceSerialEnv || forceSerialForCost;
+    // kMarkStriped is independent of the WORKERS getenv. The old nesting
+    // (stripedEnv && useParallel) made STRIPED a no-op once WORKERS was pinned-off.
+    if (kMarkStriped && threadPool != nullptr && !serialOverride) {
+        TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                 useBitmapLedger, threadPool, reachableSlotDomain);
+        return;
+    }
+    const bool useParallel = threadPool != nullptr && workersEnvSet && !serialOverride;
     if (!useParallel) {
         // It used to print pool_unavailable unconditionally, which sent readers to inspect
         // the thread pool when the real cause was an unset env var. Report the cause the
@@ -4958,6 +4973,7 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         //   force_serial      operator asked for serial outright
         //   mark_cost         operator turned on the markperf probe, which implies serial
         //   workers_unset     the default state -- nobody opted in
+        //   striped_off       kMarkStriped is false (current product default)
         const char* reason = "workers_unset";
         if (threadPool == nullptr) {
             reason = "pool_unavailable";
@@ -4965,22 +4981,18 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
             reason = "force_serial";
         } else if (forceSerialForCost) {
             reason = "mark_cost";
+        } else if (!kMarkStriped) {
+            reason = "striped_off";
         }
-        // STRIPED=1 alone never reaches the striped path: it is nested under useParallel,
-        // so MRT_GCV2_MARKPAR_WORKERS must be set too. Say so where the reader is looking.
-        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s striped_requested=%d%s", reason, stripedEnv,
-             (stripedEnv && !workersEnvSet) ? " striped_ignored=1 need=MRT_GCV2_MARKPAR_WORKERS" : "");
+        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
+             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
+             g_markStripeTurned.load(std::memory_order_relaxed));
         TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                                 useBitmapLedger, reachableSlotDomain);
         VLOG(REPORT,
              "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
              "reachable_n=%zu parallel=0",
              reachableVec.size(), reachableVec.size());
-        return;
-    }
-    if (stripedEnv) {
-        TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                                 useBitmapLedger, threadPool, reachableSlotDomain);
         return;
     }
     TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
