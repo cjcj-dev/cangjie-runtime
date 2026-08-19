@@ -8895,6 +8895,8 @@ void WCollector::DoYoungGarbageCollection()
             RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
             size_t domainEdges = PromotedRegionDomain::DischargeAll(
                 [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
+                [](RefField<>&) -> bool { return false; },
+                [](RefField<>&, BaseObject*) {},
                 [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
             PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
                                                  /*site*/ 3, domainEdges);
