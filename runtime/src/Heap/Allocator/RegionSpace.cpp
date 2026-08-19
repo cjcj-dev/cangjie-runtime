@@ -176,15 +176,25 @@ size_t RegionSpace::UncommitIdleMemory()
     if (now < delayNs) {
         return 0;
     }
-    size_t usedBytes = regionManager.GetUsedRegionSize();
-    size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
-    size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
-    size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
-    size_t flush = Uncommitter::FlushBytes(usedBytes, dirtyBytes, minCapacity, chunk);
-    if (flush == 0) {
-        return 0;
+    regionManager.ReclaimGarbageRegions();
+    size_t total = 0;
+    const uint64_t idleBefore = now - delayNs;
+    while (!Heap::GetHeap().IsGcStarted()) {
+        size_t usedBytes = regionManager.GetUsedRegionSize();
+        size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
+        size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
+        size_t flush = Uncommitter::FlushBytes(usedBytes, dirtyBytes, minCapacity, chunk);
+        if (flush == 0) {
+            break;
+        }
+        size_t n = regionManager.UncommitIdleUnits(flush, idleBefore);
+        if (n == 0) {
+            break;
+        }
+        total += n;
     }
-    return regionManager.UncommitIdleUnits(flush, now - delayNs);
+    return total;
 }
 
 void RegionSpace::Init(const HeapParam& vmHeapParam)

@@ -59,6 +59,11 @@ GC_TEST(Uncommitter, FlushZeroWhenDisabledChunk)
     GC_EXPECT_EQ(Uncommitter::FlushBytes(10 * MB, 0, 42 * MB, 256 * MB), 0ULL);
 }
 
+GC_TEST(Uncommitter, ChunkLimitScalesWithCapacity)
+{
+    GC_EXPECT_EQ(Uncommitter::ChunkLimit(8 * GB), 64 * MB);
+}
+
 GC_TEST(Uncommitter, ChunkLimitAtLeastPageAndAtMost256M)
 {
     size_t oneG = 1024 * MB;

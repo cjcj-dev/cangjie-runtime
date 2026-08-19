@@ -109,6 +109,10 @@ void FinalizerProcessor::Run()
                 Wait(iterationWaitTime);
                 waited = true;
             }
+            if (!hasPendingReclaimHeapGarbage) {
+                hasPendingReclaimHeapGarbage =
+                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
+            }
         }
 
         if (!running) {
