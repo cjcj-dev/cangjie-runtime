@@ -33,7 +33,7 @@ GC_TEST(GcTrigger, SwitchDefaultOn)
     GC_EXPECT_EQ(kGcTriggerLatchOnSmallCollect, false);
     GC_EXPECT_EQ(kGcTriggerWarmupRequestsGc, false);
     GC_EXPECT_EQ(kGcTriggerProactiveEnabled, true);
-    GC_EXPECT_EQ(kGcTriggerMajorAllocRateEnabled, true);
+    GC_EXPECT_EQ(kGcTriggerMajorAllocRateEnabled, false);
     GC_EXPECT_EQ(kGcTriggerDynamicWorkersEnabled, false);
 }
 
@@ -410,10 +410,15 @@ GC_TEST(GcTrigger, MinorUpgradesToMajorAllocRate)
     in.totalCollections = 8;
     in.collectionsAtLastMajor = 5;
     GC_EXPECT_TRUE(RuleAllocRate(in));
-    GC_EXPECT_TRUE(RuleMajorAllocRate(in));
-    const GcTriggerDecision d = DecideGcTrigger(in);
-    GC_EXPECT_EQ(static_cast<int>(d.rule), static_cast<int>(GcTriggerRule::MAJOR_ALLOC_RATE));
-    GC_EXPECT_EQ(static_cast<int>(d.kind), static_cast<int>(GcTriggerKind::MAJOR));
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
+    GC_EXPECT_EQ(kGcTriggerMajorAllocRateEnabled, false);
+    const GcTriggerDecision product = DecideGcTrigger(in);
+    GC_EXPECT_EQ(static_cast<int>(product.rule), static_cast<int>(GcTriggerRule::ALLOC_RATE));
+    GC_EXPECT_EQ(static_cast<int>(product.kind), static_cast<int>(GcTriggerKind::MINOR));
+    const GcTriggerDecision upgraded = MaybeUpgradeMinorToMajor(in, GcTriggerRule::ALLOC_RATE);
+    // MaybeUpgrade still consults the product switch; force the predicate.
+    GC_EXPECT_TRUE(RuleMajorAllocRate(in, true));
+    (void)upgraded;
 }
 
 GC_TEST(GcTrigger, ProactiveFiresAfterAcceptableInterval)

@@ -41,7 +41,11 @@ constexpr bool kGcTriggerWarmupRequestsGc = false;
 // zDirector.cpp:550-605 / z_globals.hpp:48 — ZProactive default true.
 constexpr bool kGcTriggerProactiveEnabled = true;
 // zDirector.cpp:470-519 + :830-833 — upgrade a would-be minor into major.
-constexpr bool kGcTriggerMajorAllocRateEnabled = true;
+// Product off: our MAJOR is a copying full-heap GC (same trap as warmup,
+// zDirector.cpp:401-424 / gctrigger4). ZGC's major is a concurrent old
+// collection. Enabling this on 12-wave NW upgraded ~3000 minors and SEGV.
+// Flip true only for the old-filling positive control.
+constexpr bool kGcTriggerMajorAllocRateEnabled = false;
 // zDirector.cpp:100-145 / :783-793 — select workers from predicted duration.
 // Default off: our copying MAJOR/shared pool is not ZGC's concurrent generations;
 // A/B decides whether to flip this on.
