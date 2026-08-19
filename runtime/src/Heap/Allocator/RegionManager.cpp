@@ -2624,9 +2624,6 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
     if (region->IsFromRegion()) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                        RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (region->IsLoneFromRegion()) {
-        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::LONE_FROM_REGION,
-                                       RegionInfo::RegionType::RECENT_FULL_REGION);
     } else if (region->IsGarbageRegion()) {
         garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                           RegionInfo::RegionType::RECENT_FULL_REGION);
