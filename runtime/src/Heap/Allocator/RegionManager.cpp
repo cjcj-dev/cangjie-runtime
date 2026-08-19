@@ -890,6 +890,7 @@ size_t FreeRegionManager::UncommitIdleUnits(size_t maxBytes, uint64_t idleBefore
         uncommittedBytes += num * RegionInfo::UNIT_SIZE;
     }
     if (uncommittedBytes > 0) {
+        LOG(RTLOG_INFO, "Uncommit: uncommitted %zu bytes", uncommittedBytes);
         VLOG(REPORT, "uncommit idle heap memory %zu bytes", uncommittedBytes);
     }
     return uncommittedBytes;
