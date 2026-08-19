@@ -58,6 +58,7 @@ set(SRC_LIST
     "ZgcSelfHealDiag.cpp"
     "ZgcInvariants.cpp"
     "HealCoverage.cpp"
+    "Stw2CurrentAudit.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

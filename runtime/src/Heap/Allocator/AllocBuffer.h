@@ -82,6 +82,16 @@ public:
         youngAllocBlack.clear();
     }
 
+    // Observe-only: STW2 current-face audit (Stw2CurrentAudit) classifies without
+    // consuming the grey-list MergeYoungAllocBlack still owns.
+    template<class WorkStack>
+    inline void PeekYoungAllocBlack(WorkStack& workStack) const
+    {
+        for (BaseObject* obj : youngAllocBlack) {
+            workStack.push_back(obj);
+        }
+    }
+
     // h3seed2: young→young write dirties the *holder object* (not the field slot).
     // Minor root enum merges these into the product work stack so FYS closure reaches
     // ArrayList/HashMap containers without recording every y2y field in remset.

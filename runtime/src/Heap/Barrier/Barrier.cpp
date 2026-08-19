@@ -13,6 +13,7 @@
 #include "Heap/Verify/ZgcInvariants.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
@@ -265,6 +266,61 @@ inline bool HasYoungRegionsForRecording()
     }
 #endif
     return hasYoungRegions;
+}
+
+// ZGC mark_and_remember (zBarrier.inline.hpp:735-739):
+//   if (!is_null(addr)) { mark<DontResurrect, AnyThread, Follow, Strong>(addr); }
+//   remember(p);
+// remember(p) is RecordCrossGenEdge (slot-keyed remset). The mark half was missing:
+// SATB enqueues the overwritten prev (deletion barrier), not keep-alive of the new
+// target. Concurrent old→young stores therefore landed on the remset current face
+// with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
+//
+// Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
+// TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops. Young
+// collection only (major TRACE keeps SATB). gc_unit never Heap::Init — IsGcStarted
+// is false, so this is a no-op there (same SATB Young-face fixture discipline).
+//
+// Follow: first paint greys via PushYoungAllocBlack; STW2 MergeYoungAllocBlack
+// scans children (same ledger AllocBlack uses). Already-marked skips the ledger
+// because TraceYoungClosure already owns the object.
+void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
+{
+    if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
+        return;
+    }
+    CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
+    if (!resources.IsGcStarted() || resources.GetGCStats().reason != GC_REASON_YOUNG) {
+        return;
+    }
+    // FOLLOW publishes TRACE on the heap then handshakes mutators
+    // (WCollector.cpp:8042). Until the handshake, Heap::GetBarrier() is still
+    // Idle/Enum (phase != TRACE) while concurrent old→young stores already land
+    // on the remset current face. Same heap-phase fallback as SATB G3b
+    // (Mutator.h:588-597). gc_unit never Init — IsGcStarted is false, so this
+    // does not call GetGCPhase (CollectorProxy::currentCollector is null).
+    if (barrierPhase != BarrierPhase::TRACE) {
+        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
+        if (heapPhase != GCPhase::GC_PHASE_TRACE && heapPhase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
+            return;
+        }
+    }
+    if (!Collector::PlausibleManagedObjectGate("mark_and_remember", ref)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(ref));
+    if (region == nullptr || !region->IsYoungRegion()) {
+        return;
+    }
+    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+    bool already = region->MarkObject(view, ref, ref->GetSize());
+    if (already) {
+        return;
+    }
+    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+    if (buffer != nullptr) {
+        buffer->PushYoungAllocBlack(ref);
+    }
 }
 } // namespace
 
@@ -1432,6 +1488,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return;
     }
+    // mark half of mark_and_remember (zBarrier.inline.hpp:735-739). remember(p)
+    // continues below; SATB is not a substitute (REPORT-youngconcstw2 satb=0).
+    MarkAndRememberNewValue(this->phase, ref);
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
     // ⛔⛔ Do NOT skip on "the target is not young right now".
     //

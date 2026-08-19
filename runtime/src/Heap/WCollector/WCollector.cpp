@@ -55,6 +55,7 @@
 #include "Heap/Verify/F3Why2Diag.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/FysAuditDiag.h"
+#include "Heap/Verify/Stw2CurrentAudit.h"
 #include "Heap/Verify/FlipPromoDiag.h"
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/NullRouteCaller.h"
@@ -8353,6 +8354,10 @@ void WCollector::DoYoungGarbageCollection()
                 MinorSlotSet concurrentRemset;
                 StoreBarrierBuffer::FlushAll(Heap::GetHeap().GetRememberedSet());
                 totalConcRemset = Heap::GetHeap().GetRememberedSet().DrainForMinor(concurrentRemset);
+                // Observe-only: classify current-face targets against water/mark/SATB/alloc-black
+                // BEFORE MergeYoungAllocBlack / GetRetiredObjects consume those ledgers.
+                // Does not push workStack (zGeneration.cpp:897-916 pause_mark_end has no drain).
+                Stw2CurrentAudit::Census(concurrentRemset, &theAllocator);
                 if (totalConcRemset != 0) {
                     rememberedSlots.insert(concurrentRemset.begin(), concurrentRemset.end());
                     remsetStats.recorded = rememberedSlots.size();
