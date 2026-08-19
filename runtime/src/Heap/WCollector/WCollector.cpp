@@ -7762,11 +7762,11 @@ void WCollector::DoYoungGarbageCollection()
     // Flags must be known before remset drain: FOLLOW STW1 only flips
     // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
     static const bool youngConcMark = []() {
-        const char* v = "1"; /* pinned-on:MRT_GCV2_YOUNG_CONC_MARK */
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const bool youngConcFollowRequested = []() {
-        const char* v = "1"; /* pinned-on:MRT_GCV2_YOUNG_CONC_FOLLOW */
+        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
