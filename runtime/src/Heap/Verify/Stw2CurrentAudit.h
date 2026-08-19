@@ -49,7 +49,9 @@ enum class Stw2Cover : uint8_t {
     Uncovered = 5,
 };
 
-constexpr bool kStw2CurrentAudit = true;
+// Product default off: rec=stw N=5 audit-on vs off |Δ|=6.4% >1%
+// (REPORT-youngconcmark). Diagnostic builds flip this to true.
+constexpr bool kStw2CurrentAudit = false;
 
 bool Enabled();
 
