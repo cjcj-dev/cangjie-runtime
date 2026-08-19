@@ -7,7 +7,6 @@
 #ifndef MRT_REGION_MANAGER_H
 #define MRT_REGION_MANAGER_H
 
-#include <atomic>
 #include <cstdlib>
 #include <cstring>
 #include <list>
