@@ -958,7 +958,7 @@ void NoteBarrierDecision(MAddress fieldAddress, GCPhase phase, bool recorded, ui
         }
     }
     StoreStamp(fieldAddress, static_cast<uint8_t>(phase), recorded, holderGen, targetGen, skipReason);
-    NoteRa(__builtin_return_address(1));
+    NoteRa(__builtin_return_address(0));
 }
 
 void CensusPrePinnedStamp(size_t minorRunIndex)
