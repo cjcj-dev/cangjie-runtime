@@ -998,6 +998,15 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     // livesame: MarkObject adds live only on 0→1 (ZGC inc_live); no second AddLiveByteCount.
     bool marked;
     if (gcReason == GC_REASON_YOUNG) {
+        // oracleblack round 10, face b: the young cycle itself promotes regions (evac
+        // stay-young → PromoteYoungRegion); a later young-context mark of an object in a
+        // just-promoted region would bind the young view to an old region and trip
+        // GetMarkView's sole-constructor CHECK (RegionInfo.h:211). The old generation owns
+        // the region now: the young closure never traverses old targets, and the domain
+        // install that reaches here for promoted regions is moot — report already-marked.
+        if (UNLIKELY(!region->IsYoungRegion())) {
+            return true;
+        }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
         marked = region->MarkObject(view, obj, objectSize);
     } else {
@@ -2962,8 +2971,15 @@ void EnsureRouteDomainMembership(WCollector* collector, BaseObject* obj)
     bool alreadyInDomain = false;
     if (isGhost) {
         alreadyInDomain = region->IsRouteSurvivedObject(offset);
-    } else {
+    } else if (region->IsYoungRegion()) {
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        alreadyInDomain = region->IsSurvivedObject(view, face, offset);
+    } else {
+        // oracleblack round 10, face b: the nested young cycle can promote this region
+        // before its discharge walk resolves a slot into it. A promoted region is an old
+        // region now; binding the young view trips GetMarkView's sole-constructor CHECK
+        // (RegionInfo.h:211). Consult the old face for the same survivorship question.
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         alreadyInDomain = region->IsSurvivedObject(view, face, offset);
     }
     if (alreadyInDomain) {

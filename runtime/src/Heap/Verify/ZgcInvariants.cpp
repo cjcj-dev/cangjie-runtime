@@ -211,7 +211,17 @@ void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target)
     // An unresolved zero-header target is the one the barrier cannot repair: nothing to forward to,
     // so the mutator gets an object full of zeroes and faults on the first field it dereferences.
     // Count it separately -- it is a reclaim/mark defect surfacing here, not a barrier defect.
-    if ((n & (n - 1)) == 0 || (zeroHeader && !resolved)) {
+    // oracleblack round 10 (flood guard): the zeroHeader&&!resolved arm used to bypass the
+    // power-of-two throttle entirely; a consumer retry loop on one unresolvable address then
+    // prints at ~90MB/s and fills the disk before any timeout fires. Keep the first 64 such
+    // events verbatim (forensics) and fall back to the same 2^n cadence afterwards.
+    static std::atomic<uint64_t> g_staleGuardUnusableLogged{ 0 };
+    bool logUnusable = false;
+    if (zeroHeader && !resolved) {
+        const uint64_t u = g_staleGuardUnusableLogged.fetch_add(1, std::memory_order_relaxed) + 1;
+        logUnusable = (u <= 64) || ((u & (u - 1)) == 0);
+    }
+    if ((n & (n - 1)) == 0 || logUnusable) {
         // Which region the unusable target sits in is the whole question for the zero-header arm:
         // nothing to forward to means the object was reclaimed, and a region's own type says
         // whether that reclamation already happened (GARBAGE/FREE) or whether the payload was

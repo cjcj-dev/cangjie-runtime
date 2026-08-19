@@ -1019,8 +1019,11 @@ static ArrayRef PinArray(const ArrayRef array)
     CHECK_DETAIL(mutator != nullptr, "Mutator has not initialized or has been fini: %p", mutator);
     CHECK_DETAIL(!mutator->InSaferegion(), "Mutator to be fini should not be in saferegion");
     // forbid gc thread to move this region. array must already be plain (see PlainArrayRef).
-    Heap::GetHeap().GetCollector().AddRawPointerObject(array);
-    return static_cast<ArrayRef>(array);
+    // The pin may resolve a movable from-copy to its to-version (oracleblack face c):
+    // the caller must hand out the RESOLVED payload, and MCC_ReleaseRawData will Dec the
+    // same region the pin Inc'd.
+    BaseObject* pinned = Heap::GetHeap().GetCollector().PinRawPointerObject(array);
+    return static_cast<ArrayRef>(pinned);
 }
 
 // Return the raw pointer of input array object, isCopy records whether memory copy occurs.
