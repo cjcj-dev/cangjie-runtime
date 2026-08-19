@@ -306,7 +306,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
             static const bool youngConcMarkOn = []() {
-                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
+                const char* v = static_cast<const char*>("1") /* pinned-on:MRT_GCV2_YOUNG_CONC_MARK */;
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
             if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {
