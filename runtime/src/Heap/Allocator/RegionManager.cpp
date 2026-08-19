@@ -1449,11 +1449,9 @@ size_t RegionManager::ExemptFromRegions()
         // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
         // freed at select, not entered into the relocation set. Post-mark
         // live==0 is that class (OOM dump: kept-publish 3942 live=0 hole=258MB).
-        // IsKnownEmpty would miss null-face pages (cjpmnull2 keep). Young pages
-        // stay for the nested minor. Do not CollectRegion — GetRouteMarkView
-        // is only valid after PrepareForwardable.
-        if (liveBytes == 0 && rawPtrCnt == 0 && !fromRegion->HasMarkStartAllocGap() &&
-            !fromRegion->IsYoungRegion()) {
+        // Free here, before PrepareForwardable, so they never become
+        // FORWARDABLE (NW keep-from UAF was ForwardRegion Collect after Route).
+        if (liveBytes == 0 && rawPtrCnt == 0 && !fromRegion->HasMarkStartAllocGap()) {
             RegionInfo* del = fromRegion;
             CHECK(del->IsFromRegion());
             RemoveRegionLocked(&fromRegionList, del);
