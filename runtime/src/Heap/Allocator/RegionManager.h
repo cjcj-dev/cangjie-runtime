@@ -365,13 +365,15 @@ public:
     {
         MarkView<G> view = region->GetRouteMarkView<G>();
         const bool knownEmpty = IsKnownEmptyForView(region, view);
+        const uint16_t freePath = RegionLifeDiag::TakeNextFreePath();
         // whoempty: record the *decision*, with the live-byte count it was made on, into the same
         // ring ClearUnits writes to.  ClearUnits passes liveBefore as a literal 0
         // (RegionInfo.h:1429 `TraceClear::NoteRange(unitAddress, size, "clear_units", nullptr, 0)`),
         // so a `liveBefore=0` in a clear entry says nothing about the region -- it is a constant.
         // This entry carries the real number, taken at the one edge where a region dies.
         TraceClear::NoteRange(region->GetRegionStart(), region->GetRegionSize(),
-                              knownEmpty ? "coll_empty" : "coll_live", region, region->GetLiveByteCount());
+                              knownEmpty ? "coll_empty" : "coll_live", region, region->GetLiveByteCount(),
+                              static_cast<unsigned>(G), freePath);
         DLOG(REGION, "collect region %p@[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
              region->GetLiveByteCount(), region->GetRegionEnd(), region->GetRegionType());
         // f3why2/livesame: always-on enter + knownEmpty_marked class.
@@ -381,7 +383,6 @@ public:
         GarbRegionDiag::NoteCollectEnter(region);
         // regionlife: free-edge accounting (default off; also via WHOZERO).
         {
-            uint16_t freePath = RegionLifeDiag::TakeNextFreePath();
             RegionLifeDiag::NoteFree(region, freePath);
             // holdercapture: last instant the mark face still exists. InitFreeUnits is
             // below; after it the bitmap/LiveInfo answer for the wrong reason.

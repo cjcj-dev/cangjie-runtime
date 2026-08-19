@@ -14,6 +14,8 @@
 
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
+#include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 
 namespace MapleRuntime {
@@ -44,6 +46,16 @@ struct Entry {
     unsigned int isGhost = kUnknownRegionField;
     unsigned int regionType = kUnknownRegionField;
     unsigned int routeState = kUnknownRegionField;
+    unsigned int collectGen = kUnknownRegionField;
+    unsigned int freePath = kUnknownRegionField;
+    unsigned int wasYoung = kUnknownRegionField;
+    unsigned int routeMarkYoung = kUnknownRegionField;
+    unsigned int allocating = kUnknownRegionField;
+    unsigned int knownEmpty = kUnknownRegionField;
+    unsigned int neverExamined = kUnknownRegionField;
+    unsigned int markedThisCycle = kUnknownRegionField;
+    unsigned int gcReason = kUnknownRegionField;
+    unsigned int liveZero = kUnknownRegionField;
     char kind[kKindLen] = {};
 };
 
@@ -52,12 +64,110 @@ Entry gRing[kCap];
 size_t gNext = 0;
 size_t gTotal = 0;
 
+struct ClassRow {
+    std::atomic<uint32_t> key{ 0 };
+    std::atomic<uint64_t> n{ 0 };
+};
+constexpr size_t kClassCap = 64;
+ClassRow gCollLiveClass[kClassCap];
+std::atomic<uint64_t> gCollLiveLookup{ 0 };
+std::atomic<uint64_t> gCollLiveSat{ 0 };
+std::atomic<bool> gClassAtexit{ false };
+
+uint32_t MakeClassKey(const Entry& e)
+{
+    return (e.collectGen & 1u) | ((e.freePath & 7u) << 1) | ((e.routeState & 7u) << 4) | ((e.knownEmpty & 1u) << 7) |
+        ((e.neverExamined & 1u) << 8) | ((e.allocating & 1u) << 9) | ((e.routeMarkYoung & 1u) << 10) |
+        ((e.isGhost & 1u) << 11) | ((e.gcReason & 15u) << 12) | ((e.wasYoung & 1u) << 16) |
+        ((e.regionType & 15u) << 17) | ((e.markedThisCycle & 1u) << 21) | ((e.liveZero & 1u) << 22);
+}
+
+void BumpCollLiveClass(const Entry& e)
+{
+    gCollLiveLookup.fetch_add(1, std::memory_order_relaxed);
+    const uint32_t key = MakeClassKey(e) | 0x80000000u;
+    for (size_t i = 0; i < kClassCap; ++i) {
+        uint32_t cur = gCollLiveClass[i].key.load(std::memory_order_acquire);
+        if (cur == key) {
+            gCollLiveClass[i].n.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        if (cur == 0) {
+            uint32_t expected = 0;
+            if (gCollLiveClass[i].key.compare_exchange_strong(expected, key, std::memory_order_acq_rel,
+                                                              std::memory_order_acquire)) {
+                gCollLiveClass[i].n.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            if (expected == key) {
+                gCollLiveClass[i].n.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+        }
+    }
+    gCollLiveSat.fetch_add(1, std::memory_order_relaxed);
+}
+
+void DumpCollLiveClass()
+{
+    std::fprintf(stderr, "[WHODEAD][class] lookup=%lu sat=%lu\n",
+                 static_cast<unsigned long>(gCollLiveLookup.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long>(gCollLiveSat.load(std::memory_order_relaxed)));
+    for (size_t i = 0; i < kClassCap; ++i) {
+        const uint32_t key = gCollLiveClass[i].key.load(std::memory_order_relaxed);
+        const uint64_t n = gCollLiveClass[i].n.load(std::memory_order_relaxed);
+        if (key == 0 || n == 0) {
+            continue;
+        }
+        std::fprintf(stderr,
+                     "[WHODEAD][class] n=%lu cgen=%u fpath=%u route=%u ke=%u nv=%u alloc=%u rmy=%u gh=%u "
+                     "reason=%u y=%u rtype=%u mk=%u lz=%u\n",
+                     static_cast<unsigned long>(n), key & 1u, (key >> 1) & 7u, (key >> 4) & 7u, (key >> 7) & 1u,
+                     (key >> 8) & 1u, (key >> 9) & 1u, (key >> 10) & 1u, (key >> 11) & 1u, (key >> 12) & 15u,
+                     (key >> 16) & 1u, (key >> 17) & 15u, (key >> 21) & 1u, (key >> 22) & 1u);
+    }
+    std::fflush(stderr);
+}
+
+void EnsureClassAtexit()
+{
+    bool expected = false;
+    if (gClassAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit(DumpCollLiveClass);
+    }
+}
+
 void RecordEntry(const Entry& entry)
 {
     std::lock_guard<std::mutex> lock(gMu);
     gRing[gNext % kCap] = entry;
     ++gNext;
     ++gTotal;
+}
+
+void FillRegionClass(Entry& e, void* region, unsigned collectGen, unsigned freePath)
+{
+    e.collectGen = collectGen;
+    e.freePath = freePath;
+    e.liveZero = e.liveBefore == 0 ? 1u : 0u;
+    e.gcReason = static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason);
+    if (region == nullptr) {
+        return;
+    }
+    RegionInfo* r = static_cast<RegionInfo*>(region);
+    e.regionType = static_cast<unsigned>(r->GetRegionType());
+    e.routeState = static_cast<unsigned>(r->GetRouteState());
+    e.isGhost = r->IsGhostFromRegion() ? 1u : 0u;
+    e.wasYoung = r->IsYoungRegion() ? 1u : 0u;
+    e.routeMarkYoung = r->GetRouteMarkGeneration() == Generation::Young ? 1u : 0u;
+    e.allocating = r->HasMarkStartAllocGap() ? 1u : 0u;
+    e.knownEmpty = r->IsRouteKnownEmpty() ? 1u : 0u;
+    LiveInfo* live = r->GetLiveInfo();
+    LiveInfo* ghost = r->GetLiveInfo0ForProbe();
+    RegionBitmap* mb = r->GetRouteMarkBitmap(ghost != nullptr ? ghost : live);
+    e.markedThisCycle = mb != nullptr ? 1u : 0u;
+    e.neverExamined =
+        (e.knownEmpty && mb == nullptr && r->GetRegionAllocPtr() > r->GetRegionStart()) ? 1u : 0u;
 }
 
 } // namespace
@@ -84,9 +194,16 @@ bool TraceClear::Enabled() { return kTraceClearOn; }
 
 void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore)
 {
+    NoteRange(start, size, kind, region, liveBefore, kUnknownRegionField, kUnknownRegionField);
+}
+
+void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
+                           unsigned collectGen, unsigned freePath)
+{
     if (!Enabled() || size == 0) {
         return;
     }
+    EnsureClassAtexit();
     Entry e;
     e.start = start;
     e.end = start + size;
@@ -95,6 +212,7 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
     e.phase = static_cast<unsigned int>(Heap::GetHeap().GetGCPhase());
     e.liveBefore = liveBefore;
     e.region = region;
+    FillRegionClass(e, region, collectGen, freePath);
     if (kind != nullptr) {
         std::strncpy(e.kind, kind, kKindLen - 1);
         e.kind[kKindLen - 1] = '\0';
@@ -102,8 +220,11 @@ void TraceClear::NoteRange(MAddress start, size_t size, const char* kind, void* 
     RecordEntry(e);
     VLOG(REPORT,
          "[GCV2][trace-clear] kind=%s range=[%#zx,%#zx) size=%zu region=%p liveBefore=%zu phase=%u "
+         "cgen=%u fpath=%u route=%u ke=%u nv=%u alloc=%u rmy=%u gh=%u reason=%u y=%u rtype=%u mk=%u "
          "gcStartNs=%llu total=%zu env=MRT_GCV2_TRACE_CLEAR=1|MRT_GCV2_F3_REGION=1",
          e.kind, static_cast<size_t>(e.start), static_cast<size_t>(e.end), size, region, liveBefore, e.phase,
+         e.collectGen, e.freePath, e.routeState, e.knownEmpty, e.neverExamined, e.allocating, e.routeMarkYoung,
+         e.isGhost, e.gcReason, e.wasYoung, e.regionType, e.markedThisCycle,
          static_cast<unsigned long long>(e.gcStartNs), gTotal);
 }
 
@@ -164,11 +285,17 @@ bool TraceClear::Lookup(MAddress addr, char* buf, size_t bufSize)
             continue;
         }
         if (addr >= e.start && addr < e.end) {
+            if (std::strcmp(e.kind, "coll_live") == 0) {
+                BumpCollLiveClass(e);
+            }
             std::snprintf(buf, bufSize,
                           "yes kind=%s range=[%#zx,%#zx) region=%p liveBefore=%zu ageNs=%llu phase=%u "
-                          "gcStartNs=%llu total=%zu",
+                          "cgen=%u fpath=%u route=%u ke=%u nv=%u alloc=%u rmy=%u gh=%u reason=%u y=%u "
+                          "rtype=%u mk=%u lz=%u gcStartNs=%llu total=%zu",
                           e.kind, static_cast<size_t>(e.start), static_cast<size_t>(e.end), e.region, e.liveBefore,
-                          static_cast<unsigned long long>(TimeUtil::NanoSeconds() - e.ns), e.phase,
+                          static_cast<unsigned long long>(TimeUtil::NanoSeconds() - e.ns), e.phase, e.collectGen,
+                          e.freePath, e.routeState, e.knownEmpty, e.neverExamined, e.allocating, e.routeMarkYoung,
+                          e.isGhost, e.gcReason, e.wasYoung, e.regionType, e.markedThisCycle, e.liveZero,
                           static_cast<unsigned long long>(e.gcStartNs), gTotal);
             return true;
         }
