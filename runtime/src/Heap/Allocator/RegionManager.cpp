@@ -2628,9 +2628,11 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool incompleteRoute = rsKeep == RegionInfo::RouteState::ROUTING ||
             rsKeep == RegionInfo::RouteState::ROUTED;
         const bool liveResidual = region->GetLiveByteCount() > 0;
+        // hangfloor: young neverExamined×keep fills the heap. Old from-pages
+        // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
         if (region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
-            (incompleteRoute || liveResidual)) {
+            (incompleteRoute || liveResidual || !youngRegion)) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
         size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {
