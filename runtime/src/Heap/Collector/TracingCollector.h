@@ -404,6 +404,7 @@ public:
     }
 
     GCStats& GetGCStats() override { return collectorResources.GetGCStats(); }
+    GCReason GetGCReason() const { return gcReason; }
 
     virtual void UpdateGCStats();
     virtual uint16_t GetCurrentTagID()
@@ -459,7 +460,6 @@ protected:
     }
 
     inline void SetGCReason(const GCReason reason) { gcReason = reason; }
-    inline GCReason GetGCReason() const { return gcReason; }
 
     GCThreadPool* GetThreadPool() const { return collectorResources.GetThreadPool(); }
     // enum all common roots.
