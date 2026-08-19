@@ -17,6 +17,7 @@
 
 #include "Base/SysCall.h"
 #include "CollectorProxy.h"
+#include "MutatorAllocRate.h"
 #include "Common/RunType.h"
 #include "Common/ScopedObjectAccess.h"
 #include "LoaderManager.h"
@@ -68,6 +69,7 @@ void CollectorResources::Init()
     StartGCThreads();
     finalizerProcessor.Start();
     gcStats.Init();
+    MutatorAllocRate::initialize();
 }
 
 void CollectorResources::Fini()

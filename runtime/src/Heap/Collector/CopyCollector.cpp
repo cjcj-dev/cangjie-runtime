@@ -13,6 +13,7 @@
 
 #include "Base/GcLog.h"
 #include "Allocator/RegionSpace.h"
+#include "Heap/Collector/GcTrigger.h"
 #include "Heap/Verify/GarbRegionDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
@@ -118,6 +119,8 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         const char* minorDefersHeuEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_DEFERS_HEU */;
         const bool minorDefersHeu =
             minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
+        gcStats.RecordYoungStats(gcStats.youngCandidateBytes, gcStats.youngPromotedBytes, gcStats.collectedBytes,
+                                 gcTimeNs, maxCapacity);
         GCStats::YoungHeuThrottleDecision decision = gcStats.RecordYoungGCFinish(
             finishTime, allocatedAfter, gcStats.youngPromotedBytes, gcStats.youngCandidateBytes, maxCapacity,
             gcTimeNs, heuMinInterval, minorDefersHeu);
@@ -129,6 +132,15 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
              static_cast<unsigned long long>(heuMinInterval), maxCapacity / 4);
     } else {
         gcStats.RecordMajorGCFinish(finishTime);
+        gcStats.lastGcDurationNs.store(gcTimeNs, std::memory_order_relaxed);
+        const uint32_t warmupDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
+        if (warmupDone < kGcTriggerWarmupCycles) {
+            gcStats.warmupCyclesDone.store(warmupDone + 1, std::memory_order_relaxed);
+        }
+        if (gcStats.warmupCyclesDone.load(std::memory_order_relaxed) >= kGcTriggerWarmupCycles) {
+            gcStats.isWarm.store(true, std::memory_order_relaxed);
+        }
+        gcStats.isTimeTrustable.store(true, std::memory_order_relaxed);
     }
     collectorResources.NotifyGCFinished(gcIndex);
 }

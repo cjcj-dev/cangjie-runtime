@@ -7,6 +7,7 @@
 set(SRC_LIST
     "GcRequest.cpp"
     "GcStats.cpp"
+    "MutatorAllocRate.cpp"
     "Collector.cpp"
     "CollectorProxy.cpp"
     "CollectorResources.cpp"

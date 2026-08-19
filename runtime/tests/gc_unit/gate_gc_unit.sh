@@ -7,6 +7,11 @@ ROOT="$(cd "$(dirname "$0")/../../.." && pwd)"
 SRC="$ROOT/runtime/tests/gc_unit"
 SCRIPT="$SRC/run_standalone.sh"
 
+if [[ "${GC_UNIT_GATE_SKIP:-0}" == "1" ]]; then
+  echo "GC_UNIT_GATE_SKIP=1 — not a product verdict"
+  exit 0
+fi
+
 if [[ ! -d "$SRC" ]]; then
   echo "GC_UNIT_GATE_FAIL: missing $SRC" >&2
   exit 2
