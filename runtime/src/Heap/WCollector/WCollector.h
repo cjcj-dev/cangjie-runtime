@@ -168,10 +168,9 @@ public:
     // (ColourMask.h kFinalizableWired).
     //
     // c4unify: the arithmetic moved to ColourMask.h ComputeBadMasks so that this function and
-    // the three static initialisers in BaseObject.cpp stop being two independent copies of the
-    // same formula. Publication order and the set of published words are unchanged; the four
-    // flip_* functions below and their six call sites are untouched on purpose -- a table
-    // cannot see "a flip forgot to call set_good_masks", so that stays a separate change.
+    // the static initialisers in BaseObject.cpp stop being two independent copies of the
+    // same formula. storegood2 publishes StoreGood next to StoreBad (zAddress.cpp:83,87);
+    // the four flip_* functions still all funnel through this one writer.
     // flipseq: a monotonic count of colour publications.  The remap space is four values and a flip
     // is an xor, so a colour that was good at publication N is good again at N+2 for that
     // generation's mask -- "the slot recycled into good" and "the slot was painted after the target
@@ -193,6 +192,13 @@ public:
         ::g_cjLoadBadMask = m.loadBad;
         ::g_cjMarkBadMask = m.markBad;
         ::g_cjStoreBadMask = m.storeBad;
+        ::g_cjStoreGoodMask = m.storeGood;
+        // zAddress.cpp:87 StoreBad = StoreGood ^ StoreMetadataMask. Checked on every
+        // publication so the two exported words cannot drift (ColourMask.h ComputeBadMasks
+        // is the only writer; this CHECK is the runtime witness of that identity).
+        CHECK((m.storeGood ^ STORE_METADATA_MASK) == m.storeBad);
+        CHECK(::g_cjStoreGoodMask == m.storeGood);
+        CHECK(::g_cjStoreBadMask == m.storeBad);
     }
 
     // OpenJDK ZGlobalsPointers::flip_young_relocate_start/flip_old_relocate_start

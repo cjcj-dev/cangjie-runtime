@@ -388,6 +388,7 @@ void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
     uintptr_t wLoad = TAGGED_BITS_MASK | (REMAP_COLOUR_MASK ^ wRemap);
     uintptr_t wMark = wLoad | (MARKED_YOUNG_MASK & ~e.markedYoung) | (MARKED_OLD_MASK & ~e.markedOld);
     uintptr_t wStore = wMark | (REMEMBERED_MASK & ~e.remembered);
+    uintptr_t wStoreGood = wRemap | e.markedYoung | e.markedOld | e.remembered;
 
     bool injected = false;
     if (MaskEquivInjectOn() && g_maskEquivInjected.fetch_add(1, std::memory_order_relaxed) == 0) {
@@ -399,7 +400,8 @@ void MaskEquivCheck(const EpochColours& e, const BadMasks& m)
 
     g_maskEquivChecked.fetch_add(1, std::memory_order_relaxed);
     const bool mismatch =
-        (wRemap != m.remapColour) || (wLoad != m.loadBad) || (wMark != m.markBad) || (wStore != m.storeBad);
+        (wRemap != m.remapColour) || (wLoad != m.loadBad) || (wMark != m.markBad) || (wStore != m.storeBad) ||
+        (wStoreGood != m.storeGood) || ((wStoreGood ^ STORE_METADATA_MASK) != m.storeBad);
     if (mismatch) {
         size_t n = g_maskEquivMismatch.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 16) {

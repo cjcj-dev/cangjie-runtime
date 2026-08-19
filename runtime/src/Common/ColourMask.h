@@ -40,6 +40,11 @@ extern unsigned long g_cjMarkBadMask;
 // Store barriers reject references that are mark-bad or missing the current Remembered epoch bit
 // (OpenJDK zAddress.hpp:216-217, zAddress.cpp:83-87). Load/mark masks do not include Remembered.
 extern unsigned long g_cjStoreBadMask;
+
+// Store-good colour the compiler ORs onto a newly stored heap reference after the store-bad
+// test hits (OpenJDK ZPointerStoreGoodMask, zAddress.cpp:83 / zBarrier.inline.hpp:448-450).
+// StoreGood = current remap ∨ current MarkedYoung ∨ current MarkedOld ∨ current Remembered.
+extern unsigned long g_cjStoreGoodMask;
 }
 
 namespace MapleRuntime {
@@ -178,6 +183,9 @@ struct BadMasks {
     uintptr_t loadBad;
     uintptr_t markBad;
     uintptr_t storeBad;
+    // Store-good colour word (zAddress.cpp:83). Kept next to storeBad so a flip cannot
+    // publish one without the other; storeGood ^ STORE_METADATA_MASK == storeBad.
+    uintptr_t storeGood;
 };
 
 // Token-for-token transcription of WCollector::set_good_masks (WCollector.h:132-139 @ 6adf9dd0),
@@ -199,7 +207,11 @@ constexpr BadMasks ComputeBadMasks(EpochColours e)
         loadBad | (MARKED_YOUNG_MASK & ~e.markedYoung) | (MARKED_OLD_MASK & ~e.markedOld);
     // :139  g_cjStoreBadMask = markBad | (REMEMBERED_MASK & ~currentRemembered);
     const uintptr_t storeBad = markBad | (REMEMBERED_MASK & ~e.remembered);
-    return BadMasks{ remapColour, loadBad, markBad, storeBad };
+    // :83   ZPointerStoreGoodMask = MarkGood | Remembered
+    //       = current remap | current MarkedYoung | current MarkedOld | current Remembered.
+    // :87   StoreBad = StoreGood ^ StoreMetadataMask  (TAGGED_BITS_MASK is 0).
+    const uintptr_t storeGood = remapColour | e.markedYoung | e.markedOld | e.remembered;
+    return BadMasks{ remapColour, loadBad, markBad, storeBad, storeGood };
 }
 
 // The epoch WCollector starts in: the member initialisers at WCollector.h:116-122.
@@ -208,6 +220,11 @@ constexpr EpochColours kInitialEpochColours = { ZPointerRemapped10 | ZPointerRem
                                                 MARKED_YOUNG_0,
                                                 MARKED_OLD_0,
                                                 REMEMBERED_0 };
+
+// zAddress.cpp:87 at the initial epoch: StoreBad == StoreGood ^ StoreMetadataMask.
+constexpr BadMasks kInitialBadMasks = ComputeBadMasks(kInitialEpochColours);
+static_assert((kInitialBadMasks.storeGood ^ STORE_METADATA_MASK) == kInitialBadMasks.storeBad,
+              "initial StoreGood ^ STORE_METADATA_MASK != StoreBad");
 
 // Self-heal CAS bound for load barriers (ATOMIC_READ_PROTOCOL Q2). ZGC terminates
 // self-heal via colour monotonicity; our Forward-phase writers can re-tag the same

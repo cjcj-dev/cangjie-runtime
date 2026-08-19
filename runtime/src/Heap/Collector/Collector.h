@@ -55,7 +55,8 @@ enum CollectorType {
 // (Collector.cpp:109-146), deliberately: MRT_GCV2_MASKEQUIV=1 arms it, and
 // MRT_GCV2_MASKEQUIV_INJECT=1 forces exactly one synthetic divergence so that "the probe never
 // ran" is distinguishable from "there was no divergence". Default off; the entry point returns
-// immediately when unarmed, so the product path publishes the same four words it always did.
+// immediately when unarmed, so the product path publishes the same words it always did
+// (storegood2 adds StoreGood next to StoreBad; the check covers that pair too).
 //
 // What this covers that the compile-time table cannot: which value each flip actually publishes,
 // and in what order. What neither covers: a flip that forgets to call set_good_masks at all.
