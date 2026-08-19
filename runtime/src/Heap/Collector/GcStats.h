@@ -72,7 +72,7 @@ public:
     static std::atomic<uint64_t> prevGcStartTime;
     static std::atomic<uint64_t> prevGcFinishTime;
 
-    GCReason reason;
+    GCReason reason = GC_REASON_USER;
     bool isConcurrentMark;
     bool async;
 
