@@ -87,10 +87,11 @@ const char* PathName(RegisterPath p)
     }
 }
 
-// Match RecordPromotedCrossGenEdges liveness gate (RegionManager.cpp:266-289).
+// Match RecordPromotedCrossGenEdges liveness gate (RegionManager.cpp:324-326).
 bool UseLiveOnly(RegionInfo* region, MarkView<Generation::Young> view)
 {
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
     return hasObjectLiveness && region->IsLiveCountAuthoritative();
 }
 
@@ -187,7 +188,8 @@ void SnapshotDomainEdgesAtRegister(RegionInfo* region, MarkView<Generation::Youn
         return;
     }
     static const bool skipOne = false /* pinned:MRT_GCV2_PROMO_DOMAIN_SKIP_ONE */;
-    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+    bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+        region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = UseLiveOnly(region, view);
     region->VisitAllObjects([&](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
@@ -305,8 +307,6 @@ void NoteRegisterGate(uint32_t reason, uint8_t site, bool registered)
 }
 
 size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
-                    const std::function<bool(RefField<>&)>& isStoreGood,
-                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood,
                     const std::function<void(MAddress)>& recordSlot)
 {
     if (!Enabled()) {
@@ -318,22 +318,42 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
     auto t0 = std::chrono::steady_clock::now();
     size_t recorded = 0;
 
-    std::lock_guard<std::mutex> lg(g_mu);
-    for (Entry& e : g_entries) {
-        if (e.discharged || e.region == nullptr) {
-            continue;
+    // Snapshot under the lock, walk outside it. TakeRegion → CheckNotUndischargedForReuse
+    // also takes g_mu; holding it across VisitAllObjects would stall mutator alloc for
+    // the whole remset walk (zRelocate.cpp:1268-1285 walks off the page-table lock).
+    struct WorkItem {
+        RegionInfo* region;
+        MarkView<Generation::Young> view;
+        RegisterPath path;
+        bool injectLeave;
+    };
+    std::vector<WorkItem> work;
+    {
+        std::lock_guard<std::mutex> lg(g_mu);
+        work.reserve(g_entries.size());
+        for (Entry& e : g_entries) {
+            if (e.discharged || e.region == nullptr) {
+                continue;
+            }
+            const bool injectLeave = injectUndischarged && e.region == g_entries.front().region;
+            work.push_back({ e.region, e.youngView, e.path, injectLeave });
         }
-        RegionInfo* region = e.region;
-        MarkView<Generation::Young> view = e.youngView;
+    }
+
+    for (WorkItem& item : work) {
+        RegionInfo* region = item.region;
+        MarkView<Generation::Young> view = item.view;
         if (region->IsSafeKnownYoungEmpty(view)) {
-            e.discharged = true;
             continue;
         }
-        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr;
+        bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
+            region->GetResurrectBitmap() != nullptr;
         bool useLiveOnly = UseLiveOnly(region, view);
 
-        // Product remset heal (ZGC remap_and_maybe_add_remset). Dual-run edge sets were
-        // snapshotted at Register; here we still walk for Record + store-good colour.
+        // ZGC remap_and_maybe_add_remset (zRelocate.cpp:1227-1255): resolve first
+        // (load barrier + CAS self-heal), then classify the healed target.
+        // ColourStoreGood never Records, so a store-good early-exit after
+        // ref_fix_bulk would drop every already-healed old→young edge.
         region->VisitAllObjects([&](BaseObject* object) {
             if (object == nullptr || !object->HasRefField()) {
                 return;
@@ -343,10 +363,6 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
             }
             object->ForEachRefField([&](RefField<>& field) {
                 MAddress slot = reinterpret_cast<MAddress>(&field);
-                if (isStoreGood(field)) {
-                    g_storeGoodEarly.fetch_add(1, std::memory_order_relaxed);
-                    return;
-                }
                 BaseObject* target = resolve(field);
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
@@ -356,17 +372,30 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
                     return;
                 }
                 recordSlot(slot);
-                colorStoreGood(field, target);
                 ++recorded;
             });
         });
-        if (!(injectUndischarged && e.region == g_entries.front().region)) {
-            e.discharged = true;
-        } else {
+        if (item.injectLeave) {
             g_injectUndischarged.fetch_add(1, std::memory_order_relaxed);
             VLOG(REPORT,
                  "[PROMODOMAIN][INJECT] left undischarged region=%p path=%s (positive control)",
-                 e.region, PathName(e.path));
+                 item.region, PathName(item.path));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lg(g_mu);
+        for (Entry& e : g_entries) {
+            if (e.discharged || e.region == nullptr) {
+                continue;
+            }
+            if (injectUndischarged && e.region == g_entries.front().region) {
+                continue;
+            }
+            e.discharged = true;
+        }
+        if (ReconcileEnabled()) {
+            DiffAndStore(0, "post-discharge");
         }
     }
 
@@ -376,16 +405,19 @@ size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
     g_lastDischargeNs.store(ns, std::memory_order_relaxed);
     g_dischargeEdges.fetch_add(recorded, std::memory_order_relaxed);
 
-    if (ReconcileEnabled()) {
-        DiffAndStore(0, "post-discharge");
+    size_t tableBytes = 0;
+    size_t registered = 0;
+    {
+        std::lock_guard<std::mutex> lg(g_mu);
+        registered = g_entries.size();
+        tableBytes = g_entries.size() * sizeof(Entry) + g_registered.size() * sizeof(void*) +
+            (g_oldSlots.size() + g_domainSlots.size()) * sizeof(MAddress);
     }
-    size_t tableBytes = g_entries.size() * sizeof(Entry) + g_registered.size() * sizeof(void*) +
-        (g_oldSlots.size() + g_domainSlots.size()) * sizeof(MAddress);
     VLOG(REPORT,
          "[PROMODOMAIN][DISCHARGE] edges=%zu storeGoodEarly=%llu ns=%llu registered=%zu "
          "tableBytes≈%zu",
          recorded, static_cast<unsigned long long>(g_storeGoodEarly.load(std::memory_order_relaxed)),
-         static_cast<unsigned long long>(ns), g_entries.size(), tableBytes);
+         static_cast<unsigned long long>(ns), registered, tableBytes);
     return recorded;
 }
 
