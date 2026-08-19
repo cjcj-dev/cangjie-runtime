@@ -105,3 +105,32 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefuses)
     GC_EXPECT_EQ(life.ref.load(), 0);
     GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
 }
+
+GC_TEST(ZForwardingLife, ResetIdleWakesRetainClaimed)
+{
+    // Fifth face: retain_page n<0 inlines add_and_wait as WaitUntilDone.
+    // ExpireKept / InitRegionInfo ResetIdle the same words (ZGC destroys the
+    // forwarding). Without notify + n==0 exit the waiter sleeps forever.
+    Life life;
+    ZForwardingLife::ResetForForwarding(life.ref, life.claimed, life.done);
+    ZForwardingLife::in_place_relocation_claim_page(life.ref); // 1 → -1
+    GC_EXPECT_TRUE(life.ref.load() < 0);
+    std::atomic<bool> entered{ false };
+    std::atomic<bool> finished{ false };
+    std::atomic<bool> retained{ true };
+    std::thread waiter([&]() {
+        entered.store(true, std::memory_order_release);
+        const bool ok = ZForwardingLife::retain_page(life.ref, life.done);
+        retained.store(ok, std::memory_order_release);
+        finished.store(true, std::memory_order_release);
+    });
+    while (!entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    GC_EXPECT_FALSE(finished.load(std::memory_order_acquire));
+    ZForwardingLife::ResetIdle(life.ref, life.claimed, life.done);
+    waiter.join();
+    GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
+    GC_EXPECT_FALSE(retained.load(std::memory_order_acquire));
+}
