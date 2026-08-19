@@ -13,6 +13,7 @@
 #include <csignal>
 #include <cstdint>
 #include <cstring>
+#include <fcntl.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -37,6 +38,23 @@ int WaitChild(pid_t pid)
         return WEXITSTATUS(status);
     }
     return -2;
+}
+
+// Isolate a CHECK/SEGV child from the parent's logger and ForwardDataManager
+// singleton. FormatLog(RTLOG_FATAL) aborts after writing the shared logger;
+// a later test then AllocateRegionBitmap against an uninitialized arena
+// (bitmap != nullptr). Child stderr is discarded so the parent's PASS line
+// is not spliced with the child's Check-failed line.
+void EnterIsolatedChild()
+{
+    int devnull = open("/dev/null", O_WRONLY);
+    if (devnull >= 0) {
+        (void)dup2(devnull, STDERR_FILENO);
+        (void)dup2(devnull, STDOUT_FILENO);
+        (void)close(devnull);
+    }
+    (void)signal(SIGABRT, SIG_DFL);
+    (void)signal(SIGSEGV, SIG_DFL);
 }
 
 void WalkHasRefObject(TypeInfo* ti, BaseObject* obj)
@@ -66,6 +84,7 @@ GC_TEST(GctibZero, B_NullGctibSegvIsPointerArm)
     pid_t pid = fork();
     GC_EXPECT_TRUE(pid >= 0);
     if (pid == 0) {
+        EnterIsolatedChild();
         WalkHasRefObject(ti, fx.obj0);
         _exit(0);
     }
@@ -100,6 +119,7 @@ GC_TEST(GctibZero, C_OneRegionElseStillChecks)
     pid_t pid = fork();
     GC_EXPECT_TRUE(pid >= 0);
     if (pid == 0) {
+        EnterIsolatedChild();
         (void)ri.GetRoute(kCounter);
         _exit(0);
     }
