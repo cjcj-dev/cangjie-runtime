@@ -2614,6 +2614,29 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // reclaimed the same shape (1ec07b3c); young must match. B2 survivors-wiped is a mark
         // completeness defect, not a reclaim-policy defect: papering over it by keeping dead
         // young regions is what produces the hang.
+        //
+        // cjpmnull: ZGC register_empty_page / free_page only after mark (zGeneration.cpp:216-221)
+        // and never while the page is still in the relocation set. GetRouteMarkView mints its
+        // epoch from liveInfo0's face; IsKnownEmpty then treats view.epoch != snapshotEpoch as
+        // empty (RegionInfo.h:2642-2646). A FORWARDABLE/ROUTING/ROUTED region has not been
+        // copied — CollectRegion here makes F3 soft-null live holders (garbregion: route=3
+        // slots>0). Fall through to Route/Visit like a live page.
+        {
+            RegionInfo::RouteState rs = region->GetRouteState();
+            const bool stillInRelocationSet = rs == RegionInfo::RouteState::FORWARDABLE ||
+                rs == RegionInfo::RouteState::ROUTING || rs == RegionInfo::RouteState::ROUTED;
+            if (stillInRelocationSet && region->GetRegionAllocPtr() > region->GetRegionStart()) {
+                static std::atomic<size_t> g_fwdEmptyKeepReloc{ 0 };
+                size_t n = g_fwdEmptyKeepReloc.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (n <= 8 || (n & (n - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
+                        "[GCRECLAIM][fwd-empty-keep-reloc] n=%zu region=%p start=%#zx alloc=%#zx "
+                        "route=%u live=%zu knownEmpty=1 — skip CollectRegion",
+                        n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                        static_cast<unsigned>(rs), region->GetLiveByteCount());
+                }
+                // Fall through to RouteRegion / VisitLiveObjects.
+            } else {
         bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
         if (neverExamined) {
@@ -2655,6 +2678,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion<G>(region);
         return;
+            }
+        }
     }
 
     // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
