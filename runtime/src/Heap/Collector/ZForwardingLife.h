@@ -47,11 +47,17 @@ public:
     }
 
     // Region reuse / never-a-forwarding. 0 is terminal: retain_page refuses.
+    // Store 0 then notify: a waiter in WaitUntilDone (n<0 claimed) must observe
+    // the idle transition. ZGC never reuses a ZForwarding waiters still sit on;
+    // we ResetIdle in place (ExpireKeptPublish / InitRegionInfo), so the
+    // predicate is n==0 as well as is_done (zForwarding.cpp:96-100 add_and_wait
+    // only watches is_done because the object is not reset under them).
     static void ResetIdle(std::atomic<int32_t>& refCount, std::atomic<bool>& claimed, std::atomic<bool>& done)
     {
         claimed.store(false, std::memory_order_relaxed);
-        done.store(false, std::memory_order_relaxed);
         refCount.store(0, std::memory_order_release);
+        done.store(false, std::memory_order_release);
+        NotifyAll();
     }
 
     // zForwarding.cpp:51-53
@@ -82,7 +88,7 @@ public:
             }
             if (n < 0) {
                 g_retainRefusedClaimed.fetch_add(1, std::memory_order_relaxed);
-                WaitUntilDone(done);
+                WaitUntilDone(refCount, done);
                 return false;
             }
             if (refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {
@@ -173,27 +179,13 @@ private:
         Lock().cv.notify_all();
     }
 
-    static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect)
-    {
-        if (refCount.load(std::memory_order_acquire) == expect) {
-            return;
-        }
-        std::unique_lock<std::mutex> guard(Lock().mu);
-        while (refCount.load(std::memory_order_acquire) != expect) {
-            Lock().cv.wait(guard);
-        }
-    }
+    static void WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expect);
 
-    static void WaitUntilDone(const std::atomic<bool>& done)
-    {
-        if (done.load(std::memory_order_acquire)) {
-            return;
-        }
-        std::unique_lock<std::mutex> guard(Lock().mu);
-        while (!done.load(std::memory_order_acquire)) {
-            Lock().cv.wait(guard);
-        }
-    }
+    // zForwarding.cpp:96-100: wait until is_done, then refuse. Also exit on
+    // ref==0 (ResetIdle / detach) — ZGC destroys the forwarding instead.
+    // Defined in ZForwardingLife.cpp so the waiter can enter a saferegion
+    // (mutator cv.wait without it blocks STW: all-futex fifth face).
+    static void WaitUntilDone(std::atomic<int32_t>& refCount, const std::atomic<bool>& done);
 
     static std::atomic<uint64_t> g_retainRefusedReleased;
     static std::atomic<uint64_t> g_retainRefusedClaimed;
