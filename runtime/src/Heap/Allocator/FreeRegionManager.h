@@ -67,9 +67,8 @@ public:
                         &dirtyUnitTree, idx, num, idx + num, RegionInfo::GetUnitAddress(idx),
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
-                    // Same-cycle keep-from readers still name this payload
-                    // (LEAD 0819-12:2x). Wipe at the next cycle head.
-                    RegionInfo::DeferClearUnits(idx, num);
+                    // it makes sense to slow down allocation by clearing region memory.
+                    RegionInfo::ClearUnits(idx, num);
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
                     dirtyUnitTreeMutex.unlock();
                     return region;

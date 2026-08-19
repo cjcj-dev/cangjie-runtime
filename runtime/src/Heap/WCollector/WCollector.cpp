@@ -8948,7 +8948,6 @@ void WCollector::DoGarbageCollection()
     // the head of a cycle gives ours the same gap: by now every reader that could have loaded one
     // of these pointers has been through a phase transition.
     ForwardingTable::ReclaimRetired("cycle-start");
-    RegionInfo::ApplyDeferredClears("cycle-start");
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();

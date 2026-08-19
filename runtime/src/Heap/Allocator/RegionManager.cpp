@@ -1584,7 +1584,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 // The wipe is of the payload (GetUnitAddress(idx)), not of the UnitInfo
                 // array, so the lock itself survives the body.
                 RegionInfo::DrainScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
-                RegionInfo::DeferClearUnits(idx, num);
+                RegionInfo::ClearUnits(idx, num);
             }
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             return RegionInfo::InitRegion(idx, num, type);
