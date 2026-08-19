@@ -1441,38 +1441,6 @@ public:
         MapleRuntime::MemorySet(unitAddress, size, 0, size);
     }
 
-    // LEAD 0819-12:2x / ANALYSIS-crashoracle H1: keep-from hands a naked from pointer;
-    // same-cycle TakeRegion ClearUnits zeros it. Defer the wipe like f87e6f68
-    // (forwarding-table retire). Readers that still hold from see last cycle's
-    // bytes until the next DoGarbageCollection head.
-    static void DeferClearUnits(size_t idx, size_t cnt)
-    {
-        if (cnt == 0) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(DeferredClearMutex());
-        DeferredClears().push_back({ idx, cnt });
-        DeferredClearBytes().fetch_add(cnt * UNIT_SIZE, std::memory_order_relaxed);
-    }
-
-    static void ApplyDeferredClears(const char* why)
-    {
-        std::vector<std::pair<size_t, size_t>> pending;
-        {
-            std::lock_guard<std::mutex> lock(DeferredClearMutex());
-            pending.swap(DeferredClears());
-        }
-        size_t bytes = 0;
-        for (const auto& p : pending) {
-            bytes += p.second * UNIT_SIZE;
-            ClearUnits(p.first, p.second);
-        }
-        if (!pending.empty()) {
-            LOG(RTLOG_ERROR, "[GCV2][defer-clear] why=%s n=%zu bytes=%zu",
-                why != nullptr ? why : "?", pending.size(), bytes);
-        }
-    }
-
     static void ReleaseUnits(size_t idx, size_t cnt)
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
@@ -2903,24 +2871,6 @@ private:
     {
         static std::mutex mutex;
         return mutex;
-    }
-
-    static std::mutex& DeferredClearMutex()
-    {
-        static std::mutex mutex;
-        return mutex;
-    }
-
-    static std::vector<std::pair<size_t, size_t>>& DeferredClears()
-    {
-        static std::vector<std::pair<size_t, size_t>> pending;
-        return pending;
-    }
-
-    static std::atomic<size_t>& DeferredClearBytes()
-    {
-        static std::atomic<size_t> bytes{ 0 };
-        return bytes;
     }
 
     static uint64_t& CompactRouteTableGraceGeneration()
