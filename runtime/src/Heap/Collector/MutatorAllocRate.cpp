@@ -11,6 +11,7 @@
 #include <cstdlib>
 
 #include "Base/AtomicSpinLock.h"
+#include "Base/CString.h"
 #include "Base/Globals.h"
 #include "Base/LogFile.h"
 #include "Base/TimeUtils.h"
@@ -25,6 +26,12 @@ std::atomic<uint64_t> g_gcTriggerRuleTimer{ 0 };
 std::atomic<uint64_t> g_gcTriggerRuleWarmup{ 0 };
 std::atomic<uint64_t> g_gcTriggerRuleAllocRate{ 0 };
 std::atomic<uint64_t> g_gcTriggerRuleHighUsage{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRateArmed{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleMajorAllocRate{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleProactiveArmed{ 0 };
+std::atomic<uint64_t> g_gcTriggerRuleProactive{ 0 };
+std::atomic<uint32_t> g_gcTriggerYoungWorkers{ 1 };
+std::atomic<uint32_t> g_gcTriggerOldWorkers{ 1 };
 
 namespace {
 AtomicSpinLock g_statLock;
@@ -35,13 +42,14 @@ std::atomic<uint64_t> g_sampleCount{ 0 };
 TruncatedSeq g_samplesTime(100);
 TruncatedSeq g_samplesBytes(100);
 TruncatedSeq g_rate(100);
+std::atomic<size_t> g_softMaxHeapSize{ 0 };
 } // namespace
 
 void MutatorAllocRate::update_sampling_granule()
 {
     // zStat.cpp:951-955 — sampling_heap_granules = 128, align_up to granule size.
     constexpr size_t samplingHeapGranules = 128;
-    size_t softMax = Heap::GetHeap().GetMaxCapacity();
+    size_t softMax = soft_max_heap_size();
     if (softMax == 0) {
         softMax = 256 * MB;
     }
@@ -62,6 +70,23 @@ void MutatorAllocRate::initialize()
     g_samplesTime.reset();
     g_samplesBytes.reset();
     g_rate.reset();
+    // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Env missing or 0 ⇒ hard cap.
+    // ParseSizeFromEnv returns KB, same as cjHeapSize.
+    size_t hard = Heap::GetHeap().GetMaxCapacity();
+    size_t soft = hard;
+    const char* env = std::getenv("cjSoftMaxHeapSize");
+    if (env != nullptr) {
+        const size_t parsedKb = CString::ParseSizeFromEnv(env);
+        if (parsedKb > 0) {
+            const size_t parsed = parsedKb * KB;
+            if (hard == 0 || parsed <= hard) {
+                soft = parsed;
+            } else {
+                soft = hard;
+            }
+        }
+    }
+    g_softMaxHeapSize.store(soft, std::memory_order_release);
     update_sampling_granule();
     static std::atomic<bool> dumped{ false };
     bool expected = false;
@@ -69,15 +94,25 @@ void MutatorAllocRate::initialize()
         std::atexit([]() {
             std::fprintf(stderr,
                          "[GCV2][gctrigger] atexit armed=%llu turned=%llu timer=%llu warmup=%llu "
-                         "alloc_rate=%llu high_usage=%llu samples=%llu granule=%zu\n",
+                         "alloc_rate=%llu high_usage=%llu major_alloc_rate_armed=%llu major_alloc_rate=%llu "
+                         "proactive_armed=%llu proactive=%llu young_workers=%u old_workers=%u "
+                         "samples=%llu granule=%zu soft_max=%zu\n",
                          static_cast<unsigned long long>(g_gcTriggerArmed.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_gcTriggerTurned.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_gcTriggerRuleTimer.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_gcTriggerRuleWarmup.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_gcTriggerRuleAllocRate.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_gcTriggerRuleHighUsage.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             g_gcTriggerRuleMajorAllocRateArmed.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleMajorAllocRate.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleProactiveArmed.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_gcTriggerRuleProactive.load(std::memory_order_relaxed)),
+                         g_gcTriggerYoungWorkers.load(std::memory_order_relaxed),
+                         g_gcTriggerOldWorkers.load(std::memory_order_relaxed),
                          static_cast<unsigned long long>(MutatorAllocRate::sample_count()),
-                         MutatorAllocRate::sampling_granule());
+                         MutatorAllocRate::sampling_granule(),
+                         MutatorAllocRate::soft_max_heap_size());
         });
     }
 }
@@ -132,4 +167,13 @@ MutatorAllocRateStats MutatorAllocRate::stats()
 size_t MutatorAllocRate::sampling_granule() { return g_samplingGranule.load(std::memory_order_acquire); }
 
 uint64_t MutatorAllocRate::sample_count() { return g_sampleCount.load(std::memory_order_relaxed); }
+
+size_t MutatorAllocRate::soft_max_heap_size()
+{
+    size_t soft = g_softMaxHeapSize.load(std::memory_order_acquire);
+    if (soft != 0) {
+        return soft;
+    }
+    return Heap::GetHeap().GetMaxCapacity();
+}
 } // namespace MapleRuntime

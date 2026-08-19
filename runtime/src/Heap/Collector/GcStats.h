@@ -17,6 +17,7 @@
 #include "Base/ImmortalWrapper.h"
 #include "Base/Panic.h"
 #include "GcRequest.h"
+#include "Heap/Collector/TruncatedSeq.h"
 
 namespace MapleRuntime {
 // statistics for previous gc.
@@ -61,9 +62,11 @@ public:
 
     void RecordMajorGCFinish(uint64_t timestamp)
     {
-        youngHeuDeferralUsed = false;
-        SetPrevGCFinishTime(timestamp);
+        RecordMajorGCFinish(timestamp, 0, 0, 0, 0);
     }
+
+    void RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
+                             size_t collectedBytes, uint32_t totalCollections);
 
     static const char* YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision);
 
@@ -115,6 +118,15 @@ public:
     std::atomic<bool> isWarm{ false };
     std::atomic<bool> isTimeTrustable{ false };
     std::atomic<uint64_t> lastGcDurationNs{ 0 };
+    std::atomic<uint64_t> lastOldDurationNs{ 0 };
+    std::atomic<uint64_t> lastMajorFinishNs{ 0 };
+    std::atomic<uint32_t> collectionsAtLastMajor{ 0 };
+    std::atomic<size_t> usedAtLastMajorEnd{ 0 };
+    std::atomic<size_t> oldLiveAtMarkEnd{ 0 };
+    std::atomic<double> reclaimedPerYoungAvg{ 0.0 };
+    std::atomic<double> reclaimedPerOldAvg{ 0.0 };
+    std::atomic<double> lastYoungGcDurationAvgSec{ 0.0 };
+    std::atomic<double> lastOldGcDurationAvgSec{ 0.0 };
 
     void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
                           size_t maxCapacity);
@@ -124,6 +136,10 @@ private:
     // second consecutive minor must leave the clock alone so a major cannot be
     // starved by a stream of young collections.
     bool youngHeuDeferralUsed = false;
+    TruncatedSeq youngDurationSeq{ 10 };
+    TruncatedSeq oldDurationSeq{ 10 };
+    TruncatedSeq youngReclaimedSeq{ 10 };
+    TruncatedSeq oldReclaimedSeq{ 10 };
 };
 extern std::atomic<size_t> g_gcCount;
 extern std::atomic<uint64_t> g_gcTotalTimeUs;

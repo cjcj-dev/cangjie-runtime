@@ -28,6 +28,9 @@ public:
     static MutatorAllocRateStats stats();
     static size_t sampling_granule();
     static uint64_t sample_count();
+    // zDirector.cpp:867 / zHeap.cpp:61 — SoftMaxHeapSize. Trigger denominator
+    // only; allocation failure still uses hard capacity.
+    static size_t soft_max_heap_size();
 
 private:
     static void update_sampling_granule();

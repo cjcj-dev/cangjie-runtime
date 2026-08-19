@@ -1529,16 +1529,38 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             in.allocRateSdBps = rate.sd;
             in.usedBytes = allocated;
             in.youngUsedBytes = youngAllocated;
+            in.oldUsedBytes = allocated > youngAllocated ? allocated - youngAllocated : 0;
             in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
+            in.softMaxBytes = MutatorAllocRate::soft_max_heap_size();
             in.lastGcDurationSec =
                 static_cast<double>(gcStats.lastGcDurationNs.load(std::memory_order_relaxed)) /
                 static_cast<double>(SECOND_TO_NANO_SECOND);
+            in.lastYoungGcDurationSec = gcStats.lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
+            in.lastOldGcDurationSec = gcStats.lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
             in.timeSinceLastGcSec = static_cast<double>(sinceNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
+            const uint64_t lastMajorNs = gcStats.lastMajorFinishNs.load(std::memory_order_relaxed);
+            const uint64_t sinceMajorNs = (lastMajorNs == 0 || nowNs <= lastMajorNs) ? sinceNs : nowNs - lastMajorNs;
+            in.timeSinceLastMajorSec = static_cast<double>(sinceMajorNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
             in.collectionIntervalSec = 0.0;
             in.warmupCyclesDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
+            in.totalCollections = static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed));
+            in.collectionsAtLastMajor = gcStats.collectionsAtLastMajor.load(std::memory_order_relaxed);
+            in.usedAtLastMajorEnd = gcStats.usedAtLastMajorEnd.load(std::memory_order_relaxed);
+            in.oldLiveAtMarkEnd = gcStats.oldLiveAtMarkEnd.load(std::memory_order_relaxed);
+            in.reclaimedPerYoungAvg = gcStats.reclaimedPerYoungAvg.load(std::memory_order_relaxed);
+            in.reclaimedPerOldAvg = gcStats.reclaimedPerOldAvg.load(std::memory_order_relaxed);
             in.isWarm = gcStats.isWarm.load(std::memory_order_relaxed);
             in.isTimeTrustable = gcStats.isTimeTrustable.load(std::memory_order_relaxed);
             const GcTriggerDecision d = DecideGcTrigger(in);
+            if (kGcTriggerDynamicWorkersEnabled) {
+                const uint32_t poolCap = static_cast<uint32_t>(
+                    std::max(Heap::GetHeap().GetCollectorResources().GetGCThreadCount(false), 1));
+                const double lastWorkers =
+                    static_cast<double>(g_gcTriggerYoungWorkers.load(std::memory_order_relaxed));
+                const GcWorkerSelection workers = SelectGcWorkers(in, poolCap, lastWorkers);
+                g_gcTriggerYoungWorkers.store(workers.youngWorkers, std::memory_order_relaxed);
+                g_gcTriggerOldWorkers.store(workers.oldWorkers, std::memory_order_relaxed);
+            }
             g_gcTriggerArmed.fetch_add(1, std::memory_order_relaxed);
             if (d.kind == GcTriggerKind::MAJOR) {
                 g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);

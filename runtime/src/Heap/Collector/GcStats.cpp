@@ -64,6 +64,19 @@ void GCStats::Init()
     isWarm.store(false, std::memory_order_relaxed);
     isTimeTrustable.store(false, std::memory_order_relaxed);
     lastGcDurationNs.store(0, std::memory_order_relaxed);
+    lastOldDurationNs.store(0, std::memory_order_relaxed);
+    lastMajorFinishNs.store(0, std::memory_order_relaxed);
+    collectionsAtLastMajor.store(0, std::memory_order_relaxed);
+    usedAtLastMajorEnd.store(0, std::memory_order_relaxed);
+    oldLiveAtMarkEnd.store(0, std::memory_order_relaxed);
+    reclaimedPerYoungAvg.store(0.0, std::memory_order_relaxed);
+    reclaimedPerOldAvg.store(0.0, std::memory_order_relaxed);
+    lastYoungGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
+    lastOldGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
+    youngDurationSeq.reset();
+    oldDurationSeq.reset();
+    youngReclaimedSeq.reset();
+    oldReclaimedSeq.reset();
 
     const char* jvmIhopEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_IHOP */;
     const bool useJvmIhop = jvmIhopEnv != nullptr && std::strcmp(jvmIhopEnv, "1") == 0;
@@ -136,9 +149,33 @@ void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size
     in.hasYoungSample = true;
     const size_t trigger = ComputeYoungTriggerBytes(in);
     youngTriggerBytes.store(trigger, std::memory_order_release);
+    youngDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
+    youngReclaimedSeq.add(static_cast<double>(collectedBytes));
+    lastYoungGcDurationAvgSec.store(youngDurationSeq.avg(), std::memory_order_relaxed);
+    reclaimedPerYoungAvg.store(youngReclaimedSeq.avg(), std::memory_order_relaxed);
     VLOG(REPORT,
          "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
          candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());
+}
+
+void GCStats::RecordMajorGCFinish(uint64_t timestamp, uint64_t durationNs, size_t usedAfter,
+                                  size_t collectedBytes, uint32_t totalCollections)
+{
+    youngHeuDeferralUsed = false;
+    SetPrevGCFinishTime(timestamp);
+    lastMajorFinishNs.store(timestamp, std::memory_order_relaxed);
+    lastOldDurationNs.store(durationNs, std::memory_order_relaxed);
+    collectionsAtLastMajor.store(totalCollections, std::memory_order_relaxed);
+    usedAtLastMajorEnd.store(usedAfter, std::memory_order_relaxed);
+    oldLiveAtMarkEnd.store(usedAfter, std::memory_order_relaxed);
+    if (durationNs > 0) {
+        oldDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
+        lastOldGcDurationAvgSec.store(oldDurationSeq.avg(), std::memory_order_relaxed);
+    }
+    if (collectedBytes > 0 || durationNs > 0) {
+        oldReclaimedSeq.add(static_cast<double>(collectedBytes));
+        reclaimedPerOldAvg.store(oldReclaimedSeq.avg(), std::memory_order_relaxed);
+    }
 }
 
 const char* GCStats::YoungHeuThrottleDecisionName(YoungHeuThrottleDecision decision)
