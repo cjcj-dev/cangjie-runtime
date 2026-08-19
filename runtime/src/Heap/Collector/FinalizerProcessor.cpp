@@ -93,7 +93,6 @@ void FinalizerProcessor::Run()
         bool hasPendingFeedHungryBuffers = false;
         {
             MRT_PHASE_TIMER("finalizerProcessor waitting time", FINALIZE);
-            bool waited = false;
             while (running) {
                 hasPendingFinalizableJob = hasFinalizableJob.load(std::memory_order_relaxed);
                 hasPendingReclaimHeapGarbage =
@@ -103,15 +102,8 @@ void FinalizerProcessor::Run()
                 if (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers) {
                     break;
                 }
-                if (waited && Uncommitter::Enabled()) {
-                    break;
-                }
                 Wait(iterationWaitTime);
-                waited = true;
-            }
-            if (!hasPendingReclaimHeapGarbage) {
-                hasPendingReclaimHeapGarbage =
-                    shouldReclaimHeapGarbage.exchange(false, std::memory_order_acq_rel);
+                UncommitIdleMemory();
             }
         }
 
@@ -119,8 +111,7 @@ void FinalizerProcessor::Run()
             break;
         }
 
-        if (UNLIKELY(!finalizerCJThreadInitialized) &&
-            (hasPendingFinalizableJob || hasPendingReclaimHeapGarbage || hasPendingFeedHungryBuffers)) {
+        if (UNLIKELY(!finalizerCJThreadInitialized)) {
             // Delay finalizer CJThread creation until the worker really has something to do,
             // but make all finalizer-side job types share the same one-time initialization.
             InitFinalizerCJThread();
@@ -140,8 +131,6 @@ void FinalizerProcessor::Run()
         if (hasPendingReclaimHeapGarbage) {
             ReclaimHeapGarbage();
         }
-
-        UncommitIdleMemory();
     }
     Fini();
 }
