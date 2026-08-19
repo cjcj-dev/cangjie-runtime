@@ -981,7 +981,11 @@ private:
         for (RegionInfo* region = garbageRegionList.GetHeadRegion(); region != nullptr;
              region = region->GetNextRegion()) {
             if (region == target) {
-                CHECK(region->IsGarbageRegion());
+                CHECK_DETAIL(region->IsGarbageRegion(),
+                             "TryTakeGarbageRegionAfterDispel region=%p type=%u ghost=%u "
+                             "(garbage list still names a non-GARBAGE region)",
+                             region, static_cast<unsigned>(region->GetRegionType()),
+                             static_cast<unsigned>(region->IsGhostFromRegion()));
                 CHECK(!region->IsGhostFromRegion());
                 // routedest: refuse a held region here too, so it is neither quarantined nor
                 // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.

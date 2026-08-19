@@ -79,3 +79,35 @@ GC_TEST(StayYoung, EnlistTypeMustNotStayLoneFrom)
     GC_EXPECT_TRUE(RegionInfo::RegionType::RECENT_FULL_REGION !=
                    RegionInfo::RegionType::FROM_REGION);
 }
+
+// regionType shares regionStateBitField with ghost/young/age. A plain read of the
+// bitfield member can tear against SetInGhostRegion / SetYoungAge CAS on the same
+// word (TryTakeGarbageRegionAfterDispel CHECK, RegionManager.h:984). GetRegionType
+// must observe the CAS writers.
+GC_TEST(StayYoung, GarbageTypeSurvivesGhostAndAgeCas)
+{
+    GcHeapFixture fx;
+    RegionInfo* r = fx.region0;
+    r->SetRegionType(RegionInfo::RegionType::GARBAGE_REGION);
+    r->SetInGhostRegion(1);
+    r->SetYoungAge(3);
+    GC_EXPECT_TRUE(r->IsGarbageRegion());
+    GC_EXPECT_TRUE(r->IsGhostFromRegion());
+    GC_EXPECT_EQ(r->GetYoungAge(), 3u);
+    GC_EXPECT_EQ(static_cast<unsigned>(r->GetRegionType()),
+                 static_cast<unsigned>(RegionInfo::RegionType::GARBAGE_REGION));
+    r->SetInGhostRegion(0);
+    GC_EXPECT_TRUE(r->IsGarbageRegion());
+    GC_EXPECT_TRUE(!r->IsGhostFromRegion());
+}
+
+// PrepareFromRegionList walks nextRegionIdx0. Reuse must not keep the previous
+// life's ghost successor (InitRegionInfo, RegionInfo.h).
+GC_TEST(StayYoung, InitRegionClearsGhostSuccessor)
+{
+    GcHeapFixture fx;
+    RegionInfo* r = fx.region0;
+    r->metadata.nextRegionIdx0 = 1;
+    r->InitRegionInfo(1, RegionInfo::UnitRole::SMALL_SIZED_UNITS);
+    GC_EXPECT_EQ(r->metadata.nextRegionIdx0, RegionInfo::NULLPTR_IDX);
+}
