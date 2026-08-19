@@ -165,9 +165,43 @@ std::atomic<uint64_t> g_storeBarrierSlowPath { 0 };
 // W1 (oraclecut F1 / cjpmnull5): store of a movable ghost-from value.
 // Default off — region lookup on every store. Flip to true for the
 // measurement SO: pre-fix >0, post-fix =0 is the F1 criterion.
-constexpr bool kW1GhostFromStoreProbe = false;
+constexpr bool kW1GhostFromStoreProbe = true;
 std::atomic<uint64_t> g_w1StoreTotal{ 0 };
 std::atomic<uint64_t> g_w1GhostFrom{ 0 };
+// oraclecut R4: holder side. A store whose HOLDER is a movable ghost-from copy lands in
+// memory a worker may copy concurrently (lost write -> to keeps the pre-store null); a
+// holder already FORWARDED is a write into a dead copy, lost with certainty.
+std::atomic<uint64_t> g_w1HolderGhost{ 0 };
+std::atomic<uint64_t> g_w1HolderForwarded{ 0 };
+
+inline void NoteW1HolderStore(Collector& collector, BaseObject* obj)
+{
+    if constexpr (!kW1GhostFromStoreProbe) {
+        return;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        return;
+    }
+    const uint64_t hdr = __atomic_load_n(reinterpret_cast<const uint64_t*>(obj), __ATOMIC_RELAXED);
+    if (((hdr >> 48) & 0x3u) == 3u) {
+        const uint64_t n = g_w1HolderForwarded.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][w1-holder] forwarded=%llu obj=%p — store into dead from-copy",
+                static_cast<unsigned long long>(n), static_cast<void*>(obj));
+        }
+        return;
+    }
+    // Static region-metadata lookup, not the Collector virtual: the gc_unit harness runs on the
+    // base Collector whose IsGhostFromObject is an AbortUnimplemented stub, and this probe sits on
+    // the product store path the suite exercises. GetGhostFromRegionAt is null on the fake heap.
+    if (RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj)) != nullptr) {
+        const uint64_t n = g_w1HolderGhost.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR, "[GCV2][w1-holder] ghost=%llu obj=%p — store into movable from-copy",
+                static_cast<unsigned long long>(n), static_cast<void*>(obj));
+        }
+    }
+}
 
 inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
 {
@@ -181,6 +215,9 @@ inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
             std::fprintf(stderr, "[GCV2][w1-store] atexit total=%llu ghostFrom=%llu\n",
                          static_cast<unsigned long long>(g_w1StoreTotal.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_w1GhostFrom.load(std::memory_order_relaxed)));
+            std::fprintf(stderr, "[GCV2][w1-holder] atexit ghost=%llu forwarded=%llu\n",
+                         static_cast<unsigned long long>(g_w1HolderGhost.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_w1HolderForwarded.load(std::memory_order_relaxed)));
             std::fflush(stderr);
         });
     }
@@ -188,7 +225,8 @@ inline void NoteW1GhostFromStore(Collector& collector, BaseObject* ref)
         return;
     }
     g_w1StoreTotal.fetch_add(1, std::memory_order_relaxed);
-    if (!collector.IsGhostFromObject(ref) || collector.IsUnmovableFromObject(ref)) {
+    // Static lookup for the same gc_unit-harness reason as the holder probe below.
+    if (RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref)) == nullptr) {
         return;
     }
     const uint64_t n = g_w1GhostFrom.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -427,6 +465,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     // (second write of a registered edge must not re-enter RecordCrossGenEdge).
     NoteValueSideStore(ref, static_cast<uint8_t>(phase));
     NoteW1GhostFromStore(theCollector, ref);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
@@ -889,6 +928,7 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseObject* ref, MemoryOrder order) const
 {
     NoteW1GhostFromStore(theCollector, ref);
+    NoteW1HolderStore(theCollector, obj);
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
