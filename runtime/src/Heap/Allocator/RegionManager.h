@@ -683,24 +683,25 @@ public:
         return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
     }
 
-    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
+    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken token)
     {
-        // Copier already holds retain_page (TryMutatorRelocate / TryForwardObject).
-        // Nested RetainScope would CAS +1 again; DrainScope invert then parks
-        // the same thread in WaitUntilDone (zForwarding.cpp:96-100) with its
-        // own token still live — fifth-face self-deadlock.
+        // alreadyHeld: caller already holds retain_page (TryMutatorRelocate /
+        // TryForwardObject). Nested RetainScope would CAS +1 again; DrainScope
+        // invert then parks the same thread in WaitUntilDone with its own
+        // token still live — fifth-face self-deadlock. Default false so the
+        // no-arg ForwardObjectExclusive path still retains.
         return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION,
-                                       /*alreadyHeld=*/true) };
+                                       token.alreadyHeld) };
     }
 
-    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
+    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken token)
     {
         RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
         if (fromRegionInfo == nullptr) {
             return RoutePlan{ nullptr };
         }
         return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP,
-                                       /*alreadyHeld=*/true) };
+                                       token.alreadyHeld) };
     }
 
     RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, StwRouteToken)

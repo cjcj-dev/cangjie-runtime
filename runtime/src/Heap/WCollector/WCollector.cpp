@@ -86,7 +86,7 @@
 
 namespace MapleRuntime {
 struct CopierRouteMint {
-    static CopierRouteToken Make() { return CopierRouteToken(); }
+    static CopierRouteToken Make(bool alreadyHeld = false) { return CopierRouteToken(alreadyHeld); }
 };
 
 static_assert(sizeof(RefField<false>) == 8, "RefField colour layout must preserve the 64-bit ABI");
@@ -9883,7 +9883,7 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     // (zRelocate.cpp:354-372) does alloc+copy+insert with no safepoint; 乙1 is
     // the same rule for the object lock that routefix already applied to ROUTING.
     ForwardingTable::EnsureEntries(ghostFromRegion);
-    BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest;
+    BaseObject* planned = fwdTable.PlanRoute(obj, CopierRouteMint::Make(true)).dest;
     do {
         StateWord oldWord = obj->GetStateWord();
 

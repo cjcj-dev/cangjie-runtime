@@ -8,7 +8,9 @@
 
 #include <cstdio>
 #include <cstdlib>
-#include <sched.h>
+
+extern "C" bool MRT_EnterSaferegion(bool updateUnwindContext);
+extern "C" bool MRT_LeaveSaferegion();
 
 namespace MapleRuntime {
 
@@ -38,12 +40,16 @@ void ZForwardingLife::WaitUntilRef(std::atomic<int32_t>& refCount, int32_t expec
     if (refCount.load(std::memory_order_acquire) == expect) {
         return;
     }
-    // Yield, do not park on the process-wide cv: a mutator in cv.wait is
-    // not in a saferegion and blocks STW (fifth-face all-futex hang).
-    // NotifyAll still exists for mark_done / release_page; the waiter
-    // observes the published word via acquire load.
+    // Mutator handshake: MRT_EnterSaferegion is a C export that no-ops when
+    // GetMutator() is null (gc_unit / GC thread). cv.wait without it blocks
+    // STW (fifth-face all-futex hang).
+    const bool entered = MRT_EnterSaferegion(true);
+    std::unique_lock<std::mutex> guard(Lock().mu);
     while (refCount.load(std::memory_order_acquire) != expect) {
-        sched_yield();
+        Lock().cv.wait(guard);
+    }
+    if (entered) {
+        (void)MRT_LeaveSaferegion();
     }
 }
 
@@ -55,8 +61,13 @@ void ZForwardingLife::WaitUntilDone(std::atomic<int32_t>& refCount, const std::a
     if (done.load(std::memory_order_acquire) || refCount.load(std::memory_order_acquire) == 0) {
         return;
     }
+    const bool entered = MRT_EnterSaferegion(true);
+    std::unique_lock<std::mutex> guard(Lock().mu);
     while (!done.load(std::memory_order_acquire) && refCount.load(std::memory_order_acquire) != 0) {
-        sched_yield();
+        Lock().cv.wait(guard);
+    }
+    if (entered) {
+        (void)MRT_LeaveSaferegion();
     }
 }
 
