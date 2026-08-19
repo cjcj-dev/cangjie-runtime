@@ -19,6 +19,7 @@
 #include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
+#include "Heap/Verify/MutatorRelocate.h"
 #include "Heap/Verify/ZgcSelfHealDiag.h"
 #include "Heap/WCollector/EnumBarrier.h"
 #include "Heap/WCollector/ForwardBarrier.h"
@@ -65,12 +66,24 @@ private:
 void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    // CUT-1: keep-from is transient (zBarrier.inline.hpp:72-107 heals only a
+    // proven-current address). Leave the slot load-bad so the next read re-enters.
+    if (MutatorRelocate::kSkipHealOnTransient &&
+        MutatorRelocate::CurrentResolveGrade() == MutatorRelocate::ResolveGrade::Transient) {
+        MutatorRelocate::NoteHealSkipped();
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 
 void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
                                   HealSite site) const
 {
+    if (MutatorRelocate::kSkipHealOnTransient &&
+        MutatorRelocate::CurrentResolveGrade() == MutatorRelocate::ResolveGrade::Transient) {
+        MutatorRelocate::NoteHealSkipped();
+        return;
+    }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
 }
 

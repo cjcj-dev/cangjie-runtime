@@ -347,6 +347,7 @@ public:
             }
             MutatorRelocate::NoteFunnelCall(funnelRole);
         }
+        MutatorRelocate::ResetResolveGrade();
         if (!Heap::IsHeapAddress(obj)) {
             if (funnel) {
                 nonHeapCount.fetch_add(1, std::memory_order_relaxed);
@@ -450,6 +451,7 @@ public:
             giveFromCount.fetch_add(1, std::memory_order_relaxed);
             routeNullCount.fetch_add(1, std::memory_order_relaxed);
         }
+        MutatorRelocate::NoteKeepFromExit();
         return obj;
     }
 

@@ -23,7 +23,14 @@ static std::atomic<uint64_t> g_waitEnter{ 0 };
 static std::atomic<uint64_t> g_waitGiveUp{ 0 };
 static std::atomic<uint64_t> g_waitReceipt{ 0 };
 static std::atomic<uint64_t> g_waitFatal{ 0 };
+static std::atomic<uint64_t> g_keepFromI1{ 0 };
+static std::atomic<uint64_t> g_keepFromI2{ 0 };
+static std::atomic<uint64_t> g_keepFromI3{ 0 };
+static std::atomic<uint64_t> g_healSkipped{ 0 };
 static thread_local bool t_inScope = false;
+static thread_local ResolveGrade t_grade = ResolveGrade::ProvenCurrent;
+static thread_local bool t_hasFallback = false;
+static thread_local Fallback t_lastFallback = Fallback::RETAIN_FAILED;
 static std::atomic<bool> g_atexit{ false };
 
 static void InstallAtexit()
@@ -63,6 +70,8 @@ void NoteRetainOk()
 
 void NoteFallback(Fallback why)
 {
+    t_hasFallback = true;
+    t_lastFallback = why;
     if (!kStats) {
         return;
     }
@@ -150,6 +159,47 @@ void NoteWaitFatal()
     g_waitFatal.fetch_add(1, std::memory_order_relaxed);
 }
 
+void ResetResolveGrade()
+{
+    t_grade = ResolveGrade::ProvenCurrent;
+    t_hasFallback = false;
+}
+
+void SetResolveGrade(ResolveGrade grade) { t_grade = grade; }
+
+ResolveGrade CurrentResolveGrade() { return t_grade; }
+
+void ClearLastFallback() { t_hasFallback = false; }
+
+void NoteKeepFromExit()
+{
+    t_grade = ResolveGrade::Transient;
+    if (!kStats) {
+        return;
+    }
+    InstallAtexit();
+    if (t_hasFallback && t_lastFallback == Fallback::COPY_FAILED) {
+        g_keepFromI1.fetch_add(1, std::memory_order_relaxed);
+    } else if (t_hasFallback && t_lastFallback == Fallback::PHASE) {
+        g_keepFromI2.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_keepFromI3.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void NoteHealSkipped()
+{
+    if (!kStats) {
+        return;
+    }
+    InstallAtexit();
+    const uint64_t n = g_healSkipped.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (n <= 8 || (n & (n - 1)) == 0) {
+        LOG(RTLOG_ERROR, "[GCV2][keepfrom_heal_skipped] n=%llu",
+            static_cast<unsigned long long>(n));
+    }
+}
+
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended)
 {
     (void)site;
@@ -168,7 +218,9 @@ void DumpSummary()
                  "self_mut=%llu self_gc=%llu self_rt=%llu "
                  "any_mut=%llu any_gc=%llu any_rt=%llu "
                  "funnel_mut=%llu funnel_gc=%llu "
-                 "waitEnter=%llu waitGiveUp=%llu waitReceipt=%llu waitFatal=%llu\n",
+                 "waitEnter=%llu waitGiveUp=%llu waitReceipt=%llu waitFatal=%llu "
+                 "keepfrom_i1=%llu keepfrom_i2=%llu keepfrom_i3=%llu "
+                 "keepfrom_heal_skipped=%llu\n",
                  static_cast<unsigned long long>(g_attempt.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_retainOk.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_alreadyFwd.load(std::memory_order_relaxed)),
@@ -186,7 +238,11 @@ void DumpSummary()
                  static_cast<unsigned long long>(g_waitEnter.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitGiveUp.load(std::memory_order_relaxed)),
                  static_cast<unsigned long long>(g_waitReceipt.load(std::memory_order_relaxed)),
-                 static_cast<unsigned long long>(g_waitFatal.load(std::memory_order_relaxed)));
+                 static_cast<unsigned long long>(g_waitFatal.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_keepFromI1.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_keepFromI2.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_keepFromI3.load(std::memory_order_relaxed)),
+                 static_cast<unsigned long long>(g_healSkipped.load(std::memory_order_relaxed)));
     std::fflush(stderr);
 }
 

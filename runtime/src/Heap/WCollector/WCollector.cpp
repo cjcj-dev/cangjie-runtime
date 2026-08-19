@@ -9554,6 +9554,9 @@ BaseObject* WCollector::ForwardObject(BaseObject* obj)
                 ToverFailDiag::NoteFwdSame();
             }
         }
+        if (to != obj) {
+            MutatorRelocate::SetResolveGrade(MutatorRelocate::ResolveGrade::ProvenCurrent);
+        }
         return to;
     }
     // GetRoute survivor gate / exclusive soft-miss: a movable ghost-from with no

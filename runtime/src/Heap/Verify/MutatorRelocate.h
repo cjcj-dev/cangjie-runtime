@@ -72,11 +72,23 @@ constexpr bool kMutatorSelfRelocate = true;
 // naked from while ClearUnits ran on the same page.
 constexpr bool kUnpublishedMeansKeepFrom = true;
 constexpr int kInflightWaitSpins = 4096;
+// ANALYSIS-crashoracle 第二轮 §3 CUT-1: load-good ⇒ 必是当前版本.
+// keep-from 答案禁止 ZgcSelfHealLoadGood (zBarrier.inline.hpp:72-107 只 heal
+// 已证明的当前地址). Invert this to restore the 1s crash (task ④).
+constexpr bool kSkipHealOnTransient = true;
 
 enum class UnpublishedAnswer : uint32_t {
     UseTo = 0,
     KeepFrom = 1,
     Wait = 2,
+};
+
+// Resolve-chain answer grade. proven-current may heal-good; transient
+// (every keep-from) must not — slot stays load-bad so the next read
+// re-enters the barrier (zGeneration.inline.hpp:131-140).
+enum class ResolveGrade : uint32_t {
+    ProvenCurrent = 0,
+    Transient = 1,
 };
 
 inline UnpublishedAnswer AnswerUnpublished(bool tableHit, bool regionPublished, bool retainRefused)
@@ -173,6 +185,15 @@ void NoteWaitEnter();   // entered WaitRoutedTipReady
 void NoteWaitGiveUp();  // left it without a to-version (spin bound hit, or copy not started)
 void NoteWaitReceipt(); // left it with a to-version
 void NoteWaitFatal();   // reached the permanentHole CHECK_DETAIL -- the 4096-spin FATAL leg
+
+// CUT-1 answer grade. Reset at remap entry; keep-from sets Transient.
+void ResetResolveGrade();
+void SetResolveGrade(ResolveGrade grade);
+ResolveGrade CurrentResolveGrade();
+void ClearLastFallback();
+// KeepFrom 出口按 I1 COPY_FAILED / I2 PHASE / I3 其余 计数.
+void NoteKeepFromExit();
+void NoteHealSkipped();
 
 // --- pin / drain ------------------------------------------------------------------------
 void NoteDrain(Retire site, uint64_t spunNanos, bool contended);

@@ -74,6 +74,19 @@ GC_TEST(MutatorRelocate, ForwardedRegionNoEntryKeepsFrom)
     tab->Destroy();
 }
 
+GC_TEST(MutatorRelocate, KeepFromSetsTransientGrade)
+{
+    MutatorRelocate::ResetResolveGrade();
+    GC_EXPECT_TRUE(MutatorRelocate::CurrentResolveGrade() ==
+                   MutatorRelocate::ResolveGrade::ProvenCurrent);
+    MutatorRelocate::NoteKeepFromExit();
+    GC_EXPECT_TRUE(MutatorRelocate::CurrentResolveGrade() ==
+                   MutatorRelocate::ResolveGrade::Transient);
+    MutatorRelocate::SetResolveGrade(MutatorRelocate::ResolveGrade::ProvenCurrent);
+    GC_EXPECT_TRUE(MutatorRelocate::CurrentResolveGrade() ==
+                   MutatorRelocate::ResolveGrade::ProvenCurrent);
+}
+
 GC_TEST(MutatorRelocate, RefcountZeroRetainRefusesThenWait)
 {
     std::atomic<int32_t> ref{ 0 };
