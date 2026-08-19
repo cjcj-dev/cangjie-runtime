@@ -86,6 +86,51 @@ GC_TEST(MutatorRelocate, ForwardedRegionNoEntryKeepsFrom)
     tab->Destroy();
 }
 
+GC_TEST(FwdSpin, LockedWaiterSeesInsertBeforeUnlock)
+{
+    // Positive control of the old hang: yield-while-LOCKED never looks at the
+    // table, so a copier that has insert()'d but not yet UnlockObject leaves
+    // waiters spinning (REPORT-llstore hang_live / WCollector.cpp:9570).
+    // New policy: tableHit ⇒ UseTo (zRelocate.cpp:386-389).
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(true, false) ==
+                   MutatorRelocate::LockedWaiterAnswer::UseTo);
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(false, true) ==
+                   MutatorRelocate::LockedWaiterAnswer::UsePlanned);
+    GC_EXPECT_TRUE(MutatorRelocate::AnswerLockedWaiter(false, false) ==
+                   MutatorRelocate::LockedWaiterAnswer::Yield);
+
+    constexpr MAddress kStart = 0x1000;
+    ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const MAddress from = kStart + 16;
+    const MAddress to = 0x2000;
+    std::atomic<int> phase{ 0 };
+    std::atomic<int> waiterGot{ 0 };
+    std::thread copier([&]() {
+        (void)tab->insert(from, to);
+        phase.store(1, std::memory_order_release);
+        while (phase.load(std::memory_order_acquire) < 2) {
+            std::this_thread::yield();
+        }
+    });
+    std::thread waiter([&]() {
+        while (phase.load(std::memory_order_acquire) < 1) {
+            std::this_thread::yield();
+        }
+        const bool tableHit = tab->find(from) != 0;
+        const auto ans = MutatorRelocate::AnswerLockedWaiter(tableHit, false);
+        if (ans == MutatorRelocate::LockedWaiterAnswer::UseTo) {
+            waiterGot.store(1, std::memory_order_release);
+        }
+        phase.store(2, std::memory_order_release);
+    });
+    waiter.join();
+    copier.join();
+    GC_EXPECT_EQ(waiterGot.load(), 1);
+    GC_EXPECT_EQ(tab->find(from), to);
+    tab->Destroy();
+}
+
 GC_TEST(MutatorRelocate, RefcountZeroRetainRefusesThenWait)
 {
     std::atomic<int32_t> ref{ 0 };
