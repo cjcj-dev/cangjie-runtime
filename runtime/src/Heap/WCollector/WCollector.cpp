@@ -2147,6 +2147,24 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
                 }
                 return;
             }
+        } else if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj->IsValidObject() &&
+                   latestRegion != nullptr && latestRegion->IsGhostFromRegion() &&
+                   !latestRegion->IsFreeRegion()) {
+            // cjpmnull / 47595a33: kUnpublishedMeansKeepFrom leaves live holders pointing
+            // at a from-copy whose region is already GARBAGE (CollectRegion after VisitLive).
+            // Linux keeps the mapping; the payload is still a ValidObject. Soft-null here
+            // zeros a keep-from slot (garbregion f3_liveGt0 == f3_garbage). Recolour from
+            // — same write as the non-heap arm. Not an IsValidObject / Plausible gate change.
+            static std::atomic<size_t> g_f3KeepFromGhost{ 0 };
+            size_t n = g_f3KeepFromGhost.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][F3-keep-from-ghost] n=%zu holder=%p field=%p from=%p latest=%p "
+                    "reason=%s rtype=%u — recolour from",
+                    n, holder, &field, fromObj, latest, reason, rtype);
+            }
+            latest = fromObj;
+            // Fall through to RootSlotWriteback(latest).
         } else {
             // True dead residue: soft-null by default (e8e092f6).
             // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed

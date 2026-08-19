@@ -18,7 +18,7 @@ namespace GarbRegionDiag {
 // Compile-time gate (campaign cut live MRT_GCV2 env reads to 3). Census is a full
 // heap walk — leave kCensus off in product; forensic SO flips it on.
 constexpr bool kGarbRegion = true;
-constexpr bool kCensus = true;
+constexpr bool kCensus = false;
 
 constexpr size_t kTabCap = 1u << 16;
 constexpr size_t kSampleCap = 64;
