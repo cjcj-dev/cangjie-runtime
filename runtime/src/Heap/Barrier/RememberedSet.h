@@ -43,6 +43,13 @@ public:
     // Atomically makes an empty bitmap active, drains the previous active bitmap into
     // records, and clears it for the next cycle.
     size_t DrainForMinor(std::unordered_set<MAddress>& records);
+    // ZGC zRememberedSet.cpp:36 flip(): O(1) current/previous swap. STW1 of
+    // YOUNG_CONC_FOLLOW is this plus root handoff (zGeneration.cpp:855-884);
+    // the previous face is scanned later by ScanPreviousForMinor.
+    void FlipForMinor();
+    // zRemembered.cpp:561-576 scan_and_follow: consume the previous face with
+    // mutators alive. Callers must FlipForMinor first. DrainForMinor = Flip + Scan.
+    size_t ScanPreviousForMinor(std::unordered_set<MAddress>& records);
 
     // Non-destructive view of the active (next-cycle) records for verification.
     std::unordered_set<MAddress> Snapshot() const;

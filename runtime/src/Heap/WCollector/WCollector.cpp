@@ -7759,6 +7759,17 @@ void WCollector::DoYoungGarbageCollection()
     PromotedRegionDomain::ResetForNextMinor(minorTotalRuns + 1);
     // flippromo: open broad-vs-product window for regions demoted last minor.
     FlipPromoDiag::OnBroadScanBegin(minorTotalRuns + 1);
+    // Flags must be known before remset drain: FOLLOW STW1 only flips
+    // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
+    static const bool youngConcMark = []() {
+        const char* v = "1"; /* pinned-on:MRT_GCV2_YOUNG_CONC_MARK */
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    static const bool youngConcFollowRequested = []() {
+        const char* v = "1"; /* pinned-on:MRT_GCV2_YOUNG_CONC_FOLLOW */
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -7787,7 +7798,13 @@ void WCollector::DoYoungGarbageCollection()
         // walk put back — the residual is what FYS=0 really loses. Observe only, default off.
         FysAuditDiag::CensusPostPinned(minorTotalRuns + 1, pinnedRemsetRecords);
         StoreBarrierBuffer::FlushAll(rememberedSet);
-        rememberedSet.DrainForMinor(rememberedSlots);
+        if (youngConcFollow) {
+            // S5 flip only (YOUNG_CONCURRENT.md). ScanPreviousForMinor runs after
+            // world-release with mark_follow (zRemembered.cpp:561-576).
+            rememberedSet.FlipForMinor();
+        } else {
+            rememberedSet.DrainForMinor(rememberedSlots);
+        }
         if (UNLIKELY(HeldFreeDiag::Enabled())) {
             for (MAddress slot : rememberedSlots) {
                 if (!Heap::IsHeapAddress(slot)) {
@@ -7901,22 +7918,7 @@ void WCollector::DoYoungGarbageCollection()
     // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
     // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
     // STW2 = concurrent remset drain + re-enum + evacuate.
-    static const bool youngConcMark = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    // portyoungconc L2 (ZGC zGeneration.cpp:665-669 concurrent_mark = mark_roots + mark_follow;
-    // :855-884 pause_mark_start does colours/retire/seqnum/remset-flip and nothing else).
-    // Our STW1 paints the whole closure before releasing the world, so `mark` -- the largest
-    // young pillar -- never leaves the pause and the existing window only drains SATB.
-    // MRT_GCV2_YOUNG_CONC_FOLLOW=1 releases right after root enumeration instead, putting
-    // mark_closure / remset_rescan / mark_from_remset in the concurrent window. Requires
-    // YOUNG_CONC_MARK=1 because STW2 is where the resulting residue is resealed.
-    static const bool youngConcFollowRequested = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
+    // youngConcMark / youngConcFollow computed above (before remset drain).
     // portyoungconc L1 (ZGC zGeneration.cpp:550-555): mark_end() returning false leaves the
     // safepoint and runs concurrent_mark_continue() = mark_follow() before re-entering.
     // Ours logs NON_CONVERGED and evacuates anyway. =1 arms the re-entry edge; FORCE=<n>
@@ -8022,6 +8024,13 @@ void WCollector::DoYoungGarbageCollection()
     // runtime; this is a control-flow invariant, not a workload coverage guess.
     const bool remsetConsumedLedgerElideActive = remsetHashOptRequested && fullYoungScan && !youngConcMark &&
         refFixCoveredDedupRequested && !consumedIdentityRequired;
+
+    if (youngConcFollow && rememberedSlots.empty()) {
+        // scan_and_follow (zRemembered.cpp:561-576): previous face as grey
+        // roots, mutators alive. Flip already happened under STW1.
+        concWindow.remsetSlots =
+            Heap::GetHeap().GetRememberedSet().ScanPreviousForMinor(rememberedSlots);
+    }
 
     MinorSlotSet liveRememberedSlots;
     if (remsetHashOptRequested && !remsetConsumedLedgerElideActive) {
