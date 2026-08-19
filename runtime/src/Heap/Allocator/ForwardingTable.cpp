@@ -358,8 +358,13 @@ MAddress ForwardingTable::FindTo(MAddress from)
 {
     ForwardingEntries* tab = GetEntries(from);
     if (tab != nullptr) {
-        return tab->find(from);
+        const MAddress to = tab->find(from);
+        if (to != 0) {
+            return to;
+        }
     }
+    // Reused region arms a fresh empty table; stragglers still need the
+    // retired generation (CUT-2 / Barrier.cpp:718).
     return FindRetiredTo(from);
 }
 
@@ -368,32 +373,34 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
     ForwardingEntries* tab = GetEntries(from);
-    if (tab == nullptr) {
-        const MAddress retired = FindRetiredTo(from);
-        if (retired != 0) {
+    if (tab != nullptr) {
+        const MAddress to = tab->find(from);
+        if (to != 0) {
             g_armedHit.fetch_add(1, std::memory_order_relaxed);
             if (answer != nullptr) {
                 *answer = ToAnswer::ArmedHit;
             }
-            return retired;
+            return to;
         }
-        g_unarmed.fetch_add(1, std::memory_order_relaxed);
-        if (answer != nullptr) {
-            *answer = ToAnswer::Unarmed;
-        }
-        return 0;
     }
-    const MAddress to = tab->find(from);
-    if (to != 0) {
+    const MAddress retired = FindRetiredTo(from);
+    if (retired != 0) {
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedHit;
         }
-        return to;
+        return retired;
     }
-    g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+    if (tab != nullptr) {
+        g_armedMiss.fetch_add(1, std::memory_order_relaxed);
+        if (answer != nullptr) {
+            *answer = ToAnswer::ArmedMiss;
+        }
+        return 0;
+    }
+    g_unarmed.fetch_add(1, std::memory_order_relaxed);
     if (answer != nullptr) {
-        *answer = ToAnswer::ArmedMiss;
+        *answer = ToAnswer::Unarmed;
     }
     return 0;
 }
