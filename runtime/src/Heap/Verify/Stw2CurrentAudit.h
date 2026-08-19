@@ -17,15 +17,6 @@ namespace MapleRuntime {
 class BaseObject;
 class Allocator;
 
-enum class Stw2Cover : uint8_t {
-    Skip = 0,
-    Water = 1,
-    AllocBlack = 2,
-    Marked = 3,
-    Satb = 4,
-    Uncovered = 5,
-};
-
 // STW2 current-face drain auditor (youngconcstw2 / ZGC M5).
 //
 // ZGC pause_mark_end (zGeneration.cpp:897-916) does not drain the remset current
@@ -48,6 +39,15 @@ enum class Stw2Cover : uint8_t {
 //
 // Positive control: ArmInject() forces uncovered+=1 so a zero cannot mean dead probe.
 namespace Stw2CurrentAudit {
+
+enum class Stw2Cover : uint8_t {
+    Skip = 0,
+    Water = 1,
+    AllocBlack = 2,
+    Marked = 3,
+    Satb = 4,
+    Uncovered = 5,
+};
 
 constexpr bool kStw2CurrentAudit = true;
 
