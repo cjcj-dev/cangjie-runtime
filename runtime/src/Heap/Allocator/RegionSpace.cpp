@@ -182,9 +182,14 @@ size_t RegionSpace::UncommitIdleMemory()
     while (!Heap::GetHeap().IsGcStarted()) {
         size_t usedBytes = regionManager.GetUsedRegionSize();
         size_t dirtyBytes = regionManager.GetDirtyUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t releasedBytes = regionManager.GetReleasedUnitCount() * RegionInfo::UNIT_SIZE;
+        size_t garbageBytes = regionManager.GetGarbageUnitCount() * RegionInfo::UNIT_SIZE;
         size_t minCapacity = Uncommitter::MinCapacity(usedBytes, kGcTriggerYoungFixedBytes);
         size_t chunk = Uncommitter::ChunkLimit(GetMaxCapacity());
         size_t flush = Uncommitter::FlushBytes(usedBytes, dirtyBytes, minCapacity, chunk);
+        LOG(RTLOG_INFO,
+            "Uncommit: tick used=%zu dirty=%zu released=%zu garbage=%zu min=%zu flush=%zu",
+            usedBytes, dirtyBytes, releasedBytes, garbageBytes, minCapacity, flush);
         if (flush == 0) {
             break;
         }
