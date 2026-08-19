@@ -316,3 +316,117 @@ GC_TEST(ColourIsChecks, RemapPairIsABijectionWithTheFourColours)
     epoch.FlipYoungRelocateStart();
     GC_EXPECT_EQ(epoch.Masks().remapColour, RemapBitFor(YoungRemap::Y0, OldRemap::O1));
 }
+
+// storegood2: exported StoreGood is the ZGC colour word (zAddress.cpp:83). After every
+// flip, (v & StoreBad)==0 iff v carries every StoreGood required bit, for the same
+// cross-product ColourIsChecks already walks. Collector::is_store_good is that mask
+// test plus a non-null / load-good gate (Collector.h:265-271); the extra clauses
+// reject plains that the raw mask would admit, which is pinned below.
+static void CheckStoreGoodComplement(const Epoch& epoch)
+{
+    const BadMasks m = epoch.Masks();
+    GC_EXPECT_EQ(m.storeGood ^ STORE_METADATA_MASK, m.storeBad);
+    GC_EXPECT_EQ(m.storeGood, m.remapColour | epoch.e.markedYoung | epoch.e.markedOld | epoch.e.remembered);
+
+    const YoungRemap ys[] = { YoungRemap::Absent, YoungRemap::Y0, YoungRemap::Y1 };
+    const OldRemap os[] = { OldRemap::Absent, OldRemap::O0, OldRemap::O1 };
+    const YoungMark mys[] = { YoungMark::Absent, YoungMark::M0, YoungMark::M1 };
+    const OldMark mos[] = { OldMark::Absent, OldMark::M0, OldMark::M1 };
+    const Remember rms[] = { Remember::Absent, Remember::R0, Remember::R1 };
+
+    for (YoungRemap y : ys) {
+        for (OldRemap o : os) {
+            for (YoungMark my : mys) {
+                for (OldMark mo : mos) {
+                    for (Remember rm : rms) {
+                        const Colour c{ y, o, my, mo, rm };
+                        const uintptr_t value = Paint(kValidAddress, c);
+                        const bool maskStoreGood = (value & m.storeBad) == 0;
+                        const bool hasStoreGoodBits = (value & m.storeGood) == m.storeGood;
+                        // A value that already carries some other metadata bit (a stale
+                        // remap/mark/rem) fails the mask even if it also has every current
+                        // good bit. The "carries the required bits" half is therefore only
+                        // equivalent when no extra store-metadata bit is set.
+                        const bool extraMeta = (value & STORE_METADATA_MASK & ~m.storeGood) != 0;
+                        if (!extraMeta) {
+                            GC_EXPECT_EQ(maskStoreGood, hasStoreGoodBits);
+                        } else {
+                            GC_EXPECT_TRUE(!maskStoreGood);
+                        }
+                        GC_EXPECT_EQ(ColourPredicates::is_store_good(value, m.loadBad, m.storeBad),
+                                     maskStoreGood && ColourPredicates::is_load_good(value, m.loadBad) &&
+                                         (value & ColourPredicates::current_marked_young(m.storeBad)) != 0 &&
+                                         (value & ColourPredicates::current_marked_old(m.storeBad)) != 0 &&
+                                         (value & ColourPredicates::current_remembered(m.storeBad)) != 0);
+                    }
+                }
+            }
+        }
+    }
+
+    // Plain uncoloured non-null: (v & StoreBad)==0 (no bad bit present) but it does
+    // not carry StoreGood's required bits, so it is not store-good. Same for raw null.
+    GC_EXPECT_EQ(kValidAddress & m.storeBad, uintptr_t(0));
+    GC_EXPECT_TRUE((kValidAddress & m.storeGood) != m.storeGood);
+    GC_EXPECT_TRUE(!ColourPredicates::is_store_good(kValidAddress, m.loadBad, m.storeBad));
+    GC_EXPECT_EQ(uintptr_t(0) & m.storeBad, uintptr_t(0));
+    GC_EXPECT_TRUE(!ColourPredicates::is_store_good(0, m.loadBad, m.storeBad));
+}
+
+GC_TEST(ColourIsChecks, StoreGoodComplementAtTheStartingEpoch)
+{
+    Epoch epoch;
+    CheckStoreGoodComplement(epoch);
+    // Live exported pair must stay complementary even if InitCJRuntime already
+    // flipped past the starting epoch (zAddress.cpp:87).
+    GC_EXPECT_NE(::g_cjStoreGoodMask, 0ul);
+    GC_EXPECT_EQ(::g_cjStoreGoodMask ^ static_cast<unsigned long>(STORE_METADATA_MASK), ::g_cjStoreBadMask);
+}
+
+GC_TEST(ColourIsChecks, StoreGoodComplementAcrossAnIrregularFlipSchedule)
+{
+    Epoch epoch;
+    int youngPhase = 0;
+    int oldPhase = 0;
+
+    auto advanceYoung = [&](int amount) {
+        for (int i = 0; i < amount; ++i) {
+            if (++youngPhase & 1) {
+                epoch.FlipYoungMarkStart();
+            } else {
+                epoch.FlipYoungRelocateStart();
+            }
+            CheckStoreGoodComplement(epoch);
+        }
+    };
+    auto advanceOld = [&](int amount) {
+        for (int i = 0; i < amount; ++i) {
+            if (++oldPhase & 1) {
+                epoch.FlipOldMarkStart();
+            } else {
+                epoch.FlipOldRelocateStart();
+            }
+            CheckStoreGoodComplement(epoch);
+        }
+    };
+
+    CheckStoreGoodComplement(epoch);
+    advanceOld(4);
+    advanceYoung(4);
+    for (int round = 0; round < 4; ++round) {
+        advanceOld(1);
+        advanceYoung(4);
+    }
+    for (int round = 0; round < 4; ++round) {
+        advanceOld(1);
+        advanceYoung(3);
+    }
+    for (int round = 0; round < 4; ++round) {
+        advanceOld(1);
+        advanceYoung(2);
+    }
+    for (int round = 0; round < 4; ++round) {
+        advanceOld(1);
+        advanceYoung(1);
+    }
+}

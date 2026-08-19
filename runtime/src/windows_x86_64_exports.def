@@ -3344,6 +3344,7 @@ EXPORTS
     g_cjMarkBadMask @3341 DATA
     g_cjRuntimeProvenance @3342 DATA
     g_cjStoreBadMask @3485 DATA
+    g_cjStoreGoodMask @3486 DATA
     getntptimeofday @3343
     gettimeofday @3344
     mingw_gettimeofday @3345

@@ -244,19 +244,17 @@ const char g_cjRuntimeProvenance[] = "CJRT-COMMIT:" CJ_RUNTIME_COMMIT;
 // old literals survive only as witnesses in the static_asserts below: if the shared formula ever
 // drifts from what shipped, the build stops here rather than at the first flip.
 //
-// ⭐ The named constexpr constants are load-bearing, not style. These three globals are
+// ⭐ The named constexpr constants are load-bearing, not style. These globals are
 // constant-initialised today (they land in .data), and both the compiler-emitted barriers and
 // BaseObject.cpp itself read them before main. Routing through a `constexpr unsigned long`
 // makes a platform on which the expression is not a constant expression a compile error instead
 // of a silent demotion to dynamic initialisation -- which would leave the masks reading 0 during
 // static init, i.e. every reference load-good, i.e. no barrier at all.
 namespace {
-constexpr MapleRuntime::BadMasks kInitialBadMasks =
-    MapleRuntime::ComputeBadMasks(MapleRuntime::kInitialEpochColours);
-
-constexpr unsigned long kLoadBad0 = static_cast<unsigned long>(kInitialBadMasks.loadBad);
-constexpr unsigned long kMarkBad0 = static_cast<unsigned long>(kInitialBadMasks.markBad);
-constexpr unsigned long kStoreBad0 = static_cast<unsigned long>(kInitialBadMasks.storeBad);
+constexpr unsigned long kLoadBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.loadBad);
+constexpr unsigned long kMarkBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.markBad);
+constexpr unsigned long kStoreBad0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.storeBad);
+constexpr unsigned long kStoreGood0 = static_cast<unsigned long>(MapleRuntime::kInitialBadMasks.storeGood);
 
 // Witnesses: the literal expressions this file carried before c4unify, verbatim.
 static_assert(kLoadBad0 == (MapleRuntime::TAGGED_BITS_MASK |
@@ -275,6 +273,15 @@ static_assert(kStoreBad0 == (MapleRuntime::TAGGED_BITS_MASK |
                              MapleRuntime::MARKED_YOUNG_1 | MapleRuntime::MARKED_OLD_1 |
                              MapleRuntime::REMEMBERED_1),
               "g_cjStoreBadMask initial value changed");
+// Store-good = current remap | current MY | current MO | current Remembered
+// (OpenJDK zAddress.cpp:83). Initial epoch: Remapped00 | MY_0 | MO_0 | REM_0.
+static_assert(kStoreGood0 == (MapleRuntime::ZPointerRemapped00 | MapleRuntime::MARKED_YOUNG_0 |
+                              MapleRuntime::MARKED_OLD_0 | MapleRuntime::REMEMBERED_0),
+              "g_cjStoreGoodMask initial value changed");
+// good/bad complementarity at the initial epoch (zAddress.cpp:87):
+// StoreBad == StoreGood ^ StoreMetadataMask  (TAGGED_BITS_MASK is 0).
+static_assert((kStoreGood0 ^ static_cast<unsigned long>(MapleRuntime::STORE_METADATA_MASK)) == kStoreBad0,
+              "g_cjStoreGoodMask ^ STORE_METADATA_MASK != g_cjStoreBadMask at init");
 } // namespace
 
 extern "C" unsigned long g_cjLoadBadMask = kLoadBad0;
@@ -282,3 +289,5 @@ extern "C" unsigned long g_cjLoadBadMask = kLoadBad0;
 extern "C" MRT_EXPORT unsigned long g_cjMarkBadMask = kMarkBad0;
 
 extern "C" MRT_EXPORT unsigned long g_cjStoreBadMask = kStoreBad0;
+
+extern "C" MRT_EXPORT unsigned long g_cjStoreGoodMask = kStoreGood0;
