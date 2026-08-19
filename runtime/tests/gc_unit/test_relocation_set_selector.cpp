@@ -112,4 +112,20 @@ GC_TEST(RelocationSetSelector, PreFilterDropsLowGarbage)
     GC_EXPECT_FALSE(ContainsId(r, 1u));
 }
 
+// markwater2: zGeneration.cpp:211-213 — is_allocating pages are not candidates.
+GC_TEST(RelocationSetSelector, AllocatingPagesNeverSelected)
+{
+    const size_t cap = 4096;
+    std::vector<RelocRegionDesc> in;
+    RelocRegionDesc allocating = Make(7, 64, cap);
+    allocating.allocating = true;
+    in.push_back(allocating);
+    in.push_back(Make(8, 64, cap));
+    in.push_back(Make(9, 64, cap));
+    const RelocSelectResult r = SelectRelocationSet(in);
+    GC_EXPECT_FALSE(ContainsId(r, 7u));
+    GC_EXPECT_TRUE(ContainsId(r, 8u));
+    GC_EXPECT_TRUE(ContainsId(r, 9u));
+}
+
 } // namespace

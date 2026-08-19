@@ -24,6 +24,9 @@ struct RelocRegionDesc {
     size_t capacity = 0;
     RelocRegionKind kind = RelocRegionKind::Small;
     uint32_t id = 0;
+    // ZGC zGeneration.cpp:211-213: !is_relocatable pages are never registered.
+    // is_allocating ≡ HasMarkStartAllocGap (zPage.inline.hpp:180-185).
+    bool allocating = false;
 };
 
 struct RelocSelectResult {
@@ -33,6 +36,10 @@ struct RelocSelectResult {
 // ZRelocationSetSelectorGroup::pre_filter_page (zRelocationSetSelector.inline.hpp:75-104)
 inline bool PreFilterRelocRegion(const RelocRegionDesc& page)
 {
+    // zGeneration.cpp:211-213: allocating pages are not relocatable candidates.
+    if (page.allocating) {
+        return false;
+    }
     if (page.kind == RelocRegionKind::Large) {
         return false;
     }

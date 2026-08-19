@@ -7117,6 +7117,12 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         // moved to young.conc_promote_walk after STW3 release (zRelocate.cpp:1257-1306).
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
+                // markwater2: allocating pages never entered the route plan
+                // (zGeneration.cpp:211-213). Leave them young on unmovableFrom;
+                // next PrepareYoung ClearLiveInfo re-snapshots the watermark.
+                if (region->HasMarkStartAllocGap()) {
+                    continue;
+                }
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
                 if (keepOneYoung && !keptOneYoung) {
                     keptOneYoung = true;

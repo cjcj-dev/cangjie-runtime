@@ -1334,10 +1334,63 @@ void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
     regionList->DeleteRegionLocked(region);
 }
 
+// ZGC zGeneration.cpp:211-213: !is_relocatable (is_allocating) pages are not
+// registered with the selector. HasMarkStartAllocGap ≡ zPage.inline.hpp:180-185.
+// Called at CSet select (ExemptFromRegions) and again before PrepareForwardable
+// so a watermark-gap region never publishes a route (915e6348 ghost).
+size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
+{
+    static std::atomic<size_t> g_armed{ 0 };
+    static std::atomic<size_t> g_turned{ 0 };
+    static std::atomic<bool> atexitOn{ false };
+    if (!atexitOn.exchange(true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[GCV2][markwater] atexit armed=%zu turned=%zu\n",
+                         g_armed.load(std::memory_order_relaxed),
+                         g_turned.load(std::memory_order_relaxed));
+            std::fflush(stderr);
+        });
+    }
+    std::vector<RegionInfo*> snapshot;
+    fromRegionList.VisitAllRegions([&snapshot](RegionInfo* r) { snapshot.push_back(r); });
+    size_t armed = 0;
+    size_t turned = 0;
+    for (RegionInfo* fromRegion : snapshot) {
+        if (fromRegion == nullptr || !fromRegion->HasMarkStartAllocGap()) {
+            continue;
+        }
+        ++armed;
+        if (!fromRegion->IsFromRegion()) {
+            continue;
+        }
+        DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) markwater skip CSet: %zu units, %zu live bytes",
+             fromRegion, fromRegion->GetRegionStart(), fromRegion->GetRegionAllocatedSize(),
+             fromRegion->GetRegionEnd(), fromRegion->GetUnitCount(), fromRegion->GetLiveByteCount());
+        fromRegion->PreserveRetainedLiveInfo();
+        RemoveRegionLocked(&fromRegionList, fromRegion);
+        ExemptFromRegion(fromRegion);
+        ++turned;
+    }
+    if (armed != 0) {
+        g_armed.fetch_add(armed, std::memory_order_relaxed);
+    }
+    if (turned != 0) {
+        g_turned.fetch_add(turned, std::memory_order_relaxed);
+    }
+    if (armed != 0 || turned != 0) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][markwater] cset-skip armed=%zu turned=%zu tot_armed=%zu tot_turned=%zu",
+            armed, turned, g_armed.load(std::memory_order_relaxed),
+            g_turned.load(std::memory_order_relaxed));
+    }
+    return turned;
+}
+
 // Cost-model CSet (ZRelocationSetSelector.cpp:114-196) after mark, before flip.
 // Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
+    (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
     size_t oldFromBytes = fromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
@@ -1388,6 +1441,7 @@ size_t RegionManager::ExemptFromRegions()
         d.capacity = fromRegion->GetRegionSize();
         d.kind = fromRegion->IsLargeRegion() ? RelocRegionKind::Large : RelocRegionKind::Small;
         d.id = static_cast<uint32_t>(descs.size());
+        d.allocating = fromRegion->HasMarkStartAllocGap();
         descs.push_back(d);
         descRegions.push_back(fromRegion);
     }
@@ -2835,34 +2889,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_KNOWN_EMPTY);
         CollectRegion<G>(region);
-        return;
-    }
-    // ZGC zPage.inline.hpp:180-185: is_allocating pages are not relocatable.
-    // Objects bumped after ClearLiveInfo's markStartAllocPtr have no mark bit
-    // and no prefix-sum dest. VisitLive sees them; collecting the from-page
-    // after copying only the bitmap set is the coll_live trickle.
-    if (region->HasMarkStartAllocGap()) {
-        if (youngRegion && StayYoungThisCycle(region)) {
-            EnlistStayYoungSurvivor(region);
-            return;
-        }
-        if (youngRegion) {
-            MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
-            region->PreserveRetainedLiveInfo();
-            {
-                GCReason r = Heap::GetHeap().GetCollector().GetGCStats().reason;
-                const bool doReg = (r == GC_REASON_YOUNG);
-                if (doReg) {
-                    PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Abandon);
-                }
-                PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(r), /*site*/ 1, doReg);
-                size_t recEdges = RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(r), /*site*/ 1, recEdges);
-            }
-            (void)region->PromoteYoungRegion(promotionView);
-        }
-        region->DispelGhostFromRegion();
-        ExemptFromRegion(region);
         return;
     }
     // Unmarked this cycle is not empty (zPage.inline.hpp:223-225). Still do
