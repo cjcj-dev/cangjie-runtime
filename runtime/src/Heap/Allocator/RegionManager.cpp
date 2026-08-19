@@ -2631,11 +2631,21 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                 if (n <= 8 || (n & (n - 1)) == 0) {
                     LOG(RTLOG_ERROR,
                         "[GCRECLAIM][fwd-empty-keep-reloc] n=%zu region=%p start=%#zx alloc=%#zx "
-                        "route=%u live=%zu knownEmpty=1 — skip CollectRegion",
+                        "route=%u live=%zu knownEmpty=1 — ExemptFromRegion",
                         n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
                         static_cast<unsigned>(rs), region->GetLiveByteCount());
                 }
-                // Fall through to RouteRegion / VisitLiveObjects.
+                // Same shape as the abandon arm (:2945-2950): keep from in place.
+                // Do not VisitLive — the route face is the stale one that made
+                // IsKnownEmpty true, so VisitLive would copy 0 objects and still
+                // CollectRegion (fix_r1: keep fired, F3 still 4180 region_garbage).
+                if (youngRegion) {
+                    MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
+                    (void)region->PromoteYoungRegion(promotionView);
+                }
+                region->DispelGhostFromRegion();
+                ExemptFromRegion(region);
+                return;
             } else {
         bool neverExamined = region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart();
