@@ -719,6 +719,19 @@ protected:
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
+        if (Heap::IsHeapAddress(target)) {
+            RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+            if (live == nullptr || live->IsFreeRegion()) {
+                BaseObject* to = FindToVersion(target);
+                if (to != nullptr) {
+                    target = to;
+                } else {
+                    // oracle Q3 ④: FREE + retired miss = poison. Paint load-bad
+                    // (⛔ null = silent drop; ⛔ store-good = delayed bomb).
+                    return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
+                }
+            }
+        }
         if (IsStaleStoreValue(target)) {
             BaseObject* to = FindToVersion(target);
             if (to != nullptr) {

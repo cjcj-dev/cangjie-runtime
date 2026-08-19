@@ -1776,7 +1776,7 @@ void RegionManager::FinishIncompleteFromRegions()
             fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                            RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
         }
-        if (region->IsLoneFromRegion() || region->IsFromRegion()) {
+        if (region->IsLoneFromRegion() || region->IsFromRegion() || wasFrom) {
             ExemptFromRegion(region);
         } else {
             region->MarkForwardingDone();
