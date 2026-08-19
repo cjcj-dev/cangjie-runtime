@@ -6992,6 +6992,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             *stw = std::make_unique<ScopedStopTheWorld>("young post-relocate", true,
                                                         GCPhase::GC_PHASE_FORWARD);
+            manager.FinishIncompleteFromRegions();
         }
         VLOG(REPORT, "[GCV2][relocate][conc] concurrent_relocate done; STW re-entered");
         postEvacPoint("post-forward-pre-reclaim", true);
@@ -7048,6 +7049,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     } else {
         MRT_PHASE_TIMER("young.copy");
         ForwardFromSpace();
+        manager.FinishIncompleteFromRegions();
         postEvacPoint("post-forward-pre-reclaim", true);
         {
             const char* postEvac = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_VERIFY_POST_EVAC */;
@@ -9421,7 +9423,12 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     // unpublished pages are structurally never-true (527/527 timeout).
     // Only wait while a publisher still exists this cycle.
     const GCPhase waitPhase = GetGCPhase();
-    const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
+    // POST_TRACE already RouteRegion's (PrepareForwardTable); copy is still
+    // ahead. Skipping the wait there keep-froms a page ForwardFromSpace is
+    // about to empty (r5 n=64 phase=12 route=3). IDLE/FINISH/RECLAIM have
+    // no publisher — those are the structurally-false waits (oracle r5).
+    const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_POST_TRACE ||
+                               waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
                                waitPhase == GCPhase::GC_PHASE_FORWARD) &&
         forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
