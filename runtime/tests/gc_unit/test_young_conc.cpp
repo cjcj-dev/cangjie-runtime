@@ -64,6 +64,10 @@ public:
 class TestBarrier final : public Barrier {
 public:
     TestBarrier(Collector& collector, RememberedSet& rememberedSet) : Barrier(collector, rememberedSet) {}
+    void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
+    {
+        RecordCrossGenEdge(obj, fieldAddress, ref);
+    }
 
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
@@ -76,6 +80,10 @@ class TestTraceBarrier final : public Barrier {
 public:
     TestTraceBarrier(Collector& collector, RememberedSet& rememberedSet)
         : Barrier(collector, rememberedSet, BarrierPhase::TRACE) {}
+    void Record(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
+    {
+        RecordCrossGenEdge(obj, fieldAddress, ref);
+    }
 
 protected:
     void WriteReferenceImpl(BaseObject*, RefField<false>& field, BaseObject* ref) const
@@ -348,7 +356,7 @@ GC_TEST(YoungConc, TraceStoreMarksNewYoungTarget)
     // RecordCrossGenEdge is the remember half; TRACE phase adds the mark half.
     // Do not WriteReference: DispatchPhase would static_cast to product TraceBarrier
     // and SATB-push with a null mutator (gc_unit has no Mutator).
-    barrier.RecordCrossGenEdge(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
+    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
@@ -385,7 +393,7 @@ GC_TEST(YoungConc, IdleStoreDoesNotMarkNewYoungTarget)
     resources.GetGCStats().reason = GC_REASON_YOUNG;
 
     field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj1)));
-    barrier.RecordCrossGenEdge(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
+    barrier.Record(fx.obj0, reinterpret_cast<MAddress>(field), fx.obj1);
 
     resources.SetGcStarted(startedBefore);
     resources.GetGCStats().reason = reasonBefore;
