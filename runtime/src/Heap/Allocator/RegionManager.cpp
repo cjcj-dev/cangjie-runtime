@@ -24,6 +24,8 @@
 #include "Collector/Collector.h"
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
+#include "Collector/GcTrigger.h"
+#include "Collector/MutatorAllocRate.h"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
 #include "Common/ScopedObjectAccess.h"
@@ -785,7 +787,7 @@ void RegionList::DeleteRegionLocked(RegionInfo* del)
             listTail = nullptr;
             return;
         }
-    } else {
+    } else if (pre != nullptr) {
         pre->SetNextRegion(next);
     }
 
@@ -796,8 +798,12 @@ void RegionList::DeleteRegionLocked(RegionInfo* del)
             listHead = nullptr;
             return;
         }
-    } else {
+    } else if (next != nullptr) {
         next->SetPrevRegion(pre);
+    } else if (pre != nullptr) {
+        // next was stolen (region re-homed onto another list) while this list
+        // still named it. Treat del as the last node we still own.
+        listTail = pre;
     }
 }
 
@@ -1489,8 +1495,12 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     // routefix: under ROUTING, skip RequestGC — PostIgnoredGcRequest may ScopedEnterSaferegion.
     if (allowSaferegion && !Heap::GetHeap().IsGcStarted()) {
         Collector& collector = Heap::GetHeap().GetCollector();
-        size_t heapThreshold = collector.GetGCStats().GetThreshold();
-        size_t youngRegionTriggerBytes = 32 * MB;
+        GCStats& gcStats = collector.GetGCStats();
+        size_t heapThreshold = gcStats.GetThreshold();
+        size_t youngRegionTriggerBytes = kGcTriggerYoungFixedBytes;
+        if (kGcTriggerAllocRateEnabled && !kGcTriggerPinYoung32MB) {
+            youngRegionTriggerBytes = gcStats.youngTriggerBytes.load(std::memory_order_acquire);
+        }
         // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
         // barriers/remset still run. Unset must match product path bit-for-bit.
         // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
@@ -1501,46 +1511,64 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (disableMinor) {
             youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
         }
-        static const bool jvmYoungTriggerOn = []() {
-            const char* jvmYoungTriggerEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_JVM_YOUNG_TRIGGER */;
-            return jvmYoungTriggerEnv != nullptr && std::strcmp(jvmYoungTriggerEnv, "1") == 0;
-        }();
-        const bool useJvmYoungTrigger = !disableMinor && jvmYoungTriggerOn;
-        size_t youngTriggerFloor = 0;
-        size_t youngTriggerTarget = 0;
-        size_t youngTriggerCeiling = 0;
-        if (useJvmYoungTrigger) {
-            // G1 sizes young between 5% and 60% of its heap. This runtime has no eden/survivor
-            // pause controller, so apply those bounds to the HEU budget and target half that budget.
-            constexpr size_t youngTriggerFloorPercent = 5;
-            constexpr size_t youngTriggerTargetPercent = 50;
-            constexpr size_t youngTriggerCeilingPercent = 60;
-            youngTriggerFloor = heapThreshold * youngTriggerFloorPercent / 100;
-            youngTriggerTarget = heapThreshold * youngTriggerTargetPercent / 100;
-            youngTriggerCeiling = heapThreshold * youngTriggerCeilingPercent / 100;
-            youngRegionTriggerBytes =
-                std::min(std::max(youngTriggerTarget, youngTriggerFloor), youngTriggerCeiling);
-            CHECK_DETAIL(youngRegionTriggerBytes < heapThreshold,
-                         "young GC threshold %zu must stay below HEU threshold %zu",
-                         youngRegionTriggerBytes, heapThreshold);
-        }
         size_t youngAllocated = GetYoungAllocatedSize();
-        if (youngAllocated >= youngRegionTriggerBytes) {
-            if (useJvmYoungTrigger) {
-                VLOG(REPORT,
-                     "[GCV2][jvm-young-trigger] young=%zu trigger=%zu HEU=%zu floor=%zu target=%zu ceiling=%zu "
-                     "invariant=%d",
-                     youngAllocated, youngRegionTriggerBytes, heapThreshold, youngTriggerFloor, youngTriggerTarget,
-                     youngTriggerCeiling, youngRegionTriggerBytes < heapThreshold);
+        size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
+        // Occupancy young stays on the latched line (survival). Director uses the
+        // 32MB now-gate so a new wave after a high-survival latch still minors
+        // (12-wave NW). zDirector.cpp:296-306 / :331-381.
+        const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
+        bool requested = false;
+        if (kGcTriggerAllocRateEnabled && !disableMinor) {
+            MutatorAllocRateStats rate = MutatorAllocRate::stats();
+            const uint64_t nowNs = TimeUtil::NanoSeconds();
+            const uint64_t prevFinish = GCStats::GetPrevGCFinishTime();
+            const uint64_t sinceNs = nowNs > prevFinish ? nowNs - prevFinish : 0;
+            GcTriggerInputs in;
+            in.allocRateAvgBps = rate.avg;
+            in.allocRatePredictBps = rate.predict;
+            in.allocRateSdBps = rate.sd;
+            in.usedBytes = allocated;
+            in.youngUsedBytes = youngAllocated;
+            in.capacityBytes = Heap::GetHeap().GetMaxCapacity();
+            in.lastGcDurationSec =
+                static_cast<double>(gcStats.lastGcDurationNs.load(std::memory_order_relaxed)) /
+                static_cast<double>(SECOND_TO_NANO_SECOND);
+            in.timeSinceLastGcSec = static_cast<double>(sinceNs) / static_cast<double>(SECOND_TO_NANO_SECOND);
+            in.collectionIntervalSec = 0.0;
+            in.warmupCyclesDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
+            in.isWarm = gcStats.isWarm.load(std::memory_order_relaxed);
+            in.isTimeTrustable = gcStats.isTimeTrustable.load(std::memory_order_relaxed);
+            const GcTriggerDecision d = DecideGcTrigger(in);
+            g_gcTriggerArmed.fetch_add(1, std::memory_order_relaxed);
+            if (d.kind == GcTriggerKind::MAJOR) {
+                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
+                NoteGcTriggerRule(d.rule);
+                DLOG(ALLOC, "request heu gc via DecideGcTrigger rule=%d used=%zu cap=%zu",
+                     static_cast<int>(d.rule), allocated, in.capacityBytes);
+                collector.RequestGC(GC_REASON_HEU, true);
+                requested = true;
+            } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, directorMinorBytes)) {
+                // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
+                // the occupancy watermark has been raised. Occupancy young still uses
+                // the latched line; director uses the 5%/32MB now-gate so a new young
+                // wave is collected (12-wave NW). is_young_small is already inside
+                // RuleAllocRate / RuleHighUsage (zDirector.cpp:342-343, :371-372).
+                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
+                NoteGcTriggerRule(d.rule);
+                DLOG(ALLOC, "request young gc via DecideGcTrigger rule=%d young=%zu trigger=%zu",
+                     static_cast<int>(d.rule), youngAllocated, youngRegionTriggerBytes);
+                collector.RequestGC(GC_REASON_YOUNG, true);
+                requested = true;
             }
+        }
+        if (!requested && youngAllocated >= youngRegionTriggerBytes) {
             DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
             collector.RequestGC(GC_REASON_YOUNG, true);
-        } else {
-            size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
-            if (allocated >= heapThreshold) {
-                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
-                collector.RequestGC(GC_REASON_HEU, true);
-            }
+            requested = true;
+        }
+        if (!requested && allocated >= heapThreshold) {
+            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
+            collector.RequestGC(GC_REASON_HEU, true);
         }
     }
 
@@ -1581,6 +1609,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 RegionInfo::ClearUnits(idx, num);
             }
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
+            MutatorAllocRate::sample_allocation(size);
             return RegionInfo::InitRegion(idx, num, type);
         } else {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
@@ -1596,6 +1625,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (num >= HUGE_PAGE) {
             TagHugePage(region, num);
         }
+        MutatorAllocRate::sample_allocation(size);
         return region;
     }
 
@@ -1629,6 +1659,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             if (expectPhysicalMem) {
                 RegionInfo::ClearUnits(idx, num);
             }
+            MutatorAllocRate::sample_allocation(size);
             return region;
         }
     }
@@ -2586,6 +2617,17 @@ void RegionManager::FinishStayYoungInPlace(RegionInfo* region)
 void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
 {
     FinishStayYoungInPlace(region);
+    // evac_finish calls this on FROM regions still linked in fromRegionList.
+    // PrependRegion overwrites next/prev without unlinking — later
+    // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
+    // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
+    if (region->IsFromRegion()) {
+        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                       RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::RECENT_FULL_REGION);
+    }
     recentFullRegionList.PrependRegion(region, RegionInfo::RegionType::RECENT_FULL_REGION);
 }
 
