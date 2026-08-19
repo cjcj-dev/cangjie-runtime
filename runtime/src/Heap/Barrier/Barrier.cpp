@@ -71,9 +71,11 @@ void Barrier::ZgcSelfHealLoadGood(RefField<false>& field, zpointer observed, zpo
     if (MutatorRelocate::kSkipHealOnTransient &&
         MutatorRelocate::CurrentResolveGrade() == MutatorRelocate::ResolveGrade::Transient) {
         MutatorRelocate::NoteHealSkipped();
+        MutatorRelocate::ResetResolveGrade();
         return;
     }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    MutatorRelocate::ResetResolveGrade();
 }
 
 void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
@@ -82,9 +84,11 @@ void Barrier::ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpoi
     if (MutatorRelocate::kSkipHealOnTransient &&
         MutatorRelocate::CurrentResolveGrade() == MutatorRelocate::ResolveGrade::Transient) {
         MutatorRelocate::NoteHealSkipped();
+        MutatorRelocate::ResetResolveGrade();
         return;
     }
     ZgcSelfHeal(field, observed, healPtr, LoadGoodFastPath(theCollector), site);
+    MutatorRelocate::ResetResolveGrade();
 }
 
 template<typename Function>
