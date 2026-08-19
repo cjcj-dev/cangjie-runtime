@@ -3631,8 +3631,9 @@ constexpr size_t kMarkStripeShift = 20; // 1 MiB address chunks, from zstripe ph
 constexpr size_t kMarkStripeMultiplier = 4;
 constexpr size_t kMarkStripeLocalCapacity = 64;
 constexpr size_t kMarkStripeMax = 64;
-// Independent of the WORKERS getenv. false = current serial default.
-constexpr bool kMarkStriped = false;
+// Independent of the WORKERS getenv. Product default: address-striped young mark
+// (zstripe 1ced7b2f / ZGC zMark.cpp:94-120). Flip false to restore serial.
+constexpr bool kMarkStriped = true;
 
 std::atomic<size_t> g_markStripeArmed{ 0 };
 std::atomic<size_t> g_markStripeTurned{ 0 };
