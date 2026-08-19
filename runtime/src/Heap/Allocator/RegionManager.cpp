@@ -3032,9 +3032,12 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         const bool liveResidual = region->GetLiveByteCount() > 0;
         // hangfloor: young neverExamined×keep fills the heap. Old from-pages
         // with payload are the 59-class (route=1 liveinfo_null, live-slots>0).
-        // live==0 FORWARDABLE is true dead (this comment's original contract):
-        // Exempting those old pages was the 256MB ike-keep OOM (from-regions
-        // 3944 / 258MB at dump, keepBytes ≫ heap).
+        //
+        // ikekeep: do NOT Collect unmarked live==0 in this arm. VisitLive copies
+        // nothing, then FORWARDED+Collect makes keep-from (table miss after
+        // publish) point into a freed page — NW 256MB SEGV pc=0x8aa8
+        // reclaim_satb. Same-cycle hole pages stay Exempt (cjpmnull2).
+        // ExpireKeptFromPreviousCycle lets them re-enter mark next cycle.
         //
         // oracleblack: generational contract on the young arm. A young region's liveness is
         // the MINOR's to judge -- a minor marks young via remset+roots, so "no mark bitmap"
@@ -3050,7 +3053,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // so the hangfloor regression (young garbage never reclaimed) cannot return.
         if (region->GetMarkBitmap(markView) == nullptr &&
             region->GetRegionAllocPtr() > region->GetRegionStart() &&
-            (incompleteRoute || liveResidual || (youngRegion && G == Generation::Old))) {
+            (incompleteRoute || liveResidual || !youngRegion || G == Generation::Old)) {
         static std::atomic<size_t> g_fwdUnmarkedKeep{ 0 };
         size_t n = g_fwdUnmarkedKeep.fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 8 || (n & (n - 1)) == 0) {
