@@ -581,9 +581,17 @@ private:
         // the buffers, but they can only reference already-marked objects, objects in non-collected
         // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
         // those records safely, so accepting them is cheap and correct.
-        if (UNLIKELY(phase != GCPhase::GC_PHASE_ENUM && phase != GCPhase::GC_PHASE_TRACE &&
-                     phase != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) &&
-            UNLIKELY(Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_ENUM)) {
+        GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
+        // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
+        // The heap-phase fallback used to accept only ENUM, so a concurrent store
+        // dropped SATB and the page stayed nullFace (SD256 CSet-empty residual,
+        // ke=0). ZGC heap_store_slow_path marks the new address regardless
+        // (zBarrier.cpp:253-261). Accept every marking phase.
+        const bool mutatorMarking = phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
+            phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+        const bool heapMarking = heapPhase == GCPhase::GC_PHASE_ENUM || heapPhase == GCPhase::GC_PHASE_TRACE ||
+            heapPhase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
+        if (UNLIKELY(!mutatorMarking && !heapMarking)) {
             return;
         }
         if (LIKELY(satbNode != nullptr && satbNode->Push(target, knownBase))) {
