@@ -2078,7 +2078,10 @@ public:
         SetMarkFaceSealed(false);
     }
 
-    bool IsGhostFromRegion() const { return metadata.inGhostFromRegion == 1; }
+    bool IsGhostFromRegion() const
+    {
+        return metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::IN_GHOST_FROM_REGION_FLAG, 1) != 0;
+    }
 
     // After TakeRegion re-init, every unit must have ghost cleared (payload wipe does not touch metadata).
     void AssertGhostClearedAfterReuse(size_t nUnit) const
@@ -2483,7 +2486,11 @@ public:
                                     RegionStateBitPos::YOUNG_AGE_FLAG);
     }
 
-    RegionType GetRegionType() const { return static_cast<RegionType>(metadata.regionType); }
+    RegionType GetRegionType() const
+    {
+        return static_cast<RegionType>(
+            metadata.regionStateBitField.GetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH));
+    }
     UnitRole GetUnitRole() const { return static_cast<UnitRole>(metadata.unitRole); }
 
     size_t GetUnitIdx() const { return RegionInfo::UnitInfo::GetUnitIdx(reinterpret_cast<const UnitInfo*>(this)); }
@@ -2666,20 +2673,17 @@ public:
         metadata.nextRegionIdx = static_cast<uint32_t>(nextIdx);
     }
 
-    bool IsFromRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::FROM_REGION; }
-    bool IsLoneFromRegion() const
-    {
-        return static_cast<RegionType>(metadata.regionType) == RegionType::LONE_FROM_REGION;
-    }
+    bool IsFromRegion() const { return GetRegionType() == RegionType::FROM_REGION; }
+    bool IsLoneFromRegion() const { return GetRegionType() == RegionType::LONE_FROM_REGION; }
     bool IsUnmovableFromRegion() const
     {
-        return static_cast<RegionType>(metadata.regionType) == RegionType::UNMOVABLE_FROM_REGION ||
-            static_cast<RegionType>(metadata.regionType) == RegionType::RAW_POINTER_PINNED_REGION;
+        RegionType type = GetRegionType();
+        return type == RegionType::UNMOVABLE_FROM_REGION || type == RegionType::RAW_POINTER_PINNED_REGION;
     }
 
-    bool IsToRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::TO_REGION; }
+    bool IsToRegion() const { return GetRegionType() == RegionType::TO_REGION; }
 
-    bool IsGarbageRegion() const { return static_cast<RegionType>(metadata.regionType) == RegionType::GARBAGE_REGION; }
+    bool IsGarbageRegion() const { return GetRegionType() == RegionType::GARBAGE_REGION; }
     bool IsFreeRegion() const { return static_cast<UnitRole>(metadata.unitRole) == UnitRole::FREE_UNITS; }
 
     bool IsValidRegion() const
@@ -3407,6 +3411,10 @@ private:
         metadata.markStartAllocPtr = 0;
         metadata.prevRegionIdx = NULLPTR_IDX;
         metadata.nextRegionIdx = NULLPTR_IDX;
+        // Ghost walk (PrepareFromRegionList) follows nextRegionIdx0. A reused
+        // region that still named its previous-life successor kept a retired
+        // from-space chain alive across InitRegion (RegionManager.h:782).
+        metadata.nextRegionIdx0 = NULLPTR_IDX;
         metadata.censusBoundaryOffset = 0;
         __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
         metadata.liveInfo = nullptr;
