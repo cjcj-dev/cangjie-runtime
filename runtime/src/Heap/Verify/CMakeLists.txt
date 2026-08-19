@@ -57,6 +57,7 @@ set(SRC_LIST
     "LoadGoodProbe.cpp"
     "ZgcSelfHealDiag.cpp"
     "ZgcInvariants.cpp"
+    "HealCoverage.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

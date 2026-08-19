@@ -2875,6 +2875,10 @@ void WCollector::Preforward()
     threadPool->AddWork(new (std::nothrow) LambdaWork([this](size_t) { PreforwardAllResurrectExportFromObjects(); }));
     threadPool->Start();
     threadPool->WaitFinish();
+    if (HealCoverage::kHealCoverageCensus) {
+        HealCoverage::CensusAfterPublication(
+            currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-preforward");
+    }
 }
 
 
@@ -7102,6 +7106,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
             ValidateMinorReferences("before-return", &reachableVec);
             postEvacPoint("post-fix-pre-forward", true);
+            if (HealCoverage::kHealCoverageCensus) {
+                HealCoverage::CensusAfterPublication(
+                    currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
+                    "young-ref-fix");
+            }
         }
     }
 
@@ -7168,6 +7177,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
+            if (HealCoverage::kHealCoverageCensus) {
+                HealCoverage::CensusAfterPublication(
+                    currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
+                    "young-ref-fix-conc");
+            }
         }
     } else {
         MRT_PHASE_TIMER("young.copy");
@@ -9140,6 +9154,10 @@ void WCollector::DoGarbageCollection()
     }();
     if (!skipPostflipWalk) {
         InvalidateOldTaggedRefs(false);
+    }
+    if (HealCoverage::kHealCoverageCensus) {
+        HealCoverage::CensusAfterPublication(
+            currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
     }
 
     CollectSmallSpace();
