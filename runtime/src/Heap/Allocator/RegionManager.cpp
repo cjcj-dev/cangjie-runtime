@@ -1452,8 +1452,10 @@ size_t RegionManager::ExemptFromRegions()
         // Young pages stay — major old mark never examines them (oracleblack).
         // Free here, before PrepareForwardable, so they never become
         // FORWARDABLE (NW keep-from UAF was ForwardRegion Collect after Route).
-        if (liveBytes == 0 && rawPtrCnt == 0 && !fromRegion->HasMarkStartAllocGap() &&
-            !fromRegion->IsYoungRegion()) {
+        // Flip false: 256MB OOM returns (expire-off still green — this is the reclaim).
+        static constexpr bool kFreeEmptyAtCSetSelect = true;
+        if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
+            !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             CHECK(del->IsFromRegion());
             RemoveRegionLocked(&fromRegionList, del);
