@@ -3372,6 +3372,20 @@ void RegionManager::ForwardRegion(RegionInfo* region)
             (void)validAfterReset;
             (void)validAfterInv;
         }
+        // Nested HEU young: VisitLive copies the marked prefix then CollectRegion
+        // (fpath=2). Mutator/old holders can still name the from-copy until the
+        // next barrier heals. ZGC keeps the forwarding table until the next cycle
+        // (zRelocationSet.cpp:91-96) and free_page only after detach
+        // (zRelocate.cpp:1041-1047). Immediate Collect + TakeRegion.ClearUnits
+        // zeros the payload while FindToVersion still needs the from address
+        // (cjpm coll_live: cgen=0 fpath=2 route=5 ke=0 rmy=1 gh=1 reason=HEU).
+        // Keep the from-page as UNMOVABLE_FROM this cycle (same Exempt as the
+        // unmarked/incomplete arms). PrepareYoung later re-enlists it; ghost +
+        // forwarding entries stay until the next PrepareFromRegionList.
+        if (youngRegion) {
+            ExemptFromRegion(region);
+            return;
+        }
         RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_FWD_AFTER_COPY);
         CollectRegion<G>(region);
     }
