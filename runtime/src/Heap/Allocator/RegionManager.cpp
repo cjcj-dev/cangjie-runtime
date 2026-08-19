@@ -1806,6 +1806,15 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
         }
         region->MarkForwardingDone();
     }
+    // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
+    // would DecCounts a second time ("error count 1-0 16-0"). Only a GARBAGE node
+    // can still sit on garbageRegionList (the CHECK at
+    // TryTakeGarbageRegionAfterDispel, RegionManager.h:984); unlink it before the
+    // rehome below so the garbage list cannot name a non-GARBAGE region.
+    if (region != nullptr && region->IsGarbageRegion()) {
+        garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                          RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    }
     unmovableFromRegionList.PrependRegion(region, RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
 }
 
@@ -2597,9 +2606,17 @@ void RegionManager::CompactRegion(RegionInfo* region)
     region->ResetCensusBoundary();
 
     OffpastDiag::NoteCompactDone(region);
-    if (region->IsFromRegion()) {
-        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-            RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    {
+        const RegionInfo::RegionType type = region->GetRegionType();
+        if (type == RegionInfo::RegionType::FROM_REGION) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                              RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        }
     }
     tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
 }
@@ -2742,9 +2759,17 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
     region->ResetCensusBoundary();
 
     OffpastDiag::NoteCompactDone(region);
-    if (region->IsFromRegion()) {
-        fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-            RegionInfo::RegionType::THREAD_LOCAL_REGION);
+    {
+        const RegionInfo::RegionType type = region->GetRegionType();
+        if (type == RegionInfo::RegionType::FROM_REGION) {
+            fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+            region->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
+            garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                              RegionInfo::RegionType::THREAD_LOCAL_REGION);
+        }
     }
     tlRegionList.PrependRegion(region, RegionInfo::RegionType::THREAD_LOCAL_REGION);
 }
@@ -2884,10 +2909,16 @@ void RegionManager::EnlistStayYoungSurvivor(RegionInfo* region)
     // PrependRegion overwrites next/prev without unlinking — later
     // CollectFromSpaceGarbage MergeRegionList walks a chain that now points
     // into recentFull, and DeleteRegionLocked SEGVs (r13=0, +0x14).
-    if (region->IsFromRegion()) {
+    const RegionInfo::RegionType type = region->GetRegionType();
+    if (type == RegionInfo::RegionType::FROM_REGION) {
         fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
                                        RegionInfo::RegionType::RECENT_FULL_REGION);
-    } else if (region->IsGarbageRegion()) {
+    } else if (type == RegionInfo::RegionType::LONE_FROM_REGION) {
+        // TakeHeadRegion already unlinked it (RegionManager.cpp:1712). Type still
+        // LONE_FROM until Prepend; kLoneFromIsFrom readers would keep treating it
+        // as from-space if we skipped the store (WCollector.h:495).
+        region->SetRegionType(RegionInfo::RegionType::RECENT_FULL_REGION);
+    } else if (type == RegionInfo::RegionType::GARBAGE_REGION) {
         garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
                                           RegionInfo::RegionType::RECENT_FULL_REGION);
     }

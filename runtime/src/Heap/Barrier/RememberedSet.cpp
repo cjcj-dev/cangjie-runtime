@@ -168,15 +168,22 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     return transferred;
 }
 
-size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
+void RememberedSet::FlipForMinor()
+{
+    CheckInitialized();
+    size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
+    size_t nextBuffer = scanBuffer ^ 1U;
+    CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
+                 "remembered-set next buffer is not empty at minor swap");
+    activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
+}
+
+size_t RememberedSet::ScanPreviousForMinor(std::unordered_set<MAddress>& records)
 {
     CheckInitialized();
     CHECK_DETAIL(records.empty(), "minor remembered-set destination must be empty");
+    size_t scanBuffer = activeBuffer.load(std::memory_order_acquire) ^ 1U;
 
-    // remsetdrain: the breakdown probe remains opt-in.  Hash reduction defaults on;
-    // `MRT_GCV2_REMSET_HASH_OPT=0` is its immediate rollback.  It only pre-sizes the
-    // existing destination from the bitmap's exact distinct count; it does not weaken
-    // or bypass any producer/backstop scan.
     static const bool breakdownProbe = []() {
         const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_REMSET_DRAIN_PROBE */;
         return value != nullptr && std::strcmp(value, "1") == 0;
@@ -186,15 +193,6 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
         return value == nullptr || std::strcmp(value, "1") == 0;
     }();
     const uint64_t drainStartNs = breakdownProbe ? TimeUtil::NanoSeconds() : 0;
-
-    // DoYoungGarbageCollection owns a ScopedStopTheWorld across this operation.
-    // GC workers start rebuilding records only after this synchronous drain returns.
-    size_t scanBuffer = activeBuffer.load(std::memory_order_relaxed);
-    size_t nextBuffer = scanBuffer ^ 1U;
-    CHECK_DETAIL(ClearBuffer(nextBuffer) == 0 && recordCounts[nextBuffer].load(std::memory_order_relaxed) == 0,
-                 "remembered-set next buffer is not empty at minor swap");
-    activeBuffer.store(static_cast<uint8_t>(nextBuffer), std::memory_order_release);
-
     const size_t expectedRecords = recordCounts[scanBuffer].load(std::memory_order_relaxed);
     if (reserveDestination) {
         records.reserve(expectedRecords);
@@ -301,6 +299,12 @@ size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
     ++bitmapCrossCheckCount;
 #endif
     return records.size();
+}
+
+size_t RememberedSet::DrainForMinor(std::unordered_set<MAddress>& records)
+{
+    FlipForMinor();
+    return ScanPreviousForMinor(records);
 }
 
 std::unordered_set<MAddress> RememberedSet::Snapshot() const
