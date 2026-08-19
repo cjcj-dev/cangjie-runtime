@@ -2170,6 +2170,29 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
             // f3arm: always-on classified counters; MRT_GCV2_F3_DEADARM_ASSERT=1 → fail-closed
             // (no CAS null). Default path byte-identical soft-null when env unset.
             // f3weak: holder passed so weak_holder overlay can count IsWeakRef holders.
+            // oraclegate: layer true-dead by HOLDER liveness. Reachability: a marked (live)
+            // holder cannot hold a strong ref to a dead target -- when the classifier says it
+            // does, an earlier pass failed (mark hole / premature region free) and the slot is
+            // corruption evidence, not residue. Nulling it here is what turned that evidence
+            // into the delayed compiled-fast-path null crash (cjpm 1s: a live String's bytes
+            // slot nulled, read later with no barrier -- si_addr=0x10 movzbl 0x10(%r13,%r10)).
+            // Leave the old-tag: the reader slow path still gets FindTo -> FindRetiredTo (the
+            // retired generation may hold the true to-version) -- a real recovery path that a
+            // null destroys. Dead holders (the ~6.6k region_free bulk) keep the null: the F5
+            // no-stale-tags contract is unchanged where it matters, and in a correct heap this
+            // exemption set is empty by reachability, so it cannot retain true dead residue.
+            if (holder != nullptr && Heap::IsHeapAddress(holder) &&
+                IsMarkedObject<Generation::Old>(holder)) {
+                static std::atomic<size_t> g_f3LiveHole{ 0 };
+                size_t lh = g_f3LiveHole.fetch_add(1, std::memory_order_relaxed) + 1;
+                if (lh <= 16 || (lh & (lh - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
+                        "[GCV2][f3-livehole] n=%zu reason=%s rtype=%u holder=%p field=%p "
+                        "from=%p latest=%p — live holder, dead-classified target: keep slot",
+                        lh, reason, rtype, holder, &field, fromObj, latest);
+                }
+                return;
+            }
             const char* deadReason = NoteF3DeadarmHit(reason, holder);
             static std::atomic<size_t> g_f3DeadLogged{ 0 };
             size_t n = g_f3DeadLogged.fetch_add(1, std::memory_order_relaxed);
