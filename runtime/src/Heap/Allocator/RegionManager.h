@@ -683,25 +683,14 @@ public:
         return rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED;
     }
 
-    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken token)
+    RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, CopierRouteToken)
     {
-        // alreadyHeld: caller already holds retain_page (TryMutatorRelocate /
-        // TryForwardObject). Nested RetainScope would CAS +1 again; DrainScope
-        // invert then parks the same thread in WaitUntilDone with its own
-        // token still live — fifth-face self-deadlock. Default false so the
-        // no-arg ForwardObjectExclusive path still retains.
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION,
-                                       token.alreadyHeld) };
+        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_WITH_REGION) };
     }
 
-    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken token)
+    RoutePlan PlanRoute(BaseObject* fromObj, CopierRouteToken)
     {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
-        if (fromRegionInfo == nullptr) {
-            return RoutePlan{ nullptr };
-        }
-        return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP,
-                                       token.alreadyHeld) };
+        return PlanRouteLookup(fromObj);
     }
 
     RoutePlan PlanRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, StwRouteToken)
@@ -944,11 +933,10 @@ private:
         return RoutePlan{ ComputeRoute(fromObj, fromRegionInfo, FwdInflight::Site::ROUTE_LOOKUP) };
     }
 
-    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, FwdInflight::Site site,
-                             bool alreadyHeld = false)
+    BaseObject* ComputeRoute(BaseObject* fromObj, RegionInfo* fromRegionInfo, FwdInflight::Site site)
     {
-        RegionInfo::RetainScope retain(alreadyHeld ? nullptr : fromRegionInfo);
-        if (!alreadyHeld && !retain.ok()) {
+        RegionInfo::RetainScope retain(fromRegionInfo);
+        if (!retain.ok()) {
             return nullptr;
         }
         FwdInflight::Scope inflight(fromRegionInfo, site);

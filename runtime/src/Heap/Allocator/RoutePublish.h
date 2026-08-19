@@ -15,10 +15,8 @@ struct PublishedRoute {
 };
 
 class CopierRouteToken {
-    explicit CopierRouteToken(bool alreadyHeld) : alreadyHeld(alreadyHeld) {}
-    bool alreadyHeld = false;
+    CopierRouteToken() = default;
     friend struct CopierRouteMint;
-    friend class RegionManager;
 };
 
 class StwRouteToken {
