@@ -36,8 +36,9 @@ class WCollector;
 //   MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 — force ForwardRegion in-place arm (dual-run only)
 //
 // Lifecycle:
-//   Register at in-place / abandon / residual promote sites (with old scan still on).
-//   DischargeAll at young.evac_finish (v1 STW; same window as today's sync walk).
+//   Register at in-place / abandon / residual promote sites (Promote still STW3 / copy).
+//   DischargeAll after STW3 release, still in FORWARD, before IDLE
+//   (ZRelocateAddRemsetForFlipPromoted, zRelocate.cpp:1257-1306).
 //   ResetForNextMinor at next minor start — CHECK registered==discharged first.
 
 namespace PromotedRegionDomain {
@@ -61,13 +62,13 @@ bool IsRegisteredUndischarged(const RegionInfo* region);
 // Obligation ①: call before reuse / ClearUnits. CHECK if undischarged (when enabled).
 void CheckNotUndischargedForReuse(const RegionInfo* region, const char* site);
 
-// resolve / isStoreGood / colorStoreGood / recordSlot from WCollector call site
-// (RememberedSet::Record is private to Barrier/WCollector/RegionManager).
-// Visitor = ZGC remap_and_maybe_add_remset: store-good early-exit; else resolve;
-// target still young ⇒ Record + store-good colour.
+// resolve + recordSlot from WCollector (RememberedSet::Record is not public here).
+// resolve must be ResolveMinorReference: CAS self-heal, same shape as
+// zRelocate.cpp:1242 load_barrier_on_oop_field_preloaded.
+// No store-good early-exit: ColourStoreGood never Records (WCollector.h:702-730).
+// No colour store here: resolve already CAS-installs (unconditional StoreColoured
+// would lose a mutator write once this walk is off-STW).
 size_t DischargeAll(const std::function<BaseObject*(RefField<>&)>& resolve,
-                    const std::function<bool(RefField<>&)>& isStoreGood,
-                    const std::function<void(RefField<>&, BaseObject*)>& colorStoreGood,
                     const std::function<void(MAddress)>& recordSlot);
 
 // Dual-run: old RecordPromotedCrossGenEdges product edge.

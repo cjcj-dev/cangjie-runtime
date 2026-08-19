@@ -7042,6 +7042,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     {
         // minortime: ⑧ finish inside evacuate (promote residual + remset rebuild + reassemble)
         MRT_PHASE_TIMER("young.evac_finish");
+        // Residual remset walk no longer runs here; residualPromote stays 0.
+        // The walk is young.conc_promote_walk after STW3 release.
         size_t residualPromoteRecords = 0;
         // Positive-control only (rebuildgate): force one live young region so the
         // rebuild gate must open. Prefer leaving a residual young undemoted; if
@@ -7052,10 +7054,8 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             keepOneYoungEnv != nullptr && std::strcmp(keepOneYoungEnv, "1") == 0;
         bool keptOneYoung = false;
         {
-        // PROBE evac2: how much of young.evac_finish is the promoted-region object walk?
-        // ZGC does this same walk (ZRelocateAddRemsetForFlipPromoted, zRelocate.cpp:1257-1288)
-        // but runs it inside concurrent_relocate, yielding between pages.
-        MRT_PHASE_TIMER("young.evac_promote_walk");
+        // Decision + Register + Promote stay in STW3 (O(regions)). The remset walk
+        // moved to young.conc_promote_walk after STW3 release (zRelocate.cpp:1257-1306).
         for (RegionInfo* region : minorCandidateRegions) {
             if (region->IsYoungRegion()) {
                 MarkView<Generation::Young> promotionView = region->GetMarkView<Generation::Young>();
@@ -7073,17 +7073,14 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     continue;
                 }
                 // Residual candidates not forwarded above (e.g. raw-pointer pinned):
-                // still demote to old; must replay young→young edges that become old→young.
-                // promodomain §A.3 residual arm: register + old sync walk (domain default off).
-                // residual only runs inside young.evac_finish ⇒ reason is always YOUNG.
+                // still demote to old. Remset walk is ZRelocateAddRemsetForFlipPromoted
+                // (zRelocate.cpp:1257-1306): Register+Promote here under STW3, walk after
+                // STW3 release (young.conc_promote_walk). Do not Record here — that walk
+                // is the STW cost this lane moves out.
                 region->PreserveRetainedLiveInfo();
                 PromotedRegionDomain::Register(region, PromotedRegionDomain::RegisterPath::Residual);
                 PromotedRegionDomain::NoteRegisterGate(static_cast<uint32_t>(GC_REASON_YOUNG),
                                                        /*site*/ 2, /*registered*/ true);
-                size_t recEdges = RegionManager::RecordPromotedCrossGenEdges(region);
-                PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
-                                                     /*site*/ 2, recEdges);
-                residualPromoteRecords += recEdges;
                 (void)region->PromoteYoungRegion(promotionView);
             }
         }
@@ -7105,31 +7102,6 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
             }
         }
         size_t promotedPathRecords = RegionManager::ConsumePromotedCrossGenEdgeCount();
-
-        // promodomain v1: discharge flip-promoted registry in young.evac_finish (STW).
-        // Dual-run: old RecordPromotedCrossGenEdges already ran; domain visitor reconciles.
-        {
-        // PROBE evacct: how much of young.evac_finish is the PROMODOMAIN discharge?
-        MRT_PHASE_TIMER("young.evac_domain_discharge");
-        if (PromotedRegionDomain::Enabled()) {
-            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
-            size_t domainEdges = PromotedRegionDomain::DischargeAll(
-                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
-                [this](RefField<>& field) -> bool { return is_store_good(field); },
-                [this](RefField<>& field, BaseObject* target) {
-                    RefField<> coloured = GetAndTryTagRefField(target);
-                    field.StoreColoured(coloured.GetFieldValue());
-                },
-                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
-            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "evac_finish");
-            PromotedRegionDomain::DumpProcessTotals("evac_finish");
-            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu promoteReplay=%zu residual=%zu",
-                 domainEdges, promotedPathRecords, residualPromoteRecords);
-        } else {
-            // domain off: still dump reason×site coverage (always-on counters).
-            PromotedRegionDomain::DumpCoverageByReason("evac_finish_domain_off");
-        }
-        }
 
         const size_t liveYoungRegions = RegionInfo::GetYoungRegionCount();
         VLOG(REPORT,
@@ -8888,6 +8860,31 @@ void WCollector::DoYoungGarbageCollection()
                  "[GCV2][verify][post-evac] point=post-evacuate run=%zu "
                  "env=MRT_GCV2_VERIFY_POST_EVAC=1 remsetSnap=%zu",
                  minorTotalRuns + 1, remsetSnap.size());
+        }
+    }
+
+    // ZRelocate::relocate tail (zRelocate.cpp:1303-1306): after concurrent copy,
+    // still in Relocate, walk flip-promoted pages and add remset. Residual
+    // Register happens in STW3, so the walk cannot live in young.concurrent_relocate
+    // (those pages are not registered yet). Release STW3 first; stay in FORWARD
+    // so colour / store-good masks match the STW3 walk. Then IDLE.
+    if (stw != nullptr) {
+        stw.reset();
+    }
+    {
+        MRT_PHASE_TIMER("young.conc_promote_walk");
+        if (PromotedRegionDomain::Enabled()) {
+            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
+            size_t domainEdges = PromotedRegionDomain::DischargeAll(
+                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
+                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
+            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
+                                                 /*site*/ 3, domainEdges);
+            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "conc_promote_walk");
+            PromotedRegionDomain::DumpProcessTotals("conc_promote_walk");
+            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
+        } else {
+            PromotedRegionDomain::DumpCoverageByReason("conc_promote_walk_domain_off");
         }
     }
 
