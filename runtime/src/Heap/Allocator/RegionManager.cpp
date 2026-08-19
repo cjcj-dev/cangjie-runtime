@@ -1446,17 +1446,15 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221: register_empty_page iff !is_marked, which is
-        // sound only because ZGC's mark is complete for every relocatable page
-        // (zPage.inline.hpp:223-225). Ours is not: SD256 classified 99.8% of
-        // CSet-empty pages as ke=0 (null face / not marked this cycle) with
-        // residual headers 2730–3276 and marked=0. Bare liveBytes==0 is not
-        // emptiness. Gate on IsKnownEmpty (this-cycle marked ∧ live==0).
-        // Young pages stay — major old mark never examines them (oracleblack).
+        // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
+        // freed at select. Post-mark live==0 is that class (OOM dump: kept-publish
+        // 3942 live=0 hole=258MB). Young pages stay — major old mark never
+        // examines them (oracleblack). Gate on liveBytes after TRACE; SATB
+        // handshake + TRACE MarkNewObject close the concurrent-store hole
+        // (zBarrier.cpp:253-261, zBarrier.inline.hpp:735-739).
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
-            !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion() &&
-            fromRegion->IsKnownEmpty(fromRegion->GetMarkView<Generation::Old>())) {
+            !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             CHECK(del->IsFromRegion());
             // LEAD 05:3x: holder page freed at CSet empty-select while live
