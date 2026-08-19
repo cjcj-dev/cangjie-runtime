@@ -9416,6 +9416,38 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     // Wait for the region-level publish (FORWARDED / COMPACTED / kept), not
     // an object-level empty spin (47595a33). ExemptFromRegion publishes kept
     // immediately so this wait is bounded every cycle.
+    //
+    // oracle r5: store-side waits after FORWARD (reclaim/idle) on ROUTED
+    // unpublished pages are structurally never-true (527/527 timeout).
+    // Only wait while a publisher still exists this cycle.
+    const GCPhase waitPhase = GetGCPhase();
+    const bool waitEligible = (waitPhase == GCPhase::GC_PHASE_PREFORWARD ||
+                               waitPhase == GCPhase::GC_PHASE_FORWARD) &&
+        forwarding != nullptr && !forwarding->IsFreeRegion() && !forwarding->IsGarbageRegion();
+    if (ans == MutatorRelocate::UnpublishedAnswer::Wait && !waitEligible) {
+        static std::atomic<size_t> g_waitIneligible{ 0 };
+        const size_t n = g_waitIneligible.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 8 || (n & (n - 1)) == 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][wait-ineligible] n=%zu from=%p region=%p phase=%d route=%u done=%u "
+                "free=%u garbage=%u — FindTo/FindRetiredTo/keep-from",
+                n, from, forwarding, static_cast<int>(waitPhase), static_cast<unsigned>(rs),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsForwardingDone()),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsFreeRegion()),
+                static_cast<unsigned>(forwarding != nullptr && forwarding->IsGarbageRegion()));
+        }
+        BaseObject* retired = lookupTo();
+        if (retired != nullptr && Heap::IsHeapAddress(retired) && retired->IsValidObject()) {
+            if (MutatorRelocate::StatsOn()) {
+                MutatorRelocate::NoteWaitReceipt();
+            }
+            return retired;
+        }
+        if (MutatorRelocate::StatsOn()) {
+            MutatorRelocate::NoteWaitGiveUp();
+        }
+        return from;
+    }
     if (ans == MutatorRelocate::UnpublishedAnswer::Wait) {
         static std::atomic<size_t> g_regionWait{ 0 };
         static std::atomic<size_t> g_regionGot{ 0 };
@@ -9565,8 +9597,26 @@ BaseObject* WCollector::ResolveStoreValue(BaseObject* ref) const
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return ref;
     }
-    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(ref));
+    const MAddress fromAddr = reinterpret_cast<MAddress>(ref);
+    RegionInfo* ghost = RegionInfo::GetGhostFromRegionAt(fromAddr);
     if (ghost == nullptr || ghost->IsUnmovableFromRegion()) {
+        // oracle Q3 ④: resolve-time FREE is a lost reference. FindRetiredTo
+        // first (FindToVersion already walks the retired generation); miss
+        // keeps the value for ColourStaleLoadBad — never null, never store-good.
+        RegionInfo* live = RegionInfo::TryGetRegionInfoAt(fromAddr);
+        if (ghost == nullptr && (live == nullptr || live->IsFreeRegion())) {
+            BaseObject* retired = FindToVersion(ref);
+            if (retired != nullptr) {
+                return retired;
+            }
+            static std::atomic<size_t> g_lostRef{ 0 };
+            const size_t n = g_lostRef.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8 || (n & (n - 1)) == 0) {
+                LOG(RTLOG_ERROR,
+                    "[GCV2][lostref] n=%zu ref=%p region=%p free=%u — retired miss, keep load-bad",
+                    n, ref, live, static_cast<unsigned>(live != nullptr && live->IsFreeRegion()));
+            }
+        }
         return ref;
     }
     BaseObject* resolved = relocate_or_remap_object(ref, ghost->generation_id());
