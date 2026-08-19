@@ -8986,7 +8986,17 @@ void WCollector::DoGarbageCollection()
     // Assemble->from-space route=5 collect) judged them by the OLD view and freed live
     // young objects wholesale (f3-livehole census; TraceClear kind=coll_live).
     // Running the young cycle first gives every young region a real examination each major.
-    DoYoungGarbageCollection();
+    //
+    // The nested young cycle must run under its own identity: CopyCollector::ForwardFromSpace
+    // (CopyCollector.cpp:189-193) and every other generation dispatch key on gcReason, so a
+    // young evacuation executed while gcReason==HEU instantiates the Old templates and trips
+    // GetRouteMarkView's generation CHECK on every young-enrolled region (RegionInfo.h:385).
+    {
+        const GCReason majorReason = gcReason;
+        gcReason = GC_REASON_YOUNG;
+        DoYoungGarbageCollection();
+        gcReason = majorReason;
+    }
     TraceHeap();
     PostTrace();
 
