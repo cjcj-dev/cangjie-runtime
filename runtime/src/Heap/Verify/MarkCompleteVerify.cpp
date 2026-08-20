@@ -42,6 +42,7 @@ struct Stats {
     size_t targetAllocGap = 0;
     size_t targetInteriorBaseMarked = 0;
     size_t targetNonHeap = 0;
+    size_t targetForwarded = 0;
 
     // Defects: a live holder naming an object this cycle's mark did not mark.
     size_t deadTarget = 0;
@@ -187,6 +188,18 @@ void CheckEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* h
     }
     if (IsLiveOld(target)) {
         ++stats.targetMarked;
+        return;
+    }
+    // A from-copy that has already been evacuated legitimately carries no
+    // this-cycle mark: the live version is the to-copy, and the slot naming the
+    // from-address just has not been fixed yet (ref_fix runs phases later). ZGC's
+    // verifier resolves the same case with a load barrier before testing the mark
+    // (ZVerifyColoredRootClosure, zVerify.cpp:227-230). Resolving the route here
+    // would mean calling into the forwarding machinery at a phase that does not
+    // expect it, so record the state the header already carries and keep it out of
+    // the defect column rather than guessing either way.
+    if (target->IsForwarded()) {
+        ++stats.targetForwarded;
         return;
     }
 
@@ -378,13 +391,14 @@ void RunAtMarkEnd(const char* point)
     // deadTarget is only readable when objectsScanned/liveHolders/edgesSeen are non-zero.
     LOG(RTLOG_ERROR,
         "[GCV2][markcomplete] point=%s invoke=%zu objects=%zu liveHolders=%zu edges=%zu "
-        "okMarked=%zu okYoung=%zu okAllocGap=%zu okInteriorBase=%zu okNonHeap=%zu "
+        "okMarked=%zu okYoung=%zu okAllocGap=%zu okInteriorBase=%zu okNonHeap=%zu okForwarded=%zu "
         "deadTarget=%zu deadKnownEmpty=%zu deadFrom=%zu deadGarbage=%zu deadFree=%zu "
         "deadLarge=%zu deadOther=%zu deadNoRegion=%zu deadInterior=%zu "
         "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu",
         point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
         stats.targetMarked, stats.targetYoung, stats.targetAllocGap, stats.targetInteriorBaseMarked,
-        stats.targetNonHeap, stats.deadTarget, stats.deadTargetKnownEmpty, stats.deadInFrom, stats.deadInGarbage,
+        stats.targetNonHeap, stats.targetForwarded, stats.deadTarget, stats.deadTargetKnownEmpty, stats.deadInFrom,
+        stats.deadInGarbage,
         stats.deadInFree, stats.deadInLarge, stats.deadInOther, stats.deadNoRegion, stats.deadInterior,
         stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
         static_cast<unsigned long long>(stats.costNs));
