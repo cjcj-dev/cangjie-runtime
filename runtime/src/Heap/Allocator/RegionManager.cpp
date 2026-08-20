@@ -1951,14 +1951,40 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    region->VisitAllObjects([](BaseObject* obj) {
-        if (obj == nullptr) {
-            return;
+    // VisitAllObjects breaks on a gate reject (hole / residual head), so a
+    // later LOCKED header is never waited. Step ALLOC_ALIGN past a reject
+    // (zRelocate.cpp:1041-1047 waits the whole page). Do not SetStateCode
+    // on LOCKED (copier still UnlockObject, StateWord.h:183).
+    if (region->IsLargeRegion()) {
+        BaseObject* obj = from_region_addr(region->GetRegionStart());
+        if (obj != nullptr && Collector::PlausibleManagedObjectGate("WaitCopiedObjectsUnlocked", obj)) {
+            while (obj->GetStateWord().IsLockedWord()) {
+                sched_yield();
+            }
+        }
+        return;
+    }
+    if (!region->IsSmallRegion()) {
+        return;
+    }
+    uintptr_t position = region->GetRegionStart();
+    uintptr_t allocPtr = region->GetRegionAllocPtr();
+    while (position < allocPtr) {
+        BaseObject* obj = from_region_addr(position);
+        if (obj == nullptr || !Collector::PlausibleManagedObjectGate("WaitCopiedObjectsUnlocked", obj)) {
+            position += kMarkedBytesPerBit;
+            continue;
         }
         while (obj->GetStateWord().IsLockedWord()) {
             sched_yield();
         }
-    });
+        size_t size = RegionSpace::GetAllocSize(*obj);
+        if (size == 0) {
+            position += kMarkedBytesPerBit;
+            continue;
+        }
+        position += size;
+    }
 }
 } // namespace
 
