@@ -233,9 +233,6 @@ public:
             regionInfo->GetRegionType() == RegionInfo::RegionType::FREE_REGION) {
             return false;
         }
-        if (regionInfo->IsTraceRegion()) {
-            return false;
-        }
         size_t offset = regionInfo->GetAddressOffset(reinterpret_cast<MAddress>(obj));
         MarkView<G> view = regionInfo->GetMarkView<G>();
         if (regionInfo->IsMarkedObject(view, offset)) {

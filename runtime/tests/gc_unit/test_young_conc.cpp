@@ -168,7 +168,9 @@ GC_TEST(YoungConc, StaleOldMarkDoesNotSkipYoungEnqueue)
     fx.FreePlanted(live);
 }
 
-// isTraceRegion alone skips SATB (ShouldEnqueue) — paint required or object stays white.
+// isTraceRegion without paint is not allocate-black: SATB must still enqueue
+// (zBarrier.inline.hpp:735-739 mark_and_remember). Skipping here left SurvivalNode
+// array overwrites white (survnode visitSame=0).
 GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
 {
     GcHeapFixture fx;
@@ -178,7 +180,7 @@ GC_TEST(YoungConc, TraceRegionSkipsSatbWithoutPaint)
     LiveInfo* live = fx.PlantLiveInfo(fx.region0);
     (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
 
-    GC_EXPECT_FALSE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
+    GC_EXPECT_TRUE(RegionSpace::ShouldEnqueue<Generation::Young>(fx.obj0));
     size_t off = fx.region0->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     GC_EXPECT_FALSE(fx.region0->IsMarkedObject(fx.region0->GetMarkView<Generation::Young>(), off));
 
