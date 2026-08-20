@@ -1509,7 +1509,12 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool freeEmpty = (ke != 0) || deadFromCopy;
+            // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
+            // Held until DrainScope waits copyInflight even at fwdRefCount==0
+            // (LEAD-NOTE 0820 21:1x / PORT_ZFORWARDING step 3). oldroots2
+            // 152ccd59 SEGV+drift was ClearUnits racing a naked mutator ref.
+            const bool unmarkedResidual = residual != 0 && marked == 0;
+            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
