@@ -41,6 +41,9 @@ thread_local size_t g_currentThreadRootMapMissCount = 0;
 // was right every time" rather than as "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
 std::atomic<size_t> g_markTerminatePauses{ 0 };
+// Entries the pause's flush actually delivered. Separates "the test was right"
+// (flushed > 0, ncontinue == 0) from "the flush reached nobody" (flushed == 0).
+std::atomic<size_t> g_markTerminateFlushed{ 0 };
 std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 
 // A zero ncontinue is a real and expected result -- it means every concurrent
@@ -50,8 +53,9 @@ void ReportMarkTerminateContinue()
 {
     if (!g_markTerminateAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
         (void)std::atexit([]() {
-            LOG(RTLOG_ERROR, "[GCV2][markterm] atexit pauses=%zu ncontinue=%zu",
+            LOG(RTLOG_ERROR, "[GCV2][markterm] atexit pauses=%zu flushedInPause=%zu ncontinue=%zu",
                 g_markTerminatePauses.load(std::memory_order_relaxed),
+                g_markTerminateFlushed.load(std::memory_order_relaxed),
                 g_markTerminateContinue.load(std::memory_order_relaxed));
         });
     }
@@ -849,13 +853,19 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
 
     constexpr uint64_t maxIterationTime = 120ULL * 1000 * 1000 * 1000; // 2 mins.
     constexpr uint64_t maxIterationLoopNum = 1000;
-    auto visitSatbObj = [this, &workStack]() {
+    // satbSeen counts every entry the drain took delivery of, marked or not. Without
+    // it an ncontinue of 0 cannot be told apart from "the pause was handed nothing":
+    // the first says the concurrent termination test was right, the second says the
+    // flush is not reaching the mutators' nodes at all.
+    size_t satbSeen = 0;
+    auto visitSatbObj = [this, &workStack, &satbSeen]() {
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
 
         while (!remarkStack.empty()) {
             BaseObject* obj = remarkStack.back();
             remarkStack.pop_back();
+            ++satbSeen;
             if (Heap::IsHeapAddress(obj) && !this->IsMarkedObject<Generation::Old>(obj)) {
                 workStack.push_back(obj);
                 DLOG(TRACE, "satb buffer add obj %p", obj);
@@ -900,7 +910,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // inside the ZMarkEnd VM operation -- that is, with the Java threads already
         // stopped -- flushes the threads it can still reach, and only then tests for
         // emptiness. If anything turns up it returns false, _ncontinue++, and the whole
-        // concurrent mark resumes (zMark.cpp:975-989).
+        // concurrent mark resumes (zMark.cpp:973-989).
         //
         // Deciding this while mutators run cannot be repaired by draining again. A
         // record pushed into a mutator's own node after that mutator flushed sits in a
@@ -912,8 +922,10 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed);
+            const size_t seenBefore = satbSeen;
             MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
             visitSatbObj();
+            g_markTerminateFlushed.fetch_add(satbSeen - seenBefore, std::memory_order_relaxed);
             terminated = workStack.empty();
         }
         if (terminated) {

@@ -13,7 +13,7 @@
 // zPage.inline.hpp:254-256).  That is only sound because of a guarantee it checks
 // directly: once mark claims completion, every reference out of a live old object
 // points at a live old object -- ZVerifyOldOopClosure -> z_verify_old_oop's
-// `guarantee(ZPointer::is_marked_old(o))` (zVerify.cpp:145-155), driven over the
+// `guarantee(ZPointer::is_marked_old(o))` (zVerify.cpp:131-155), driven over the
 // whole old generation by ZVerifyObjectClosure::do_object (zVerify.cpp:432-444).
 //
 // Our tree states in a comment that it does not have that guarantee

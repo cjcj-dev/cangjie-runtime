@@ -140,7 +140,7 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
         static_cast<unsigned>(knownEmpty), stats.deadTarget);
 }
 
-// One edge out of a live old holder.  Mirrors z_verify_old_oop (zVerify.cpp:145-155):
+// One edge out of a live old holder.  Mirrors z_verify_old_oop (zVerify.cpp:131-155):
 // the target must be marked old, except for the cases ZGC also exempts.
 void CheckEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field)
 {
@@ -335,7 +335,7 @@ void RunAtMarkEnd(const char* point)
     const size_t maxSamples = MaxSamples();
 
     {
-        // ZVerify::objects asserts it runs at a safepoint (zVerify.cpp:470).  The
+        // ZVerify::objects asserts it runs at a safepoint (zVerify.cpp:473).  The
         // mark face and every region's live count have to be read while nothing
         // mutates them, or a zero here would only mean "we looked at the wrong
         // instant" -- the failure mode the earlier `!is_marked` runs could not rule out.
