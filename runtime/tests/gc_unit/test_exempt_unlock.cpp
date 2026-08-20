@@ -73,6 +73,25 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
 }
 
+GC_TEST(ExemptLife, InPlaceCopyMustNotPaintNormalBeforeUnlock)
+{
+    // Exclusive CopyObject(from, from) then SetStateCode(NORMAL) clears LOCKED
+    // and UnlockObject CHECK-fails (StateWord.h:183). Skip the paint when to==from.
+    GcHeapFixture fx;
+    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    StateWord word = obj->GetStateWord();
+    GC_EXPECT_TRUE(obj->TryLockObject(word));
+    GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
+    BaseObject* toObj = obj;
+    if (toObj != obj) {
+        toObj->SetStateCode(ObjectState::NORMAL);
+    }
+    obj->UnlockObject(ObjectState::FORWARDED);
+    GC_EXPECT_TRUE(obj->IsForwarded());
+    GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
+}
+
 GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)
 {
     // zRelocate.cpp:382-410: find() hit returns without retain. Exempt must

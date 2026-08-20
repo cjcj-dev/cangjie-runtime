@@ -10093,7 +10093,13 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
     // Publish a fully-initialized to-object. ZGC insert (zRelocate.cpp:371) is the
     // publish of a completed copy; SetStateCode must precede InsertMapping so a
     // find() hit never observes the from-copy's LOCKED header bits on to.
-    toObj->SetStateCode(ObjectState::NORMAL);
+    // In-place (GetRoute keep-from: to==from) the header is still LOCKED —
+    // painting NORMAL here makes UnlockObject CHECK fail (StateWord.h:183).
+    // That is the A_locked abort after exempt-kept (REPORT-lockdrain /
+    // REPORT-exemptlife §4).
+    if (toObj != obj) {
+        toObj->SetStateCode(ObjectState::NORMAL);
+    }
     std::atomic_thread_fence(std::memory_order_release);
     ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     // portmutreloc: the copy just happened on this thread. InScope() is set only by
