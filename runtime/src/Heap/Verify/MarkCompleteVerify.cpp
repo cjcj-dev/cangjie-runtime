@@ -132,12 +132,29 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
     TypeInfo* holderTip = holder == nullptr ? nullptr : holder->GetTypeInfo();
     const char* holderType = (holderTip == nullptr || holderTip->GetName() == nullptr) ? "?" : holderTip->GetName();
 
+    // "live holder" is marked-or-resurrected, and the two have different tracing
+    // rules: MarkObject enqueues for a field scan, ResurrectObject paints the
+    // resurrect bitmap and DoResurrection follows separately
+    // (TracingCollector.cpp:896-922). Which one this holder is decides whether the
+    // question is "who marked it without following it" or "who resurrected it".
+    // The target's own two bits and the from-page route state are printed for the
+    // same reason -- so the next reader does not have to re-derive them from the
+    // address.
+    const unsigned holderMarked = RegionSpace::IsMarkedObject<Generation::Old>(holder) ? 1u : 0u;
+    const unsigned holderResurrected = RegionSpace::IsResurrectedObject(holder) ? 1u : 0u;
+    const unsigned targetMarkedBit = RegionSpace::IsMarkedObject<Generation::Old>(target) ? 1u : 0u;
+    const unsigned targetResurrected = RegionSpace::IsResurrectedObject(target) ? 1u : 0u;
+    const unsigned targetForwardedBit = target->IsForwarded() ? 1u : 0u;
     LOG(RTLOG_ERROR,
         "[GCV2][markcomplete] DEAD_EDGE point=%s holder=%p holderType=%s holderRegion=%s "
-        "field=%p fieldOffset=%zd target=%p targetRegion=%s targetRegionBase=%p knownEmpty=%u n=%zu",
-        point == nullptr ? "?" : point, holder, holderType, RegionKindName(holderRegion), &field,
-        BaseObject::FieldOffset(holder, &field), target, RegionKindName(targetRegion),
-        targetRegion == nullptr ? nullptr : reinterpret_cast<void*>(targetRegion->GetRegionStart()),
+        "holderMarked=%u holderResurrected=%u "
+        "field=%p fieldOffset=%zd target=%p targetRegion=%s targetRegionBase=%p "
+        "targetMarked=%u targetResurrected=%u targetForwarded=%u targetRoute=%u knownEmpty=%u n=%zu",
+        point == nullptr ? "?" : point, holder, holderType, RegionKindName(holderRegion), holderMarked,
+        holderResurrected, &field, BaseObject::FieldOffset(holder, &field), target, RegionKindName(targetRegion),
+        targetRegion == nullptr ? nullptr : reinterpret_cast<void*>(targetRegion->GetRegionStart()), targetMarkedBit,
+        targetResurrected, targetForwardedBit,
+        targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetRouteState()),
         static_cast<unsigned>(knownEmpty), stats.deadTarget);
 }
 
