@@ -1948,6 +1948,13 @@ public:
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
         metadata.routeState = FORWARDABLE;
+        // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
+        // forwarding table must not survive into the next install.
+        // EnsureEntries returns early if a table is already armed, so a kept
+        // page would carry last cycle's mappings (REPORT-trainbisect §6 knife B;
+        // [IKEKEEP-01] same shape). ZGC destroys forwarding at the next
+        // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
+        ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.

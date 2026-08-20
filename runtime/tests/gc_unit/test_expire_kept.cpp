@@ -10,6 +10,7 @@
 
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Allocator/RegionManager.h"
 
 using namespace MapleRuntime;
@@ -78,6 +79,34 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
 
     GC_EXPECT_TRUE(forwarded->IsForwardingDone());
     GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetRouteState()),
-                 static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
+                  static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
     GC_EXPECT_TRUE(IkeKeepTestAccess::OnFrom(manager, forwarded));
+}
+
+GC_TEST(ExemptLife, ExpireRetiresForwardedKeptTable)
+{
+    // After-copy Exempt parks FORWARDED+done with a live table. Next cycle
+    // must not find() last cycle's dest (zRelocationSet.cpp:91-96).
+    GcHeapFixture fx;
+    RegionManager manager;
+    ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
+
+    RegionInfo* forwarded = fx.region0;
+    forwarded->SetRegionType(RegionInfo::RegionType::FROM_REGION);
+    forwarded->SetRouteState(RegionInfo::RouteState::FORWARDED);
+    forwarded->MarkForwardingDone();
+    IkeKeepTestAccess::ParkUnmovable(manager, forwarded);
+
+    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
+    const MAddress stale = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
+    GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
+    GC_EXPECT_EQ(ForwardingTable::InsertMapping(from, stale), stale);
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
+
+    manager.ExpireKeptFromPreviousCycle();
+
+    GC_EXPECT_TRUE(forwarded->IsForwardingDone());
+    GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetRouteState()),
+                  static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
+    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
 }
