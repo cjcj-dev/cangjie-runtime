@@ -90,5 +90,14 @@ GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
     GC_EXPECT_TRUE(obj->IsForwarded());
     fx.region0->ClearRelocationResiduals();
     GC_EXPECT_FALSE(obj->IsForwarded());
-    GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
+}
+
+GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
+{
+    GcHeapFixture fx;
+    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    obj->SetStateCode(ObjectState::LOCKED);
+    fx.region0->ClearRelocationResiduals();
+    GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
 }

@@ -666,11 +666,10 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
 
 void RegionInfo::ClearRelocationResiduals()
 {
+    // WaitCopiedObjectsUnlocked already ran at Exempt. Do not SetStateCode on
+    // LOCKED: a live copier still UnlockObject(FORWARDED) (StateWord.h:183).
     VisitAllObjects([](BaseObject* obj) {
-        if (obj == nullptr) {
-            return;
-        }
-        if (obj->GetStateWord().IsLockedWord() || obj->IsForwarded()) {
+        if (obj != nullptr && obj->IsForwarded()) {
             obj->SetStateCode(ObjectState::NORMAL);
         }
     });

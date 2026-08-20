@@ -10018,11 +10018,11 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
             }
             if (ans == MutatorRelocate::LockedWaiterAnswer::UsePlanned) {
                 // Page done + leftover LOCKED is not a live copier
-                // (zForwarding.cpp:138-151). PlanRoute dest is uncopied when the
-                // table was retired (zRelocationSet.cpp:91-96); returning it is
-                // si_addr=0x8. Wait for the header; recopy after it drops.
-                sched_yield();
-                continue;
+                // (zForwarding.cpp:138-151). PlanRoute dest is uncopied after
+                // the table was retired (zRelocationSet.cpp:91-96). Keep from
+                // (same as AnswerUnpublished KeepFrom) — do not return planned,
+                // do not yield-wait (REPORT-llstore hang_live).
+                return obj;
             }
             sched_yield();
             continue;

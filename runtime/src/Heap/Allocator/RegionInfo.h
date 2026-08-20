@@ -1529,11 +1529,11 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
-    // After-copy Exempt parks FORWARDED/LOCKED residuals (zRelocate.cpp:1041-1047).
+    // After-copy Exempt parks FORWARDED residuals (zRelocate.cpp:1041-1047).
     // CSet empty-select still needs those headers; strip only at the next install,
     // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
     // with no table entry makes ForwardObjectImpl return PlanRoute's uncopied dest
-    // (si_addr=0x8 / near-golden drift). No live copier at install.
+    // (si_addr=0x8 / near-golden drift). Does not touch LOCKED (live copier).
     void ClearRelocationResiduals();
 
     // reset so that this region can be reused for allocation
