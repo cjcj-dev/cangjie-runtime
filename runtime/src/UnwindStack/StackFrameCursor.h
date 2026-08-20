@@ -36,10 +36,19 @@ public:
 
     // Process exactly one frame (barrier-frame or stub bookkeeping), advance cursor.
     // Returns false when already done.
-    bool ProcessOne(const RootVisitor& visitor, Mutator& mutator);
+    //
+    // derivedPtrVisitor is optional only because the oracles do not have one. A
+    // scan that marks must pass it: stack maps carry base/derived pairs, and ZGC
+    // marks both together in the oopmap walk (zMark.cpp:691-692
+    // ZUncoloredRoot::mark). Dropping the pair is how introot's hang happened --
+    // an array whose only root was RawArray+8 went unmarked and its region was
+    // reclaimed under it.
+    bool ProcessOne(const RootVisitor& visitor, Mutator& mutator,
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
 
     // Drain remaining frames.
-    void ProcessAll(const RootVisitor& visitor, Mutator& mutator);
+    void ProcessAll(const RootVisitor& visitor, Mutator& mutator,
+                    const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
 
     // Resume from a watermark-published frame index (stackwm #1).
     // Replays stub bookkeeping for frames [0, resumeIndex) so RegSlotsMap matches a
@@ -52,7 +61,7 @@ public:
 
     // Shared per-frame dispatch used by the legacy full-stack loop and this cursor.
     static void ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
-                             Mutator& mutator);
+                             Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor = nullptr);
 
 private:
     std::vector<FrameInfo> frames;

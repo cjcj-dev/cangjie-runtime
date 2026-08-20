@@ -50,12 +50,19 @@ StackFrameCursor::StackFrameCursor(const UnwindContext& topFrame)
 }
 
 void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlotsMap, const RootVisitor& visitor,
-                                    Mutator& mutator)
+                                    Mutator& mutator, const DerivedPtrVisitor* derivedPtrVisitor)
 {
 #ifdef __arm__
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+            if (derivedPtrVisitor != nullptr) {
+                // Same per-frame walk the non-epoch Enum leg uses, and the only one
+                // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
+                // VisitDerivedPtr order (StackMap.h:67, :116-117).
+                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator);
+            } else {
+                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+            }
             break;
         }
         case FrameType::STACKGROW:
@@ -80,7 +87,14 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #else
     switch (frame.GetFrameType()) {
         case FrameType::MANAGED: {
-            TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+            if (derivedPtrVisitor != nullptr) {
+                // Same per-frame walk the non-epoch Enum leg uses, and the only one
+                // that honours the fixed VisitRegRoots -> VisitSlotRoots ->
+                // VisitDerivedPtr order (StackMap.h:67, :116-117).
+                TracingCollector::VisitHeapReferencesOnStack(visitor, *derivedPtrVisitor, regSlotsMap, frame, mutator);
+            } else {
+                TracingCollector::VisitStackRoots(visitor, regSlotsMap, frame, mutator);
+            }
             break;
         }
         case FrameType::SAFEPOINT:
@@ -102,20 +116,22 @@ void StackFrameCursor::ProcessFrame(const FrameInfo& frame, RegSlotsMap& regSlot
 #endif
 }
 
-bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator)
+bool StackFrameCursor::ProcessOne(const RootVisitor& visitor, Mutator& mutator,
+                                  const DerivedPtrVisitor* derivedPtrVisitor)
 {
     if (Done()) {
         return false;
     }
     StackRootSlotAttest::FrameScope attestFrame(index);
-    ProcessFrame(frames[index], regSlotsMap, visitor, mutator);
+    ProcessFrame(frames[index], regSlotsMap, visitor, mutator, derivedPtrVisitor);
     ++index;
     return true;
 }
 
-void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator)
+void StackFrameCursor::ProcessAll(const RootVisitor& visitor, Mutator& mutator,
+                                  const DerivedPtrVisitor* derivedPtrVisitor)
 {
-    while (ProcessOne(visitor, mutator)) {
+    while (ProcessOne(visitor, mutator, derivedPtrVisitor)) {
     }
 }
 
