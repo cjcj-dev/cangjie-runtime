@@ -7,19 +7,19 @@
 #ifndef MRT_FORWARDING_TABLE_H
 #define MRT_FORWARDING_TABLE_H
 
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 
 #include "Common/TypeDef.h"
-#include "Heap/Allocator/ForwardingEntry.h"
+#include "Heap/Collector/ZForwarding.h"
 
 namespace MapleRuntime {
 class RegionInfo;
 class BaseObject;
 
-// PORT_ZFORWARDING ②b/③: granule map (step 1) plus per-page _entries (this step).
-// Destination is whatever insert stored.  Miss is null.  No geometry.
+// zForwardingTable.hpp:32-52 — granule map of ZForwarding*.
+// Two maps: membership (get/insert/remove) unlinks at Dispel; entries live until
+// ClearEntries. ZGC has one map because reset_relocation_set is the only unlink.
 class ForwardingTable {
 public:
     // Compile-time: FindToVersion prefers a stored entry, then falls back to geometry
@@ -29,11 +29,17 @@ public:
     // Miss is "no to" — never invent a destination from route geometry.
     // Unarmed regions still use geometry (transition). zForwarding.inline.hpp:248-252.
     static constexpr bool kEntriesSoleWhenArmed = true;
+    // PORT_ZFORWARDING step ②: IsFromObject / membership consume the table.
+    // Disagreements vs region-type are legacyOnly at FROM/UNMOVABLE_FROM after
+    // Dispel unlinked membership — old path reading a type that has moved.
+    // tableOnly is the other old-path miss (type not yet FROM while table is).
+    static constexpr bool kZfwdTableConsume = true;
 
     enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
 
     static void Initialize(MAddress heapStart, size_t heapSize, size_t unitSize);
 
+    // Dual-write hook from RegionInfo (PrepareForwardable / SetRegionType FROM*).
     static void Insert(MAddress regionStart, size_t regionSize, RegionInfo* region);
     static void Remove(MAddress regionStart, size_t regionSize);
     static void EnsureEntries(RegionInfo* region);
@@ -43,13 +49,16 @@ public:
     // kept page re-armed next cycle would find() last cycle's dest. Drop the
     // covering tables at the next install (zRelocationSet.cpp:91-96).
     static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
-    // Unlinked-but-not-freed tables, and the point at which they actually go away. ZGC keeps the
-    // same gap by construction: entries live in an arena recycled a whole phase after the page dies.
-    static void Retire(ForwardingEntries* tab);
+    static void Retire(ZForwarding* tab);
     static void ReclaimRetired(const char* why);
 
-    static RegionInfo* Get(MAddress addr);
-    static ForwardingEntries* GetEntries(MAddress addr);
+    // zForwardingTable.inline.hpp:43-62
+    static ZForwarding* get(MAddress addr);
+    static void insert(ZForwarding* forwarding);
+    static void remove(ZForwarding* forwarding);
+
+    static ZForwarding* Get(MAddress addr) { return get(addr); }
+    static ZForwarding* GetEntries(MAddress addr);
 
     // After copy: zRelocate.cpp:367-372
     static MAddress InsertMapping(MAddress from, MAddress to);
@@ -67,7 +76,7 @@ public:
     static bool Ready();
 
 private:
-    static size_t IndexFor(MAddress addr);
+    static uint32_t EstimateLiveObjects(RegionInfo* region, size_t regionSize);
 };
 } // namespace MapleRuntime
 

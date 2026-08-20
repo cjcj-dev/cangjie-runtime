@@ -8,26 +8,26 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstddef>
+#include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <vector>
 #include <mutex>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/ZGranuleMap.h"
 
 namespace MapleRuntime {
 namespace {
 
-struct FwdSlot {
-    std::atomic<RegionInfo*> region;
-    std::atomic<ForwardingEntries*> entries;
-};
-
-FwdSlot* g_map = nullptr;
-size_t g_entries = 0;
-MAddress g_base = 0;
-size_t g_unitSize = 0;
+// zForwardingTable.hpp:32-52 — one granule map of ZForwarding*.
+// Two maps because Dispel unlinks membership while ClearEntries (a phase later)
+// is when the attached array may be retired. ZGC has one map: reset_relocation_set
+// is the only unlink (zGeneration.cpp:276-285).
+ZGranuleMap<ZForwarding*> g_membership;
+ZGranuleMap<ZForwarding*> g_entries;
 std::atomic<bool> g_ready{ false };
 
 std::atomic<uint64_t> g_cmpTotal{ 0 };
@@ -51,33 +51,65 @@ std::atomic<uint64_t> g_unarmed{ 0 };
 
 bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); }
 
-size_t ForwardingTable::IndexFor(MAddress addr)
-{
-    if (addr < g_base) {
-        return SIZE_MAX;
-    }
-    const size_t idx = static_cast<size_t>(addr - g_base) / g_unitSize;
-    return idx < g_entries ? idx : SIZE_MAX;
-}
-
 void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t unitSize)
 {
     if (g_ready.load(std::memory_order_acquire) || unitSize == 0 || heapSize == 0) {
         return;
     }
-    const size_t entries = heapSize / unitSize + 1;
-    auto* map = static_cast<FwdSlot*>(std::calloc(entries, sizeof(FwdSlot)));
-    if (map == nullptr) {
-        LOG(RTLOG_ERROR, "[FWDTABLE] calloc failed entries=%zu -- table stays off", entries);
+    if (!g_membership.Initialize(heapStart, heapSize, unitSize) ||
+        !g_entries.Initialize(heapStart, heapSize, unitSize)) {
+        LOG(RTLOG_ERROR, "[FWDTABLE] granule map init failed size=%zu unit=%zu -- table stays off", heapSize,
+            unitSize);
         return;
     }
-    g_map = map;
-    g_entries = entries;
-    g_base = heapStart;
-    g_unitSize = unitSize;
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, entries);
+        heapSize, unitSize, g_membership.size());
+}
+
+uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)
+{
+    // zForwarding.inline.hpp:43-50 sizes from live *object* count. GetLiveByteCount
+    // is bytes; liveBytes>>3 counts 8-byte words. When the live count is still
+    // zero (lazy EnsureEntries), take the region's capacity so the table cannot
+    // fill and spin (REPORT-fwdentries).
+    const uint64_t liveBytes = region->GetLiveByteCount();
+    uint64_t estimate = liveBytes >> ZForwarding::kAlignShift;
+    if (estimate == 0) {
+        estimate = regionSize >> ZForwarding::kAlignShift;
+    }
+    if (estimate == 0) {
+        estimate = 1;
+    }
+    return static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
+}
+
+void ForwardingTable::insert(ZForwarding* forwarding)
+{
+    // zForwardingTable.inline.hpp:48-54
+    if (forwarding == nullptr || !Ready()) {
+        return;
+    }
+    g_membership.put(forwarding->start(), forwarding->size(), forwarding);
+    g_entries.put(forwarding->start(), forwarding->size(), forwarding);
+}
+
+void ForwardingTable::remove(ZForwarding* forwarding)
+{
+    // zForwardingTable.inline.hpp:56-62 — membership only. Entries stay until
+    // ClearEntries (zRelocationSet.cpp:91-96 arena recycle is a phase later).
+    if (forwarding == nullptr || !Ready()) {
+        return;
+    }
+    g_membership.put(forwarding->start(), forwarding->size(), nullptr);
+}
+
+ZForwarding* ForwardingTable::get(MAddress addr)
+{
+    if (!Ready()) {
+        return nullptr;
+    }
+    return g_membership.get(addr);
 }
 
 void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo* region)
@@ -85,14 +117,12 @@ void ForwardingTable::Insert(MAddress regionStart, size_t regionSize, RegionInfo
     if (!Ready() || regionSize == 0) {
         return;
     }
-    const size_t first = IndexFor(regionStart);
-    if (first == SIZE_MAX) {
+    EnsureEntries(region);
+    ZForwarding* forwarding = g_entries.get(regionStart);
+    if (forwarding == nullptr) {
         return;
     }
-    const size_t count = regionSize / g_unitSize + ((regionSize % g_unitSize) != 0 ? 1 : 0);
-    for (size_t i = 0; i < count && first + i < g_entries; ++i) {
-        g_map[first + i].region.store(region, std::memory_order_release);
-    }
+    g_membership.put(regionStart, regionSize, forwarding);
 }
 
 void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
@@ -100,14 +130,7 @@ void ForwardingTable::Remove(MAddress regionStart, size_t regionSize)
     if (!Ready() || regionSize == 0) {
         return;
     }
-    const size_t first = IndexFor(regionStart);
-    if (first == SIZE_MAX) {
-        return;
-    }
-    const size_t count = regionSize / g_unitSize + ((regionSize % g_unitSize) != 0 ? 1 : 0);
-    for (size_t i = 0; i < count && first + i < g_entries; ++i) {
-        g_map[first + i].region.store(nullptr, std::memory_order_release);
-    }
+    g_membership.put(regionStart, regionSize, nullptr);
 }
 
 void ForwardingTable::EnsureEntries(RegionInfo* region)
@@ -117,56 +140,26 @@ void ForwardingTable::EnsureEntries(RegionInfo* region)
     }
     const MAddress start = region->GetRegionStart();
     const size_t regionSize = region->GetRegionSize();
-    const size_t first = IndexFor(start);
-    if (first == SIZE_MAX) {
+    if (g_entries.index_for_offset(start) == SIZE_MAX) {
         return;
     }
-    if (g_map[first].entries.load(std::memory_order_acquire) != nullptr) {
+    if (g_entries.get(start) != nullptr) {
         return;
     }
-    // ZGC sizes the table from the live *object* count and doubles it, so the load factor stays
-    // under one half and the open-addressing probe always terminates (zForwarding.inline.hpp:43-50).
-    //
-    // Two things went wrong with copying that here. liveBytes >> kAlignShift counts eight-byte
-    // words, not objects, so it is not the same quantity. And this runs lazily, on the first insert
-    // into a region, at which point GetLiveByteCount() can still be zero -- which used to fall
-    // through to liveObjs = 1 and a table with two slots. The third object forwarded out of that
-    // region then probed a full table forever: two GC threads pinned at 100% CPU inside find(),
-    // and a workload that takes ten seconds ran past a five-minute timeout.
-    //
-    // The probes are bounded now, so a table that fills degrades to a geometry fallback rather than
-    // a hang. This still sizes it not to fill: when the live count is unusable, take the region's
-    // own capacity as the bound on how many objects can possibly be in it.
-    const uint64_t liveBytes = region->GetLiveByteCount();
-    uint64_t estimate = liveBytes >> ForwardingEntries::kAlignShift;
-    if (estimate == 0) {
-        estimate = regionSize >> ForwardingEntries::kAlignShift;
-    }
-    if (estimate == 0) {
-        estimate = 1;
-    }
-    const uint32_t liveObjs = static_cast<uint32_t>(std::min<uint64_t>(estimate, UINT32_MAX));
-    ForwardingEntries* created = ForwardingEntries::Create(liveObjs, start, g_base, regionSize);
+    const uint32_t liveObjs = EstimateLiveObjects(region, regionSize);
+    ZForwarding* created = ZForwarding::alloc(liveObjs, start, g_entries.base(), regionSize, region);
     if (created == nullptr) {
         return;
     }
-    ForwardingEntries* expected = nullptr;
-    if (!g_map[first].entries.compare_exchange_strong(expected, created, std::memory_order_release,
-                                                      std::memory_order_acquire)) {
+    ZForwarding* expected = nullptr;
+    if (!g_entries.compare_exchange(start, expected, created)) {
         created->Destroy();
-        // Adopting whatever was already there is only right when it belongs to this region. The
-        // fan-out below writes one pointer across every unit a region covers, so a slot can hold a
-        // *neighbour's* table -- and inserting into that one would index from the wrong base and,
-        // worse, hand this region an owner it does not own.
         if (expected == nullptr || expected->start() != start) {
             return;
         }
         created = expected;
     }
-    const size_t count = regionSize / g_unitSize + ((regionSize % g_unitSize) != 0 ? 1 : 0);
-    for (size_t i = 1; i < count && first + i < g_entries; ++i) {
-        g_map[first + i].entries.store(created, std::memory_order_release);
-    }
+    g_entries.put(start, regionSize, created);
 }
 
 void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
@@ -174,55 +167,42 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     if (!Ready() || regionSize == 0) {
         return;
     }
-    const size_t first = IndexFor(regionStart);
-    if (first == SIZE_MAX) {
-        return;
+    ZForwarding* tab = g_entries.exchange(regionStart, nullptr);
+    const size_t granule = g_entries.granule();
+    if (granule != 0) {
+        const size_t first = g_entries.index_for_offset(regionStart);
+        const size_t count = regionSize / granule + ((regionSize % granule) != 0 ? 1 : 0);
+        for (size_t i = 1; i < count && first != SIZE_MAX && first + i < g_entries.size(); ++i) {
+            g_entries.put(g_entries.base() + (first + i) * granule, nullptr);
+        }
     }
-    ForwardingEntries* tab = g_map[first].entries.exchange(nullptr, std::memory_order_acq_rel);
-    const size_t count = regionSize / g_unitSize + ((regionSize % g_unitSize) != 0 ? 1 : 0);
-    for (size_t i = 1; i < count && first + i < g_entries; ++i) {
-        g_map[first + i].entries.store(nullptr, std::memory_order_release);
-    }
-    // One table, many slots: EnsureEntries publishes the same pointer across every unit the region
-    // covers, so "I took a non-null pointer out of a slot" is not "I own it". The table records the
-    // address it was built for, so ownership is a comparison rather than a convention.
-    //
-    // Retired, not freed. ZGC's entries live in the ZForwardingAllocator arena and that arena is
-    // recycled only by the *next* cycle's ZRelocationSetInstallTask (zRelocationSet.cpp:91-96);
-    // ZHeap::free_page frees the page and nothing else (zRelocate.cpp:1041-1047), and
-    // reset_relocation_set runs destructors only (zRelocationSet.cpp:191-196). Page death and table
-    // death are a whole phase apart, and that gap is what licenses ZForwarding::find to run with no
-    // reference held -- which it does, before retain_page rather than after (zRelocate.cpp:382-393).
-    //
-    // Ours had no gap: region reuse was the free. ClearEntries is reached from InitRegionInfo, so a
-    // mutator allocating a fresh region called std::free on a table that FindToVersion was reading
-    // -- and FindToVersion sits on the mutator read barrier whenever kStaleGuard is on, holding
-    // nothing, gated only on IsHeapAddress. Deferring the free to a cycle boundary restores the gap
-    // instead of asking every reader to take a reference.
-    //
-    // It also removes a read-after-free that did not need concurrency at all: a small region is 32
-    // units, InitFreeUnits walks them one at a time, and each call landed here with count == 1.
-    // Iteration 0 freed the table; iterations 1..31 then evaluated tab->start() on freed storage.
     if (tab != nullptr && tab->start() == regionStart) {
         Retire(tab);
     }
 }
 
-// Tables unlinked from the map but not yet freed, and the count of frees deferred through them.
-// A pointer sitting here is unreachable through the map -- no new reader can find it -- but a reader
-// that loaded it before the unlink may still be inside find().
+static void UnlinkThenDestroy(ZForwarding* tab)
+{
+    if (tab == nullptr) {
+        return;
+    }
+    // Membership and entries may still name a retired object (ExpireKept
+    // ClearEntries parks it; get() must stay valid until the object is
+    // actually freed). Null both before Destroy so get() cannot UAF
+    // (zForwardingTable.inline.hpp:56-62 remove, then arena recycle).
+    if (g_membership.get(tab->start()) == tab) {
+        g_membership.put(tab->start(), tab->size(), nullptr);
+    }
+    if (g_entries.get(tab->start()) == tab) {
+        g_entries.put(tab->start(), tab->size(), nullptr);
+    }
+    tab->Destroy();
+}
+
 namespace {
 std::mutex g_retiredLock;
-std::vector<ForwardingEntries*> g_retired;
-// oraclecut CUT-2: a second generation. f87e6f68 deferred the free by one cycle boundary,
-// which protects readers inside find() across one phase gap -- ZGC's arena argument
-// (zRelocationSet.cpp:91-96). But a stale good-coloured slot written before the ban in
-// Barrier.cpp SkipLaunderingHeal existed can surface a from-address up to two colour flips
-// later (the remap space is four values), and staleguard's FindToVersion is its only way
-// back to the to-version. Holding tables one extra full cycle turns those stragglers from
-// unresolvable (crash) into resolvable (self-heal): retired at cycle N, freed at the head
-// of cycle N+2.
-std::vector<ForwardingEntries*> g_retiredAged;
+std::vector<ZForwarding*> g_retired;
+std::vector<ZForwarding*> g_retiredAged;
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
@@ -234,13 +214,13 @@ void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSiz
         return;
     }
     const MAddress regionEnd = regionStart + regionSize;
-    std::vector<ForwardingEntries*> victims;
+    std::vector<ZForwarding*> victims;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
-        auto drop = [&](std::vector<ForwardingEntries*>& gens) {
-            std::vector<ForwardingEntries*> keep;
+        auto drop = [&](std::vector<ZForwarding*>& gens) {
+            std::vector<ZForwarding*> keep;
             keep.reserve(gens.size());
-            for (ForwardingEntries* tab : gens) {
+            for (ZForwarding* tab : gens) {
                 if (tab != nullptr && tab->start() >= regionStart && tab->start() < regionEnd) {
                     victims.push_back(tab);
                 } else {
@@ -252,12 +232,12 @@ void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSiz
         drop(g_retired);
         drop(g_retiredAged);
     }
-    for (ForwardingEntries* tab : victims) {
-        tab->Destroy();
+    for (ZForwarding* tab : victims) {
+        UnlinkThenDestroy(tab);
     }
 }
 
-void ForwardingTable::Retire(ForwardingEntries* tab)
+void ForwardingTable::Retire(ZForwarding* tab)
 {
     if (tab == nullptr) {
         return;
@@ -269,11 +249,10 @@ void ForwardingTable::Retire(ForwardingEntries* tab)
 
 void ForwardingTable::ReclaimRetired(const char* why)
 {
-    std::vector<ForwardingEntries*> victims;
+    std::vector<ZForwarding*> victims;
     size_t heldNow = 0;
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
-        // Free only the generation retired two cycle heads ago; age the fresh one.
         victims.swap(g_retiredAged);
         g_retiredAged.swap(g_retired);
         heldNow = g_retiredAged.size();
@@ -281,49 +260,35 @@ void ForwardingTable::ReclaimRetired(const char* why)
     uint64_t peak = g_retiredHeldPeak.load(std::memory_order_relaxed);
     while (heldNow > peak && !g_retiredHeldPeak.compare_exchange_weak(peak, heldNow, std::memory_order_relaxed)) {
     }
-    for (ForwardingEntries* tab : victims) {
-        tab->Destroy();
+    for (ZForwarding* tab : victims) {
+        UnlinkThenDestroy(tab);
     }
     if (!victims.empty() || heldNow != 0) {
-        const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) +
-            victims.size();
+        const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
         LOG(RTLOG_ERROR,
             "[FWDTABLE][reclaim] why=%s freed=%zu aged_held=%zu held_peak=%lu retired_total=%lu reclaimed_total=%lu",
-            why == nullptr ? "?" : why, victims.size(), heldNow,
-            g_retiredHeldPeak.load(std::memory_order_relaxed),
+            why == nullptr ? "?" : why, victims.size(), heldNow, g_retiredHeldPeak.load(std::memory_order_relaxed),
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
 }
 
-RegionInfo* ForwardingTable::Get(MAddress addr)
+ZForwarding* ForwardingTable::GetEntries(MAddress addr)
 {
     if (!Ready()) {
         return nullptr;
     }
-    const size_t idx = IndexFor(addr);
-    if (idx == SIZE_MAX) {
-        return nullptr;
-    }
-    return g_map[idx].region.load(std::memory_order_acquire);
-}
-
-ForwardingEntries* ForwardingTable::GetEntries(MAddress addr)
-{
-    if (!Ready()) {
-        return nullptr;
-    }
-    const size_t idx = IndexFor(addr);
-    if (idx == SIZE_MAX) {
-        return nullptr;
-    }
-    return g_map[idx].entries.load(std::memory_order_acquire);
+    return g_entries.get(addr);
 }
 
 MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
 {
-    ForwardingEntries* tab = GetEntries(from);
+    ZForwarding* tab = GetEntries(from);
     if (tab == nullptr) {
-        RegionInfo* region = Get(from);
+        RegionInfo* region = nullptr;
+        ZForwarding* membership = get(from);
+        if (membership != nullptr) {
+            region = membership->page();
+        }
         if (region == nullptr) {
             region = RegionInfo::TryGetRegionInfoAt(from);
         }
@@ -339,9 +304,9 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
 static MAddress FindRetiredTo(MAddress from)
 {
     std::lock_guard<std::mutex> lock(g_retiredLock);
-    auto scan = [&](const std::vector<ForwardingEntries*>& gens) -> MAddress {
+    auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
-            ForwardingEntries* tab = *it;
+            ZForwarding* tab = *it;
             if (tab != nullptr && tab->covers(from)) {
                 const MAddress to = tab->find(from);
                 if (to != 0) {
@@ -360,15 +325,13 @@ static MAddress FindRetiredTo(MAddress from)
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {
-    ForwardingEntries* tab = GetEntries(from);
+    ZForwarding* tab = GetEntries(from);
     if (tab != nullptr) {
         const MAddress to = tab->find(from);
         if (to != 0) {
             return to;
         }
     }
-    // Reused region arms a fresh empty table; stragglers still need the
-    // retired generation (CUT-2 / Barrier.cpp:718). e57ae807.
     return FindRetiredTo(from);
 }
 
@@ -376,7 +339,7 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 
 MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
-    ForwardingEntries* tab = GetEntries(from);
+    ZForwarding* tab = GetEntries(from);
     if (tab != nullptr) {
         const MAddress to = tab->find(from);
         if (to != 0) {
@@ -418,7 +381,7 @@ void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
     if (!Ready()) {
         return;
     }
-    const bool table = Get(addr) != nullptr;
+    const bool table = get(addr) != nullptr;
     const uint64_t n = g_cmpTotal.fetch_add(1, std::memory_order_relaxed) + 1;
     if (table == legacy) {
         g_cmpAgree.fetch_add(1, std::memory_order_relaxed);
@@ -427,15 +390,21 @@ void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
         const unsigned rtype = region == nullptr ? kTypeBuckets - 1
                                                  : static_cast<unsigned>(region->GetRegionType());
         const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
+        const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
         if (table) {
-            g_cmpTableOnly.fetch_add(1, std::memory_order_relaxed);
+            const uint64_t c = g_cmpTableOnly.fetch_add(1, std::memory_order_relaxed) + 1;
             g_tableOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
+            if (c <= 64) {
+                LOG(RTLOG_ERROR, "[FWDTABLE][tableOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
+                    static_cast<size_t>(addr), rtype, ghost);
+            }
         } else {
-            g_cmpLegacyOnly.fetch_add(1, std::memory_order_relaxed);
+            const uint64_t c = g_cmpLegacyOnly.fetch_add(1, std::memory_order_relaxed) + 1;
             g_legacyOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
-            const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
-            LOG(RTLOG_ERROR, "[FWDTABLE][legacyOnly] addr=%#zx rtype=%u ghost=%u", static_cast<size_t>(addr),
-                rtype, ghost);
+            if (c <= 64) {
+                LOG(RTLOG_ERROR, "[FWDTABLE][legacyOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
+                    static_cast<size_t>(addr), rtype, ghost);
+            }
         }
     }
     if ((n & (n - 1)) == 0) {
@@ -461,6 +430,8 @@ void ForwardingTable::NoteDestCompare(MAddress from, MAddress geometricTo)
                                                  : static_cast<unsigned>(region->GetRegionType());
         const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
         g_destDisagreeByType[bucket].fetch_add(1, std::memory_order_relaxed);
+        LOG(RTLOG_ERROR, "[FWDENT][disagree] from=%#zx table=%#zx geo=%#zx rtype=%u", static_cast<size_t>(from),
+            static_cast<size_t>(stored), static_cast<size_t>(geometricTo), rtype);
     }
     if ((n & (n - 1)) == 0) {
         DumpCompare("dest-periodic");
@@ -480,9 +451,9 @@ void ForwardingTable::DumpCompare(const char* why)
         why == nullptr ? "?" : why, g_destTotal.load(std::memory_order_relaxed),
         g_destAgree.load(std::memory_order_relaxed), g_destDisagree.load(std::memory_order_relaxed),
         g_destPending.load(std::memory_order_relaxed));
-    LOG(RTLOG_ERROR, "[FWDENT][sole] why=%s armedHit=%lu armedMiss=%lu unarmed=%lu",
-        why == nullptr ? "?" : why, g_armedHit.load(std::memory_order_relaxed),
-        g_armedMiss.load(std::memory_order_relaxed), g_unarmed.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[FWDENT][sole] why=%s armedHit=%lu armedMiss=%lu unarmed=%lu", why == nullptr ? "?" : why,
+        g_armedHit.load(std::memory_order_relaxed), g_armedMiss.load(std::memory_order_relaxed),
+        g_unarmed.load(std::memory_order_relaxed));
     for (unsigned t = 0; t < kTypeBuckets; ++t) {
         const uint64_t to = g_tableOnlyByType[t].load(std::memory_order_relaxed);
         const uint64_t lo = g_legacyOnlyByType[t].load(std::memory_order_relaxed);

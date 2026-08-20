@@ -7,7 +7,7 @@
 // Port of test/hotspot/gtest/gc/z/test_zForwarding.cpp:
 // setup / find_empty / find_full / find_every_other.
 
-#include "Heap/Allocator/ForwardingEntry.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
