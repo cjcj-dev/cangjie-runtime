@@ -74,11 +74,18 @@ std::atomic<uint64_t> g_deadNeverPainted{ 0 };
 std::atomic<uint64_t> g_deadWriteAfterTrace{ 0 };
 std::atomic<uint64_t> g_deadWriteDuringTrace{ 0 };
 std::atomic<uint64_t> g_deadWriteIdle{ 0 };
+std::atomic<uint64_t> g_tracePush{ 0 };
+std::atomic<uint64_t> g_traceSkipMarked{ 0 };
+std::atomic<uint64_t> g_traceSkipGate{ 0 };
+std::atomic<uint64_t> g_deadVisitHit{ 0 };
+std::atomic<uint64_t> g_deadVisitMiss{ 0 };
+std::atomic<uint64_t> g_deadVisitPush{ 0 };
+std::atomic<uint64_t> g_deadVisitSkipMarked{ 0 };
 
 size_t WriteIndex(uintptr_t slot) { return static_cast<size_t>((slot >> 3) & kWriteMask); }
 size_t PaintIndex(uintptr_t obj) { return static_cast<size_t>((obj >> 4) & kPaintMask); }
 
-const char* SiteName(uint8_t site)
+    const char* SiteName(uint8_t site)
 {
     switch (site) {
         case STORE_WRITE_REF: return "WriteReference";
@@ -87,6 +94,10 @@ const char* SiteName(uint8_t site)
         case STORE_SWAP: return "Swap";
         case STORE_COPY_REF: return "CopyRefArray";
         case STORE_WRITE_STATIC: return "WriteStatic";
+        case 0x41: return "TracePush";
+        case 0x42: return "TraceSkipMarked";
+        case 0x43: return "TraceSkipGate";
+        case 0x44: return "TraceSkipStale";
         default: return "?";
     }
 }
@@ -140,7 +151,10 @@ void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site)
 
 void NotePaint(BaseObject* obj, RegionInfo* region)
 {
-    if (!Enabled() || obj == nullptr) {
+    if (!Enabled() || obj == nullptr || region == nullptr) {
+        return;
+    }
+    if (!(region->IsFromRegion() || region->IsLoneFromRegion() || region->IsUnmovableFromRegion())) {
         return;
     }
     const uintptr_t addr = reinterpret_cast<uintptr_t>(obj);
@@ -153,6 +167,33 @@ void NotePaint(BaseObject* obj, RegionInfo* region)
                     std::memory_order_relaxed);
     rec.obj.store(addr, std::memory_order_release);
     g_paintSeen.fetch_add(1, std::memory_order_relaxed);
+}
+
+void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action)
+{
+    if (!Enabled() || slot == nullptr || target == nullptr || !Heap::IsHeapAddress(target)) {
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (region == nullptr ||
+        !(region->IsFromRegion() || region->IsLoneFromRegion() || region->IsUnmovableFromRegion())) {
+        return;
+    }
+    const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(slot);
+    WriteRec& rec = g_writes[WriteIndex(slotAddr)];
+    rec.neu.store(reinterpret_cast<uintptr_t>(target), std::memory_order_relaxed);
+    rec.pre.store(0, std::memory_order_relaxed);
+    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.phase.store(static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), std::memory_order_relaxed);
+    rec.site.store(static_cast<uint8_t>(0x40u | action), std::memory_order_relaxed);
+    rec.slot.store(slotAddr, std::memory_order_release);
+    if (action == TRACE_PUSH) {
+        g_tracePush.fetch_add(1, std::memory_order_relaxed);
+    } else if (action == TRACE_SKIP_MARKED) {
+        g_traceSkipMarked.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_traceSkipGate.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void NoteClear(RegionInfo* region, uint8_t site, bool epochBumped)
@@ -204,7 +245,14 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
         writeGc = wrec.gcCount.load(std::memory_order_relaxed);
         neu = wrec.neu.load(std::memory_order_relaxed);
         pre = wrec.pre.load(std::memory_order_relaxed);
-        if (PhaseAfterTrace(phase)) {
+        if ((site & 0x40u) != 0) {
+            g_deadVisitHit.fetch_add(1, std::memory_order_relaxed);
+            if (site == 0x41) {
+                g_deadVisitPush.fetch_add(1, std::memory_order_relaxed);
+            } else if (site == 0x42) {
+                g_deadVisitSkipMarked.fetch_add(1, std::memory_order_relaxed);
+            }
+        } else if (PhaseAfterTrace(phase)) {
             g_deadWriteAfterTrace.fetch_add(1, std::memory_order_relaxed);
         } else if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER || phase == GC_PHASE_ENUM) {
             g_deadWriteDuringTrace.fetch_add(1, std::memory_order_relaxed);
@@ -213,6 +261,7 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
         }
     } else {
         g_deadLookupMiss.fetch_add(1, std::memory_order_relaxed);
+        g_deadVisitMiss.fetch_add(1, std::memory_order_relaxed);
     }
 
     const uintptr_t tgtAddr = reinterpret_cast<uintptr_t>(target);
@@ -278,17 +327,26 @@ void ReportAtMarkEnd(const char* point)
     }
     LOG(RTLOG_ERROR,
         "[GCV2][survnode] point=%s storeSeen=%llu storeFromUnmarked=%llu paintSeen=%llu clearSeen=%llu "
+        "tracePush=%llu traceSkipMarked=%llu traceSkipGate=%llu "
         "deadWriteHit=%llu deadWriteMiss=%llu deadWriteAfterTrace=%llu deadWriteDuringTrace=%llu "
-        "deadWriteIdle=%llu deadPaintedThenClear=%llu deadNeverPainted=%llu",
+        "deadWriteIdle=%llu deadVisitHit=%llu deadVisitMiss=%llu deadVisitPush=%llu deadVisitSkipMarked=%llu "
+        "deadPaintedThenClear=%llu deadNeverPainted=%llu",
         point == nullptr ? "?" : point, static_cast<unsigned long long>(g_storeSeen.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_storeFromUnmarked.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_paintSeen.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_clearSeen.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_tracePush.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_traceSkipMarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_traceSkipGate.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadLookupHit.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadLookupMiss.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadWriteAfterTrace.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadWriteDuringTrace.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadWriteIdle.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadVisitHit.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadVisitMiss.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadVisitPush.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadVisitSkipMarked.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadPaintedThenClear.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadNeverPainted.load(std::memory_order_relaxed)));
 }

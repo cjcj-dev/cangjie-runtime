@@ -46,9 +46,17 @@ enum ClearSite : uint8_t {
     CLEAR_RESET_MARK_BIT = 4,
 };
 
+enum TraceAction : uint8_t {
+    TRACE_PUSH = 1,
+    TRACE_SKIP_MARKED = 2,
+    TRACE_SKIP_GATE = 3,
+    TRACE_SKIP_STALE = 4,
+};
+
 void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site);
 void NotePaint(BaseObject* obj, RegionInfo* region);
 void NoteClear(RegionInfo* region, uint8_t site, bool epochBumped);
+void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action);
 
 void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, RegionInfo* targetRegion);
 void ReportAtMarkEnd(const char* point);
