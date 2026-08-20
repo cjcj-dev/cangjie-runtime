@@ -29,7 +29,7 @@ namespace MapleRuntime {
 namespace CsetEmptyWho {
 namespace {
 
-constexpr bool kCsetEmptyWho = true;
+constexpr bool kCsetEmptyWho = false;
 constexpr size_t kMaxKeepPages = 32768;
 constexpr size_t kLogPages = 4;
 
