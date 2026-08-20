@@ -10,10 +10,12 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Heap.h"
+#include "Heap/Verify/MarkCompleteVerify.h"
 
 #include "Base/ImmortalWrapper.h"
 
 #include <array>
+#include <atomic>
 #include <cstdio>
 #include <cstdlib>
 
@@ -163,6 +165,65 @@ bool SatbBuffer::ShouldEnqueue(const BaseObject* obj)
     return RegionSpace::ShouldEnqueue<Generation::Old>(obj);
 }
 
+// Why an entry was dropped, re-derived off the hot path. ShouldEnqueue answers
+// yes/no, and the difference between its reasons is the difference between two
+// unrelated defects: "target sits in a trace region" discards a record for a whole
+// class of pages, while the EnqueueObject dedupe discards a record because the same
+// object was already enqueued once this cycle -- which is wrong if that earlier
+// record was consumed without the object ending up marked.
+// Gated with MarkCompleteVerify, which is what reports the dead edges these drops
+// are suspected of producing; costs nothing when that gate is off.
+namespace {
+std::atomic<uint64_t> g_filterDropNonHeap{ 0 };
+std::atomic<uint64_t> g_filterDropDeadRegion{ 0 };
+std::atomic<uint64_t> g_filterDropTraceRegion{ 0 };
+std::atomic<uint64_t> g_filterDropAlreadyMarked{ 0 };
+std::atomic<uint64_t> g_filterDropDedupe{ 0 };
+} // namespace
+
+void SatbBuffer::NoteFilterDrop(BaseObject* obj)
+{
+    if (!MarkCompleteVerify::Enabled()) {
+        return;
+    }
+    if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+        g_filterDropNonHeap.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
+        g_filterDropDeadRegion.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (region->IsTraceRegion()) {
+        g_filterDropTraceRegion.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    if (RegionSpace::IsMarkedObject<Generation::Old>(obj)) {
+        g_filterDropAlreadyMarked.fetch_add(1, std::memory_order_relaxed);
+        return;
+    }
+    // Not dead, not a trace region, not marked -- so ShouldEnqueue said no because
+    // EnqueueObject reported this object already enqueued this cycle. That is the
+    // one drop class that can lose a record the mark closure still needed.
+    g_filterDropDedupe.fetch_add(1, std::memory_order_relaxed);
+}
+
+void SatbBuffer::ReportFilterDrops(const char* point)
+{
+    if (!MarkCompleteVerify::Enabled()) {
+        return;
+    }
+    LOG(RTLOG_ERROR,
+        "[GCV2][satbdrop] point=%s nonHeap=%llu deadRegion=%llu traceRegion=%llu alreadyMarked=%llu dedupe=%llu",
+        point == nullptr ? "?" : point,
+        static_cast<unsigned long long>(g_filterDropNonHeap.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_filterDropDeadRegion.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_filterDropTraceRegion.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_filterDropAlreadyMarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_filterDropDedupe.load(std::memory_order_relaxed)));
+}
+
 void SatbBuffer::Filter(Node* node)
 {
     size_t retainedIndex = Node::CONTAINER_CAPACITY;
@@ -173,6 +234,8 @@ void SatbBuffer::Filter(Node* node)
         if (Heap::IsHeapAddress(objectToMark) && ShouldEnqueue(objectToMark)) {
             node->entryContainer[--retainedIndex] = entry;
             NoteInteriorRetained(entry.knownBase);
+        } else {
+            NoteFilterDrop(objectToMark);
         }
     }
     while (node->index != retainedIndex) {

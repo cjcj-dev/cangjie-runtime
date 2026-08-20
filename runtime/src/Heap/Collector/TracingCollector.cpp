@@ -1185,6 +1185,7 @@ void TracingCollector::PostGarbageCollection(uint64_t gcIndex)
     // holdercapture: periodic persistence, so ABRT/kill cannot erase the snapshot census.
     MarkFaceSnap::Report("gc_end");
     NoTracedDiag::Report("gc_end");
+    SatbBuffer::ReportFilterDrops("gc_end");
     // loadgood: same reason -- the workload under measurement ends in SIGSEGV, so the
     // cross-table has to be on stderr before the crash, not only at exit.
     LoadGoodProbe::Report("gc_end");

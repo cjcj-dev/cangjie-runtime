@@ -235,6 +235,11 @@ public:
         }
     }
     bool ShouldEnqueue(const BaseObject* obj);
+    // Drop-reason census for entries Filter discards. See the .cpp: the difference
+    // between "trace region" and "dedupe" is the difference between two unrelated
+    // defects. Gated with MarkCompleteVerify; no cost when that is off.
+    static void NoteFilterDrop(BaseObject* obj);
+    static void ReportFilterDrops(const char* point);
     void Filter(Node* node);
     void FlushQueue(Node*& node);
 
