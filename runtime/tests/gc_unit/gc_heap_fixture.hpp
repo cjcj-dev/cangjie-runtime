@@ -17,10 +17,13 @@
 
 #include "Common/BaseObject.h"
 // Test-only: plant liveInfo/liveInfo0 without product structure change (no 乙).
-// RegionInfo::metadata is private; unit tests need direct slot control.
+// RegionInfo::metadata and RegionSpace reserved span are private; unit tests
+// need them to Init FDM without Heap::Init / InitCJRuntime.
 #define private public
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/RegionSpace.h"
 #undef private
+#include "Heap/Collector/ForwardDataManager.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
 #include "ObjectModel/Flags.h"
@@ -48,6 +51,7 @@ struct GcHeapFixture {
         region1->SetRegionType(RegionInfo::RegionType::THREAD_LOCAL_REGION);
         Heap::OnHeapCreated(heapStart);
         Heap::OnHeapExtended(heapStart + kUnits * RegionInfo::UNIT_SIZE);
+        EnsureForwardData(heapStart);
 
         std::memset(typeInfoStorage, 0, sizeof(typeInfoStorage));
         typeInfo = reinterpret_cast<TypeInfo*>(typeInfoStorage);
@@ -81,7 +85,50 @@ struct GcHeapFixture {
         return obj;
     }
 
-    // Hand-plant LiveInfo + mark bitmap (no ForwardDataManager / full runtime init).
+    // Product GetOrAlloc* faces go through ForwardDataManager (RegionInfo.h:832/873/912).
+    // gc_unit never Heap::Init, so FDM's arena starts at 0 and AllocateRegionBitmap
+    // CHECKs bitmap != nullptr. Union order hits this after ForwardingNoGeometry arms
+    // the table: YoungConc.StaleOldMarkDoesNotSkipYoungEnqueue → ShouldEnqueue →
+    // EnqueueObject → GetOrAllocEnqueueBitmap (enqueue face was never planted).
+    // youngconcmark §3b: fixture Init FDM, do not relax the CHECK.
+    static void EnsureForwardData(MAddress heapStart)
+    {
+        static bool ready = false;
+        if (ready) {
+            return;
+        }
+        auto& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+        if (space.GetMaxCapacity() == 0) {
+            constexpr size_t kFdmUnits = 64;
+            space.reservedStart = heapStart;
+            space.reservedEnd = heapStart + kFdmUnits * RegionInfo::UNIT_SIZE;
+        }
+        ForwardDataManager::GetForwardDataManager().InitializeForwardData();
+        ready = true;
+    }
+
+    static RegionBitmap* AllocPlantedBitmap(size_t regionSize)
+    {
+        size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
+        void* mem = std::calloc(1, bytes);
+        if (mem == nullptr) {
+            std::abort();
+        }
+        return new (mem) RegionBitmap(regionSize);
+    }
+
+    static void FreePlantedBitmap(RegionBitmap*& bitmap)
+    {
+        if (bitmap == nullptr) {
+            return;
+        }
+        bitmap->~RegionBitmap();
+        std::free(bitmap);
+        bitmap = nullptr;
+    }
+
+    // Hand-plant LiveInfo + every GetOrAlloc* face (mark young/old stay explicit;
+    // enqueue is the face ShouldEnqueue allocates when the SATB skip-check misses).
     LiveInfo* PlantLiveInfo(RegionInfo* region)
     {
         auto* live = new LiveInfo();
@@ -93,7 +140,7 @@ struct GcHeapFixture {
             region->GetMarkSnapshotEpoch<Generation::Old>(), std::memory_order_relaxed);
         live->GetMarkFace<Generation::Old>().bitmap = nullptr;
         live->resurrectBitmap = nullptr;
-        live->enqueueBitmap = nullptr;
+        live->enqueueBitmap = AllocPlantedBitmap(region->GetRegionSize());
         region->metadata.liveInfo = live;
         return live;
     }
@@ -101,12 +148,7 @@ struct GcHeapFixture {
     template<Generation G = Generation::Old>
     RegionBitmap* PlantMarkBitmap(LiveInfo* live, size_t regionSize)
     {
-        size_t bytes = RegionBitmap::GetRegionBitmapSize(regionSize);
-        void* mem = std::calloc(1, bytes);
-        if (mem == nullptr) {
-            std::abort();
-        }
-        auto* bm = new (mem) RegionBitmap(regionSize);
+        auto* bm = AllocPlantedBitmap(regionSize);
         live->GetMarkFace<G>().bitmap = bm;
         return bm;
     }
@@ -119,15 +161,15 @@ struct GcHeapFixture {
         RegionBitmap* young = live->GetMarkFace<Generation::Young>().bitmap;
         RegionBitmap* old = live->GetMarkFace<Generation::Old>().bitmap;
         if (young != nullptr) {
-            young->~RegionBitmap();
-            std::free(young);
+            FreePlantedBitmap(young);
             live->GetMarkFace<Generation::Young>().bitmap = nullptr;
         }
         if (old != nullptr && old != young) {
-            old->~RegionBitmap();
-            std::free(old);
+            FreePlantedBitmap(old);
             live->GetMarkFace<Generation::Old>().bitmap = nullptr;
         }
+        FreePlantedBitmap(live->enqueueBitmap);
+        FreePlantedBitmap(live->resurrectBitmap);
         delete live;
     }
 
