@@ -28,6 +28,7 @@
 #include "Heap/WCollector/PostTraceBarrier.h"
 #include "Heap/WCollector/PreforwardBarrier.h"
 #include "Heap/WCollector/TraceBarrier.h"
+#include "Mutator/Mutator.h"
 #include "ObjectModel/Field.inline.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/RefField.inline.h"
@@ -278,20 +279,22 @@ inline bool HasYoungRegionsForRecording()
 // with a white young target (Stw2CurrentAudit uncovered, REPORT-youngconcstw2).
 //
 // Window: BarrierPhase::TRACE only (InstallBarrier maps TRACE and CLEAR_SATB onto
-// TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops. Young
-// collection only (major TRACE keeps SATB). gc_unit never Heap::Init — IsGcStarted
-// is false, so this is a no-op there (same SATB Young-face fixture discipline).
+// TraceBarrier). Idle/Enum/STW/PostTrace/Preforward/Forward are no-ops.
+// gc_unit never Heap::Init — IsGcStarted is false, so this is a no-op there.
 //
-// Follow: first paint greys via PushYoungAllocBlack; STW2 MergeYoungAllocBlack
-// scans children (same ledger AllocBlack uses). Already-marked skips the ledger
-// because TraceYoungClosure already owns the object.
+// Young: paint + PushYoungAllocBlack (STW2 MergeYoungAllocBlack follows children).
+// Major: SATB-enqueue the new target (TraceBarrier RememberNewReference can still
+// lose it when ShouldEnqueue treats an unmarked isTraceRegion as allocate-black).
+// zBarrier.inline.hpp:735-739 marks the new address on every heap store; SATB
+// deletion of the pre-value is not a substitute (REPORT-youngconcstw2 satb=0;
+// survnode DEAD_SLOT visitSame=0).
 void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
 {
     if (ref == nullptr || !Heap::IsHeapAddress(ref)) {
         return;
     }
     CollectorResources& resources = Heap::GetHeap().GetCollectorResources();
-    if (!resources.IsGcStarted() || resources.GetGCStats().reason != GC_REASON_YOUNG) {
+    if (!resources.IsGcStarted()) {
         return;
     }
     // FOLLOW publishes TRACE on the heap then handshakes mutators
@@ -310,17 +313,27 @@ void MarkAndRememberNewValue(BarrierPhase barrierPhase, BaseObject* ref)
         return;
     }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(ref));
-    if (region == nullptr || !region->IsYoungRegion()) {
+    if (region == nullptr) {
         return;
     }
-    MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
-    bool already = region->MarkObject(view, ref, ref->GetSize());
-    if (already) {
+    if (resources.GetGCStats().reason == GC_REASON_YOUNG) {
+        if (!region->IsYoungRegion()) {
+            return;
+        }
+        MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
+        bool already = region->MarkObject(view, ref, ref->GetSize());
+        if (already) {
+            return;
+        }
+        AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
+        if (buffer != nullptr) {
+            buffer->PushYoungAllocBlack(ref);
+        }
         return;
     }
-    AllocBuffer* buffer = AllocBuffer::GetAllocBuffer();
-    if (buffer != nullptr) {
-        buffer->PushYoungAllocBlack(ref);
+    Mutator* mutator = Mutator::GetMutator();
+    if (mutator != nullptr) {
+        mutator->RememberObjectInSatbBuffer(ref);
     }
 }
 } // namespace
@@ -530,6 +543,10 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     WriteReferenceImpl(obj, field, ref);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_WRITE_REF);
     NoteInstalledSlot(field, theCollector, static_cast<uint8_t>(phase));
+    // zBarrier.inline.hpp:735-739 mark_and_remember: mark the new target on every
+    // heap store, not only the remset slow path. A store-good rewrite of a
+    // different object still needs keep-alive (survnode visitSame=0).
+    MarkAndRememberNewValue(this->phase, ref);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -997,6 +1014,7 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
     SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_ATOMIC_WRITE);
+    MarkAndRememberNewValue(this->phase, ref);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -1664,8 +1682,9 @@ void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObj
         }
         return;
     }
-    // mark half of mark_and_remember (zBarrier.inline.hpp:735-739). remember(p)
-    // continues below; SATB is not a substitute (REPORT-youngconcstw2 satb=0).
+    // Bulk paths (CopyRefArray / WriteStruct) reach here without going through
+    // WriteReference. Single-field stores already marked in WriteReference;
+    // MarkObject / SATB enqueue are idempotent.
     MarkAndRememberNewValue(this->phase, ref);
     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(ref));
     // ⛔⛔ Do NOT skip on "the target is not young right now".
