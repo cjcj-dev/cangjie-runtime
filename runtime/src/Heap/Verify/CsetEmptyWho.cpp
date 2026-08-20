@@ -180,8 +180,14 @@ void HitTarget(BaseObject* target, Who cls)
 void VisitRootSlot(RootSlot& root, Who cls, std::atomic<size_t>& counter)
 {
     // Peel colour so IsHeapAddress/region lookup see the real address.
-    // GetTargetObject is peel-only (RefField.h:167); no barrier, no heal.
-    BaseObject* target = to_object(root.GetTargetObject());
+    // RootSlot is uncolored storage (RefField.h:478-489) but mutator slots
+    // may still hold colour bits until PreForward; match GcPhaseEnum
+    // (Mutator.cpp:948-951 StripRootObjectColour / uncolor_bits).
+    zaddress_unsafe value = root.LoadPlain();
+    if (is_null(value)) {
+        return;
+    }
+    BaseObject* target = to_object(safe(uncolor_bits(to_zpointer(raw(value)))));
     if (target == nullptr) {
         return;
     }
