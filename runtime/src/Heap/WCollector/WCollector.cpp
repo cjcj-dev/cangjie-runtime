@@ -9985,14 +9985,18 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
     do {
         StateWord oldWord = obj->GetStateWord();
 
-        // 1. object has already been forwarded
+        // 1. object has already been forwarded. Table hit is the publish
+        // (zRelocate.cpp:371, MutatorRelocate.h:124). A FORWARDED header with no
+        // entry is last cycle's residual after the table was retired
+        // (zRelocationSet.cpp:91-96); PlanRoute's dest is uncopied — do not
+        // return it. Fall through and recopy this cycle.
         if (obj->IsForwarded()) {
             auto toObj = GetForwardPointer(obj, ghostFromRegion);
-            if (toObj == nullptr) {
-                return planned;
+            if (toObj != nullptr) {
+                DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(),
+                     toObj->GetSize());
+                return toObj;
             }
-            DLOG(FORWARD, "skip forwarded obj %p -> %p<%p>(%zu)", obj, toObj, toObj->GetTypeInfo(), toObj->GetSize());
-            return toObj;
         }
 
         // 2. object is being forwarded. zRelocate.cpp:386-389 find() hit → already
@@ -10013,7 +10017,12 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
                 return toObj;
             }
             if (ans == MutatorRelocate::LockedWaiterAnswer::UsePlanned) {
-                return planned != nullptr ? planned : FindToVersion(obj);
+                // Page done + leftover LOCKED is not a live copier
+                // (zForwarding.cpp:138-151). PlanRoute dest is uncopied when the
+                // table was retired (zRelocationSet.cpp:91-96); returning it is
+                // si_addr=0x8. Wait for the header; recopy after it drops.
+                sched_yield();
+                continue;
             }
             sched_yield();
             continue;

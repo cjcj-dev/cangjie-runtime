@@ -78,3 +78,17 @@ GC_TEST(ExemptLife, ExemptAlreadyForwardedStillPublishesDone)
     GC_EXPECT_TRUE(obj->IsForwarded());
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
 }
+
+GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
+{
+    // CSet empty-select still needs FORWARDED headers; strip only at the next
+    // install after the table is retired (zRelocationSet.cpp:91-96).
+    GcHeapFixture fx;
+    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    obj->SetStateCode(ObjectState::FORWARDED);
+    GC_EXPECT_TRUE(obj->IsForwarded());
+    fx.region0->ClearRelocationResiduals();
+    GC_EXPECT_FALSE(obj->IsForwarded());
+    GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
+}

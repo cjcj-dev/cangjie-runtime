@@ -1529,6 +1529,13 @@ public:
     void VisitAllObjects(const std::function<void(BaseObject*)>&& func);
     bool VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func);
 
+    // After-copy Exempt parks FORWARDED/LOCKED residuals (zRelocate.cpp:1041-1047).
+    // CSet empty-select still needs those headers; strip only at the next install,
+    // after the table is retired (zRelocationSet.cpp:91-96). A leftover FORWARDED
+    // with no table entry makes ForwardObjectImpl return PlanRoute's uncopied dest
+    // (si_addr=0x8 / near-golden drift). No live copier at install.
+    void ClearRelocationResiduals();
+
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
@@ -1956,6 +1963,7 @@ public:
         // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
         ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
         ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
+        ClearRelocationResiduals();
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.

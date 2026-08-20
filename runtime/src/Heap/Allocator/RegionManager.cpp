@@ -664,6 +664,18 @@ void RegionInfo::VisitAllObjects(const std::function<void(BaseObject*)>&& func)
     }
 }
 
+void RegionInfo::ClearRelocationResiduals()
+{
+    VisitAllObjects([](BaseObject* obj) {
+        if (obj == nullptr) {
+            return;
+        }
+        if (obj->GetStateWord().IsLockedWord() || obj->IsForwarded()) {
+            obj->SetStateCode(ObjectState::NORMAL);
+        }
+    });
+}
+
 bool RegionInfo::VisitLiveObjectsUntilFalse(const std::function<bool(BaseObject*)>&& func)
 {
     // Skip only when a mark phase established live==0. Bare zero (e.g. non-young under minor)
