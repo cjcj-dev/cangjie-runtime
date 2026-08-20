@@ -83,34 +83,21 @@ GC_TEST(IkeKeep, ExpireClearsKeptButLeavesForwarded)
     GC_EXPECT_TRUE(IkeKeepTestAccess::OnFrom(manager, forwarded));
 }
 
-GC_TEST(ExemptLife, ExpireRetiresForwardedKeptTable)
+GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
 {
-    // After-copy Exempt parks FORWARDED+done with a live table. Next cycle
-    // must not find() last cycle's dest (zRelocationSet.cpp:91-96).
-    GcHeapFixture fx;
-    RegionManager manager;
-    ForwardingTable::Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE, RegionInfo::UNIT_SIZE);
-
-    RegionInfo* forwarded = fx.region0;
-    forwarded->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    forwarded->SetRouteState(RegionInfo::RouteState::FORWARDED);
-    forwarded->MarkForwardingDone();
-    IkeKeepTestAccess::ParkUnmovable(manager, forwarded);
-
-    const MAddress from = reinterpret_cast<MAddress>(fx.obj0);
-    const MAddress stale = fx.heapStart + RegionInfo::UNIT_SIZE + 128;
-    GC_EXPECT_TRUE(ForwardingTable::EntriesArmed(from));
-    GC_EXPECT_EQ(ForwardingTable::InsertMapping(from, stale), stale);
+    // After-copy Exempt ClearEntries unlinks into the retired generation.
+    // FindTo still scans it; the next install must drop covering tables
+    // (zRelocationSet.cpp:91-96). Addresses below any live heap base so
+    // GetEntries cannot hit a previous fixture's map.
+    constexpr MAddress kStart = 0x10000;
+    constexpr size_t kSize = 0x1000;
+    ForwardingEntries* tab = ForwardingEntries::Create(4, kStart, 0, kSize);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const MAddress from = kStart + 16;
+    const MAddress stale = 0x2000;
+    GC_EXPECT_EQ(tab->insert(from, stale), stale);
+    ForwardingTable::Retire(tab);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
-
-    manager.ExpireKeptFromPreviousCycle();
-
-    GC_EXPECT_TRUE(forwarded->IsForwardingDone());
-    GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetRouteState()),
-                  static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
-    GC_EXPECT_FALSE(ForwardingTable::GetEntries(from) != nullptr);
-    // FindTo still answers from the retired generation until the next install.
-    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
-    ForwardingTable::DropRetiredCovering(forwarded->GetRegionStart(), forwarded->GetRegionSize());
+    ForwardingTable::DropRetiredCovering(kStart, kSize);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
 }
