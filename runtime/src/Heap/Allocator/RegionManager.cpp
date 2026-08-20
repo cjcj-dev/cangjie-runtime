@@ -1971,19 +1971,14 @@ void WaitCopiedObjectsUnlocked(RegionInfo* region)
     uintptr_t allocPtr = region->GetRegionAllocPtr();
     while (position < allocPtr) {
         BaseObject* obj = from_region_addr(position);
-        if (obj == nullptr || !Collector::PlausibleManagedObjectGate("WaitCopiedObjectsUnlocked", obj)) {
-            position += kMarkedBytesPerBit;
-            continue;
+        if (obj != nullptr && Collector::PlausibleManagedObjectGate("WaitCopiedObjectsUnlocked", obj)) {
+            while (obj->GetStateWord().IsLockedWord()) {
+                sched_yield();
+            }
         }
-        while (obj->GetStateWord().IsLockedWord()) {
-            sched_yield();
-        }
-        size_t size = RegionSpace::GetAllocSize(*obj);
-        if (size == 0) {
-            position += kMarkedBytesPerBit;
-            continue;
-        }
-        position += size;
+        // Always ALIGN. GetAllocSize of a residual/interior skipped later
+        // LOCKED headers (knife B2.3 A=1→5). Gate rejects interiors.
+        position += kMarkedBytesPerBit;
     }
 }
 } // namespace
