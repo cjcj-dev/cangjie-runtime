@@ -1510,7 +1510,14 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool freeEmpty = (ke != 0) || deadFromCopy;
+            // ZGC registers a page empty on !is_marked alone (zGeneration.cpp:216-221,
+            // zPage.inline.hpp:254-256).  Whether we may do the same is the question
+            // MarkCompleteVerify was built to answer, so this arm exists to be measured
+            // against it, not to ship: oldroots (f2f8af78) and oldroots2 (152ccd59) both
+            // reverted it, and this lane re-runs it only with the verifier armed so the
+            // crash can be attributed to mark completeness or ruled out.
+            const bool unmarkedResidual = residual != 0 && marked == 0;
+            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
