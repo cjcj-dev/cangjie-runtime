@@ -141,3 +141,30 @@ GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
     fx.region0->ClearRelocationResiduals();
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
 }
+
+GC_TEST(ZForwardingLife, DrainScopeWaitsCopiedWhenRefCountZero)
+{
+    // LEAD-NOTE 0820 21:1x: DrainScope used to return when fwdRefCount==0,
+    // so TakeRegion ClearUnits raced a LOCKED copier that never retained.
+    GcHeapFixture fx;
+    fx.region0->NoteCopyInflight();
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
+    GC_EXPECT_EQ(fx.region0->metadata.fwdRefCount.load(std::memory_order_acquire), 0);
+
+    std::atomic<int> phase{ 0 };
+    std::thread copier([&]() {
+        phase.store(1, std::memory_order_release);
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        fx.region0->EndCopyInflight();
+        phase.store(2, std::memory_order_release);
+    });
+    while (phase.load(std::memory_order_acquire) < 1) {
+        std::this_thread::yield();
+    }
+    {
+        RegionInfo::DrainScope drain(fx.region0, MutatorRelocate::Retire::TAKE_GARBAGE);
+        GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+        GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
+    }
+    copier.join();
+}

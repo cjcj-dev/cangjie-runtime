@@ -2341,11 +2341,21 @@ public:
             if (region == nullptr) {
                 return;
             }
+            uint64_t start = TimeUtil::NanoSeconds();
+            // copyInflight is the copier token (zForwarding.cpp:86-108 / lockdrain).
+            // detach_page does not observe it. ClearUnits must not race a LOCKED copy.
+            ZForwardingLife::wait_copied(region->metadata.copyInflight);
             int32_t before = region->metadata.fwdRefCount.load(std::memory_order_acquire);
+            // zForwarding.cpp:171-181 detach_page: wait until 0. A count that is
+            // already 0 is a successful wait, not a license to skip the drain —
+            // LEAD-NOTE 0820 21:1x: TakeRegion garbage_reuse ClearUnits ran with
+            // no wait when only naked mutator refs remained.
             if (before == 0) {
+                ZForwardingLife::detach_page(region->metadata.fwdRefCount);
+                uint64_t spun = TimeUtil::NanoSeconds() - start;
+                MutatorRelocate::NoteDrain(site, spun, false);
                 return;
             }
-            uint64_t start = TimeUtil::NanoSeconds();
             if (!region->ClaimForwarding()) {
                 // Another retire already claimed. Wait until that one published 0.
                 ZForwardingLife::detach_page(region->metadata.fwdRefCount);
