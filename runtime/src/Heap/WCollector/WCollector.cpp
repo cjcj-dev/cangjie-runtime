@@ -1487,6 +1487,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             if (UNLIKELY(GateDropDiag::Enabled())) {
                 GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_MARKGOOD);
             }
+            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
         // markfloor: skip interiors (RawArray+8 etc.) before IsValidObject/GetSize.
@@ -1494,6 +1495,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             if (UNLIKELY(GateDropDiag::Enabled())) {
                 GateDropDiag::NoteReject(obj, &field, targetObj, GateDropDiag::ARM_PLAUSIBLE_GOOD);
             }
+            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_GATE);
             return;
         }
         // Anchor main 9a124c4f14ddd5944330ddbf68d1659cbb629e56
@@ -1509,7 +1511,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
                 StartWhoDiag::NoteProduced(targetObj, StartWhoDiag::Source::HEAP_FIELD,
                                            "TraceRefField.mark_good", &field, obj);
             }
+            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_PUSH);
             workStack.push_back(targetObj);
+        } else {
+            SurvNodeDiag::NoteTraceVisit(&field, targetObj, SurvNodeDiag::TRACE_SKIP_MARKED);
         }
         return;
     }
@@ -1524,6 +1529,7 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
         if (UNLIKELY(GateDropDiag::Enabled())) {
             GateDropDiag::NoteReject(obj, &field, latest, GateDropDiag::ARM_PLAUSIBLE_SLOW);
         }
+        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_GATE);
         return;
     }
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
@@ -1554,7 +1560,10 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
             StartWhoDiag::NoteProduced(latest, StartWhoDiag::Source::HEAP_FIELD,
                                        "TraceRefField.slow", &field, obj);
         }
+        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_PUSH);
         workStack.push_back(latest);
+    } else {
+        SurvNodeDiag::NoteTraceVisit(&field, latest, SurvNodeDiag::TRACE_SKIP_MARKED);
     }
 }
 
