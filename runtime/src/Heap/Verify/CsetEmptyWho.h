@@ -24,12 +24,12 @@ class RegionInfo;
 // Observe-only. Samples recorded at CSet select (PostTrace); classified in
 // Preforward ScopedLightSync (mutators stopped, before relocate-start flip):
 //   - Decode slots with GetTargetObject (peel colour only).
-//   - Match by page range, not object identity.
-//   - One heap walk + VisitStaticRoots + VisitMutatorRoots per cycle.
+//   - Match every keep page by RegionInfo* (O(1)), not first-two-page range.
+//   - Heap walk + static + stack + finalizer + export + concurrency roots.
 //
-// Classes: STATIC / STACK / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
-// holdersVisited/fieldsSeen/pageHits/stackSeen are live-probe counters:
-// sampled>0 ∧ holdersVisited=0 ⇒ dead probe, not "true garbage".
+// Classes: STATIC / STACK / EXTRA_ROOT / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
+// holdersVisited/fieldsSeen/pageHits/stackSeen/extraSeen are live-probe
+// counters: sampled>0 ∧ holdersVisited=0 ⇒ dead probe, not "true garbage".
 namespace CsetEmptyWho {
 
 void BeginCycle();

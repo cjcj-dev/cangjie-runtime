@@ -8,13 +8,17 @@
 
 #include <atomic>
 #include <cstdio>
+#include <unordered_map>
 #include <vector>
 
 #include "Base/Log.h"
 #include "Base/TimeUtils.h"
 #include "Common/BaseObject.h"
+#include "Common/Runtime.h"
+#include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
+#include "Heap/Collector/FinalizerProcessor.h"
 #include "Heap/Heap.h"
 #include "Mutator/Mutator.h"
 #include "Mutator/MutatorManager.h"
@@ -25,15 +29,17 @@ namespace CsetEmptyWho {
 namespace {
 
 constexpr bool kCsetEmptyWho = true;
-constexpr size_t kMaxSamplePages = 2;
+constexpr size_t kMaxKeepPages = 32768;
+constexpr size_t kLogPages = 4;
 
 enum class Who : uint8_t {
     None = 0,
     Static = 1,
     Stack = 2,
-    Young = 3,
-    OldUnmarked = 4,
-    OldMarked = 5,
+    ExtraRoot = 3,
+    Young = 4,
+    OldUnmarked = 5,
+    OldMarked = 6,
 };
 
 const char* WhoName(Who w)
@@ -43,6 +49,8 @@ const char* WhoName(Who w)
             return "STATIC";
         case Who::Stack:
             return "STACK";
+        case Who::ExtraRoot:
+            return "EXTRA_ROOT";
         case Who::Young:
             return "YOUNG";
         case Who::OldUnmarked:
@@ -57,13 +65,13 @@ const char* WhoName(Who w)
 struct Sample {
     RegionInfo* region = nullptr;
     uintptr_t start = 0;
-    uintptr_t alloc = 0;
     size_t residual = 0;
     Who who = Who::None;
     size_t hits = 0;
 };
 
-std::vector<Sample> g_samples;
+std::vector<Sample> g_keeps;
+std::unordered_map<RegionInfo*, size_t> g_keepIdx;
 
 std::atomic<size_t> g_keep{ 0 };
 std::atomic<size_t> g_sampledPages{ 0 };
@@ -72,9 +80,11 @@ std::atomic<size_t> g_fields{ 0 };
 std::atomic<size_t> g_pageHits{ 0 };
 std::atomic<size_t> g_staticSeen{ 0 };
 std::atomic<size_t> g_stackSeen{ 0 };
+std::atomic<size_t> g_extraSeen{ 0 };
 std::atomic<size_t> g_clsNone{ 0 };
 std::atomic<size_t> g_clsStatic{ 0 };
 std::atomic<size_t> g_clsStack{ 0 };
+std::atomic<size_t> g_clsExtra{ 0 };
 std::atomic<size_t> g_clsYoung{ 0 };
 std::atomic<size_t> g_clsOldUnmarked{ 0 };
 std::atomic<size_t> g_clsOldMarked{ 0 };
@@ -92,6 +102,9 @@ void BumpClass(Who w)
             break;
         case Who::Stack:
             g_clsStack.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case Who::ExtraRoot:
+            g_clsExtra.fetch_add(1, std::memory_order_relaxed);
             break;
         case Who::Young:
             g_clsYoung.fetch_add(1, std::memory_order_relaxed);
@@ -141,14 +154,28 @@ void HitTarget(BaseObject* target, Who cls)
     if (target == nullptr) {
         return;
     }
-    const uintptr_t addr = reinterpret_cast<uintptr_t>(target);
-    for (Sample& s : g_samples) {
-        if (addr >= s.start && addr < s.alloc) {
-            s.who = Stronger(s.who, cls);
-            ++s.hits;
-            g_pageHits.fetch_add(1, std::memory_order_relaxed);
-        }
+    RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+    if (tr == nullptr) {
+        return;
     }
+    auto it = g_keepIdx.find(tr);
+    if (it == g_keepIdx.end()) {
+        return;
+    }
+    Sample& s = g_keeps[it->second];
+    s.who = Stronger(s.who, cls);
+    ++s.hits;
+    g_pageHits.fetch_add(1, std::memory_order_relaxed);
+}
+
+void VisitRootSlot(RootSlot& root, Who cls, std::atomic<size_t>& counter)
+{
+    zaddress_unsafe value = root.LoadPlain();
+    if (is_null(value)) {
+        return;
+    }
+    counter.fetch_add(1, std::memory_order_relaxed);
+    HitTarget(to_object(safe(value)), cls);
 }
 
 } // namespace
@@ -160,7 +187,8 @@ void BeginCycle()
     }
     EnsureAtexit();
     g_cycleKeep = 0;
-    g_samples.clear();
+    g_keeps.clear();
+    g_keepIdx.clear();
     g_cycles.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -174,48 +202,40 @@ void NoteKeep(RegionInfo* region, size_t residual, size_t residualFwd, size_t ma
     ++g_cycleKeep;
     (void)residualFwd;
     (void)marked;
-    if (g_samples.size() >= kMaxSamplePages || residual == 0) {
+    if (g_keeps.size() >= kMaxKeepPages || residual == 0) {
         return;
     }
     Sample s;
     s.region = region;
     s.start = region->GetRegionStart();
-    s.alloc = region->GetRegionAllocPtr();
     s.residual = residual;
-    if (s.alloc <= s.start) {
-        return;
-    }
-    g_samples.push_back(s);
+    const size_t idx = g_keeps.size();
+    g_keeps.push_back(s);
+    g_keepIdx[region] = idx;
     g_sampledPages.fetch_add(1, std::memory_order_relaxed);
 }
 
 void ClassifyCycle()
 {
-    if (!kCsetEmptyWho || g_samples.empty()) {
+    if (!kCsetEmptyWho || g_keeps.empty()) {
         return;
     }
     const uint64_t t0 = TimeUtil::NanoSeconds();
 
-    Heap::GetHeap().VisitStaticRoots([](RootSlot& root) {
-        zaddress_unsafe value = root.LoadPlain();
-        if (is_null(value)) {
-            return;
-        }
-        g_staticSeen.fetch_add(1, std::memory_order_relaxed);
-        // StaticRootTable keeps the referent (DumpRoots proof). Peel only.
-        HitTarget(to_object(safe(value)), Who::Static);
-    });
+    Heap::GetHeap().VisitStaticRoots([](RootSlot& root) { VisitRootSlot(root, Who::Static, g_staticSeen); });
 
     MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) {
-        mutator.VisitMutatorRoots([](RootSlot& root) {
-            zaddress_unsafe value = root.LoadPlain();
-            if (is_null(value)) {
-                return;
-            }
-            g_stackSeen.fetch_add(1, std::memory_order_relaxed);
-            HitTarget(to_object(safe(value)), Who::Stack);
-        });
+        mutator.VisitMutatorRoots([](RootSlot& root) { VisitRootSlot(root, Who::Stack, g_stackSeen); });
     });
+
+    Heap::GetHeap().GetFinalizerProcessor().VisitRawPointers(
+        [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); });
+    Heap::GetHeap().VisitAllExportRoots(
+        [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); });
+    {
+        RootVisitor conc = [](RootSlot& root) { VisitRootSlot(root, Who::ExtraRoot, g_extraSeen); };
+        Runtime::Current().GetConcurrencyModel().VisitGCRoots(&conc);
+    }
 
     Heap::GetHeap().ForEachObj(
         [](BaseObject* holder) {
@@ -247,21 +267,27 @@ void ClassifyCycle()
 
     const uint64_t dt = TimeUtil::NanoSeconds() - t0;
     g_walkNs.fetch_add(static_cast<size_t>(dt), std::memory_order_relaxed);
-    for (const Sample& s : g_samples) {
+    size_t logged = 0;
+    for (const Sample& s : g_keeps) {
         BumpClass(s.who);
-        LOG(RTLOG_ERROR,
-            "[OLDROOTS][cset-who] region=%p start=%#zx residual=%zu hits=%zu page=%s walkNs=%llu",
-            s.region, s.start, s.residual, s.hits, WhoName(s.who), static_cast<unsigned long long>(dt));
+        if (logged < kLogPages && (s.residual >= 2730 || s.hits != 0)) {
+            LOG(RTLOG_ERROR,
+                "[OLDROOTS][cset-who] region=%p start=%#zx residual=%zu hits=%zu page=%s walkNs=%llu keepPages=%zu",
+                s.region, s.start, s.residual, s.hits, WhoName(s.who), static_cast<unsigned long long>(dt),
+                g_keeps.size());
+            ++logged;
+        }
     }
-    g_samples.clear();
+    g_keeps.clear();
+    g_keepIdx.clear();
 }
 
 void Report(const char* tag)
 {
     std::fprintf(stderr,
                  "[OLDROOTS][cset-who] %s cycles=%zu keep=%zu sampledPages=%zu "
-                 "holdersVisited=%zu fieldsSeen=%zu pageHits=%zu staticSeen=%zu stackSeen=%zu "
-                 "page STATIC=%zu STACK=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
+                 "holdersVisited=%zu fieldsSeen=%zu pageHits=%zu staticSeen=%zu stackSeen=%zu extraSeen=%zu "
+                 "page STATIC=%zu STACK=%zu EXTRA=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
                  "walkNs=%zu\n",
                  tag != nullptr ? tag : "?",
                  g_cycles.load(std::memory_order_relaxed),
@@ -272,8 +298,10 @@ void Report(const char* tag)
                  g_pageHits.load(std::memory_order_relaxed),
                  g_staticSeen.load(std::memory_order_relaxed),
                  g_stackSeen.load(std::memory_order_relaxed),
+                 g_extraSeen.load(std::memory_order_relaxed),
                  g_clsStatic.load(std::memory_order_relaxed),
                  g_clsStack.load(std::memory_order_relaxed),
+                 g_clsExtra.load(std::memory_order_relaxed),
                  g_clsYoung.load(std::memory_order_relaxed),
                  g_clsOldUnmarked.load(std::memory_order_relaxed),
                  g_clsOldMarked.load(std::memory_order_relaxed),
