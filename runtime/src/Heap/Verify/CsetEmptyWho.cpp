@@ -151,7 +151,7 @@ void EnsureAtexit()
 
 void HitTarget(BaseObject* target, Who cls)
 {
-    if (target == nullptr) {
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return;
     }
     RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
