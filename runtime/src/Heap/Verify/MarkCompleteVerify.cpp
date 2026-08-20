@@ -50,6 +50,11 @@ struct Stats {
     // Of those, the ones whose region `!is_marked` would actually free.  This is
     // the subset that turns into a use-after-free the moment the knife lands.
     size_t deadTargetKnownEmpty = 0;
+    // The rollback question for 8eeefdff: would the now-live CSet-empty predicate
+    // actually free the page this live holder points into?
+    size_t deadTargetWouldFree = 0;
+    size_t deadTargetWouldKeep = 0;
+    size_t deadTargetNotConsidered = 0;
     // Region shape of the dead target, for triage.
     size_t deadInFrom = 0;
     size_t deadInGarbage = 0;
@@ -115,6 +120,57 @@ const char* RegionKindName(const RegionInfo* region)
         return "large";
     }
     return "old-or-other";
+}
+
+// Replicates the CSet-empty free predicate (RegionManager.cpp:1479-1517) for one
+// region. The address join against sampled [WHODEAD][cset-empty] lines could only
+// ever say "no evidence"; those lines are emitted for n<=8 or powers of two, so a
+// miss proves nothing. This asks the predicate directly, per dead edge, which is
+// what decides whether a page a live holder points into would actually be freed.
+// Returns 1 if the predicate would free it, 0 if not, 2 if the guard conditions
+// mean the predicate never even considers this region.
+unsigned WouldCsetPredicateFree(RegionInfo* region)
+{
+    if (region == nullptr) {
+        return 2;
+    }
+    // Outer guard (RegionManager.cpp:1479-1482): only from-regions with no live
+    // bytes, no raw pointers, no alloc gap and not young reach the predicate.
+    if (!region->IsFromRegion() || region->GetLiveByteCount() != 0 || region->GetRawPointerObjectCount() != 0 ||
+        region->HasMarkStartAllocGap() || region->IsYoungRegion()) {
+        return 2;
+    }
+    const bool ke = region->IsKnownEmpty(region->GetMarkView<Generation::Old>());
+    size_t residual = 0;
+    size_t residualFwd = 0;
+    size_t marked = 0;
+    const uintptr_t start = region->GetRegionStart();
+    const uintptr_t alloc = region->GetRegionAllocPtr();
+    if (alloc > start && !region->IsLargeRegion()) {
+        MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
+        uintptr_t pos = start;
+        while (pos < alloc) {
+            BaseObject* o = from_region_addr(pos);
+            if (!o->IsValidObject()) {
+                break;
+            }
+            const size_t sz = o->GetSize();
+            if (sz == 0) {
+                break;
+            }
+            ++residual;
+            if (o->IsForwarded()) {
+                ++residualFwd;
+            }
+            if (region->IsMarkedObject(view, o)) {
+                ++marked;
+            }
+            pos += sz;
+        }
+    }
+    const bool deadFromCopy = residual == residualFwd;
+    const bool unmarkedResidual = residual != 0 && marked == 0;
+    return (ke || deadFromCopy || unmarkedResidual) ? 1u : 0u;
 }
 
 void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field,
@@ -249,6 +305,14 @@ void CheckEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* h
     const bool knownEmpty = region->IsKnownEmpty(region->GetMarkView<Generation::Old>());
     if (knownEmpty) {
         ++stats.deadTargetKnownEmpty;
+    }
+    const unsigned wouldFree = WouldCsetPredicateFree(region);
+    if (wouldFree == 1u) {
+        ++stats.deadTargetWouldFree;
+    } else if (wouldFree == 0u) {
+        ++stats.deadTargetWouldKeep;
+    } else {
+        ++stats.deadTargetNotConsidered;
     }
     if (region->IsFromRegion() || region->IsLoneFromRegion() || region->IsUnmovableFromRegion()) {
         ++stats.deadInFrom;
@@ -434,12 +498,14 @@ void RunAtMarkEnd(const char* point)
     LOG(RTLOG_ERROR,
         "[GCV2][markcomplete] point=%s invoke=%zu objects=%zu liveHolders=%zu edges=%zu "
         "okMarked=%zu okYoung=%zu okAllocGap=%zu okInteriorBase=%zu okNonHeap=%zu okForwarded=%zu "
-        "deadTarget=%zu deadKnownEmpty=%zu deadFrom=%zu deadGarbage=%zu deadFree=%zu "
+        "deadTarget=%zu deadKnownEmpty=%zu deadWouldFree=%zu deadWouldKeep=%zu deadNotConsidered=%zu "
+        "deadFrom=%zu deadGarbage=%zu deadFree=%zu "
         "deadLarge=%zu deadOther=%zu deadNoRegion=%zu deadInterior=%zu "
         "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu",
         point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
         stats.targetMarked, stats.targetYoung, stats.targetAllocGap, stats.targetInteriorBaseMarked,
-        stats.targetNonHeap, stats.targetForwarded, stats.deadTarget, stats.deadTargetKnownEmpty, stats.deadInFrom,
+        stats.targetNonHeap, stats.targetForwarded, stats.deadTarget, stats.deadTargetKnownEmpty,
+        stats.deadTargetWouldFree, stats.deadTargetWouldKeep, stats.deadTargetNotConsidered, stats.deadInFrom,
         stats.deadInGarbage,
         stats.deadInFree, stats.deadInLarge, stats.deadInOther, stats.deadNoRegion, stats.deadInterior,
         stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
