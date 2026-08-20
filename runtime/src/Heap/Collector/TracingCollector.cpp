@@ -25,54 +25,28 @@
 #include "ObjectModel/RefField.inline.h"
 
 namespace MapleRuntime {
-namespace {
-struct SkippedStackMapCounts {
-    std::atomic<size_t> zeroEntries{ 0 };
-    std::atomic<size_t> pcMiss{ 0 };
-    std::atomic<size_t> zeroRootIndices{ 0 };
-};
 
-SkippedStackMapCounts g_skippedStackMapCounts;
-SkippedStackMapCounts g_rootMapMissCounts;
-thread_local size_t g_currentThreadRootMapMissCount = 0;
-
-// ZMark::_ncontinue (zMark.cpp:975-981): how many times the mark-end pause found
-// SATB work the concurrent termination test had already declared absent. Always
-// on and always reported, because a zero has to be readable as "the pre-pause test
-// was right every time" rather than as "nobody is counting".
+// ZMark::_ncontinue (zMark.cpp:975-981). Always on so a zero is readable as
+// "the pre-pause test was right every time" rather than "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
 std::atomic<size_t> g_markTerminatePauses{ 0 };
-
-// Compile-time constant, default false: the pre-existing behaviour (decide
-// termination while mutators run). Flip to true to decide it inside a pause.
-// A constant rather than an MRT_GCV2_ env var on purpose -- commit 05095555 cut
-// that surface from 194 to 3 as scaffolding rather than product configuration,
-// and this lane is not the place to grow it back.
-//
-// False even though the pause is the correct shape, because the evidence does not
-// yet support making it the default:
-//   - it never recovered a record. NW 1GB paired, 90 runs, 544 pauses: ncontinue=0.
-//     The hole it closes is provable by construction but was not observed to fire.
-//   - it costs one extra stop-the-world per major cycle.
-//   - the one metric that measures mark completeness is numerically worse with it on
-//     (SD256: bursts of >1000 dead edges in 3 of 42 cycles with the pause, 1 of 53
-//     without) -- far short of significance at that n, and the same burst occurs
-//     without the pause so the pause does not cause it, but unexplained either way.
-// A change with no demonstrated benefit and an unexplained adverse number does not
-// get to be the default. Set kMarkTerminateInPause and re-run the ablation at larger
-// n to decide. The two arms this lane measured were taken with an env switch before
-// it was folded into this constant; the code either side of it is unchanged.
-constexpr bool kMarkTerminateInPause = false;
-
-bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
-// Entries the pause's flush actually delivered. Separates "the test was right"
-// (flushed > 0, ncontinue == 0) from "the flush reached nobody" (flushed == 0).
 std::atomic<size_t> g_markTerminateFlushed{ 0 };
 std::atomic<bool> g_markTerminateAtexitInstalled{ false };
 
-// A zero ncontinue is a real and expected result -- it means every concurrent
-// termination test was already right. It is only readable next to the pause count,
-// which proves the pause ran at all.
+void NoteMarkTerminatePause() { g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed); }
+
+void NoteMarkTerminateFlushed(size_t n)
+{
+    g_markTerminateFlushed.fetch_add(n, std::memory_order_relaxed);
+}
+
+void NoteMarkTerminateContinue(size_t stackSize)
+{
+    const size_t nContinue = g_markTerminateContinue.fetch_add(1, std::memory_order_relaxed) + 1;
+    LOG(RTLOG_ERROR, "[GCV2][markterm] pause found unflushed SATB work: ncontinue=%zu stack=%zu", nContinue,
+        stackSize);
+}
+
 void ReportMarkTerminateContinue()
 {
     if (!g_markTerminateAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
@@ -84,6 +58,17 @@ void ReportMarkTerminateContinue()
         });
     }
 }
+
+namespace {
+struct SkippedStackMapCounts {
+    std::atomic<size_t> zeroEntries{ 0 };
+    std::atomic<size_t> pcMiss{ 0 };
+    std::atomic<size_t> zeroRootIndices{ 0 };
+};
+
+SkippedStackMapCounts g_skippedStackMapCounts;
+SkippedStackMapCounts g_rootMapMissCounts;
+thread_local size_t g_currentThreadRootMapMissCount = 0;
 
 const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GC_STRICT_STACKMAP */;
@@ -967,11 +952,11 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
-            g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed);
+            NoteMarkTerminatePause();
             const size_t seenBefore = satbSeen;
             MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
             visitSatbObj();
-            g_markTerminateFlushed.fetch_add(satbSeen - seenBefore, std::memory_order_relaxed);
+            NoteMarkTerminateFlushed(satbSeen - seenBefore);
             terminated = workStack.empty();
         }
         if (terminated) {
@@ -980,9 +965,7 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // ZMark::_ncontinue: the pause found work the concurrent phase had declared
         // absent. Report it -- a non-zero here is the direct measurement of records
         // the pre-pause termination test used to drop.
-        const size_t nContinue = g_markTerminateContinue.fetch_add(1, std::memory_order_relaxed) + 1;
-        LOG(RTLOG_ERROR, "[GCV2][markterm] pause found unflushed SATB work: ncontinue=%zu stack=%zu", nContinue,
-            workStack.size());
+        NoteMarkTerminateContinue(workStack.size());
     } while (true);
     SatbBuffer::ReportCarryProbe();
     ReportMarkTerminateContinue();

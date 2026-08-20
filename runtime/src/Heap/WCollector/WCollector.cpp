@@ -5217,7 +5217,10 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as
 // TracingCollector::MarkSatbBuffer, but feeds TraceYoungClosure (young claim + FYS).
-// Mutators run under TraceBarrier (InstallBarrier TRACE); final CLEAR_SATB is STW.
+// Mutators run under TraceBarrier (InstallBarrier TRACE).
+// Termination: ZMark::end -> try_end (zMark.cpp:940-971) + ZMark::flush
+// (zMark.cpp:587-596 / :998-1006). Young mark uses the same ZMark
+// (zMark.cpp:757-780). kMarkTerminateInPause default false, same as major.
 bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, MinorObjectSet& reachableObjects,
                                      std::vector<BaseObject*>& reachableVec, MinorSlotSet& reachableSlots,
                                      MinorSlotSet& weakSlots, bool useBitmapLedger,
@@ -5231,12 +5234,14 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
     // Push* discards (non-heap / already marked / not young) is still SATB traffic, so it
     // is counted at the pop, not at the push -- the question this answers is "did the
     // window do GC work", not "how many greys survived the filter".
-    auto visitSatbObj = [this, &workStack, windowStats]() {
+    size_t satbSeen = 0;
+    auto visitSatbObj = [this, &workStack, windowStats, &satbSeen]() {
         WorkStack remarkStack;
         SatbBuffer::Instance().GetRetiredObjects(remarkStack);
         while (!remarkStack.empty()) {
             BaseObject* obj = remarkStack.back();
             remarkStack.pop_back();
+            ++satbSeen;
             if (windowStats != nullptr) {
                 ++windowStats->satbObjects;
             }
@@ -5256,12 +5261,14 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
         if (++iterationCnt > maxIterationLoopNum && (TimeUtil::NanoSeconds() - iterationStartTime) > maxIterationTime) {
             ScopedStopTheWorld stw("MarkYoungSatbBuffer timeout", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
             VLOG(REPORT, "[GCV2][youngconc] MarkYoungSatbBuffer timeout STW drain");
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
             visitSatbObj();
             if (windowStats != nullptr) {
                 ++windowStats->closureCalls;
             }
             TraceYoungClosure(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                               useBitmapLedger);
+            ReportMarkTerminateContinue();
             return workStack.empty();
         }
         if (!workStack.empty()) {
@@ -5272,11 +5279,42 @@ bool WCollector::MarkYoungSatbBuffer(WorkStack& workStack, bool fullYoungScan, M
                               useBitmapLedger);
         }
         visitSatbObj();
-        if (workStack.empty()) {
+        if (!workStack.empty()) {
+            continue;
+        }
+        // Handshake, not a pause: a mutator that already acknowledged CLEAR_SATB
+        // runs on and may enqueue again. Same as MarkSatbBuffer (TracingCollector.cpp).
+        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
+            if (!workStack.empty()) {
+                continue;
+            }
         }
-    } while (!workStack.empty());
+        if (!MarkTerminateInPauseEnabled()) {
+            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            visitSatbObj();
+            if (workStack.empty()) {
+                break;
+            }
+            continue;
+        }
+        bool terminated = false;
+        {
+            ScopedStopTheWorld stw("young mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+            NoteMarkTerminatePause();
+            const size_t seenBefore = satbSeen;
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+            visitSatbObj();
+            NoteMarkTerminateFlushed(satbSeen - seenBefore);
+            terminated = workStack.empty();
+        }
+        if (terminated) {
+            break;
+        }
+        NoteMarkTerminateContinue(workStack.size());
+    } while (true);
+    ReportMarkTerminateContinue();
     return true;
 }
 

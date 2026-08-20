@@ -26,6 +26,20 @@ namespace MapleRuntime {
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
+// Shared by MarkSatbBuffer (major) and MarkYoungSatbBuffer (young).
+// ZMark::end -> try_end (zMark.cpp:940-971) decides termination inside the
+// pause after ZMark::flush (zMark.cpp:587-596 / :998-1006). Young mark
+// termination uses the same ZMark (zMark.cpp:757-780 young roots).
+// Default false: the pre-existing concurrent test. Flip to true to measure
+// the pause arm. Compile-time, not an MRT_GCV2_ env (commit 05095555).
+constexpr bool kMarkTerminateInPause = false;
+inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
+
+void NoteMarkTerminatePause();
+void NoteMarkTerminateFlushed(size_t n);
+void NoteMarkTerminateContinue(size_t stackSize);
+void ReportMarkTerminateContinue();
+
 // prefetch distance for mark.
 #define MACRO_MARK_PREFETCH_DISTANCE 16    // this macro is used for check when pre-compiling.
 constexpr int MARK_PREFETCH_DISTANCE = 16; // when it is changed, remember to change MACRO_MARK_PREFETCH_DISTANCE.
