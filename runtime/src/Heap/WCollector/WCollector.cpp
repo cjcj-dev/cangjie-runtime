@@ -1968,7 +1968,7 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         resurrectedExportObjectes.insert(tmp.begin(), tmp.end());
     }
 }
-void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
+void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector<BaseObject*>* collectOnly)
 {
     // Nested young (DoYoungGarbageCollection) traces only young targets
     // (TraceYoungClosure skips !IsYoungRegion). ZGC overlapping mark paints
@@ -1979,7 +1979,8 @@ void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
     RegionManager& manager = space.GetRegionManager();
     size_t holders = 0;
     size_t seeded = 0;
-    auto seedFrom = [this, &workStack, &holders, &seeded](RegionInfo* region) {
+    size_t painted = 0;
+    auto seedFrom = [this, &workStack, collectOnly, &holders, &seeded, &painted](RegionInfo* region) {
         // Before Assemble: current-space only. Nested young has already
         // promoted survivors (IsYoungRegion=false) onto recentFull.
         if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
@@ -1988,14 +1989,14 @@ void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
             return;
         }
         ++holders;
-        region->VisitAllObjects([this, &workStack, &seeded](BaseObject* obj) {
+        region->VisitAllObjects([this, &workStack, collectOnly, &seeded, &painted](BaseObject* obj) {
             if (obj == nullptr || !obj->HasRefField() || obj->IsWeakRef()) {
                 return;
             }
             if (!Collector::PlausibleManagedObjectGate("SeedOldMarkFromYoungSurvivors.holder", obj)) {
                 return;
             }
-            obj->ForEachRefField([this, &workStack, &seeded, obj](RefField<>& field) {
+            obj->ForEachRefField([this, &workStack, collectOnly, &seeded, &painted](RefField<>& field) {
                 BaseObject* target = to_object(field.GetTargetObject());
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     return;
@@ -2013,28 +2014,37 @@ void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
                     tr->IsGarbageRegion()) {
                     return;
                 }
-                if (IsMarkedObject<Generation::Old>(target)) {
+                ++seeded;
+                if (collectOnly != nullptr) {
+                    collectOnly->push_back(target);
                     return;
                 }
+                // zMark.inline.hpp:58-65 mark_before_push: paint on the GC
+                // thread so a bounded work stack cannot drop the live bit.
+                if (MarkObject(target)) {
+                    return;
+                }
+                ++painted;
                 workStack.push_back(target);
-                ++seeded;
             });
         });
     };
     manager.VisitAllManagedRegionsForProbe([&seedFrom](RegionInfo* region, const char*) {
         seedFrom(region);
     });
-    LOG(RTLOG_ERROR, "[WHODEAD][oldseed] youngHolders=%zu oldSeeded=%zu stack=%zu", holders, seeded,
-        workStack.size());
+    LOG(RTLOG_ERROR, "[WHODEAD][oldseed] youngHolders=%zu oldSeeded=%zu painted=%zu stack=%zu collect=%zu",
+        holders, seeded, painted, workStack.size(), collectOnly != nullptr ? collectOnly->size() : 0);
 }
 
 void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
     WorkStack foreignStack = NewWorkStack();
-    // Seed before Assemble: nested-young survivors still sit on recentFull /
-    // tl as current-space. Assemble ClearLiveInfo + from-enlist would hide them.
-    SeedOldMarkFromYoungSurvivors(workStack);
+    // Collect young→old targets before Assemble (survivors still current-space).
+    // Paint after Assemble+PrepareTrace so ClearLiveInfo cannot wipe the bits
+    // (zMark.inline.hpp:58-65 mark_before_push).
+    std::vector<BaseObject*> youngToOld;
+    SeedOldMarkFromYoungSurvivors(workStack, &youngToOld);
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
@@ -2121,6 +2131,21 @@ void WCollector::TraceHeap()
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        {
+            size_t painted = 0;
+            for (BaseObject* target : youngToOld) {
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    continue;
+                }
+                if (MarkObject(target)) {
+                    continue;
+                }
+                ++painted;
+                workStack.push_back(target);
+            }
+            LOG(RTLOG_ERROR, "[WHODEAD][oldseed] post-assemble paint=%zu stack=%zu from=%zu", painted,
+                workStack.size(), youngToOld.size());
+        }
         DoTracing(workStack, foreignStack);
 
         ProcessFinalizers();
