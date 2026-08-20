@@ -37,7 +37,9 @@
 #include "Heap/Barrier/Barrier.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/TracingCollector.h"
 #include "Heap/Verify/Stw2CurrentAudit.h"
+#include "Mutator/SatbBuffer.h"
 #include "ObjectModel/RefField.inline.h"
 
 using namespace MapleRuntime;
@@ -490,4 +492,46 @@ GC_TEST(YoungConc, ClassifySkipOldHolderTarget)
     std::unordered_set<BaseObject*> none;
     GC_EXPECT_EQ(static_cast<unsigned>(Stw2CurrentAudit::ClassifyTarget(fx.obj0, none, none)),
                  static_cast<unsigned>(Stw2CurrentAudit::Stw2Cover::Skip));
+}
+
+// Product default matches major: kMarkTerminateInPause=false (f3a48c102).
+// Young MarkYoungSatbBuffer reads the same compile-time gate.
+GC_TEST(YoungConc, MarkTerminateInPauseDefaultOff)
+{
+    GC_EXPECT_FALSE(kMarkTerminateInPause);
+    GC_EXPECT_FALSE(MarkTerminateInPauseEnabled());
+}
+
+// ZMark::flush (zMark.cpp:998-1006) / Mutator::FlushSatbBuffer: an in-flight
+// SATB node that is not full is never retired by EnsureGoodNode, so
+// GetRetiredObjects cannot see it. FlushQueue hands the node over
+// unconditionally. That is the hole MarkYoungSatbBuffer's pause arm closes
+// (WCollector.cpp MarkYoungSatbBuffer, same shape as MarkSatbBuffer).
+GC_TEST(YoungConc, UnfullSatbNodeInvisibleUntilFlush)
+{
+    GcHeapFixture fx;
+    fx.region0->SetYoungRegionFlag(1);
+    fx.region0->SetYoungAge(1);
+    LiveInfo* live = fx.PlantLiveInfo(fx.region0);
+    (void)fx.PlantMarkBitmap<Generation::Young>(live, fx.region0->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, fx.region0->GetRegionSize());
+
+    auto* node = new SatbBuffer::Node();
+    GC_EXPECT_TRUE(node->Push(fx.obj0, nullptr));
+    GC_EXPECT_FALSE(node->IsEmpty());
+    GC_EXPECT_FALSE(node->IsFull());
+
+    std::vector<BaseObject*> retired;
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    GC_EXPECT_EQ(retired.size(), 0u);
+
+    SatbBuffer::Instance().FlushQueue(node);
+    GC_EXPECT_TRUE(node == nullptr);
+
+    SatbBuffer::Instance().GetRetiredObjects(retired);
+    GC_EXPECT_EQ(retired.size(), 1u);
+    GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(retired[0]), reinterpret_cast<uintptr_t>(fx.obj0));
+
+    fx.region0->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
 }
