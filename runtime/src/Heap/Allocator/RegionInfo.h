@@ -1954,6 +1954,7 @@ public:
         CHECK(metadata.inGhostFromRegion == 0);
         // marklate: freeze last-alloc phase before ghost snapshot (survives reuse).
         AllocPhaseDiag::FreezeRegion(GetRegionStart());
+        const RouteState prevRoute = GetRouteState();
         metadata.routeState = FORWARDABLE;
         // After-copy Exempt keeps the page (zRelocate.cpp:1041-1047) but the
         // forwarding table must not survive into the next install.
@@ -1965,8 +1966,8 @@ public:
         ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
         // Only last-cycle after-copy Exempt pages carry FORWARDED headers
         // (RegionManager.cpp:3533 then Exempt). Walking every from is the
-        // rec=stw tax (B2.1 |Δ|=+4.53%). zRelocationSet.cpp:91-96.
-        if (GetRouteState() == FORWARDED || GetRouteState() == COMPACTED) {
+        // rec=stw tax (B2.1 |Δ|=+4.53%). Snapshot prevRoute before paint.
+        if (prevRoute == FORWARDED || prevRoute == COMPACTED) {
             ClearRelocationResiduals();
         }
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
