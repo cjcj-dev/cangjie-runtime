@@ -759,17 +759,22 @@ protected:
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
         }
-        if (Heap::IsHeapAddress(target)) {
-            RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
-            if (live == nullptr || live->IsFreeRegion()) {
-                BaseObject* to = FindToVersion(target);
-                if (to != nullptr) {
-                    target = to;
-                } else {
-                    // oracle Q3 ④: FREE + retired miss = poison. Paint load-bad
-                    // (⛔ null = silent drop; ⛔ store-good = delayed bomb).
-                    return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
-                }
+        // TypeInfo* / binary constants / immortal metadata after Flip
+        // (PlanRouteUnderStw:611-613).  Same heap gate as FindToVersion.
+        // Uncoloured ⇒ load-good high-bits-zero fast path.  Painting
+        // store-good here would send the next load through the barrier.
+        if (!Heap::IsHeapAddress(target)) {
+            return RefField<>(target);
+        }
+        RegionInfo* live = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+        if (live == nullptr || live->IsFreeRegion()) {
+            BaseObject* to = FindToVersion(target);
+            if (to != nullptr) {
+                target = to;
+            } else {
+                // oracle Q3 ④: FREE + retired miss = poison. Paint load-bad
+                // (⛔ null = silent drop; ⛔ store-good = delayed bomb).
+                return ColourStaleLoadBad(to_zaddress_unsafe(reinterpret_cast<Uptr>(target)));
             }
         }
         if (IsStaleStoreValue(target)) {
@@ -906,6 +911,16 @@ protected:
 
     bool IsStaleStoreValue(BaseObject* target) const
     {
+        // FindToVersion / PlanRouteUnderStw / IsFromObject / IsGhostFromObject all
+        // refuse a non-heap address.  kAskObjectState used to read
+        // target->IsForwarded() (StateWord objectState at +6) with no heap gate.
+        // GetAndTryTagRefField is handed TypeInfo* / binary constants / immortal
+        // metadata after Flip (PlanRouteUnderStw:611-613).  cjpm N=5 r1 on
+        // 1f8730a54: target=0x646e65706564 ASCII "depend", si_addr=target+6,
+        // insn=movzx 0x6(%r12),%eax @ IsStaleStoreValue, forward/fix.
+        if (target == nullptr || !Heap::IsHeapAddress(target)) {
+            return false;
+        }
         const bool stale = IsFromObject(target) || IsGhostFromObject(target) ||
             (kAskObjectState && target->IsForwarded());
         // PORT_ZFORWARDING step 1: compare the address-keyed answer against the region-keyed one at
