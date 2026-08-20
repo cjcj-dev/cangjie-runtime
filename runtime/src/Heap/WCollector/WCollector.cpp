@@ -2132,18 +2132,21 @@ void WCollector::TraceHeap()
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
         {
-            size_t painted = 0;
+            // Push unmarked only. ConcurrentMarkingWork skips follow when
+            // MarkObject already returned true (wasMarked). Pre-paint would
+            // leave young→old edges as live bits without a field scan.
+            size_t pushed = 0;
             for (BaseObject* target : youngToOld) {
                 if (target == nullptr || !Heap::IsHeapAddress(target)) {
                     continue;
                 }
-                if (MarkObject(target)) {
+                if (IsMarkedObject<Generation::Old>(target)) {
                     continue;
                 }
-                ++painted;
                 workStack.push_back(target);
+                ++pushed;
             }
-            LOG(RTLOG_ERROR, "[WHODEAD][oldseed] post-assemble paint=%zu stack=%zu from=%zu", painted,
+            LOG(RTLOG_ERROR, "[WHODEAD][oldseed] post-assemble pushed=%zu stack=%zu from=%zu", pushed,
                 workStack.size(), youngToOld.size());
         }
         DoTracing(workStack, foreignStack);
