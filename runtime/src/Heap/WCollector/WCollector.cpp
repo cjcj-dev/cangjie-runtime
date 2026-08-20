@@ -73,6 +73,7 @@
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
 #include "Mutator/MutatorManager.h"
@@ -2931,6 +2932,7 @@ void WCollector::Preforward()
         RemapYoungRoots();
         // This collector relocates both generations in one full-GC relocation set. Match the two
         // generation relocate-start flips while mutators are stopped, before any root is forwarded.
+        CsetEmptyWho::ClassifyCycle();
         flip_young_relocate_start();
         flip_old_relocate_start();
         CensusFrameColoursAfterFlip("full",

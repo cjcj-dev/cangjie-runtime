@@ -1610,7 +1610,6 @@ size_t RegionManager::ExemptFromRegions()
     size_t exemptedFromBytes = unmovableFromRegionList.GetUnitCount() * RegionInfo::UNIT_SIZE;
     VLOG(REPORT, "exempt from-space: %zu B - %zu B -> %zu B, %zu B floating garbage, %zu B to forward",
          oldFromBytes, exemptedFromBytes, newFromBytes, floatingGarbage, forwardBytes);
-    CsetEmptyWho::ClassifyCycle();
     return newFromBytes - forwardBytes;
 }
 

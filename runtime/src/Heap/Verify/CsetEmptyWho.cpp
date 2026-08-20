@@ -16,6 +16,8 @@
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
+#include "Mutator/Mutator.h"
+#include "Mutator/MutatorManager.h"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
@@ -28,9 +30,10 @@ constexpr size_t kMaxSamplePages = 2;
 enum class Who : uint8_t {
     None = 0,
     Static = 1,
-    Young = 2,
-    OldUnmarked = 3,
-    OldMarked = 4,
+    Stack = 2,
+    Young = 3,
+    OldUnmarked = 4,
+    OldMarked = 5,
 };
 
 const char* WhoName(Who w)
@@ -38,6 +41,8 @@ const char* WhoName(Who w)
     switch (w) {
         case Who::Static:
             return "STATIC";
+        case Who::Stack:
+            return "STACK";
         case Who::Young:
             return "YOUNG";
         case Who::OldUnmarked:
@@ -66,8 +71,10 @@ std::atomic<size_t> g_holders{ 0 };
 std::atomic<size_t> g_fields{ 0 };
 std::atomic<size_t> g_pageHits{ 0 };
 std::atomic<size_t> g_staticSeen{ 0 };
+std::atomic<size_t> g_stackSeen{ 0 };
 std::atomic<size_t> g_clsNone{ 0 };
 std::atomic<size_t> g_clsStatic{ 0 };
+std::atomic<size_t> g_clsStack{ 0 };
 std::atomic<size_t> g_clsYoung{ 0 };
 std::atomic<size_t> g_clsOldUnmarked{ 0 };
 std::atomic<size_t> g_clsOldMarked{ 0 };
@@ -82,6 +89,9 @@ void BumpClass(Who w)
     switch (w) {
         case Who::Static:
             g_clsStatic.fetch_add(1, std::memory_order_relaxed);
+            break;
+        case Who::Stack:
+            g_clsStack.fetch_add(1, std::memory_order_relaxed);
             break;
         case Who::Young:
             g_clsYoung.fetch_add(1, std::memory_order_relaxed);
@@ -196,6 +206,17 @@ void ClassifyCycle()
         HitTarget(to_object(safe(value)), Who::Static);
     });
 
+    MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) {
+        mutator.VisitMutatorRoots([](RootSlot& root) {
+            zaddress_unsafe value = root.LoadPlain();
+            if (is_null(value)) {
+                return;
+            }
+            g_stackSeen.fetch_add(1, std::memory_order_relaxed);
+            HitTarget(to_object(safe(value)), Who::Stack);
+        });
+    });
+
     Heap::GetHeap().ForEachObj(
         [](BaseObject* holder) {
             if (holder == nullptr) {
@@ -239,9 +260,9 @@ void Report(const char* tag)
 {
     std::fprintf(stderr,
                  "[OLDROOTS][cset-who] %s cycles=%zu keep=%zu sampledPages=%zu "
-                 "holdersVisited=%zu fieldsSeen=%zu pageHits=%zu staticSeen=%zu "
-                 "page STATIC=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
-                 "walkNs=%zu STACK_SKIPPED=1 (PostTrace not STW)\n",
+                 "holdersVisited=%zu fieldsSeen=%zu pageHits=%zu staticSeen=%zu stackSeen=%zu "
+                 "page STATIC=%zu STACK=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
+                 "walkNs=%zu\n",
                  tag != nullptr ? tag : "?",
                  g_cycles.load(std::memory_order_relaxed),
                  g_keep.load(std::memory_order_relaxed),
@@ -250,7 +271,9 @@ void Report(const char* tag)
                  g_fields.load(std::memory_order_relaxed),
                  g_pageHits.load(std::memory_order_relaxed),
                  g_staticSeen.load(std::memory_order_relaxed),
+                 g_stackSeen.load(std::memory_order_relaxed),
                  g_clsStatic.load(std::memory_order_relaxed),
+                 g_clsStack.load(std::memory_order_relaxed),
                  g_clsYoung.load(std::memory_order_relaxed),
                  g_clsOldUnmarked.load(std::memory_order_relaxed),
                  g_clsOldMarked.load(std::memory_order_relaxed),

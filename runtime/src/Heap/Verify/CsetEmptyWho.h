@@ -21,15 +21,14 @@ class RegionInfo;
 // (SeedOldMarkFromYoungSurvivors). Keep pages with marked=0 mean the
 // old TRACE never reached those objects.
 //
-// Observe-only. ExemptFromRegions runs in PostTrace (mutators running):
-//   - Decode slots with GetTargetObject (peel colour, no make_load_good /
-//     ForwardObject — those CHECK PREFORWARD and abort in IDLE).
-//   - Match by page range, not object identity (interiors / unhealed from).
-//   - One heap walk per cycle after samples are collected.
-//   - STACK_SKIPPED: VisitMutatorRoots is not STW-safe here.
+// Observe-only. Samples recorded at CSet select (PostTrace); classified in
+// Preforward ScopedLightSync (mutators stopped, before relocate-start flip):
+//   - Decode slots with GetTargetObject (peel colour only).
+//   - Match by page range, not object identity.
+//   - One heap walk + VisitStaticRoots + VisitMutatorRoots per cycle.
 //
-// Classes: STATIC / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
-// holdersVisited/fieldsSeen/pageHits are the live-probe counters:
+// Classes: STATIC / STACK / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
+// holdersVisited/fieldsSeen/pageHits/stackSeen are live-probe counters:
 // sampled>0 ∧ holdersVisited=0 ⇒ dead probe, not "true garbage".
 namespace CsetEmptyWho {
 
