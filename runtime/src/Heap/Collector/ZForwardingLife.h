@@ -148,6 +148,30 @@ public:
         WaitUntilRef(refCount, 0);
     }
 
+    // In-flight copier token, distinct from retain_page (construction starts at 1).
+    // TryLockObject success (this thread will copy) → note_copy; every UnlockObject
+    // exit (publish FORWARDED or rollback NORMAL) → end_copy. find() hits do not
+    // enter (zRelocate.cpp:382-410). Exempt waits wait_copied, never walks the page
+    // (VisitAllObjects holes miss LOCKED; REPORT-exemptlife §4 B2.3/B2.4).
+    static void note_copy(std::atomic<int32_t>& copyCount)
+    {
+        copyCount.fetch_add(1, std::memory_order_acq_rel);
+    }
+
+    static void end_copy(std::atomic<int32_t>& copyCount)
+    {
+        const int32_t n = copyCount.fetch_sub(1, std::memory_order_acq_rel);
+        CHECK(n > 0);
+        if (n == 1) {
+            NotifyAll();
+        }
+    }
+
+    static void wait_copied(std::atomic<int32_t>& copyCount)
+    {
+        WaitUntilRef(copyCount, 0);
+    }
+
     static uint64_t RetainRefusedReleased()
     {
         return g_retainRefusedReleased.load(std::memory_order_relaxed);

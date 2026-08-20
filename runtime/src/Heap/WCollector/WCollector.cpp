@@ -10044,6 +10044,28 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj)
 {
+    // zForwarding.cpp:86-108 retain only when this thread copies; find() hits
+    // (ForwardObjectImpl early returns) do not enter. Exclusive is the copier
+    // body after TryLockObject. Count +1 here, −1 after every UnlockObject.
+    // Ghost from is the page Exempt waits on; TryGet is the live owner if ghost
+    // is already cleared (KeepFrom / in-place).
+    RegionInfo* fromRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    if (fromRegion == nullptr) {
+        fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    }
+    if (fromRegion != nullptr) {
+        fromRegion->NoteCopyInflight();
+    }
+    struct EndCopyInflight {
+        RegionInfo* region;
+        ~EndCopyInflight()
+        {
+            if (region != nullptr) {
+                region->EndCopyInflight();
+            }
+        }
+    } endCopy{ fromRegion };
+
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
         // Caller locked for a real object; unlock without claiming FORWARDED.
         obj->UnlockObject(ObjectState::NORMAL);

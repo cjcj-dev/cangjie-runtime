@@ -38,6 +38,8 @@ struct ExemptUnlockTestAccess {
 
 GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
 {
+    // Count drain, not page walk (zForwarding.cpp:171-181). Planting LOCKED
+    // without note_copy is the hole VisitAllObjects used to miss.
     GcHeapFixture fx;
     RegionManager manager;
 
@@ -45,13 +47,16 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
     fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
     obj->SetStateCode(ObjectState::LOCKED);
+    fx.region0->NoteCopyInflight();
     GC_EXPECT_TRUE(obj->GetStateWord().IsLockedWord());
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
 
     std::atomic<int> phase{ 0 };
     std::thread copier([&]() {
         phase.store(1, std::memory_order_release);
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
         obj->UnlockObject(ObjectState::FORWARDED);
+        fx.region0->EndCopyInflight();
         phase.store(2, std::memory_order_release);
     });
     while (phase.load(std::memory_order_acquire) < 1) {
@@ -63,8 +68,24 @@ GC_TEST(ExemptLife, ExemptWaitsForLockedThenPublishesDone)
     GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
     GC_EXPECT_TRUE(obj->IsForwarded());
     GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
     GC_EXPECT_TRUE(ExemptUnlockTestAccess::OnUnmovable(manager, fx.region0));
     GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
+}
+
+GC_TEST(ExemptLife, FindHitDoesNotEnterCopyInflight)
+{
+    // zRelocate.cpp:382-410: find() hit returns without retain. Exempt must
+    // not wait on a table-hit reader.
+    GcHeapFixture fx;
+    RegionManager manager;
+    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart());
+    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
+    obj->SetStateCode(ObjectState::FORWARDED);
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
+    manager.ExemptFromRegion(fx.region0);
+    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 0);
 }
 
 GC_TEST(ExemptLife, ExemptAlreadyForwardedStillPublishesDone)

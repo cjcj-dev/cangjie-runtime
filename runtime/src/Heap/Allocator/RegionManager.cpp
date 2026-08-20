@@ -1941,24 +1941,17 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
 }
 
 namespace {
-// Wait until every walked header is not LOCKED. Copiers publish insert then
-// UnlockObject(FORWARDED) (WCollector.cpp:10055-10075; MutatorRelocate.h:124).
-// After-copy Exempt used to keep LOCKED/FORWARDED residuals across the next
-// cycle (REPORT-trainbisect §5-§6). ZGC never lets relocation residuals
-// outlive the page (zRelocate.cpp:1041-1047; zRelocationSet.cpp:91-96).
+// Wait until in-flight copiers drop to 0 (zForwarding.cpp:171-181 detach_page).
+// Copiers NoteCopyInflight on TryLock success (Exclusive entry) and
+// EndCopyInflight on every UnlockObject (WCollector.cpp ForwardObjectExclusive).
+// find() hits do not enter the count (zRelocate.cpp:382-410). Page walks miss
+// LOCKED past VisitAllObjects holes (REPORT-exemptlife §4 B2.3/B2.4).
 void WaitCopiedObjectsUnlocked(RegionInfo* region)
 {
     if (region == nullptr || region->IsFreeRegion()) {
         return;
     }
-    region->VisitAllObjects([](BaseObject* obj) {
-        if (obj == nullptr) {
-            return;
-        }
-        while (obj->GetStateWord().IsLockedWord()) {
-            sched_yield();
-        }
-    });
+    region->WaitCopiedInflight();
 }
 } // namespace
 

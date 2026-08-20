@@ -106,6 +106,42 @@ GC_TEST(ZForwardingLife, ClaimInvertsAndLateRetainRefuses)
     GC_EXPECT_FALSE(ZForwardingLife::retain_page(life.ref, life.done));
 }
 
+GC_TEST(ZForwardingLife, CopyInflightPairing)
+{
+    std::atomic<int32_t> copy{ 0 };
+    ZForwardingLife::note_copy(copy);
+    ZForwardingLife::note_copy(copy);
+    GC_EXPECT_EQ(copy.load(), 2);
+    ZForwardingLife::end_copy(copy);
+    GC_EXPECT_EQ(copy.load(), 1);
+    ZForwardingLife::end_copy(copy);
+    GC_EXPECT_EQ(copy.load(), 0);
+    ZForwardingLife::wait_copied(copy);
+    GC_EXPECT_EQ(copy.load(), 0);
+}
+
+GC_TEST(ZForwardingLife, CopyInflightDrainWakes)
+{
+    std::atomic<int32_t> copy{ 0 };
+    ZForwardingLife::note_copy(copy);
+    std::atomic<bool> entered{ false };
+    std::atomic<bool> finished{ false };
+    std::thread waiter([&]() {
+        entered.store(true, std::memory_order_release);
+        ZForwardingLife::wait_copied(copy);
+        finished.store(true, std::memory_order_release);
+    });
+    while (!entered.load(std::memory_order_acquire)) {
+        std::this_thread::yield();
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    GC_EXPECT_FALSE(finished.load(std::memory_order_acquire));
+    ZForwardingLife::end_copy(copy);
+    waiter.join();
+    GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
+    GC_EXPECT_EQ(copy.load(), 0);
+}
+
 GC_TEST(ZForwardingLife, ResetIdleWakesRetainClaimed)
 {
     // Fifth face: retain_page n<0 inlines add_and_wait as WaitUntilDone.

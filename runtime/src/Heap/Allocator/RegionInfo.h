@@ -1999,6 +1999,7 @@ public:
         // zForwarding.inline.hpp:67-70 — construction token = 1. Late retain after
         // detach (count 0) is refused; that is the ABA answer.
         ZForwardingLife::ResetForForwarding(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
         SetRouteMarkGeneration(G);
         metadata.regionEnd0 = metadata.regionEnd;
         metadata.routeInfo.SetRouteInfo(0);
@@ -2314,7 +2315,16 @@ public:
             }
         }
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
     }
+
+    void NoteCopyInflight() { ZForwardingLife::note_copy(metadata.copyInflight); }
+
+    void EndCopyInflight() { ZForwardingLife::end_copy(metadata.copyInflight); }
+
+    void WaitCopiedInflight() { ZForwardingLife::wait_copied(metadata.copyInflight); }
+
+    int32_t CopyInflight() const { return metadata.copyInflight.load(std::memory_order_acquire); }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
@@ -3187,6 +3197,9 @@ private:
         // MRT_GCV2_RETAINED_OWN_COPY=1. Freed by ClearLiveInfo / InitRegionInfo.
         uint64_t* retainedMarkWords = nullptr;
         uint32_t retainedMarkWordCnt = 0;
+        // In-flight copiers that hold LOCKED (TryLock success → Unlock). Fills the
+        // 4-byte hole after retainedMarkWordCnt; sizeof(UnitInfo) stays 208.
+        std::atomic<int32_t> copyInflight{ 0 };
 
         // resolveto: Compact packs densely; GetRoute prefix-sum dests are holes.
         // Table maps from-offset → actual dest for COMPACTED regions only.
@@ -3442,6 +3455,7 @@ private:
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
+        metadata.copyInflight.store(0, std::memory_order_relaxed);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);
         metadata.allocPtr = GetRegionStart();
         metadata.regionEnd = metadata.allocPtr + nUnit * RegionInfo::UNIT_SIZE;
