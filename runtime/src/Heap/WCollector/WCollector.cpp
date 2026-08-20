@@ -1980,8 +1980,11 @@ void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
     size_t holders = 0;
     size_t seeded = 0;
     auto seedFrom = [this, &workStack, &holders, &seeded](RegionInfo* region) {
-        if (region == nullptr || !region->IsYoungRegion() || region->IsFreeRegion() ||
-            region->IsGarbageRegion()) {
+        // Before Assemble: current-space only. Nested young has already
+        // promoted survivors (IsYoungRegion=false) onto recentFull.
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+            region->IsFromRegion() || region->IsLoneFromRegion() ||
+            region->IsUnmovableFromRegion()) {
             return;
         }
         ++holders;
@@ -2029,6 +2032,9 @@ void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
     WorkStack foreignStack = NewWorkStack();
+    // Seed before Assemble: nested-young survivors still sit on recentFull /
+    // tl as current-space. Assemble ClearLiveInfo + from-enlist would hide them.
+    SeedOldMarkFromYoungSurvivors(workStack);
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
@@ -2115,7 +2121,6 @@ void WCollector::TraceHeap()
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
-        SeedOldMarkFromYoungSurvivors(workStack);
         DoTracing(workStack, foreignStack);
 
         ProcessFinalizers();
