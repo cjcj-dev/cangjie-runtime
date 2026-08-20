@@ -1448,14 +1448,12 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221 register_empty_page iff !is_marked
-        // (zPage.inline.hpp:223-225 livemap.seqnum == generation.seqnum).
-        // oldroots CsetEmptyWho (SD256 N=5, holdersVisited≈54M, pageHits 4–771):
-        // keep pages are 99.97% NONE (no static/stack/young/old/extra incoming).
-        // The residual headers are unmarked garbage, not live objects the
-        // closure missed. Free ke || dead-from-copy || unmarked residual
-        // (marked==0 after this cycle's old TRACE). Still keep pages whose
-        // residual objects were marked (liveBits without liveBytes).
+        // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
+        // oldroots CsetEmptyWho (SD256 N=5 keep 99.97% NONE) but freeing
+        // unmarked residual immediately UAF (IDLE ForwardObjectImpl CHECK
+        // PREFORWARD, free=1). STACK/derived census incomplete — do not
+        // treat unmarked residual as empty. Keep whodead predicate:
+        // ke || dead-from-copy only.
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
@@ -1490,8 +1488,7 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool unmarkedResidual = residual != 0 && marked == 0;
-            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
+            const bool freeEmpty = (ke != 0) || deadFromCopy;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
