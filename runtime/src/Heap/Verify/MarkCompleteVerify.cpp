@@ -152,17 +152,35 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
     const unsigned targetMarkedBit = RegionSpace::IsMarkedObject<Generation::Old>(target) ? 1u : 0u;
     const unsigned targetResurrected = RegionSpace::IsResurrectedObject(target) ? 1u : 0u;
     const unsigned targetForwardedBit = target->IsForwarded() ? 1u : 0u;
+    // The bursts seen so far are a contiguous run of array elements naming a
+    // contiguous run of objects in ONE from-region, which does not look like a
+    // per-element miss. If a whole region's mark face is absent or is bound to a
+    // different epoch than the one this cycle wrote through, every mark aimed at
+    // it is lost together -- the failure mode the TraceHeap seed-push comment
+    // already guards against ("paint after Assemble+PrepareTrace so ClearLiveInfo
+    // cannot wipe the bits", WCollector.cpp:2044-2048). These two epochs are what
+    // IsKnownEmpty itself compares (RegionInfo.h:2794-2805), so printing them says
+    // whether the region had a usable mark face at all.
+    const unsigned long long targetViewEpoch =
+        targetRegion == nullptr ? 0ULL
+                                : static_cast<unsigned long long>(
+                                      targetRegion->GetMarkView<Generation::Old>().GetEpoch());
+    const unsigned long long targetSnapEpoch =
+        targetRegion == nullptr
+            ? 0ULL
+            : static_cast<unsigned long long>(targetRegion->GetMarkSnapshotEpoch<Generation::Old>());
     LOG(RTLOG_ERROR,
         "[GCV2][markcomplete] DEAD_EDGE point=%s holder=%p holderType=%s holderRegion=%s "
         "holderMarked=%u holderResurrected=%u "
         "field=%p fieldOffset=%zd target=%p targetRegion=%s targetRegionBase=%p "
-        "targetMarked=%u targetResurrected=%u targetForwarded=%u targetRoute=%u knownEmpty=%u n=%zu",
+        "targetMarked=%u targetResurrected=%u targetForwarded=%u targetRoute=%u "
+        "targetViewEpoch=%llu targetSnapEpoch=%llu knownEmpty=%u n=%zu",
         point == nullptr ? "?" : point, holder, holderType, RegionKindName(holderRegion), holderMarked,
         holderResurrected, &field, BaseObject::FieldOffset(holder, &field), target, RegionKindName(targetRegion),
         targetRegion == nullptr ? nullptr : reinterpret_cast<void*>(targetRegion->GetRegionStart()), targetMarkedBit,
         targetResurrected, targetForwardedBit,
-        targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetRouteState()),
-        static_cast<unsigned>(knownEmpty), stats.deadTarget);
+        targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetRouteState()), targetViewEpoch,
+        targetSnapEpoch, static_cast<unsigned>(knownEmpty), stats.deadTarget);
 }
 
 // One edge out of a live old holder.  Mirrors z_verify_old_oop (zVerify.cpp:131-155):
