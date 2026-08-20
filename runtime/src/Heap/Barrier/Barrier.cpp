@@ -905,7 +905,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
             const TargetVerdict verdict = JudgeTarget(handed);
             if (verdict != TargetVerdict::Usable) {
                 BaseObject* resolved = theCollector.FindToVersion(handed);
-                ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed);
+                ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
+                                                   obj, &field);
                 if (resolved != nullptr) {
                     handed = resolved;
                 }

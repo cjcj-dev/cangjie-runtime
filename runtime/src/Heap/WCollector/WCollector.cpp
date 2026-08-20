@@ -1969,10 +1969,83 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         resurrectedExportObjectes.insert(tmp.begin(), tmp.end());
     }
 }
+void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector<BaseObject*>* collectOnly)
+{
+    // Nested young (DoYoungGarbageCollection) traces only young targets
+    // (TraceYoungClosure skips !IsYoungRegion). ZGC overlapping mark paints
+    // whichever generation the stored address lives in
+    // (zBarrier.inline.hpp:742-749 mark()). Seed old objects named by the
+    // remaining young survivors so old TRACE sees those young→old edges.
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    size_t holders = 0;
+    size_t seeded = 0;
+    size_t painted = 0;
+    auto seedFrom = [this, &workStack, collectOnly, &holders, &seeded, &painted](RegionInfo* region) {
+        // Before Assemble: current-space only. Nested young has already
+        // promoted survivors (IsYoungRegion=false) onto recentFull.
+        if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion() ||
+            region->IsFromRegion() || region->IsLoneFromRegion() ||
+            region->IsUnmovableFromRegion()) {
+            return;
+        }
+        ++holders;
+        region->VisitAllObjects([this, &workStack, collectOnly, &seeded, &painted](BaseObject* obj) {
+            if (obj == nullptr || !obj->HasRefField() || obj->IsWeakRef()) {
+                return;
+            }
+            if (!Collector::PlausibleManagedObjectGate("SeedOldMarkFromYoungSurvivors.holder", obj)) {
+                return;
+            }
+            obj->ForEachRefField([this, &workStack, collectOnly, &seeded, &painted](RefField<>& field) {
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("SeedOldMarkFromYoungSurvivors.target",
+                                                           target)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                    if (host == nullptr || host == target) {
+                        return;
+                    }
+                    target = host;
+                }
+                RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (tr == nullptr || tr->IsYoungRegion() || tr->IsFreeRegion() ||
+                    tr->IsGarbageRegion()) {
+                    return;
+                }
+                ++seeded;
+                if (collectOnly != nullptr) {
+                    collectOnly->push_back(target);
+                    return;
+                }
+                // zMark.inline.hpp:58-65 mark_before_push: paint on the GC
+                // thread so a bounded work stack cannot drop the live bit.
+                if (MarkObject(target)) {
+                    return;
+                }
+                ++painted;
+                workStack.push_back(target);
+            });
+        });
+    };
+    manager.VisitAllManagedRegionsForProbe([&seedFrom](RegionInfo* region, const char*) {
+        seedFrom(region);
+    });
+    LOG(RTLOG_ERROR, "[WHODEAD][oldseed] youngHolders=%zu oldSeeded=%zu painted=%zu stack=%zu collect=%zu",
+        holders, seeded, painted, workStack.size(), collectOnly != nullptr ? collectOnly->size() : 0);
+}
+
 void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
     WorkStack foreignStack = NewWorkStack();
+    // Collect young→old targets before Assemble (survivors still current-space).
+    // Paint after Assemble+PrepareTrace so ClearLiveInfo cannot wipe the bits
+    // (zMark.inline.hpp:58-65 mark_before_push).
+    std::vector<BaseObject*> youngToOld;
+    SeedOldMarkFromYoungSurvivors(workStack, &youngToOld);
     // assemble garbage candidates for tracing.
     reinterpret_cast<RegionSpace&>(theAllocator).AssembleGarbageCandidates();
 
@@ -1983,38 +2056,22 @@ void WCollector::TraceHeap()
     uint64_t stackScanEpoch = 0;
 
     if (concurrentStackScan) {
-        // Publish the mark colours and ENUM barrier while every mutator is stopped.
-        // An epoch ack may then enumerate its own stack, or the handshake GC owner
-        // may enumerate a parked mutator, without running the legacy enum first.
+        // Publish the old mark colour and ENUM barrier while every mutator is stopped.
+        // Nested young already flipped young (DoYoungGarbageCollection). A second
+        // flip_young_mark_start here XOR-undoes that colour and the remset face.
+        // ZGenerationOld::mark_start only flips old (zGeneration.cpp:1074-1077 / :1219).
         ScopedStopTheWorld stw("major stack scan prepare", false);
-        flip_young_mark_start();
         flip_old_mark_start();
         Heap::GetHeap().InstallBarrier(GCPhase::GC_PHASE_ENUM);
         Heap::GetHeap().SetGCPhase(GCPhase::GC_PHASE_ENUM);
     } else {
-        // Full collection starts young and old marking in the same pause, as
-        // VM_ZMarkStartYoungAndOld::do_operation does (OpenJDK zGeneration.cpp:583-605).
-        //
-        // The comment said "in the same pause" and there was no pause. ZGenerationYoung::mark_start
-        // opens with assert(SafepointSynchronize::is_at_safepoint()) (zGeneration.cpp:855-859), and
-        // ZGenerationOld::mark_start with the same assert (:1212-1213); both are the body of one VM
-        // operation (:583-605). The safepoint is not incidental -- flip_mark_start calls
-        // ZBarrierSet::assembler()->patch_barriers() (:644-648), which rewrites running barrier code.
-        //
-        // This was the live arm, and the only flip site in this collector without a stop. The
-        // sibling arm above holds one, but ConcurrentStackScanEnabled() reads a pinned-off env and
-        // is always false, so it never ran. No caller supplied a stop either: RunGarbageCollection
-        // takes ScopedSTWLock, which is a mutex that prevents *other* threads from stopping the
-        // world, not a stop -- and the ScopedStopTheWorld beside it is commented out.
-        //
-        // What that published to running mutators: the two flips are separate calls, each ending in
-        // its own set_good_masks(), which writes four plain non-atomic globals. So a mutator could
-        // execute a barrier against the pair (MarkedYoung advanced, MarkedOld not) -- a combination
-        // ZGC only ever publishes from inside a safepoint. Every other flip here already does the
-        // right thing: the minor at :7712-7715 flips inside ScopedStopTheWorld, and Preforward at
-        // :2722-2733 wraps both relocate-start flips in a ScopedLightSync for exactly this reason.
+        // After the nested young collection, this is old mark-start only.
+        // VM_ZMarkStartYoungAndOld (zGeneration.cpp:583-605) flips both in one
+        // pause when the generations start together. We already ran a full young
+        // cycle; flipping young again here undoes its mark/remset colours and
+        // left old from-pages unmarked (SD256 CSet-empty ke=0 residual keep≈99%).
+        // Match ZGenerationOld::mark_start (zGeneration.cpp:1212-1219).
         ScopedStopTheWorld stw("major mark start", false);
-        flip_young_mark_start();
         flip_old_mark_start();
     }
 
@@ -2075,6 +2132,24 @@ void WCollector::TraceHeap()
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        {
+            // Push unmarked only. ConcurrentMarkingWork skips follow when
+            // MarkObject already returned true (wasMarked). Pre-paint would
+            // leave young→old edges as live bits without a field scan.
+            size_t pushed = 0;
+            for (BaseObject* target : youngToOld) {
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    continue;
+                }
+                if (IsMarkedObject<Generation::Old>(target)) {
+                    continue;
+                }
+                workStack.push_back(target);
+                ++pushed;
+            }
+            LOG(RTLOG_ERROR, "[WHODEAD][oldseed] post-assemble pushed=%zu stack=%zu from=%zu", pushed,
+                workStack.size(), youngToOld.size());
+        }
         DoTracing(workStack, foreignStack);
 
         ProcessFinalizers();

@@ -1093,6 +1093,10 @@ private:
     // Region-set structural verifier (Verify/VerifyRegions); gated by MRT_GCV2_VERIFY_REGIONS.
     void VerifyRegionSets(const char* point);
     void DoYoungGarbageCollection();
+    // After nested young, remaining young survivors hold young→old edges the
+    // young closure skipped. ZGC overlapping mark paints old targets from those
+    // stores (zBarrier.inline.hpp:742-749). Seed them into the old TRACE stack.
+    void SeedOldMarkFromYoungSurvivors(WorkStack& workStack, std::vector<BaseObject*>* collectOnly);
     void FlushAllocationRegions();
     template<bool forward>
     bool TryUpdateRefFieldImpl(BaseObject* obj, RefField<>& ref, BaseObject*& oldRef, BaseObject*& newRef) const;

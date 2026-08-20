@@ -586,11 +586,12 @@ private:
         // trace regions, or non-heap/null values. ClearBuffer/the FORWARD-transition clear can discard
         // those records safely, so accepting them is cheap and correct.
         GCPhase heapPhase = Heap::GetHeap().GetGCPhase();
-        // FOLLOW world-release publishes TRACE while mutators may still be IDLE until
-        // the phase handshake. The heap-phase fallback used to accept only ENUM, so a
-        // concurrent old→young store dropped SATB and showed up as Stw2CurrentAudit
-        // uncovered (REPORT-youngconcstw2). ZGC heap_store_slow_path marks the new
-        // address regardless (zBarrier.cpp:253-261). Accept every marking phase.
+        // FOLLOW / major TRACE publishes the heap phase before mutators handshake.
+        // The heap-phase fallback used to accept only ENUM, so a concurrent store
+        // dropped SATB: seen as Stw2CurrentAudit uncovered (old→young, FOLLOW) and
+        // as SD256 CSet-empty residual pages stuck nullFace (major, ke=0). ZGC
+        // heap_store_slow_path marks the new address regardless
+        // (zBarrier.cpp:253-261). Accept every marking phase.
         const bool mutatorMarking = phase == GCPhase::GC_PHASE_ENUM || phase == GCPhase::GC_PHASE_TRACE ||
             phase == GCPhase::GC_PHASE_CLEAR_SATB_BUFFER;
         const bool heapMarking = heapPhase == GCPhase::GC_PHASE_ENUM || heapPhase == GCPhase::GC_PHASE_TRACE ||

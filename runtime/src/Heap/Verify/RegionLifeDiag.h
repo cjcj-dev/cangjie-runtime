@@ -33,6 +33,7 @@ enum FreePath : uint16_t {
     // only path whose mark bit is not already constrained to 0 by our own gate. Kept
     // distinct from PATH_LARGE_GARBAGE precisely so the two never get pooled.
     PATH_PRE_RELEASE_DECISION = 8,
+    PATH_CSET_EMPTY = 9,        // ExemptFromRegions kFreeEmptyAtCSetSelect
 };
 
 bool Enabled();

@@ -7,11 +7,14 @@
 #include "Heap/Verify/ZgcInvariants.h"
 
 #include <atomic>
+#include <cstring>
 
 #include "Base/Log.h"
 #include "Common/BaseObject.h"
 #include "Heap/Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Barrier/RememberedSet.h"
+#include "Heap/Collector/Collector.h"
 #include "Common/ColourMask.h"
 #include "Heap/Verify/TraceClear.h"
 
@@ -196,7 +199,7 @@ static std::atomic<uint64_t> g_staleGuardFired{ 0 };
 static std::atomic<uint64_t> g_staleGuardZero{ 0 };
 static std::atomic<uint64_t> g_staleGuardUnresolved{ 0 };
 
-void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target)
+void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target, BaseObject* holder, const void* slot)
 {
     if (!kInvariantsOn) {
         return;
@@ -250,18 +253,61 @@ void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target)
         const unsigned pastAlloc = (region != nullptr && addr >= allocPtr) ? 1u : 0u;
         const unsigned inRange = (region != nullptr && addr >= startPtr && addr < allocPtr) ? 1u : 0u;
         // Direct evidence of who zeroed this address, from the ring recorded at clear time.
-        char clearInfo[256] = {};
+        char clearInfo[384] = {};
         if (zeroHeader && !resolved) {
             (void)TraceClear::Lookup(static_cast<MAddress>(addr), clearInfo, sizeof(clearInfo));
         }
+        unsigned hgen = 0;
+        unsigned htype = 99;
+        unsigned halloc = 0;
+        unsigned hlive = 0;
+        unsigned hyoungMark = 0;
+        unsigned holdMark = 0;
+        unsigned inRemset = 0;
+        unsigned edge = 0;
+        if (holder != nullptr && Heap::IsHeapAddress(holder)) {
+            RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            if (hr != nullptr && !hr->IsFreeRegion() && !hr->IsGarbageRegion()) {
+                htype = static_cast<unsigned>(hr->GetRegionType());
+                const bool young = hr->IsYoungRegion();
+                hgen = young ? 1u : 2u;
+                const RegionInfo::RegionType ht = hr->GetRegionType();
+                halloc = (hr->HasMarkStartAllocGap() || hr->IsToRegion() || hr->IsThreadLocalRegion() ||
+                          ht == RegionInfo::RegionType::RECENT_FULL_REGION ||
+                          ht == RegionInfo::RegionType::RECENT_LARGE_REGION || hr->IsPinnedRegion())
+                    ? 1u
+                    : 0u;
+                if (young) {
+                    hyoungMark = hr->IsMarkedObject(hr->GetMarkView<Generation::Young>(), holder) ? 1u : 0u;
+                } else {
+                    holdMark = hr->IsMarkedObject(hr->GetMarkView<Generation::Old>(), holder) ? 1u : 0u;
+                }
+                hlive = (halloc || hyoungMark || holdMark) ? 1u : 0u;
+                const bool tgtYoung = std::strstr(clearInfo, " y=1 ") != nullptr ||
+                    std::strstr(clearInfo, "y=1 rtype") != nullptr;
+                if (young && tgtYoung) {
+                    edge = 3;
+                } else if (young) {
+                    edge = 4;
+                } else if (tgtYoung) {
+                    edge = 1;
+                } else {
+                    edge = 2;
+                }
+            }
+        }
+        if (slot != nullptr && Heap::IsHeapAddress(slot)) {
+            inRemset = Heap::GetHeap().GetRememberedSet().Contains(reinterpret_cast<MAddress>(slot)) ? 1u : 0u;
+        }
         LOG(RTLOG_ERROR,
             "[ZGCINV][staleguard] fired=%lu zeroHeader=%lu unresolved=%lu thisZero=%u thisResolved=%u "
-            "rtype=%u route=%u garbage=%u free=%u ghost=%u pastAlloc=%u inRange=%u off=%#lx clear=%s",
+            "rtype=%u route=%u garbage=%u free=%u ghost=%u pastAlloc=%u inRange=%u off=%#lx "
+            "hgen=%u htype=%u halloc=%u hlive=%u hyMark=%u hoMark=%u edge=%u remset=%u clear=%s",
             n, g_staleGuardZero.load(std::memory_order_relaxed),
             g_staleGuardUnresolved.load(std::memory_order_relaxed), zeroHeader ? 1u : 0u, resolved ? 1u : 0u, rtype,
             route, garbage, freeR, ghostR, pastAlloc, inRange,
-            static_cast<unsigned long>(region == nullptr ? 0 : addr - startPtr),
-            clearInfo[0] == '\0' ? "-" : clearInfo);
+            static_cast<unsigned long>(region == nullptr ? 0 : addr - startPtr), hgen, htype, halloc, hlive,
+            hyoungMark, holdMark, edge, inRemset, clearInfo[0] == '\0' ? "-" : clearInfo);
     }
 }
 

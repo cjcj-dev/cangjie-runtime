@@ -59,7 +59,9 @@ void DumpCensus(const char* why);
 void NoteFastPathAccept(uintptr_t slotRaw, BaseObject* target);
 
 // staleguard fired: the hand-out named an object whose header says it has moved, and we resolved.
-void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target);
+// holder/slot classify the live-holder → dead-target edge (coll_live ruler).
+void NoteStaleGuardFired(bool zeroHeader, bool resolved, BaseObject* target, BaseObject* holder = nullptr,
+                         const void* slot = nullptr);
 
 // Totals, including the zero case.
 void DumpSummary(const char* why);

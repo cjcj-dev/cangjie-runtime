@@ -28,8 +28,13 @@ class TraceClear {
 public:
     static bool Enabled();
 
-    // kind: "compact" | "clear_units"
+    // kind: "compact" | "clear_units" | "coll_live" | "coll_empty"
     static void NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore);
+
+    // CollectRegion decision with the classification the coll_live ruler needs.
+    // collectGen: 0=Young template 1=Old template. freePath: RegionLifeDiag::FreePath.
+    static void NoteRange(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
+                          unsigned collectGen, unsigned freePath);
 
     // F3-only lifecycle event, recorded in the same ring as payload clears.
     static void NoteRegionEvent(MAddress start, size_t size, const char* kind, void* region, size_t liveBefore,
