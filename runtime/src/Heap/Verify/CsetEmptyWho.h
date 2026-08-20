@@ -30,6 +30,7 @@ class RegionInfo;
 // Classes: STATIC / STACK / EXTRA_ROOT / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
 // holdersVisited/fieldsSeen/pageHits/stackSeen/extraSeen are live-probe
 // counters: sampled>0 ∧ holdersVisited=0 ⇒ dead probe, not "true garbage".
+// Compile-time gate kCsetEmptyWho is product OFF after the census (rec=stw).
 namespace CsetEmptyWho {
 
 void BeginCycle();

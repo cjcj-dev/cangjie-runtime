@@ -1448,18 +1448,14 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221 register_empty_page iff !is_marked — sound
-        // only because ZGC mark is complete (zPage.inline.hpp:223-225). Ours
-        // is not: SD256 CSet-empty was 99.8% ke=0 residual=2730–3276 marked=0
-        // (LEAD 05:3x holder page UAF). Bare liveBytes==0 mixes two classes:
-        //   (1) dead from-copies — ResetLiveMapAfterForward left FORWARDED
-        //       residual; next Assemble ClearLiveInfo zeros live + nulls the
-        //       face. These are the 256MB OOM debt (ike-keep keep≈24k).
-        //   (2) unmarked live pages — residual headers are not FORWARDED.
-        //       zPage::is_object_live = is_allocating || live_bit
-        //       (zPage.inline.hpp:254-256): a non-forwarded object on a
-        //       non-allocating page with no this-cycle mark is live.
-        // Free (1) and IsKnownEmpty; keep (2) for the selector.
+        // zGeneration.cpp:216-221 register_empty_page iff !is_marked
+        // (zPage.inline.hpp:223-225 livemap.seqnum == generation.seqnum).
+        // oldroots CsetEmptyWho (SD256 N=5, holdersVisited≈54M, pageHits 4–771):
+        // keep pages are 99.97% NONE (no static/stack/young/old/extra incoming).
+        // The residual headers are unmarked garbage, not live objects the
+        // closure missed. Free ke || dead-from-copy || unmarked residual
+        // (marked==0 after this cycle's old TRACE). Still keep pages whose
+        // residual objects were marked (liveBits without liveBytes).
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
@@ -1494,7 +1490,8 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool freeEmpty = (ke != 0) || deadFromCopy;
+            const bool unmarkedResidual = residual != 0 && marked == 0;
+            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
