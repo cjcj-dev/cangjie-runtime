@@ -39,6 +39,7 @@
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/OffpastDiag.h"
+#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
@@ -1444,6 +1445,7 @@ size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
 // Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
+    CsetEmptyWho::BeginCycle();
     (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
@@ -1550,6 +1552,7 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             if (!freeEmpty) {
+                CsetEmptyWho::NoteKeep(del, residual, residualFwd, marked);
                 continue;
             }
             RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
