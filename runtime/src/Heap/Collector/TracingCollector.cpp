@@ -20,6 +20,7 @@
 #include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
@@ -360,6 +361,7 @@ public:
                 if (!obj->HasRefField()) {
                     continue;
                 }
+                SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SCAN);
                 // Skip marking the weakRef itself, but trace its children node
                 if (UNLIKELY(obj->IsWeakRef())) {
                     HeapSlot<>& referentField =
@@ -374,8 +376,11 @@ public:
                 } else {
                     collector.TraceObjectRefFields(obj, workStack);
                 }
-            } else if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
-                HealPairDiag::NoteMajorWasMarked(obj);
+            } else {
+                SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_MARKED);
+                if (UNLIKELY(HealPairDiag::YoungClaimEnabled())) {
+                    HealPairDiag::NoteMajorWasMarked(obj);
+                }
             }
             // try to fork new task if needed.
             if (threadPool != nullptr) {

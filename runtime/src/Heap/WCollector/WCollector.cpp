@@ -1051,6 +1051,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     // markfloor: work stack may hold RawArray+8 interiors (tip word = length, e.g. 0x200).
     // Return true ⇒ ConcurrentMarkingWork treats as already-marked and skips HasRefField.
     if (!Collector::PlausibleManagedObjectGate("WCollector::MarkObject", obj)) {
+        SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_GATE);
         return true;
     }
     RegionInfo* region = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(obj));
@@ -1066,6 +1067,7 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
         // the region now: the young closure never traverses old targets, and the domain
         // install that reaches here for promoted regions is moot — report already-marked.
         if (UNLIKELY(!region->IsYoungRegion())) {
+            SurvNodeDiag::NoteFollowHolder(obj, SurvNodeDiag::FOLLOW_SKIP_GATE);
             return true;
         }
         MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();

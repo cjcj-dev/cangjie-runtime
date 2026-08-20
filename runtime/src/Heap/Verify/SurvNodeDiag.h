@@ -6,14 +6,15 @@
 
 // survnode: split markport §6.1 SurvivalNode deadFrom into frame (a) vs (b).
 //
-// (a) the slot was stored after mark-end, when SATB / TRACE no longer covers it
-//     (zBarrier.inline.hpp:59-67 store-good monotonicity; ZGC store after mark-end
-//     is store-good and the new referent is already marked).
+// (a) TRACE-window store of an unmarked heap target (LEAD-NOTE U1:
+//     MarkAndRememberNewValue remember-without-mark, zBarrier.inline.hpp:735-739).
+//     storeSeen=0 on the first probe was the from-unmarked filter, not "no stores".
 // (b) the target was painted this cycle then the mark face was cleared without an
 //     epoch bump (ZGC flip_mark_start, zGeneration.cpp:1074-1077, is the only
-//     reset; CheckAndClearLiveInfo / NullLiveInfoFieldsInRange null liveInfo
-//     without bumping snapshot epoch).
+//     reset).
 //
+// Holder follow vs skip-follow (zMark.cpp:392-400 mark_and_follow) is recorded
+// separately so a DEAD_EDGE names whether the array was scanned this cycle.
 // Gated with MarkCompleteVerify. Default off. No new MRT_GCV2_ env.
 
 #ifndef MRT_SURV_NODE_DIAG_H
@@ -53,10 +54,17 @@ enum TraceAction : uint8_t {
     TRACE_SKIP_STALE = 4,
 };
 
+enum FollowAction : uint8_t {
+    FOLLOW_SCAN = 1,
+    FOLLOW_SKIP_MARKED = 2,
+    FOLLOW_SKIP_GATE = 3,
+};
+
 void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site);
 void NotePaint(BaseObject* obj, RegionInfo* region);
 void NoteClear(RegionInfo* region, uint8_t site, bool epochBumped);
 void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action);
+void NoteFollowHolder(BaseObject* holder, uint8_t action);
 
 void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, RegionInfo* targetRegion);
 void ReportAtMarkEnd(const char* point);
