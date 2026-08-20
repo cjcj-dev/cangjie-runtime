@@ -12,11 +12,9 @@
 #include <chrono>
 #include <thread>
 
-#include "Common/BaseObject.h"
-#include "Common/StateWord.h"
-#include "Heap/Allocator/RegionManager.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
+#include "Heap/Allocator/RegionManager.h"
 
 using namespace MapleRuntime;
 using namespace MapleRuntime::GcUnit;
