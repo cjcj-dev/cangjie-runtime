@@ -1963,7 +1963,12 @@ public:
         // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
         ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
         ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
-        ClearRelocationResiduals();
+        // Only last-cycle after-copy Exempt pages carry FORWARDED headers
+        // (RegionManager.cpp:3533 then Exempt). Walking every from is the
+        // rec=stw tax (B2.1 |Δ|=+4.53%). zRelocationSet.cpp:91-96.
+        if (GetRouteState() == FORWARDED || GetRouteState() == COMPACTED) {
+            ClearRelocationResiduals();
+        }
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.
