@@ -1446,50 +1446,58 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221: !is_marked relocatable pages are empty and
-        // freed at select. Post-mark live==0 is that class (OOM dump: kept-publish
-        // 3942 live=0 hole=258MB). Young pages stay — major old mark never
-        // examines them (oracleblack). Gate on liveBytes after TRACE; SATB
-        // handshake + TRACE MarkNewObject close the concurrent-store hole
-        // (zBarrier.cpp:253-261, zBarrier.inline.hpp:735-739).
+        // zGeneration.cpp:216-221 register_empty_page iff !is_marked — sound
+        // only because ZGC mark is complete (zPage.inline.hpp:223-225). Ours
+        // is not: SD256 CSet-empty was 99.8% ke=0 residual=2730–3276 marked=0
+        // (LEAD 05:3x holder page UAF). Bare liveBytes==0 mixes two classes:
+        //   (1) dead from-copies — ResetLiveMapAfterForward left FORWARDED
+        //       residual; next Assemble ClearLiveInfo zeros live + nulls the
+        //       face. These are the 256MB OOM debt (ike-keep keep≈24k).
+        //   (2) unmarked live pages — residual headers are not FORWARDED.
+        //       zPage::is_object_live = is_allocating || live_bit
+        //       (zPage.inline.hpp:254-256): a non-forwarded object on a
+        //       non-allocating page with no this-cycle mark is live.
+        // Free (1) and IsKnownEmpty; keep (2) for the selector.
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
             CHECK(del->IsFromRegion());
-            // LEAD 05:3x: holder page freed at CSet empty-select while live
-            // slots still name it (keepgate null+8). Classify residual
-            // headers vs this-cycle mark vs remset before the page dies.
-            // ZGC register_empty_page (zGeneration.cpp:216-221) is only
-            // sound when mark is complete (zPage.inline.hpp:223-225).
-            {
-                const unsigned rs = static_cast<unsigned>(del->GetRouteState());
-                const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
-                size_t residual = 0;
-                size_t marked = 0;
-                const uintptr_t start = del->GetRegionStart();
-                const uintptr_t alloc = del->GetRegionAllocPtr();
-                if (alloc > start && !del->IsLargeRegion()) {
-                    uintptr_t pos = start;
-                    while (pos < alloc) {
-                        BaseObject* o = from_region_addr(pos);
-                        if (!o->IsValidObject()) {
-                            break;
-                        }
-                        const size_t sz = o->GetSize();
-                        if (sz == 0) {
-                            break;
-                        }
-                        ++residual;
-                        if (del->IsMarkedObject(del->GetMarkView<Generation::Old>(), o)) {
-                            ++marked;
-                        }
-                        pos += sz;
+            const unsigned rs = static_cast<unsigned>(del->GetRouteState());
+            const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
+            size_t residual = 0;
+            size_t residualFwd = 0;
+            size_t marked = 0;
+            const uintptr_t start = del->GetRegionStart();
+            const uintptr_t alloc = del->GetRegionAllocPtr();
+            if (alloc > start && !del->IsLargeRegion()) {
+                uintptr_t pos = start;
+                while (pos < alloc) {
+                    BaseObject* o = from_region_addr(pos);
+                    if (!o->IsValidObject()) {
+                        break;
                     }
+                    const size_t sz = o->GetSize();
+                    if (sz == 0) {
+                        break;
+                    }
+                    ++residual;
+                    if (o->IsForwarded()) {
+                        ++residualFwd;
+                    }
+                    if (del->IsMarkedObject(del->GetMarkView<Generation::Old>(), o)) {
+                        ++marked;
+                    }
+                    pos += sz;
                 }
+            }
+            const bool deadFromCopy = residual == residualFwd;
+            const bool freeEmpty = (ke != 0) || deadFromCopy;
+            {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
                 static std::atomic<size_t> gCsetEmptyMarked{ 0 };
+                static std::atomic<size_t> gCsetEmptyKeep{ 0 };
                 static std::atomic<bool> gCsetEmptyAtexit{ false };
                 const size_t n = gCsetEmpty.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (residual != 0) {
@@ -1498,31 +1506,39 @@ size_t RegionManager::ExemptFromRegions()
                 if (marked != 0) {
                     gCsetEmptyMarked.fetch_add(1, std::memory_order_relaxed);
                 }
+                if (!freeEmpty) {
+                    gCsetEmptyKeep.fetch_add(1, std::memory_order_relaxed);
+                }
                 if (!gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
                     std::atexit([]() {
                         std::fprintf(stderr,
-                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu\n",
+                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu keep=%zu\n",
                                      gCsetEmpty.load(std::memory_order_relaxed),
                                      gCsetEmptyResidual.load(std::memory_order_relaxed),
-                                     gCsetEmptyMarked.load(std::memory_order_relaxed));
+                                     gCsetEmptyMarked.load(std::memory_order_relaxed),
+                                     gCsetEmptyKeep.load(std::memory_order_relaxed));
                         std::fflush(stderr);
                     });
                 }
                 if (n <= 8 || (n & (n - 1)) == 0) {
                     LOG(RTLOG_ERROR,
-                        "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu marked=%zu "
-                        "route=%u ke=%u ghost=%u alloc=%u reason=%u",
-                        n, del, start, liveBytes, residual, marked, rs, ke,
+                        "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu fwd=%zu marked=%zu "
+                        "route=%u ke=%u ghost=%u alloc=%u reason=%u free=%u",
+                        n, del, start, liveBytes, residual, residualFwd, marked, rs, ke,
                         static_cast<unsigned>(del->IsGhostFromRegion()),
                         static_cast<unsigned>(del->HasMarkStartAllocGap()),
-                        static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason));
+                        static_cast<unsigned>(Heap::GetHeap().GetCollector().GetGCStats().reason),
+                        static_cast<unsigned>(freeEmpty));
                 }
-                RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
-                TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
-                                      residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
-                                      static_cast<unsigned>(Generation::Old),
-                                      RegionLifeDiag::PATH_CSET_EMPTY);
             }
+            if (!freeEmpty) {
+                continue;
+            }
+            RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
+            TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
+                                  residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
+                                  static_cast<unsigned>(Generation::Old),
+                                  RegionLifeDiag::PATH_CSET_EMPTY);
             RemoveRegionLocked(&fromRegionList, del);
             ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
