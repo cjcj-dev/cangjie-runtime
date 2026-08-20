@@ -1170,11 +1170,15 @@ void Barrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dst
             return barrier.CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
         });
     }
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyRefArrayPlainToNonHeap(dstField, srcObj, srcField, dstSize, srcSize);
+        return;
+    }
     (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
                  "memmove_s failed");
-    // R9：堆 dst 上 memmove 可能灌入栈 plain；逐槽补色。非堆 dst = Y5 保持 plain。
+    // R9：堆 dst 上 memmove 可能灌入栈 plain；逐槽补色。
     // heap→heap 已有色时 GetAndTryTagRefField 幂等（Y6 不新增 plain，补色也无害）。
     if (dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
         MAddress end = dstField + dstSize;
@@ -1224,6 +1228,10 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
             return barrier.CopyStructArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
         });
     }
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
     (void)srcObj;
     CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), dstSize, reinterpret_cast<void*>(srcField), srcSize) ==
                      EOK,
@@ -1249,38 +1257,199 @@ void Barrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex 
 #endif
 }
 
-void Barrier::FixupNonHeapStructRefs(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const
+void Barrier::CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const
 {
-    // Heap→heap must keep coloured slots; only non-heap (stack sret / root buffer) goes plain.
-    if (srcObj == nullptr || Heap::IsHeapAddress(dst)) {
+    // STACK_ROOTS_STAY_PLAIN: never memcpy a coloured heap word onto the stack.
+    // Walk GC pointer slots in address order, copy the primitive gap, then StorePlain.
+    CHECK(!Heap::IsHeapAddress(dst));
+    if (size == 0) {
         return;
     }
-    srcObj->ForEachRefInStruct(
-        [this, srcObj, dst, src, size](RefField<false>& field) {
-            MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
-            if (fieldAddr < src || fieldAddr >= (src + size)) {
-                return;
-            }
-            // ReadReference may self-heal the heap source (colour stays on heap).
-            BaseObject* target = ReadReference(srcObj, field);
-            StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
-        },
-        src, src + size);
+    if (!Heap::IsHeapAddress(src) && dst < src + size && src < dst + size) {
+        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
+                     "read struct overlap memmove_s failed");
+#if defined(CANGJIE_TSAN_SUPPORT)
+        Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
+        Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
+#endif
+        return;
+    }
+    MAddress cursor = src;
+    const MAddress srcEnd = src + size;
+    if (srcObj != nullptr) {
+        srcObj->ForEachRefInStruct(
+            [this, srcObj, dst, src, srcEnd, &cursor](RefField<false>& field) {
+                MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+                if (fieldAddr < cursor || fieldAddr >= srcEnd) {
+                    return;
+                }
+                if (fieldAddr > cursor) {
+                    size_t gap = static_cast<size_t>(fieldAddr - cursor);
+                    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), gap,
+                                          reinterpret_cast<void*>(cursor), gap) == EOK,
+                                 "read struct gap memcpy_s failed");
+                }
+                BaseObject* target = ReadReference(srcObj, field);
+                StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
+                cursor = fieldAddr + sizeof(RefField<>);
+            },
+            src, srcEnd);
+    }
+    if (cursor < srcEnd) {
+        size_t tail = static_cast<size_t>(srcEnd - cursor);
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), tail,
+                              reinterpret_cast<void*>(cursor), tail) == EOK,
+                     "read struct tail memcpy_s failed");
+    }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
+#endif
 }
 
-void Barrier::FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
+void Barrier::CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    if (Heap::IsHeapAddress(dst)) {
+    CHECK(!Heap::IsHeapAddress(dst));
+    if (size == 0) {
         return;
     }
+    if (!Heap::IsHeapAddress(src) && dst < src + size && src < dst + size) {
+        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
+                     "read static struct overlap memmove_s failed");
+#if defined(CANGJIE_TSAN_SUPPORT)
+        Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
+        Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
+#endif
+        return;
+    }
+    MAddress cursor = src;
+    const MAddress srcEnd = src + size;
     gctib.ForEachBitmapWordInRange(
         src,
-        [this, dst, src](RefField<>& srcField) {
-            MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
+        [this, dst, src, srcEnd, &cursor](RefField<>& srcField) {
+            MAddress fieldAddr = reinterpret_cast<MAddress>(&srcField);
+            if (fieldAddr < cursor || fieldAddr >= srcEnd) {
+                return;
+            }
+            if (fieldAddr > cursor) {
+                size_t gap = static_cast<size_t>(fieldAddr - cursor);
+                CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), gap,
+                                      reinterpret_cast<void*>(cursor), gap) == EOK,
+                             "read static struct gap memcpy_s failed");
+            }
             BaseObject* target = ReadReference(nullptr, srcField);
-            StorePlain(RootSlotAt(dst + offset), from_object(target));
+            StorePlain(RootSlotAt(dst + (fieldAddr - src)), from_object(target));
+            cursor = fieldAddr + sizeof(RefField<>);
         },
-        src, src + size);
+        src, srcEnd);
+    if (cursor < srcEnd) {
+        size_t tail = static_cast<size_t>(srcEnd - cursor);
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst + (cursor - src)), tail,
+                              reinterpret_cast<void*>(cursor), tail) == EOK,
+                     "read static struct tail memcpy_s failed");
+    }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), size);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), size);
+#endif
+}
+
+void Barrier::CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField,
+                                           size_t srcSize) const
+{
+    CHECK(!Heap::IsHeapAddress(dstField));
+    if (srcSize == 0) {
+        return;
+    }
+    if (!Heap::IsHeapAddress(srcField) && dstField < srcField + srcSize && srcField < dstField + srcSize) {
+        CHECK_DETAIL(memmove_s(reinterpret_cast<void*>(dstField), srcSize,
+                               reinterpret_cast<void*>(srcField), srcSize) == EOK,
+                     "copy struct array overlap memmove_s failed");
+#if defined(CANGJIE_TSAN_SUPPORT)
+        Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), srcSize);
+        Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
+#endif
+        return;
+    }
+    if (srcObj == nullptr) {
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dstField), srcSize,
+                              reinterpret_cast<void*>(srcField), srcSize) == EOK,
+                     "copy struct array plain memcpy_s failed");
+#if defined(CANGJIE_TSAN_SUPPORT)
+        Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), srcSize);
+        Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
+#endif
+        return;
+    }
+    MAddress cursor = srcField;
+    const MAddress srcEnd = srcField + srcSize;
+    static_cast<MArray*>(srcObj)->ForEachRefFieldInRange(
+        [this, srcObj, dstField, srcField, srcEnd, &cursor](RefField<false>& field) {
+            MAddress fieldAddr = reinterpret_cast<MAddress>(&field);
+            if (fieldAddr < cursor || fieldAddr >= srcEnd) {
+                return;
+            }
+            if (fieldAddr > cursor) {
+                size_t gap = static_cast<size_t>(fieldAddr - cursor);
+                CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dstField + (cursor - srcField)), gap,
+                                      reinterpret_cast<void*>(cursor), gap) == EOK,
+                             "copy struct array gap memcpy_s failed");
+            }
+            BaseObject* target = ReadReference(srcObj, field);
+            StorePlain(RootSlotAt(dstField + (fieldAddr - srcField)), from_object(target));
+            cursor = fieldAddr + sizeof(RefField<>);
+        },
+        srcField, srcEnd);
+    if (cursor < srcEnd) {
+        size_t tail = static_cast<size_t>(srcEnd - cursor);
+        CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dstField + (cursor - srcField)), tail,
+                              reinterpret_cast<void*>(cursor), tail) == EOK,
+                     "copy struct array tail memcpy_s failed");
+    }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dstField), srcSize);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(srcField), srcSize);
+#endif
+}
+
+void Barrier::CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize,
+                                         MIndex srcSize) const
+{
+    CHECK(!Heap::IsHeapAddress(dst));
+    if (dst == src) {
+        return;
+    }
+    const size_t copyLen = (dstSize < srcSize ? dstSize : srcSize);
+    if (copyLen == 0) {
+        return;
+    }
+    if (dst < src) {
+        MAddress currentDst = dst;
+        MAddress currentSrc = src;
+        MAddress fieldBound = dst + copyLen;
+        while (currentDst < fieldBound) {
+            HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
+            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            StorePlain(RootSlotAt(currentDst), from_object(newRef));
+            currentDst += sizeof(RefField<false>);
+            currentSrc += sizeof(RefField<false>);
+        }
+    } else {
+        MAddress currentDst = dst + copyLen - sizeof(RefField<>);
+        MAddress currentSrc = src + copyLen - sizeof(RefField<>);
+        MAddress fieldBound = dst;
+        while (currentDst >= fieldBound) {
+            HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
+            BaseObject* newRef = ReadReference(srcObj, currentSrcField);
+            StorePlain(RootSlotAt(currentDst), from_object(newRef));
+            currentDst -= sizeof(RefField<false>);
+            currentSrc -= sizeof(RefField<false>);
+        }
+    }
+#if defined(CANGJIE_TSAN_SUPPORT)
+    Sanitizer::TsanWriteMemoryRange(reinterpret_cast<void*>(dst), copyLen);
+    Sanitizer::TsanReadMemoryRange(reinterpret_cast<void*>(src), copyLen);
+#endif
 }
 
 // Post-copy fixup for a bulk write into static/global storage.
@@ -1319,25 +1488,20 @@ void Barrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t siz
             return barrier.ReadStruct(dst, obj, src, size);
         });
     }
-    size_t dstSize = size;
-    size_t srcSize = size;
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
-                // MAddress bias = reinterpret_cast<MAddress>(&field) - reinterpret_cast<MAddress>(src);
-                // The destination reference slot starts at dst + bias.
-                BaseObject* fromVersion = to_object(field.GetTargetObject());
-                (void)fromVersion;
                 BaseObject* toVersion = nullptr;
                 theCollector.TryUpdateRefField(obj, field, toVersion);
             },
             src, src + size);
     }
-
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstSize, reinterpret_cast<void*>(src), srcSize) == EOK,
+    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
                  "read struct memcpy_s failed");
-    // Non-heap dst: overwrite ref slots with plain (STACK_ROOTS_STAY_PLAIN).
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
@@ -1347,14 +1511,12 @@ void Barrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GC
             return barrier.ReadStaticStruct(dst, src, size, gctib);
         });
     }
-    size_t dstSize = size;
-    size_t srcSize = size;
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), dstSize, reinterpret_cast<void*>(src), srcSize) == EOK,
-                 "read struct memcpy_s failed");
     if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
+    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
+                 "read struct memcpy_s failed");
     gctib.ForEachBitmapWord(dst, [this](RefField<>& refField) {
         BaseObject* toVersion = nullptr;
         theCollector.TryUpdateRefField(nullptr, refField, toVersion);

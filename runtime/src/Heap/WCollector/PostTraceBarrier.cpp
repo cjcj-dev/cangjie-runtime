@@ -66,7 +66,10 @@ BaseObject* PostTraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fiel
 
 void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    // Heap-src: E-class ReadReference (assertion-only). Non-heap dst: StorePlain, never coloured heal.
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
@@ -74,13 +77,15 @@ void PostTraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, s
             },
             src, src + size);
     }
-
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
+        return;
+    }
     gctib.ForEachBitmapWordInRange(
         src,
         [this](RefField<>& srcField) {
@@ -89,10 +94,6 @@ void PostTraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size,
         src, src + size);
 
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
-        return;
-    }
     // Heap dst residual path (should be rare for ReadStaticStruct): peel via ReadReference only.
     gctib.ForEachBitmapWord(dst, [this](RefField<>& dstRef) {
         (void)ReadReference(nullptr, dstRef);
@@ -239,6 +240,10 @@ bool PostTraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tru
 void PostTraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                        MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!dstObj->HasRefField()) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);

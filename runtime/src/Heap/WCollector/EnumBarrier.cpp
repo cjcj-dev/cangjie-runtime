@@ -54,7 +54,10 @@ BaseObject* EnumBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) co
 
 void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    // Heap-src SATB / self-heal via ReadReference; non-heap dst gets StorePlain.
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
@@ -62,18 +65,16 @@ void EnumBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t
             },
             src, src + size);
     }
-
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void EnumBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
+    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(
         src,
@@ -275,6 +276,10 @@ bool EnumBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& f
 void EnumBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                   MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);

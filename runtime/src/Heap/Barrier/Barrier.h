@@ -129,11 +129,13 @@ protected:
     Collector& theCollector;
 
 protected:
-    // STACK_ROOTS_STAY_PLAIN: non-heap ReadStruct/ReadStaticStruct dst ref slots
-    // must receive plain addresses (StorePlain), never coloured self-heal.
-    // Heap-src fields still heal via ReadReference; only the stack/root copy is plain.
-    void FixupNonHeapStructRefs(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const;
-    void FixupNonHeapStaticStructRefs(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
+    // STACK_ROOTS_STAY_PLAIN / zUncoloredRoot: non-heap dst never receives a
+    // coloured word. Each GC pointer is ReadReference (load-good) then StorePlain;
+    // primitive gaps memcpy. Heap dst still memcpy's coloured slots.
+    void CopyStructPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, size_t size) const;
+    void CopyStaticStructPlainToNonHeap(MAddress dst, MAddress src, size_t size, const GCTib gctib) const;
+    void CopyStructArrayPlainToNonHeap(MAddress dstField, BaseObject* srcObj, MAddress srcField, size_t srcSize) const;
+    void CopyRefArrayPlainToNonHeap(MAddress dst, BaseObject* srcObj, MAddress src, MIndex dstSize, MIndex srcSize) const;
 
     // Shared post-copy fixup for every WriteStaticStruct phase specialization: resolve forwarding,
     // store plain. Typed on RootSlot so a coloured write cannot be spelled (see Barrier.cpp).

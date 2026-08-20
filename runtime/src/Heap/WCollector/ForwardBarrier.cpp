@@ -211,28 +211,14 @@ BaseObject* ForwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field)
 void ForwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
     CHECK(!Heap::IsHeapAddress(dst));
-    if (obj != nullptr) {
-        obj->ForEachRefInStruct(
-            [this, obj](RefField<false>& field) {
-                BaseObject* target = ReadReference(obj, field);
-                (void)target;
-            },
-            src, src + size);
-    }
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    FixupNonHeapStructRefs(dst, obj, src, size);
+    CopyStructPlainToNonHeap(dst, obj, src, size);
 }
 
 void ForwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
     CHECK(!Heap::IsHeapAddress(src));
     CHECK(!Heap::IsHeapAddress(dst));
-    gctib.ForEachBitmapWord(src, [=](RefField<>& srcField) {
-        BaseObject* target = ReadReference(nullptr, srcField);
-        (void)target;
-    });
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+    CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
 }
 
 BaseObject* ForwardBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
@@ -332,6 +318,10 @@ bool ForwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>
 void ForwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                      MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
