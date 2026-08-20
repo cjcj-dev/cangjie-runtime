@@ -14,6 +14,7 @@
 #include "Common/BaseObject.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/RegionSpace.h"
+#include "Heap/Barrier/RememberedSet.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Heap.h"
@@ -23,10 +24,12 @@ namespace MapleRuntime {
 namespace SurvNodeDiag {
 namespace {
 
-constexpr size_t kWriteSlots = 1u << 20;
+constexpr size_t kWriteSlots = 1u << 21;
 constexpr size_t kWriteMask = kWriteSlots - 1;
 constexpr size_t kPaintSlots = 1u << 18;
 constexpr size_t kPaintMask = kPaintSlots - 1;
+constexpr size_t kFollowSlots = 1u << 20;
+constexpr size_t kFollowMask = kFollowSlots - 1;
 constexpr size_t kClearRing = 256;
 
 struct WriteRec {
@@ -58,13 +61,22 @@ struct ClearRec {
     uint8_t genOld = 0;
 };
 
+struct FollowRec {
+    std::atomic<uintptr_t> holder{ 0 };
+    std::atomic<uint32_t> gcCount{ 0 };
+    std::atomic<uint8_t> action{ 0 };
+};
+
 WriteRec g_writes[kWriteSlots];
+WriteRec g_visits[kWriteSlots];
 PaintRec g_paints[kPaintSlots];
+FollowRec g_follows[kFollowSlots];
 ClearRec g_clears[kClearRing];
 std::atomic<uint64_t> g_clearHead{ 0 };
 
 std::atomic<uint64_t> g_storeSeen{ 0 };
 std::atomic<uint64_t> g_storeFromUnmarked{ 0 };
+std::atomic<uint64_t> g_storeDuringTrace{ 0 };
 std::atomic<uint64_t> g_paintSeen{ 0 };
 std::atomic<uint64_t> g_clearSeen{ 0 };
 std::atomic<uint64_t> g_deadLookupHit{ 0 };
@@ -81,11 +93,19 @@ std::atomic<uint64_t> g_deadVisitHit{ 0 };
 std::atomic<uint64_t> g_deadVisitMiss{ 0 };
 std::atomic<uint64_t> g_deadVisitPush{ 0 };
 std::atomic<uint64_t> g_deadVisitSkipMarked{ 0 };
+std::atomic<uint64_t> g_followScan{ 0 };
+std::atomic<uint64_t> g_followSkipMarked{ 0 };
+std::atomic<uint64_t> g_followSkipGate{ 0 };
+std::atomic<uint64_t> g_deadFollowScan{ 0 };
+std::atomic<uint64_t> g_deadFollowSkipMarked{ 0 };
+std::atomic<uint64_t> g_deadFollowMiss{ 0 };
+std::atomic<uint64_t> g_deadRemsetHit{ 0 };
 
 size_t WriteIndex(uintptr_t slot) { return static_cast<size_t>((slot >> 3) & kWriteMask); }
 size_t PaintIndex(uintptr_t obj) { return static_cast<size_t>((obj >> 4) & kPaintMask); }
+size_t FollowIndex(uintptr_t holder) { return static_cast<size_t>((holder >> 4) & kFollowMask); }
 
-    const char* SiteName(uint8_t site)
+const char* SiteName(uint8_t site)
 {
     switch (site) {
         case STORE_WRITE_REF: return "WriteReference";
@@ -99,6 +119,16 @@ size_t PaintIndex(uintptr_t obj) { return static_cast<size_t>((obj >> 4) & kPain
         case 0x43: return "TraceSkipGate";
         case 0x44: return "TraceSkipStale";
         default: return "?";
+    }
+}
+
+const char* FollowName(uint8_t action)
+{
+    switch (action) {
+        case FOLLOW_SCAN: return "scan";
+        case FOLLOW_SKIP_MARKED: return "skipMarked";
+        case FOLLOW_SKIP_GATE: return "skipGate";
+        default: return "-";
     }
 }
 
@@ -131,10 +161,20 @@ void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site)
     if (neu == nullptr || !Heap::IsHeapAddress(neu)) {
         return;
     }
+    if (RegionSpace::IsMarkedObject<Generation::Old>(neu)) {
+        return;
+    }
     RegionInfo* region = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(neu));
-    if (region == nullptr ||
-        !(region->IsFromRegion() || region->IsLoneFromRegion() || region->IsUnmovableFromRegion()) ||
-        RegionSpace::IsMarkedObject<Generation::Old>(neu)) {
+    if (region == nullptr || region->IsFreeRegion() || region->IsGarbageRegion()) {
+        return;
+    }
+    const uint8_t phase = static_cast<uint8_t>(Heap::GetHeap().GetGCPhase());
+    const bool fromSpace =
+        region->IsFromRegion() || region->IsLoneFromRegion() || region->IsUnmovableFromRegion();
+    const bool duringTrace =
+        phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER || phase == GC_PHASE_ENUM;
+    // LEAD-NOTE U1: TRACE-window stores of unmarked heap targets, not only from-space.
+    if (!fromSpace && !duringTrace) {
         return;
     }
     const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(slot);
@@ -142,11 +182,16 @@ void NoteStore(const void* slot, BaseObject* pre, BaseObject* neu, uint8_t site)
     rec.neu.store(reinterpret_cast<uintptr_t>(neu), std::memory_order_relaxed);
     rec.pre.store(reinterpret_cast<uintptr_t>(pre), std::memory_order_relaxed);
     rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
-    rec.phase.store(static_cast<uint8_t>(Heap::GetHeap().GetGCPhase()), std::memory_order_relaxed);
+    rec.phase.store(phase, std::memory_order_relaxed);
     rec.site.store(site, std::memory_order_relaxed);
     rec.slot.store(slotAddr, std::memory_order_release);
     g_storeSeen.fetch_add(1, std::memory_order_relaxed);
-    g_storeFromUnmarked.fetch_add(1, std::memory_order_relaxed);
+    if (fromSpace) {
+        g_storeFromUnmarked.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (duringTrace) {
+        g_storeDuringTrace.fetch_add(1, std::memory_order_relaxed);
+    }
 }
 
 void NotePaint(BaseObject* obj, RegionInfo* region)
@@ -180,7 +225,7 @@ void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action)
         return;
     }
     const uintptr_t slotAddr = reinterpret_cast<uintptr_t>(slot);
-    WriteRec& rec = g_writes[WriteIndex(slotAddr)];
+    WriteRec& rec = g_visits[WriteIndex(slotAddr)];
     rec.neu.store(reinterpret_cast<uintptr_t>(target), std::memory_order_relaxed);
     rec.pre.store(0, std::memory_order_relaxed);
     rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
@@ -193,6 +238,29 @@ void NoteTraceVisit(const void* slot, BaseObject* target, uint8_t action)
         g_traceSkipMarked.fetch_add(1, std::memory_order_relaxed);
     } else {
         g_traceSkipGate.fetch_add(1, std::memory_order_relaxed);
+    }
+}
+
+void NoteFollowHolder(BaseObject* holder, uint8_t action)
+{
+    if (!Enabled() || holder == nullptr) {
+        return;
+    }
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(holder);
+    FollowRec& rec = g_follows[FollowIndex(addr)];
+    if (rec.holder.load(std::memory_order_acquire) == addr &&
+        rec.action.load(std::memory_order_relaxed) == FOLLOW_SKIP_GATE && action == FOLLOW_SKIP_MARKED) {
+        return;
+    }
+    rec.gcCount.store(static_cast<uint32_t>(g_gcCount.load(std::memory_order_relaxed)), std::memory_order_relaxed);
+    rec.action.store(action, std::memory_order_relaxed);
+    rec.holder.store(addr, std::memory_order_release);
+    if (action == FOLLOW_SCAN) {
+        g_followScan.fetch_add(1, std::memory_order_relaxed);
+    } else if (action == FOLLOW_SKIP_MARKED) {
+        g_followSkipMarked.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_followSkipGate.fetch_add(1, std::memory_order_relaxed);
     }
 }
 
@@ -245,14 +313,7 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
         writeGc = wrec.gcCount.load(std::memory_order_relaxed);
         neu = wrec.neu.load(std::memory_order_relaxed);
         pre = wrec.pre.load(std::memory_order_relaxed);
-        if ((site & 0x40u) != 0) {
-            g_deadVisitHit.fetch_add(1, std::memory_order_relaxed);
-            if (site == 0x41) {
-                g_deadVisitPush.fetch_add(1, std::memory_order_relaxed);
-            } else if (site == 0x42) {
-                g_deadVisitSkipMarked.fetch_add(1, std::memory_order_relaxed);
-            }
-        } else if (PhaseAfterTrace(phase)) {
+        if (PhaseAfterTrace(phase)) {
             g_deadWriteAfterTrace.fetch_add(1, std::memory_order_relaxed);
         } else if (phase == GC_PHASE_TRACE || phase == GC_PHASE_CLEAR_SATB_BUFFER || phase == GC_PHASE_ENUM) {
             g_deadWriteDuringTrace.fetch_add(1, std::memory_order_relaxed);
@@ -261,7 +322,42 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
         }
     } else {
         g_deadLookupMiss.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    WriteRec& vrec = g_visits[WriteIndex(slotAddr)];
+    const bool visitHit = vrec.slot.load(std::memory_order_acquire) == slotAddr;
+    uint8_t visitSite = 0;
+    if (visitHit) {
+        g_deadVisitHit.fetch_add(1, std::memory_order_relaxed);
+        visitSite = vrec.site.load(std::memory_order_relaxed);
+        if (visitSite == 0x41) {
+            g_deadVisitPush.fetch_add(1, std::memory_order_relaxed);
+        } else if (visitSite == 0x42) {
+            g_deadVisitSkipMarked.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
         g_deadVisitMiss.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const uintptr_t holderAddr = reinterpret_cast<uintptr_t>(holder);
+    FollowRec& frec = g_follows[FollowIndex(holderAddr)];
+    const bool followHit = frec.holder.load(std::memory_order_acquire) == holderAddr;
+    uint8_t followAction = 0;
+    if (followHit) {
+        followAction = frec.action.load(std::memory_order_relaxed);
+        if (followAction == FOLLOW_SCAN) {
+            g_deadFollowScan.fetch_add(1, std::memory_order_relaxed);
+        } else if (followAction == FOLLOW_SKIP_MARKED) {
+            g_deadFollowSkipMarked.fetch_add(1, std::memory_order_relaxed);
+        }
+    } else {
+        g_deadFollowMiss.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const unsigned remsetHit =
+        slot == nullptr ? 0u : (Heap::GetHeap().GetRememberedSet().Contains(slotAddr) ? 1u : 0u);
+    if (remsetHit != 0) {
+        g_deadRemsetHit.fetch_add(1, std::memory_order_relaxed);
     }
 
     const uintptr_t tgtAddr = reinterpret_cast<uintptr_t>(target);
@@ -306,12 +402,15 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
     LOG(RTLOG_ERROR,
         "[GCV2][survnode] DEAD_SLOT holder=%p slot=%p target=%p "
         "writeHit=%u writePhase=%s writeSite=%s writeGc=%u neu=%p pre=%p "
+        "visitHit=%u visitSite=%s followHit=%u follow=%s remset=%u "
         "paintHit=%u paintedThisCycle=%u paintGc=%u paintLiveInfo=%p paintEpoch=%llu "
         "liveInfoNow=%p markedNow=%u "
         "clearHit=%u clearSite=%s clearPhase=%s clearGc=%u clearEpoch=%llu clearBumped=%u",
         holder, slot, target, static_cast<unsigned>(writeHit),
         writeHit ? Collector::GetGCPhaseName(static_cast<GCPhase>(phase)) : "-", writeHit ? SiteName(site) : "-",
-        writeGc, reinterpret_cast<void*>(neu), reinterpret_cast<void*>(pre), static_cast<unsigned>(paintHit),
+        writeGc, reinterpret_cast<void*>(neu), reinterpret_cast<void*>(pre), static_cast<unsigned>(visitHit),
+        visitHit ? SiteName(visitSite) : "-", static_cast<unsigned>(followHit),
+        followHit ? FollowName(followAction) : "-", remsetHit, static_cast<unsigned>(paintHit),
         static_cast<unsigned>(paintedThisCycle), paintHit ? prec.gcCount.load(std::memory_order_relaxed) : 0u,
         paintHit ? reinterpret_cast<void*>(prec.liveInfo.load(std::memory_order_relaxed)) : nullptr,
         paintHit ? static_cast<unsigned long long>(prec.epoch.load(std::memory_order_relaxed)) : 0ULL, liveNow,
@@ -326,18 +425,25 @@ void ReportAtMarkEnd(const char* point)
         return;
     }
     LOG(RTLOG_ERROR,
-        "[GCV2][survnode] point=%s storeSeen=%llu storeFromUnmarked=%llu paintSeen=%llu clearSeen=%llu "
+        "[GCV2][survnode] point=%s storeSeen=%llu storeFromUnmarked=%llu storeDuringTrace=%llu "
+        "paintSeen=%llu clearSeen=%llu "
         "tracePush=%llu traceSkipMarked=%llu traceSkipGate=%llu "
+        "followScan=%llu followSkipMarked=%llu followSkipGate=%llu "
         "deadWriteHit=%llu deadWriteMiss=%llu deadWriteAfterTrace=%llu deadWriteDuringTrace=%llu "
         "deadWriteIdle=%llu deadVisitHit=%llu deadVisitMiss=%llu deadVisitPush=%llu deadVisitSkipMarked=%llu "
+        "deadFollowScan=%llu deadFollowSkipMarked=%llu deadFollowMiss=%llu deadRemsetHit=%llu "
         "deadPaintedThenClear=%llu deadNeverPainted=%llu",
         point == nullptr ? "?" : point, static_cast<unsigned long long>(g_storeSeen.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_storeFromUnmarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_storeDuringTrace.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_paintSeen.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_clearSeen.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_tracePush.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_traceSkipMarked.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_traceSkipGate.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_followScan.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_followSkipMarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_followSkipGate.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadLookupHit.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadLookupMiss.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadWriteAfterTrace.load(std::memory_order_relaxed)),
@@ -347,6 +453,10 @@ void ReportAtMarkEnd(const char* point)
         static_cast<unsigned long long>(g_deadVisitMiss.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadVisitPush.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadVisitSkipMarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadFollowScan.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadFollowSkipMarked.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadFollowMiss.load(std::memory_order_relaxed)),
+        static_cast<unsigned long long>(g_deadRemsetHit.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadPaintedThenClear.load(std::memory_order_relaxed)),
         static_cast<unsigned long long>(g_deadNeverPainted.load(std::memory_order_relaxed)));
 }
