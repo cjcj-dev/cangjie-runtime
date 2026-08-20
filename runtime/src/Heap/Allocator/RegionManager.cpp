@@ -1466,14 +1466,15 @@ size_t RegionManager::ExemptFromRegions()
     for (RegionInfo* fromRegion : snapshot) {
         size_t liveBytes = fromRegion->GetLiveByteCount();
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
-        // zGeneration.cpp:216-221 register_empty_page iff !is_marked
-        // (zPage.inline.hpp:223-225 livemap.seqnum == generation.seqnum).
-        // oldroots2 CsetEmptyWho SD256 N=5 (VisitHeapReferences + uncolor_bits
-        // + derived): keep pages still NONE≈99.97% (derivedSeen=0 STACK=0
-        // STATIC=0 EXTRA=0 YOUNG=0; holdersVisited≈54–65M). Residual headers
-        // have no incoming edge from roots/heap. Free ke || dead-from-copy ||
-        // unmarked residual (marked==0 after this cycle's old TRACE). Keep
-        // pages whose residual objects were marked (liveBits without liveBytes).
+        // zGeneration.cpp:216-221 register_empty_page iff !is_marked — sound
+        // only because ZGC mark is complete (zPage.inline.hpp:223-225). Ours
+        // is not: oldroots2 CsetEmptyWho (VisitHeapReferences + uncolor_bits +
+        // derived) still NONE≈99.97% (derivedSeen=0). Freeing unmarked residual
+        // dropped keep to 0 but SD256 N=6: 1×SEGV si_addr=0x8 trace_phase +
+        // 1×checksum drift. Reverted. Bare liveBytes==0 mixes two classes:
+        //   (1) dead from-copies — residual headers all FORWARDED.
+        //   (2) unmarked residual — no incoming edge we can name, but mutator
+        //       still observes them (SEGV/drift). Keep (2) for the selector.
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
@@ -1508,8 +1509,7 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool unmarkedResidual = residual != 0 && marked == 0;
-            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
+            const bool freeEmpty = (ke != 0) || deadFromCopy;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
