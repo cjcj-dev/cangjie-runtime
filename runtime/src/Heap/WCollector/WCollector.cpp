@@ -1968,6 +1968,63 @@ void WCollector::PreforwardAllResurrectExportFromObjects()
         resurrectedExportObjectes.insert(tmp.begin(), tmp.end());
     }
 }
+void WCollector::SeedOldMarkFromYoungSurvivors(WorkStack& workStack)
+{
+    // Nested young (DoYoungGarbageCollection) traces only young targets
+    // (TraceYoungClosure skips !IsYoungRegion). ZGC overlapping mark paints
+    // whichever generation the stored address lives in
+    // (zBarrier.inline.hpp:742-749 mark()). Seed old objects named by the
+    // remaining young survivors so old TRACE sees those young→old edges.
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
+    RegionManager& manager = space.GetRegionManager();
+    size_t holders = 0;
+    size_t seeded = 0;
+    auto seedFrom = [this, &workStack, &holders, &seeded](RegionInfo* region) {
+        if (region == nullptr || !region->IsYoungRegion() || region->IsFreeRegion() ||
+            region->IsGarbageRegion()) {
+            return;
+        }
+        ++holders;
+        region->VisitAllObjects([this, &workStack, &seeded](BaseObject* obj) {
+            if (obj == nullptr || !obj->HasRefField() || obj->IsWeakRef()) {
+                return;
+            }
+            if (!Collector::PlausibleManagedObjectGate("SeedOldMarkFromYoungSurvivors.holder", obj)) {
+                return;
+            }
+            obj->ForEachRefField([this, &workStack, &seeded, obj](RefField<>& field) {
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                if (!Collector::PlausibleManagedObjectGate("SeedOldMarkFromYoungSurvivors.target",
+                                                           target)) {
+                    BaseObject* host = Collector::TryRecoverInteriorBase(target);
+                    if (host == nullptr || host == target) {
+                        return;
+                    }
+                    target = host;
+                }
+                RegionInfo* tr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(target));
+                if (tr == nullptr || tr->IsYoungRegion() || tr->IsFreeRegion() ||
+                    tr->IsGarbageRegion()) {
+                    return;
+                }
+                if (IsMarkedObject<Generation::Old>(target)) {
+                    return;
+                }
+                workStack.push_back(target);
+                ++seeded;
+            });
+        });
+    };
+    manager.VisitAllManagedRegionsForProbe([&seedFrom](RegionInfo* region, const char*) {
+        seedFrom(region);
+    });
+    LOG(RTLOG_ERROR, "[WHODEAD][oldseed] youngHolders=%zu oldSeeded=%zu stack=%zu", holders, seeded,
+        workStack.size());
+}
+
 void WCollector::TraceHeap()
 {
     WorkStack workStack = NewWorkStack();
@@ -2058,6 +2115,7 @@ void WCollector::TraceHeap()
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         }
         reinterpret_cast<RegionSpace&>(theAllocator).PrepareTrace();
+        SeedOldMarkFromYoungSurvivors(workStack);
         DoTracing(workStack, foreignStack);
 
         ProcessFinalizers();
