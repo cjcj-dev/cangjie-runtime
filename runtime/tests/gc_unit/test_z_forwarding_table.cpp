@@ -66,11 +66,11 @@ GC_TEST(ZForwarding, AttachedArraySitsAfterObject)
     fwd->Destroy();
 }
 
-GC_TEST(ZForwardingTable, kZfwdTableConsumeDefaultOff)
+GC_TEST(ZForwardingTable, kZfwdTableConsumeOn)
 {
-    static_assert(!ForwardingTable::kZfwdTableConsume,
-                  "step ① queries still trust the old path (PORT_ZFORWARDING.md §六)");
-    GC_EXPECT_FALSE(ForwardingTable::kZfwdTableConsume);
+    static_assert(ForwardingTable::kZfwdTableConsume,
+                  "step ② IsFromObject consumes ZForwardingTable::get (PORT_ZFORWARDING.md §六)");
+    GC_EXPECT_TRUE(ForwardingTable::kZfwdTableConsume);
 }
 
 GC_TEST(ZForwardingTable, MembershipUnlinkKeepsEntries)

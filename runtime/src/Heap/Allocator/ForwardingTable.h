@@ -30,9 +30,10 @@ public:
     // Unarmed regions still use geometry (transition). zForwarding.inline.hpp:248-252.
     static constexpr bool kEntriesSoleWhenArmed = true;
     // PORT_ZFORWARDING step ②: IsFromObject / membership consume the table.
-    // Default false — product still trusts the region-type path. Flip only when
-    // NoteCompare agree rate is 100% (or every disagree is a legacy defect).
-    static constexpr bool kZfwdTableConsume = false;
+    // Disagreements vs region-type are legacyOnly at FROM/UNMOVABLE_FROM after
+    // Dispel unlinked membership — old path reading a type that has moved.
+    // tableOnly is the other old-path miss (type not yet FROM while table is).
+    static constexpr bool kZfwdTableConsume = true;
 
     enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
 
