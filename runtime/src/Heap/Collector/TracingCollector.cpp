@@ -35,6 +35,28 @@ SkippedStackMapCounts g_skippedStackMapCounts;
 SkippedStackMapCounts g_rootMapMissCounts;
 thread_local size_t g_currentThreadRootMapMissCount = 0;
 
+// ZMark::_ncontinue (zMark.cpp:975-981): how many times the mark-end pause found
+// SATB work the concurrent termination test had already declared absent. Always
+// on and always reported, because a zero has to be readable as "the pre-pause test
+// was right every time" rather than as "nobody is counting".
+std::atomic<size_t> g_markTerminateContinue{ 0 };
+std::atomic<size_t> g_markTerminatePauses{ 0 };
+std::atomic<bool> g_markTerminateAtexitInstalled{ false };
+
+// A zero ncontinue is a real and expected result -- it means every concurrent
+// termination test was already right. It is only readable next to the pause count,
+// which proves the pause ran at all.
+void ReportMarkTerminateContinue()
+{
+    if (!g_markTerminateAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
+        (void)std::atexit([]() {
+            LOG(RTLOG_ERROR, "[GCV2][markterm] atexit pauses=%zu ncontinue=%zu",
+                g_markTerminatePauses.load(std::memory_order_relaxed),
+                g_markTerminateContinue.load(std::memory_order_relaxed));
+        });
+    }
+}
+
 const bool STRICT_STACKMAP_ENABLED = []() {
     const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GC_STRICT_STACKMAP */;
     return value != nullptr && std::strcmp(value, "1") == 0;
@@ -861,12 +883,51 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
         }
         visitSatbObj();
-        if (workStack.empty()) {
+        if (!workStack.empty()) {
+            continue;
+        }
+        // Publish CLEAR_SATB so mutators stop treating this as plain TRACE. This is a
+        // handshake, not a pause, so it can never be the termination test: a mutator
+        // that has already acknowledged it runs on and may enqueue again.
+        if (Heap::GetHeap().GetGCPhase() != GCPhase::GC_PHASE_CLEAR_SATB_BUFFER) {
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
+            if (!workStack.empty()) {
+                continue;
+            }
         }
-    } while (!workStack.empty());
+        // ZMark::end -> try_end (zMark.cpp:940-971) makes the termination decision from
+        // inside the ZMarkEnd VM operation -- that is, with the Java threads already
+        // stopped -- flushes the threads it can still reach, and only then tests for
+        // emptiness. If anything turns up it returns false, _ncontinue++, and the whole
+        // concurrent mark resumes (zMark.cpp:975-989).
+        //
+        // Deciding this while mutators run cannot be repaired by draining again. A
+        // record pushed into a mutator's own node after that mutator flushed sits in a
+        // node that is not full, so EnsureGoodNode never retires it and no number of
+        // GetRetiredObjects passes can see it. The record is a deletion barrier's
+        // pre-value, so losing it leaves a still-reachable object unmarked -- and an
+        // unmarked live object is exactly what makes its region look empty.
+        bool terminated = false;
+        {
+            ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
+            g_markTerminatePauses.fetch_add(1, std::memory_order_relaxed);
+            MutatorManager::Instance().VisitAllMutators([](Mutator& mutator) { mutator.FlushSatbBuffer(); });
+            visitSatbObj();
+            terminated = workStack.empty();
+        }
+        if (terminated) {
+            break;
+        }
+        // ZMark::_ncontinue: the pause found work the concurrent phase had declared
+        // absent. Report it -- a non-zero here is the direct measurement of records
+        // the pre-pause termination test used to drop.
+        const size_t nContinue = g_markTerminateContinue.fetch_add(1, std::memory_order_relaxed) + 1;
+        LOG(RTLOG_ERROR, "[GCV2][markterm] pause found unflushed SATB work: ncontinue=%zu stack=%zu", nContinue,
+            workStack.size());
+    } while (true);
     SatbBuffer::ReportCarryProbe();
+    ReportMarkTerminateContinue();
     return true;
 }
 

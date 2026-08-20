@@ -559,6 +559,19 @@ public:
     // flushes before Census; peek still covers a node that HandleGCPhase missed.
     SatbBuffer::Node* PeekSatbNode() const { return satbNode; }
 
+    // Hand this mutator's in-flight SATB node over unconditionally.
+    // ZMark::flush(Thread*) (zMark.cpp:998-1006) is what the mark-termination
+    // handshake calls on every thread, and it does not ask whether that thread
+    // already ran a phase transition. HandleGCPhase(CLEAR_SATB_BUFFER) is not a
+    // substitute: EnsurePhaseTransition (MutatorManager.cpp:806-811) erases any
+    // mutator already parked in the target phase without re-running the handler,
+    // so a second transition to the same phase flushes nobody.
+    void FlushSatbBuffer()
+    {
+        std::lock_guard<std::mutex> lg(mutatorLock);
+        SatbBuffer::Instance().FlushQueue(satbNode);
+    }
+
 protected:
     // for managed stack
     void VisitStackRoots(const RootVisitor& func);
