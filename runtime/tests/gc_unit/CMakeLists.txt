@@ -38,6 +38,7 @@ set(GC_UNIT_SOURCES
     test_expire_kept.cpp
     test_exempt_unlock.cpp
     test_heal_coverage.cpp
+    test_diag_gate.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
