@@ -41,6 +41,9 @@
 // Gate: MRT_GCV2_MARKCOMPLETE=1 or MRT_GCV2_DIAG token "markcomplete".  Default off,
 // and the product path early-returns before any counter or STW.
 // Fail-closed variant: MRT_GCV2_MARKCOMPLETE_FATAL=1 (report-only otherwise).
+// Nested deadInterior census: MRT_GCV2_MARKCOMPLETE_INTEDGE=1 / token "intedge"
+// (no-op unless MARKCOMPLETE is already on). Observation only; does not change
+// the okInteriorBase exemption or the deadFrom arm.
 
 namespace MapleRuntime {
 

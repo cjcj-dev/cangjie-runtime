@@ -9,6 +9,8 @@
 #include <array>
 #include <atomic>
 #include <cstdint>
+#include <unordered_map>
+#include <vector>
 
 #include "Base/Log.h"
 #include "Base/LogFile.h"
@@ -19,8 +21,10 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/InteriorEdgeClass.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Mutator/MutatorManager.h"
+#include "ObjectModel/MArray.h"
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"
 
@@ -63,6 +67,18 @@ struct Stats {
     size_t deadInOther = 0;
     size_t deadNoRegion = 0;
     size_t deadInterior = 0;
+    // Nested intedge census (MRT_GCV2_MARKCOMPLETE_INTEDGE). Sum of the four
+    // equals deadInterior when the nested gate is on; stays 0 when it is off
+    // so a parser that subtracts them from deadInterior cannot invent a drop
+    // on the deadFrom arm. Survnode reads deadFrom; these columns must not
+    // move it.
+    size_t deadIntSlotNotRef = 0;
+    size_t deadIntRecoverFail = 0;
+    size_t deadIntBaseUnmarked = 0;
+    size_t deadIntValueCorrupt = 0;
+
+    std::unordered_map<RegionInfo*, std::vector<std::pair<uintptr_t, size_t>>> streamIndex;
+    std::unordered_map<RegionInfo*, unsigned> streamTruncated;
 
     // Root arm (ZVerify::roots_strong, zVerify.cpp:496-499).
     size_t rootsSeen = 0;
@@ -239,6 +255,9 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
         targetSnapEpoch, static_cast<unsigned>(knownEmpty), stats.deadTarget);
 }
 
+void AccountInteriorKind(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field,
+                         BaseObject* target, RegionInfo* region, BaseObject* recovered);
+
 // One edge out of a live old holder.  Mirrors z_verify_old_oop (zVerify.cpp:131-155):
 // the target must be marked old, except for the cases ZGC also exempts.
 void CheckEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field)
@@ -281,6 +300,7 @@ void CheckEdge(Stats& stats, size_t maxSamples, const char* point, BaseObject* h
         }
         ++stats.deadTarget;
         ++stats.deadInterior;
+        AccountInteriorKind(stats, maxSamples, point, holder, field, target, region, base);
         ReportDeadEdge(stats, maxSamples, point, holder, field, target, region, false);
         return;
     }
@@ -428,6 +448,207 @@ bool FatalOnFailure()
     return on;
 }
 
+// Nested census of deadInterior. Off unless MARKCOMPLETE is already on AND
+// MRT_GCV2_MARKCOMPLETE_INTEDGE=1 / token "intedge". Size-walk and GCTib
+// lookup only run on the deadInterior arm, so deadFrom is untouched.
+bool IntedgeEnabled()
+{
+    static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE_INTEDGE", "intedge");
+    return on;
+}
+
+bool GctibBitIsRef(GCTib gcTib, size_t wordIndex)
+{
+    if (gcTib.IsGCTibWord()) {
+        ArchUInt gcInfo = gcTib.bitmap.bitmap & (~SIGN_BIT);
+        return ((gcInfo >> wordIndex) & 1u) != 0;
+    }
+    StdGCTib* large = gcTib.gctib;
+    if (large == nullptr) {
+        return false;
+    }
+    const size_t byteIndex = wordIndex / 8u;
+    if (byteIndex >= large->nBitmapWords) {
+        return false;
+    }
+    const U8 bit = static_cast<U8>(1u << (wordIndex % 8u));
+    return (large->bitmapWords[byteIndex] & bit) != 0;
+}
+
+// Independent of ForEachRefField: ask the TypeInfo bitmap whether this
+// payload word is a reference. ForEachRefField is how the verifier arrived;
+// a false here is the SlotNotRef case (non-ref word walked as a ref).
+bool HolderFieldIsRef(BaseObject* holder, RefField<>& field)
+{
+    if (holder == nullptr) {
+        return false;
+    }
+    TypeInfo* tip = holder->GetTypeInfo();
+    if (tip == nullptr || !Collector::PlausibleManagedObjectGate("MarkCompleteVerify.intedge.holderTip", holder)) {
+        return false;
+    }
+    const intptr_t off = BaseObject::FieldOffset(holder, &field);
+    if (off < 0) {
+        return false;
+    }
+    const size_t uoff = static_cast<size_t>(off);
+    if (tip->IsRawArray()) {
+        auto* arr = reinterpret_cast<MArray*>(holder);
+        TypeInfo* component = arr->GetComponentTypeInfo();
+        if (component == nullptr) {
+            return false;
+        }
+        const size_t contentOff = sizeof(MArray);
+        if (uoff < contentOff) {
+            return false;
+        }
+        if (component->IsRef()) {
+            return ((uoff - contentOff) % sizeof(HeapSlot<>)) == 0;
+        }
+        if (!component->IsStructType() || !component->HasRefField()) {
+            return false;
+        }
+        // Struct elements have no TypeInfo header. ForEachElementInArray
+        // (BaseObject.cpp:109-115) feeds GCTib the element origin, so bit 0 is
+        // the first word of the struct, not origin+TYPEINFO_PTR_SIZE.
+        const size_t elemSize = component->GetComponentSize();
+        if (elemSize == 0) {
+            return false;
+        }
+        const size_t inElem = (uoff - contentOff) % elemSize;
+        if ((inElem % sizeof(HeapSlot<>)) != 0) {
+            return false;
+        }
+        return GctibBitIsRef(component->GetGCTib(), inElem / sizeof(HeapSlot<>));
+    }
+    if (uoff < TYPEINFO_PTR_SIZE) {
+        return false;
+    }
+    if (!tip->HasRefField()) {
+        return false;
+    }
+    return GctibBitIsRef(tip->GetGCTib(), (uoff - TYPEINFO_PTR_SIZE) / sizeof(HeapSlot<>));
+}
+
+unsigned EnsureStreamIndex(Stats& stats, RegionInfo* region)
+{
+    if (region == nullptr) {
+        return 1u;
+    }
+    auto found = stats.streamTruncated.find(region);
+    if (found != stats.streamTruncated.end()) {
+        return found->second;
+    }
+    std::vector<std::pair<uintptr_t, size_t>> starts;
+    unsigned truncated = 0;
+    if (region->IsLargeRegion()) {
+        BaseObject* obj = from_region_addr(region->GetRegionStart());
+        if (Collector::PlausibleManagedObjectGate("MarkCompleteVerify.intedge.stream", obj)) {
+            const size_t sz = RegionSpace::GetAllocSize(*obj);
+            if (sz != 0) {
+                starts.emplace_back(region->GetRegionStart(), sz);
+            } else {
+                truncated = 1u;
+            }
+        } else {
+            truncated = 1u;
+        }
+    } else if (region->IsSmallRegion()) {
+        uintptr_t pos = region->GetRegionStart();
+        const uintptr_t alloc = region->GetRegionAllocPtr();
+        while (pos < alloc) {
+            BaseObject* obj = from_region_addr(pos);
+            if (!Collector::PlausibleManagedObjectGate("MarkCompleteVerify.intedge.stream", obj)) {
+                truncated = 1u;
+                break;
+            }
+            const size_t sz = RegionSpace::GetAllocSize(*obj);
+            if (sz == 0) {
+                truncated = 1u;
+                break;
+            }
+            starts.emplace_back(pos, sz);
+            pos += sz;
+        }
+        if (pos < alloc) {
+            truncated = 1u;
+        }
+    } else {
+        truncated = 1u;
+    }
+    stats.streamIndex[region] = std::move(starts);
+    stats.streamTruncated[region] = truncated;
+    return truncated;
+}
+
+BaseObject* FindContainingObject(Stats& stats, RegionInfo* region, BaseObject* target)
+{
+    if (region == nullptr || target == nullptr) {
+        return nullptr;
+    }
+    (void)EnsureStreamIndex(stats, region);
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(target);
+    const auto& starts = stats.streamIndex[region];
+    for (const auto& entry : starts) {
+        if (addr >= entry.first && addr < entry.first + entry.second) {
+            return from_region_addr(entry.first);
+        }
+    }
+    return nullptr;
+}
+
+void AccountInteriorKind(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field,
+                         BaseObject* target, RegionInfo* region, BaseObject* recovered)
+{
+    if (!IntedgeEnabled()) {
+        return;
+    }
+    const bool slotIsRef = HolderFieldIsRef(holder, field);
+    BaseObject* contain = FindContainingObject(stats, region, target);
+    const bool inStream = contain != nullptr && contain != target;
+    const bool containLive = inStream && IsLiveOld(contain);
+    const bool recoverFound = recovered != nullptr && recovered != target;
+    const bool recoverLive = recoverFound && IsLiveOld(recovered);
+    const bool walkTruncated = EnsureStreamIndex(stats, region) != 0 && !inStream;
+    const InteriorEdgeClass::Kind kind =
+        InteriorEdgeClass::Classify(slotIsRef, inStream, containLive, recoverFound, recoverLive, walkTruncated);
+    switch (kind) {
+        case InteriorEdgeClass::Kind::SlotNotRef:
+            ++stats.deadIntSlotNotRef;
+            break;
+        case InteriorEdgeClass::Kind::RecoverFail:
+            ++stats.deadIntRecoverFail;
+            break;
+        case InteriorEdgeClass::Kind::BaseUnmarked:
+            ++stats.deadIntBaseUnmarked;
+            break;
+        case InteriorEdgeClass::Kind::ValueCorrupt:
+            ++stats.deadIntValueCorrupt;
+            break;
+    }
+    if (stats.deadInterior > maxSamples) {
+        return;
+    }
+    const unsigned containMarked = contain != nullptr && RegionSpace::IsMarkedObject<Generation::Old>(contain) ? 1u : 0u;
+    TypeInfo* containTip = contain == nullptr ? nullptr : contain->GetTypeInfo();
+    const char* containType = (containTip == nullptr || containTip->GetName() == nullptr) ? "?" : containTip->GetName();
+    const zpointer rawSlot = field.GetFieldValue();
+    const uintptr_t containOff =
+        contain == nullptr ? 0u : reinterpret_cast<uintptr_t>(target) - reinterpret_cast<uintptr_t>(contain);
+    LOG(RTLOG_ERROR,
+        "[GCV2][markcomplete] DEAD_INTERIOR point=%s kind=%s slotRaw=%p slotIsRef=%u "
+        "inStream=%u contain=%p containOff=%zu containType=%s containMarked=%u containLive=%u "
+        "recover=%p recoverFound=%u recoverLive=%u walkTruncated=%u "
+        "holder=%p fieldOffset=%zd target=%p regionBase=%p n=%zu",
+        point == nullptr ? "?" : point, InteriorEdgeClass::KindName(kind),
+        reinterpret_cast<void*>(raw(rawSlot)), static_cast<unsigned>(slotIsRef),
+        static_cast<unsigned>(inStream), contain, static_cast<size_t>(containOff), containType, containMarked,
+        static_cast<unsigned>(containLive), recovered, static_cast<unsigned>(recoverFound),
+        static_cast<unsigned>(recoverLive), static_cast<unsigned>(walkTruncated), holder,
+        BaseObject::FieldOffset(holder, &field), target,
+        region == nullptr ? nullptr : reinterpret_cast<void*>(region->GetRegionStart()), stats.deadInterior);
+}
+
 size_t MaxSamples()
 {
     return 64;
@@ -501,7 +722,8 @@ void RunAtMarkEnd(const char* point)
         "deadTarget=%zu deadKnownEmpty=%zu deadWouldFree=%zu deadWouldKeep=%zu deadNotConsidered=%zu "
         "deadFrom=%zu deadGarbage=%zu deadFree=%zu "
         "deadLarge=%zu deadOther=%zu deadNoRegion=%zu deadInterior=%zu "
-        "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu",
+        "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu "
+        "deadIntSlotNotRef=%zu deadIntRecoverFail=%zu deadIntBaseUnmarked=%zu deadIntValueCorrupt=%zu",
         point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
         stats.targetMarked, stats.targetYoung, stats.targetAllocGap, stats.targetInteriorBaseMarked,
         stats.targetNonHeap, stats.targetForwarded, stats.deadTarget, stats.deadTargetKnownEmpty,
@@ -509,7 +731,8 @@ void RunAtMarkEnd(const char* point)
         stats.deadInGarbage,
         stats.deadInFree, stats.deadInLarge, stats.deadInOther, stats.deadNoRegion, stats.deadInterior,
         stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
-        static_cast<unsigned long long>(stats.costNs));
+        static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
+        stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
 
     if (FatalOnFailure() && (stats.deadTarget != 0 || stats.rootDead != 0)) {
         CHECK_DETAIL(false,
