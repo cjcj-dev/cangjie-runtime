@@ -4,7 +4,7 @@
 #include <atomic>
 #include <thread>
 
-#include "Heap/Allocator/ForwardingEntry.h"
+#include "Heap/Collector/ZForwarding.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Verify/MutatorRelocate.h"
 #include "gc_unittest.hpp"

@@ -551,7 +551,7 @@ public:
     // region type is rewritten as relocation progresses, and a predicate reading it can be right
     // one instant and wrong the next -- that shape produced several of this session's dead ends.
     // An address either is in the set or is not.
-    static constexpr bool kMembershipFromTable = false;
+    static constexpr bool kMembershipFromTable = ForwardingTable::kZfwdTableConsume;
 
     bool IsFromObject(BaseObject* obj) const override
     {

@@ -39,6 +39,7 @@
 #include "Heap/Verify/IdleEdgeDiag.h"
 #include "Heap/Verify/O2ORemsetDiag.h"
 #include "Heap/Verify/OffpastDiag.h"
+#include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
@@ -1444,6 +1445,7 @@ size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
 // Sort key = GetLiveByteCount(); stop = relative reclaimable <= kRelocationFragmentationLimitPercent.
 size_t RegionManager::ExemptFromRegions()
 {
+    CsetEmptyWho::BeginCycle();
     (void)ExemptMarkStartAllocatingFromCSet();
     size_t forwardBytes = 0;
     size_t floatingGarbage = 0;
@@ -1466,16 +1468,13 @@ size_t RegionManager::ExemptFromRegions()
         long rawPtrCnt = fromRegion->GetRawPointerObjectCount();
         // zGeneration.cpp:216-221 register_empty_page iff !is_marked — sound
         // only because ZGC mark is complete (zPage.inline.hpp:223-225). Ours
-        // is not: SD256 CSet-empty was 99.8% ke=0 residual=2730–3276 marked=0
-        // (LEAD 05:3x holder page UAF). Bare liveBytes==0 mixes two classes:
-        //   (1) dead from-copies — ResetLiveMapAfterForward left FORWARDED
-        //       residual; next Assemble ClearLiveInfo zeros live + nulls the
-        //       face. These are the 256MB OOM debt (ike-keep keep≈24k).
-        //   (2) unmarked live pages — residual headers are not FORWARDED.
-        //       zPage::is_object_live = is_allocating || live_bit
-        //       (zPage.inline.hpp:254-256): a non-forwarded object on a
-        //       non-allocating page with no this-cycle mark is live.
-        // Free (1) and IsKnownEmpty; keep (2) for the selector.
+        // is not: oldroots2 CsetEmptyWho (VisitHeapReferences + uncolor_bits +
+        // derived) still NONE≈99.97% (derivedSeen=0). Freeing unmarked residual
+        // dropped keep to 0 but SD256 N=6: 1×SEGV si_addr=0x8 trace_phase +
+        // 1×checksum drift. Reverted. Bare liveBytes==0 mixes two classes:
+        //   (1) dead from-copies — residual headers all FORWARDED.
+        //   (2) unmarked residual — no incoming edge we can name, but mutator
+        //       still observes them (SEGV/drift). Keep (2) for the selector.
         static constexpr bool kFreeEmptyAtCSetSelect = true;
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
@@ -1510,7 +1509,12 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             const bool deadFromCopy = residual == residualFwd;
-            const bool freeEmpty = (ke != 0) || deadFromCopy;
+            // zGeneration.cpp:216-221 register_empty_page iff !is_marked.
+            // Held until DrainScope waits copyInflight even at fwdRefCount==0
+            // (LEAD-NOTE 0820 21:1x / PORT_ZFORWARDING step 3). oldroots2
+            // 152ccd59 SEGV+drift was ClearUnits racing a naked mutator ref.
+            const bool unmarkedResidual = residual != 0 && marked == 0;
+            const bool freeEmpty = (ke != 0) || deadFromCopy || unmarkedResidual;
             {
                 static std::atomic<size_t> gCsetEmpty{ 0 };
                 static std::atomic<size_t> gCsetEmptyResidual{ 0 };
@@ -1550,6 +1554,7 @@ size_t RegionManager::ExemptFromRegions()
                 }
             }
             if (!freeEmpty) {
+                CsetEmptyWho::NoteKeep(del, residual, residualFwd, marked);
                 continue;
             }
             RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
