@@ -327,9 +327,11 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
     WriteRec& vrec = g_visits[WriteIndex(slotAddr)];
     const bool visitHit = vrec.slot.load(std::memory_order_acquire) == slotAddr;
     uint8_t visitSite = 0;
+    uintptr_t visitNeu = 0;
     if (visitHit) {
         g_deadVisitHit.fetch_add(1, std::memory_order_relaxed);
         visitSite = vrec.site.load(std::memory_order_relaxed);
+        visitNeu = vrec.neu.load(std::memory_order_relaxed);
         if (visitSite == 0x41) {
             g_deadVisitPush.fetch_add(1, std::memory_order_relaxed);
         } else if (visitSite == 0x42) {
@@ -402,14 +404,16 @@ void ReportOnDeadEdge(BaseObject* holder, void* slot, BaseObject* target, Region
     LOG(RTLOG_ERROR,
         "[GCV2][survnode] DEAD_SLOT holder=%p slot=%p target=%p "
         "writeHit=%u writePhase=%s writeSite=%s writeGc=%u neu=%p pre=%p "
-        "visitHit=%u visitSite=%s followHit=%u follow=%s remset=%u "
+        "visitHit=%u visitSite=%s visitNeu=%p visitSame=%u followHit=%u follow=%s remset=%u "
         "paintHit=%u paintedThisCycle=%u paintGc=%u paintLiveInfo=%p paintEpoch=%llu "
         "liveInfoNow=%p markedNow=%u "
         "clearHit=%u clearSite=%s clearPhase=%s clearGc=%u clearEpoch=%llu clearBumped=%u",
         holder, slot, target, static_cast<unsigned>(writeHit),
         writeHit ? Collector::GetGCPhaseName(static_cast<GCPhase>(phase)) : "-", writeHit ? SiteName(site) : "-",
         writeGc, reinterpret_cast<void*>(neu), reinterpret_cast<void*>(pre), static_cast<unsigned>(visitHit),
-        visitHit ? SiteName(visitSite) : "-", static_cast<unsigned>(followHit),
+        visitHit ? SiteName(visitSite) : "-", reinterpret_cast<void*>(visitNeu),
+        static_cast<unsigned>(visitHit && visitNeu == reinterpret_cast<uintptr_t>(target)),
+        static_cast<unsigned>(followHit),
         followHit ? FollowName(followAction) : "-", remsetHit, static_cast<unsigned>(paintHit),
         static_cast<unsigned>(paintedThisCycle), paintHit ? prec.gcCount.load(std::memory_order_relaxed) : 0u,
         paintHit ? reinterpret_cast<void*>(prec.liveInfo.load(std::memory_order_relaxed)) : nullptr,
