@@ -61,6 +61,15 @@ struct Stats {
     size_t rootsSeen = 0;
     size_t rootDead = 0;
 
+    // Walk-coverage census.  RegionInfo::VisitAllObjects (RegionManager.cpp:648-663)
+    // *breaks* at the first object whose header fails the gate -- "remaining stream
+    // is unwalkable" -- so the heap walk this verifier rides on can stop short
+    // inside a region.  Without these two numbers a deadTarget=0 could just mean
+    // the walk never reached the interesting bytes.
+    size_t regionsWalked = 0;
+    size_t regionsTruncated = 0;
+    size_t bytesUnwalked = 0;
+
     uint64_t costNs = 0;
     std::array<void*, kSampleLimit> holderSamples{};
     std::array<void*, kSampleLimit> targetSamples{};
@@ -260,6 +269,40 @@ void CheckStrongRoots(Stats& stats, const char* point)
     Heap::GetHeap().VisitAllExportRoots(exportVisitor);
 }
 
+// Independent second enumeration, over the managed region lists rather than the
+// address range, repeating the same size-walk the product walk uses.  Its job is
+// only to say how much of each region that walk could actually reach.
+void CensusWalkCoverage(Stats& stats)
+{
+    RegionSpace& space = reinterpret_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+    space.GetRegionManager().VisitAllManagedRegionsForProbe([&stats](RegionInfo* region, const char*) {
+        if (region == nullptr || !region->IsValidRegion() || region->IsFreeRegion() || region->IsGarbageRegion()) {
+            return;
+        }
+        ++stats.regionsWalked;
+        if (!region->IsSmallRegion()) {
+            return;
+        }
+        uintptr_t pos = region->GetRegionStart();
+        const uintptr_t alloc = region->GetRegionAllocPtr();
+        while (pos < alloc) {
+            BaseObject* obj = from_region_addr(pos);
+            if (!Collector::PlausibleManagedObjectGate("MarkCompleteVerify.census", obj)) {
+                break;
+            }
+            const size_t size = RegionSpace::GetAllocSize(*obj);
+            if (size == 0) {
+                break;
+            }
+            pos += size;
+        }
+        if (pos < alloc) {
+            ++stats.regionsTruncated;
+            stats.bytesUnwalked += static_cast<size_t>(alloc - pos);
+        }
+    });
+}
+
 bool FatalOnFailure()
 {
     static const bool on = DiagGate::LegacyOrToken("MRT_GCV2_MARKCOMPLETE_FATAL", "markcompletefatal");
@@ -326,6 +369,7 @@ void RunAtMarkEnd(const char* point)
             },
             false);
         CheckStrongRoots(stats, point);
+        CensusWalkCoverage(stats);
     }
 
     stats.costNs = TimeUtil::NanoSeconds() - startNs;
@@ -337,12 +381,13 @@ void RunAtMarkEnd(const char* point)
         "okMarked=%zu okYoung=%zu okAllocGap=%zu okInteriorBase=%zu okNonHeap=%zu "
         "deadTarget=%zu deadKnownEmpty=%zu deadFrom=%zu deadGarbage=%zu deadFree=%zu "
         "deadLarge=%zu deadOther=%zu deadNoRegion=%zu deadInterior=%zu "
-        "roots=%zu deadRoots=%zu costNs=%llu",
+        "roots=%zu deadRoots=%zu regionsWalked=%zu regionsTruncated=%zu bytesUnwalked=%zu costNs=%llu",
         point == nullptr ? "?" : point, invoke, stats.objectsScanned, stats.liveHolders, stats.edgesSeen,
         stats.targetMarked, stats.targetYoung, stats.targetAllocGap, stats.targetInteriorBaseMarked,
         stats.targetNonHeap, stats.deadTarget, stats.deadTargetKnownEmpty, stats.deadInFrom, stats.deadInGarbage,
         stats.deadInFree, stats.deadInLarge, stats.deadInOther, stats.deadNoRegion, stats.deadInterior,
-        stats.rootsSeen, stats.rootDead, static_cast<unsigned long long>(stats.costNs));
+        stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
+        static_cast<unsigned long long>(stats.costNs));
 
     if (FatalOnFailure() && (stats.deadTarget != 0 || stats.rootDead != 0)) {
         CHECK_DETAIL(false,
