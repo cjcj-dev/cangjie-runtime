@@ -8,8 +8,6 @@
 
 #include <atomic>
 #include <cstdio>
-#include <cstring>
-#include <unordered_map>
 #include <vector>
 
 #include "Base/Log.h"
@@ -26,7 +24,6 @@ namespace {
 
 constexpr bool kCsetEmptyWho = true;
 constexpr size_t kMaxSamplePages = 2;
-constexpr size_t kMaxSampleObjs = 8;
 
 enum class Who : uint8_t {
     None = 0,
@@ -52,25 +49,33 @@ const char* WhoName(Who w)
     }
 }
 
+struct Sample {
+    RegionInfo* region = nullptr;
+    uintptr_t start = 0;
+    uintptr_t alloc = 0;
+    size_t residual = 0;
+    Who who = Who::None;
+    size_t hits = 0;
+};
+
+std::vector<Sample> g_samples;
+
 std::atomic<size_t> g_keep{ 0 };
 std::atomic<size_t> g_sampledPages{ 0 };
-std::atomic<size_t> g_sampledObjs{ 0 };
+std::atomic<size_t> g_holders{ 0 };
+std::atomic<size_t> g_fields{ 0 };
+std::atomic<size_t> g_pageHits{ 0 };
+std::atomic<size_t> g_staticSeen{ 0 };
 std::atomic<size_t> g_clsNone{ 0 };
 std::atomic<size_t> g_clsStatic{ 0 };
 std::atomic<size_t> g_clsYoung{ 0 };
 std::atomic<size_t> g_clsOldUnmarked{ 0 };
 std::atomic<size_t> g_clsOldMarked{ 0 };
-std::atomic<size_t> g_pageNone{ 0 };
-std::atomic<size_t> g_pageStatic{ 0 };
-std::atomic<size_t> g_pageYoung{ 0 };
-std::atomic<size_t> g_pageOldUnmarked{ 0 };
-std::atomic<size_t> g_pageOldMarked{ 0 };
 std::atomic<size_t> g_walkNs{ 0 };
 std::atomic<size_t> g_cycles{ 0 };
 std::atomic<bool> g_atexit{ false };
 
 size_t g_cycleKeep = 0;
-size_t g_cycleSampled = 0;
 
 void BumpClass(Who w)
 {
@@ -93,25 +98,9 @@ void BumpClass(Who w)
     }
 }
 
-void BumpPageClass(Who w)
+Who Stronger(Who a, Who b)
 {
-    switch (w) {
-        case Who::Static:
-            g_pageStatic.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Who::Young:
-            g_pageYoung.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Who::OldUnmarked:
-            g_pageOldUnmarked.fetch_add(1, std::memory_order_relaxed);
-            break;
-        case Who::OldMarked:
-            g_pageOldMarked.fetch_add(1, std::memory_order_relaxed);
-            break;
-        default:
-            g_pageNone.fetch_add(1, std::memory_order_relaxed);
-            break;
-    }
+    return static_cast<uint8_t>(a) >= static_cast<uint8_t>(b) ? a : b;
 }
 
 Who ClassifyHolder(RegionInfo* holderRegion, BaseObject* holder)
@@ -129,11 +118,6 @@ Who ClassifyHolder(RegionInfo* holderRegion, BaseObject* holder)
     return marked ? Who::OldMarked : Who::OldUnmarked;
 }
 
-Who Stronger(Who a, Who b)
-{
-    return static_cast<uint8_t>(a) >= static_cast<uint8_t>(b) ? a : b;
-}
-
 void EnsureAtexit()
 {
     bool expected = false;
@@ -142,80 +126,19 @@ void EnsureAtexit()
     }
 }
 
-void ClassifyPage(RegionInfo* region, const std::vector<BaseObject*>& objs)
+void HitTarget(BaseObject* target, Who cls)
 {
-    std::unordered_map<BaseObject*, Who> who;
-    who.reserve(objs.size());
-    for (BaseObject* o : objs) {
-        who[o] = Who::None;
+    if (target == nullptr) {
+        return;
     }
-
-    auto consider = [&who](BaseObject* target, Who cls) {
-        if (target == nullptr) {
-            return;
+    const uintptr_t addr = reinterpret_cast<uintptr_t>(target);
+    for (Sample& s : g_samples) {
+        if (addr >= s.start && addr < s.alloc) {
+            s.who = Stronger(s.who, cls);
+            ++s.hits;
+            g_pageHits.fetch_add(1, std::memory_order_relaxed);
         }
-        auto it = who.find(target);
-        if (it == who.end()) {
-            if (!Collector::PlausibleManagedObjectGate("CsetEmptyWho.target", target)) {
-                BaseObject* host = Collector::TryRecoverInteriorBase(target);
-                if (host == nullptr) {
-                    return;
-                }
-                it = who.find(host);
-                if (it == who.end()) {
-                    return;
-                }
-            } else {
-                return;
-            }
-        }
-        it->second = Stronger(it->second, cls);
-    };
-
-    Heap::GetHeap().VisitStaticRoots([&consider](RootSlot& root) {
-        zaddress_unsafe value = root.LoadPlain();
-        if (is_null(value)) {
-            return;
-        }
-        // StaticRootTable keeps the referent while this observe-only decode runs
-        // (same proof as TracingCollector::DumpRoots).
-        consider(to_object(safe(value)), Who::Static);
-    });
-
-    Heap::GetHeap().ForEachObj(
-        [&consider](BaseObject* holder) {
-            if (holder == nullptr || !holder->HasRefField()) {
-                return;
-            }
-            if (!Collector::PlausibleManagedObjectGate("CsetEmptyWho.holder", holder)) {
-                return;
-            }
-            RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
-            if (hr == nullptr || hr->IsFreeRegion() || hr->IsGarbageRegion()) {
-                return;
-            }
-            Who cls = ClassifyHolder(hr, holder);
-            holder->ForEachRefField([&consider, cls](RefField<>& field) {
-                BaseObject* target = to_object(field.GetTargetObject());
-                if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                    return;
-                }
-                consider(target, cls);
-            });
-        },
-        false);
-
-    Who pageWho = Who::None;
-    for (BaseObject* o : objs) {
-        Who w = who[o];
-        BumpClass(w);
-        pageWho = Stronger(pageWho, w);
     }
-    BumpPageClass(pageWho);
-    LOG(RTLOG_ERROR,
-        "[OLDROOTS][cset-who] region=%p start=%#zx objs=%zu page=%s "
-        "(STATIC/YOUNG/OLD_UNMARKED/OLD_MARKED/NONE object totals next atexit)",
-        region, region->GetRegionStart(), objs.size(), WhoName(pageWho));
 }
 
 } // namespace
@@ -227,7 +150,7 @@ void BeginCycle()
     }
     EnsureAtexit();
     g_cycleKeep = 0;
-    g_cycleSampled = 0;
+    g_samples.clear();
     g_cycles.fetch_add(1, std::memory_order_relaxed);
 }
 
@@ -237,69 +160,101 @@ void NoteKeep(RegionInfo* region, size_t residual, size_t residualFwd, size_t ma
         return;
     }
     EnsureAtexit();
-    const size_t n = g_keep.fetch_add(1, std::memory_order_relaxed) + 1;
+    g_keep.fetch_add(1, std::memory_order_relaxed);
     ++g_cycleKeep;
     (void)residualFwd;
     (void)marked;
-    if (g_cycleSampled >= kMaxSamplePages || residual == 0) {
+    if (g_samples.size() >= kMaxSamplePages || residual == 0) {
         return;
     }
-    std::vector<BaseObject*> objs;
-    objs.reserve(kMaxSampleObjs);
-    const uintptr_t start = region->GetRegionStart();
-    const uintptr_t alloc = region->GetRegionAllocPtr();
-    uintptr_t pos = start;
-    while (pos < alloc && objs.size() < kMaxSampleObjs) {
-        BaseObject* o = from_region_addr(pos);
-        if (!o->IsValidObject()) {
-            break;
-        }
-        const size_t sz = o->GetSize();
-        if (sz == 0) {
-            break;
-        }
-        if (!o->IsForwarded()) {
-            objs.push_back(o);
-        }
-        pos += sz;
-    }
-    if (objs.empty()) {
+    Sample s;
+    s.region = region;
+    s.start = region->GetRegionStart();
+    s.alloc = region->GetRegionAllocPtr();
+    s.residual = residual;
+    if (s.alloc <= s.start) {
         return;
     }
-    ++g_cycleSampled;
+    g_samples.push_back(s);
     g_sampledPages.fetch_add(1, std::memory_order_relaxed);
-    g_sampledObjs.fetch_add(objs.size(), std::memory_order_relaxed);
+}
+
+void ClassifyCycle()
+{
+    if (!kCsetEmptyWho || g_samples.empty()) {
+        return;
+    }
     const uint64_t t0 = TimeUtil::NanoSeconds();
-    ClassifyPage(region, objs);
+
+    Heap::GetHeap().VisitStaticRoots([](RootSlot& root) {
+        zaddress_unsafe value = root.LoadPlain();
+        if (is_null(value)) {
+            return;
+        }
+        g_staticSeen.fetch_add(1, std::memory_order_relaxed);
+        // StaticRootTable keeps the referent (DumpRoots proof). Peel only.
+        HitTarget(to_object(safe(value)), Who::Static);
+    });
+
+    Heap::GetHeap().ForEachObj(
+        [](BaseObject* holder) {
+            if (holder == nullptr) {
+                return;
+            }
+            g_holders.fetch_add(1, std::memory_order_relaxed);
+            if (!holder->HasRefField()) {
+                return;
+            }
+            if (!Collector::PlausibleManagedObjectGate("CsetEmptyWho.holder", holder)) {
+                return;
+            }
+            RegionInfo* hr = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+            if (hr == nullptr || hr->IsFreeRegion() || hr->IsGarbageRegion()) {
+                return;
+            }
+            Who cls = ClassifyHolder(hr, holder);
+            holder->ForEachRefField([cls](RefField<>& field) {
+                g_fields.fetch_add(1, std::memory_order_relaxed);
+                BaseObject* target = to_object(field.GetTargetObject());
+                if (target == nullptr || !Heap::IsHeapAddress(target)) {
+                    return;
+                }
+                HitTarget(target, cls);
+            });
+        },
+        false);
+
     const uint64_t dt = TimeUtil::NanoSeconds() - t0;
     g_walkNs.fetch_add(static_cast<size_t>(dt), std::memory_order_relaxed);
-    LOG(RTLOG_ERROR,
-        "[OLDROOTS][cset-who] sampled nKeep=%zu cycleKeep=%zu walkNs=%llu residual=%zu marked=%zu",
-        n, g_cycleKeep, static_cast<unsigned long long>(dt), residual, marked);
+    for (const Sample& s : g_samples) {
+        BumpClass(s.who);
+        LOG(RTLOG_ERROR,
+            "[OLDROOTS][cset-who] region=%p start=%#zx residual=%zu hits=%zu page=%s walkNs=%llu",
+            s.region, s.start, s.residual, s.hits, WhoName(s.who), static_cast<unsigned long long>(dt));
+    }
+    g_samples.clear();
 }
 
 void Report(const char* tag)
 {
     std::fprintf(stderr,
-                 "[OLDROOTS][cset-who] %s cycles=%zu keep=%zu sampledPages=%zu sampledObjs=%zu "
-                 "obj STATIC=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
+                 "[OLDROOTS][cset-who] %s cycles=%zu keep=%zu sampledPages=%zu "
+                 "holdersVisited=%zu fieldsSeen=%zu pageHits=%zu staticSeen=%zu "
                  "page STATIC=%zu YOUNG=%zu OLD_UNMARKED=%zu OLD_MARKED=%zu NONE=%zu "
                  "walkNs=%zu STACK_SKIPPED=1 (PostTrace not STW)\n",
                  tag != nullptr ? tag : "?",
                  g_cycles.load(std::memory_order_relaxed),
                  g_keep.load(std::memory_order_relaxed),
                  g_sampledPages.load(std::memory_order_relaxed),
-                 g_sampledObjs.load(std::memory_order_relaxed),
+                 g_holders.load(std::memory_order_relaxed),
+                 g_fields.load(std::memory_order_relaxed),
+                 g_pageHits.load(std::memory_order_relaxed),
+                 g_staticSeen.load(std::memory_order_relaxed),
                  g_clsStatic.load(std::memory_order_relaxed),
                  g_clsYoung.load(std::memory_order_relaxed),
                  g_clsOldUnmarked.load(std::memory_order_relaxed),
                  g_clsOldMarked.load(std::memory_order_relaxed),
                  g_clsNone.load(std::memory_order_relaxed),
-                 g_pageStatic.load(std::memory_order_relaxed),
-                 g_pageYoung.load(std::memory_order_relaxed),
-                 g_pageOldUnmarked.load(std::memory_order_relaxed),
-                 g_pageOldMarked.load(std::memory_order_relaxed),
-                 g_pageNone.load(std::memory_order_relaxed),
                  g_walkNs.load(std::memory_order_relaxed));
     std::fflush(stderr);
 }

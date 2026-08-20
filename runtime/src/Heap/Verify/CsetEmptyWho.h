@@ -19,23 +19,23 @@ class RegionInfo;
 // (zGeneration.cpp:1086-1090 concurrent_mark → mark_roots + mark_follow;
 //  zMark.cpp:938-941 mark_old_roots). Ours seeds only young→old
 // (SeedOldMarkFromYoungSurvivors). Keep pages with marked=0 mean the
-// old TRACE never reached those objects. This checker samples keep
-// pages and classifies incoming edges:
-//   STATIC       — static root names the object
-//   YOUNG        — young-region holder field (young→old / 晋升 survivor 边)
-//   OLD_MARKED   — already-marked old holder (TRACE follow 没走到这页)
-//   OLD_UNMARKED — unmarked old holder (old→old 子图缺根)
-//   NONE         — no heap/static incoming (true garbage, or stack-only)
-// Stack roots are STACK_SKIPPED: ExemptFromRegions runs in PostTrace
-// (not STW), so VisitMutatorRoots is not safe here.
+// old TRACE never reached those objects.
 //
-// Compile-time gate, product ON for this lane (observe-only). No new
-// MRT_GCV2_* env. Atexit keep vs sampled so sampled=0 cannot mean dead
-// probe when keep>0.
+// Observe-only. ExemptFromRegions runs in PostTrace (mutators running):
+//   - Decode slots with GetTargetObject (peel colour, no make_load_good /
+//     ForwardObject — those CHECK PREFORWARD and abort in IDLE).
+//   - Match by page range, not object identity (interiors / unhealed from).
+//   - One heap walk per cycle after samples are collected.
+//   - STACK_SKIPPED: VisitMutatorRoots is not STW-safe here.
+//
+// Classes: STATIC / YOUNG / OLD_UNMARKED / OLD_MARKED / NONE.
+// holdersVisited/fieldsSeen/pageHits are the live-probe counters:
+// sampled>0 ∧ holdersVisited=0 ⇒ dead probe, not "true garbage".
 namespace CsetEmptyWho {
 
 void BeginCycle();
 void NoteKeep(RegionInfo* region, size_t residual, size_t residualFwd, size_t marked);
+void ClassifyCycle();
 void Report(const char* tag);
 
 } // namespace CsetEmptyWho
