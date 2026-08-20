@@ -17,6 +17,7 @@
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
+#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/MarkFaceSnap.h"
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
@@ -781,6 +782,18 @@ void TracingCollector::FindUselessExternObjects()
             if (IsMarkedObject<Generation::Old>(*listIt)) {
                 listIt = ls.erase(listIt);
             } else {
+                // MarkObject paints the live bit and nothing enqueues this object, so
+                // its ref fields are never scanned this cycle: the mark closure has
+                // already finished (DoTracing calls this after ConcurrentReMark). An
+                // object kept alive here therefore keeps nothing else alive, and a
+                // reference it holds can name an unmarked object -- which is what
+                // MarkCompleteVerify reports as a DEAD_EDGE. Record what was painted so
+                // that report can be joined against this list by address instead of
+                // guessed at. Gated with the verifier; no cost when it is off.
+                if (UNLIKELY(MarkCompleteVerify::Enabled())) {
+                    LOG(RTLOG_ERROR, "[GCV2][markcomplete] EXTERN_PAINT_NO_FOLLOW obj=%p exportObj=%p",
+                        static_cast<void*>(*listIt), static_cast<void*>(it->first));
+                }
                 MarkObject(*listIt);
                 listIt++;
             }
