@@ -42,6 +42,18 @@ thread_local size_t g_currentThreadRootMapMissCount = 0;
 // was right every time" rather than as "nobody is counting".
 std::atomic<size_t> g_markTerminateContinue{ 0 };
 std::atomic<size_t> g_markTerminatePauses{ 0 };
+
+// Default on. MRT_GCV2_MARK_TERMINATE_PAUSE=0 restores the pre-existing behaviour
+// (decide termination while mutators run), so the change can be ablated in one
+// binary. Read once; the product path pays a single getenv per process.
+bool MarkTerminateInPauseEnabled()
+{
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_MARK_TERMINATE_PAUSE");
+        return !(v != nullptr && std::strcmp(v, "0") == 0);
+    }();
+    return on;
+}
 // Entries the pause's flush actually delivered. Separates "the test was right"
 // (flushed > 0, ncontinue == 0) from "the flush reached nobody" (flushed == 0).
 std::atomic<size_t> g_markTerminateFlushed{ 0 };
@@ -931,6 +943,16 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // GetRetiredObjects passes can see it. The record is a deletion barrier's
         // pre-value, so losing it leaves a still-reachable object unmarked -- and an
         // unmarked live object is exactly what makes its region look empty.
+        if (!MarkTerminateInPauseEnabled()) {
+            // Ablation arm: the pre-existing behaviour, kept reachable so the pause can
+            // be measured against its own absence in one binary rather than two.
+            TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
+            visitSatbObj();
+            if (workStack.empty()) {
+                break;
+            }
+            continue;
+        }
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);
