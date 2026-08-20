@@ -228,6 +228,35 @@ std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
 } // namespace
 
+void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSize)
+{
+    if (regionSize == 0) {
+        return;
+    }
+    const MAddress regionEnd = regionStart + regionSize;
+    std::vector<ForwardingEntries*> victims;
+    {
+        std::lock_guard<std::mutex> lock(g_retiredLock);
+        auto drop = [&](std::vector<ForwardingEntries*>& gens) {
+            std::vector<ForwardingEntries*> keep;
+            keep.reserve(gens.size());
+            for (ForwardingEntries* tab : gens) {
+                if (tab != nullptr && tab->start() >= regionStart && tab->start() < regionEnd) {
+                    victims.push_back(tab);
+                } else {
+                    keep.push_back(tab);
+                }
+            }
+            gens.swap(keep);
+        };
+        drop(g_retired);
+        drop(g_retiredAged);
+    }
+    for (ForwardingEntries* tab : victims) {
+        tab->Destroy();
+    }
+}
+
 void ForwardingTable::Retire(ForwardingEntries* tab)
 {
     if (tab == nullptr) {

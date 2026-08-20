@@ -108,5 +108,9 @@ GC_TEST(ExemptLife, ExpireRetiresForwardedKeptTable)
     GC_EXPECT_TRUE(forwarded->IsForwardingDone());
     GC_EXPECT_EQ(static_cast<unsigned>(forwarded->GetRouteState()),
                   static_cast<unsigned>(RegionInfo::RouteState::FORWARDED));
-    GC_EXPECT_FALSE(ForwardingTable::EntriesArmed(from));
+    GC_EXPECT_FALSE(ForwardingTable::GetEntries(from) != nullptr);
+    // FindTo still answers from the retired generation until the next install.
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
+    ForwardingTable::DropRetiredCovering(forwarded->GetRegionStart(), forwarded->GetRegionSize());
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
 }

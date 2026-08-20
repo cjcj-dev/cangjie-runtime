@@ -1955,6 +1955,7 @@ public:
         // [IKEKEEP-01] same shape). ZGC destroys forwarding at the next
         // ZRelocationSetInstallTask (zRelocationSet.cpp:91-96).
         ForwardingTable::ClearEntries(GetRegionStart(), GetRegionSize());
+        ForwardingTable::DropRetiredCovering(GetRegionStart(), GetRegionSize());
         // PORT_ZFORWARDING step 1: same event, recorded address-keyed as well.  Populated in
         // parallel with the region machinery so the two answers can be compared before either is
         // trusted; nothing reads it for decisions yet.

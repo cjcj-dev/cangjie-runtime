@@ -38,6 +38,11 @@ public:
     static void Remove(MAddress regionStart, size_t regionSize);
     static void EnsureEntries(RegionInfo* region);
     static void ClearEntries(MAddress regionStart, size_t regionSize);
+    // After-copy Exempt parks a live table; ClearEntries unlinks it into the
+    // retired generation. FindTo/LookupTo still scan that generation, so a
+    // kept page re-armed next cycle would find() last cycle's dest. Drop the
+    // covering tables at the next install (zRelocationSet.cpp:91-96).
+    static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
     // Unlinked-but-not-freed tables, and the point at which they actually go away. ZGC keeps the
     // same gap by construction: entries live in an arena recycled a whole phase after the page dies.
     static void Retire(ForwardingEntries* tab);
