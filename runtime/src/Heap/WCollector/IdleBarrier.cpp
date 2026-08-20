@@ -98,33 +98,31 @@ BaseObject* IdleBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& fi
 
 void IdleBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
-        // Heap-src self-heal stays on the heap field; non-heap dst is StorePlain below.
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
-                RefField<> oldField(field);
-                BaseObject* target = ReadReference(obj, field);
-                (void)target;
+                (void)ReadReference(obj, field);
             },
             src, src + size);
     }
-
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
                  "read struct memcpy_s failed");
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void IdleBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
     if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
+    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
+                 "read struct memcpy_s failed");
     gctib.ForEachBitmapWord(dst, [=](RefField<>& field) {
-        BaseObject* target = ReadReference(nullptr, field);
-        (void)target;
+        (void)ReadReference(nullptr, field);
     });
 }
 
@@ -250,7 +248,10 @@ void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstS
     if (dst == src) {
         return;
     }
-    bool inHeap = Heap::IsHeapAddress(dstObj);
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyRefArrayPlainToNonHeap(dst, srcObj, src, dstSize, srcSize);
+        return;
+    }
     if (dst < src) {
         MAddress currentDst = dst;
         MAddress currentSrc = src;
@@ -259,11 +260,7 @@ void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstS
             HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
             BaseObject* newRef = Barrier::ReadReference(srcObj, currentSrcField);
-            if (inHeap) {
-                WriteReference(dstObj, currentDstField, newRef);
-            } else {
-                StorePlain(RootSlotAt(currentDst), from_object(newRef));
-            }
+            WriteReference(dstObj, currentDstField, newRef);
             currentDst += sizeof(RefField<false>);
             currentSrc += sizeof(RefField<false>);
         }
@@ -275,11 +272,7 @@ void IdleBarrier::CopyRefArrayImpl(BaseObject* dstObj, MAddress dst, MIndex dstS
             HeapSlot<false>& currentDstField = HeapSlotAt<false>(currentDst);
             HeapSlot<false>& currentSrcField = HeapSlotAt<false>(currentSrc);
             BaseObject* newRef = Barrier::ReadReference(srcObj, currentSrcField);
-            if (inHeap) {
-                WriteReference(dstObj, currentDstField, newRef);
-            } else {
-                StorePlain(RootSlotAt(currentDst), from_object(newRef));
-            }
+            WriteReference(dstObj, currentDstField, newRef);
             currentDst -= sizeof(RefField<false>);
             currentSrc -= sizeof(RefField<false>);
         }
@@ -303,6 +296,10 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
         return;
     }
 #endif
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
     MArray* srcArray = static_cast<MArray*>(srcObj);
     RefFieldVisitor srcVisitor = [this, srcArray](RefField<false>& field) { (void)ReadReference(srcArray, field); };
     srcArray->ForEachRefFieldInRange(srcVisitor, srcField, srcField + srcSize);
@@ -311,7 +308,7 @@ void IdleBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIn
                      EOK,
                  "memmove_s failed");
 
-    // R9 bulk：堆 dst 上 memmove 后补规范色（栈源恒 plain）。非堆 dst = Y5。
+    // R9 bulk：堆 dst 上 memmove 后补规范色（栈源恒 plain）。
     if (dstObj != nullptr && Heap::IsHeapAddress(dstObj) && dstObj->HasRefField()) {
         RefFieldVisitor recolour = [this](RefField<false>& field) {
             RefField<> oldField(field);

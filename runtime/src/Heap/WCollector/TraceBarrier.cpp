@@ -69,7 +69,10 @@ BaseObject* TraceBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) c
 
 void TraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
-    // Heap-src SATB / self-heal via ReadReference; non-heap dst gets StorePlain.
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
@@ -77,18 +80,16 @@ void TraceBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_
             },
             src, src + size);
     }
-
     CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void TraceBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
+    CHECK(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK);
     LocalRefFieldContainer refFields;
     gctib.ForEachBitmapWordInRange(src, [&refFields, dst, src](RefField<>& srcField) {
         MAddress offset = reinterpret_cast<MAddress>(&srcField) - src;
@@ -297,6 +298,10 @@ bool TraceBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<true>& 
 void TraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                    MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!dstObj->HasRefField()) {
         LOG(RTLOG_FATAL, "array %p doesn't have class-type element\n", dstObj);

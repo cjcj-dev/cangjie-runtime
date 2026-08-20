@@ -64,30 +64,29 @@ BaseObject* PreforwardBarrier::ReadWeakRef(BaseObject* obj, RefField<false>& fie
 
 void PreforwardBarrier::ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const
 {
+    if (!Heap::IsHeapAddress(dst)) {
+        CopyStructPlainToNonHeap(dst, obj, src, size);
+        return;
+    }
     if (obj != nullptr) {
-        // Heap-src self-heal stays on the heap field; non-heap dst is StorePlain below.
         obj->ForEachRefInStruct(
             [this, obj](RefField<false>& field) {
-                RefField<> oldField(field);
-                BaseObject* target = ReadReference(obj, field);
-                (void)target;
+                (void)ReadReference(obj, field);
             },
             src, src + size);
     }
-
     CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
                  "read struct memcpy_s failed");
-    FixupNonHeapStructRefs(dst, obj, src, size);
 }
 
 void PreforwardBarrier::ReadStaticStruct(MAddress dst, MAddress src, size_t size, const GCTib gctib) const
 {
-    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
-                 "read struct memcpy_s failed");
     if (!Heap::IsHeapAddress(dst)) {
-        FixupNonHeapStaticStructRefs(dst, src, size, gctib);
+        CopyStaticStructPlainToNonHeap(dst, src, size, gctib);
         return;
     }
+    CHECK_DETAIL(memcpy_s(reinterpret_cast<void*>(dst), size, reinterpret_cast<void*>(src), size) == EOK,
+                 "read struct memcpy_s failed");
     gctib.ForEachBitmapWord(dst, [=](RefField<>& field) {
         RefField<> oldField(field);
         BaseObject* target = ReadReference(nullptr, field);
@@ -182,6 +181,10 @@ bool PreforwardBarrier::CompareAndSwapReferenceImpl(BaseObject* obj, RefField<tr
 void PreforwardBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MIndex dstSize, BaseObject* srcObj,
                                         MAddress srcField, MIndex srcSize) const
 {
+    if (dstObj == nullptr || !Heap::IsHeapAddress(dstObj)) {
+        CopyStructArrayPlainToNonHeap(dstField, srcObj, srcField, srcSize);
+        return;
+    }
 #if defined(MRT_DEBUG) && (MRT_DEBUG == 1)
     if (!(static_cast<MArray*>(dstObj)->GetComponentTypeInfo()->IsStructType())) {
         LOG(RTLOG_FATAL, "array %p type is not struct type", dstObj);
