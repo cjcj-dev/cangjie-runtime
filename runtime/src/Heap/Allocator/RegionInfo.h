@@ -48,6 +48,7 @@
 #include "Heap/Verify/RegionLifeDiag.h"
 #include "Heap/Verify/TagReuseProbe.h"
 #include "Heap/Verify/MarkWhyProbe.h"
+#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDestHold.h"
 #include "Heap/Allocator/ForwardingTable.h"
@@ -955,6 +956,7 @@ public:
 
     void ResetMarkBit(MarkView<Generation::Old> view)
     {
+        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_RESET_MARK_BIT, false);
         SetMarkedRegionFlag(view, 0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
@@ -2130,6 +2132,7 @@ public:
         }
         // Check the value whether is expected, in order to avoid resetting a reused region.
         if (metadata.liveInfo == liveInfo) {
+            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_CHECK_AND_CLEAR, false);
             metadata.liveInfo = nullptr;
             // Tracking phase ended: live counter is no longer a mark-period truth.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);
@@ -2161,6 +2164,7 @@ public:
         }
         CHECK_DETAIL(unitRole == UnitRole::SMALL_SIZED_UNITS || unitRole == UnitRole::LARGE_SIZED_UNITS,
                      "ClearLiveInfo must be called on a region head");
+        SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_LIVE_INFO, true);
         // ZGC mark-start allocation watermark (zPage is_allocating). Capture
         // before the epoch bump so VisitLive / IsKnownEmpty / IsMarkedObject
         // see objects bumped after this point as implicitly live.
@@ -2230,6 +2234,7 @@ public:
         };
         LiveInfo* liveInfo = __atomic_load_n(&metadata.liveInfo, std::memory_order_acquire);
         if (reinterpret_cast<MAddress>(liveInfo) != LiveInfo::TEMPORARY_PTR && inRange(liveInfo)) {
+            SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_NULL_IN_RANGE, false);
             __atomic_store_n(&metadata.liveInfo, static_cast<LiveInfo*>(nullptr), std::memory_order_release);
             // Tracking phase for this LiveInfo ended with its backing store about to vanish.
             __atomic_store_n(&metadata.liveByteCount, 0, std::memory_order_release);

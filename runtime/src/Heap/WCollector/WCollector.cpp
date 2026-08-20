@@ -71,6 +71,7 @@
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/GateDropDiag.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
@@ -1071,6 +1072,9 @@ bool WCollector::MarkObjectImpl(BaseObject* obj, bool youngClaim) const
     } else {
         MarkView<Generation::Old> view = region->GetMarkView<Generation::Old>();
         marked = region->MarkObject(view, obj, objectSize);
+    }
+    if (!marked) {
+        SurvNodeDiag::NotePaint(obj, region);
     }
     if (UNLIKELY(HeldFreeDiag::Enabled()) && !marked) {
         HeldFreeDiag::NoteMark(obj);
