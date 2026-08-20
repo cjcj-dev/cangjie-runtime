@@ -42,6 +42,7 @@
 #include "Heap/WCollector/UntagRefFieldBreadcrumb.h"
 #endif
 #include "Heap/Verify/VerifyHeap.h"
+#include "Heap/Verify/MarkCompleteVerify.h"
 #include "Heap/Verify/VerifyOption.h"
 #include "Heap/Verify/VerifyRememberedSet.h"
 #include "Heap/Verify/DiffPathExplainer.h"
@@ -2154,6 +2155,12 @@ void WCollector::TraceHeap()
 
         ProcessFinalizers();
     }
+
+    // ZVerify::after_mark (zVerify.cpp:496-506) runs here, between mark completing and
+    // anything acting on the mark face.  PostTrace -> HandleTraceRegions is the first
+    // consumer, so this is the last instant at which "mark says X is dead" can still be
+    // contradicted by a live holder rather than by a crash three phases later.
+    MarkCompleteVerify::RunAtMarkEnd("major-mark-end");
 }
 
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw)

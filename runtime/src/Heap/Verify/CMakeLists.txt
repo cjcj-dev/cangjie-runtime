@@ -8,6 +8,7 @@ set(SRC_LIST
     "VerifyRememberedSet.cpp"
     "VerifyRoots.cpp"
     "VerifyHeap.cpp"
+    "MarkCompleteVerify.cpp"
     "VerifyOption.cpp"
     "Zap.cpp"
     "VerifyRegions.cpp"
