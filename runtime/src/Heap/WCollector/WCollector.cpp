@@ -10030,7 +10030,20 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
         // 3. hope we can forward this object
         if (obj->TryLockObject(oldWord)) {
-            return ForwardObjectExclusive(obj, planned);
+            // zForwarding.cpp:86-108: retain at the moment this thread copies,
+            // not later in Exclusive — Exempt WaitCopied must observe the token
+            // before MarkForwardingDone (REPORT-lockdrain A 1→6 on Exclusive-only +1).
+            RegionInfo* page = ghostFromRegion;
+            if (page == nullptr) {
+                page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+                if (page == nullptr) {
+                    page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                }
+            }
+            if (page != nullptr) {
+                page->NoteCopyInflight();
+            }
+            return ForwardObjectExclusive(obj, planned, page);
         }
     } while (true);
     LOG(RTLOG_FATAL, "forwardObject exit in wrong path");
@@ -10039,23 +10052,22 @@ BaseObject* WCollector::ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFrom
 
 BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj)
 {
-    return ForwardObjectExclusive(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest);
+    // Vtable entry: caller already TryLock'd. Count on the from-page here so
+    // the token is live before copy (same as ForwardObjectImpl's TryLock arm).
+    RegionInfo* page = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+    if (page == nullptr) {
+        page = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+    }
+    if (page != nullptr) {
+        page->NoteCopyInflight();
+    }
+    return ForwardObjectExclusive(obj, fwdTable.PlanRoute(obj, CopierRouteMint::Make()).dest, page);
 }
 
-BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj)
+BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage)
 {
-    // zForwarding.cpp:86-108 retain only when this thread copies; find() hits
-    // (ForwardObjectImpl early returns) do not enter. Exclusive is the copier
-    // body after TryLockObject. Count +1 here, −1 after every UnlockObject.
-    // Ghost from is the page Exempt waits on; TryGet is the live owner if ghost
-    // is already cleared (KeepFrom / in-place).
-    RegionInfo* fromRegion = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
-    if (fromRegion == nullptr) {
-        fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
-    }
-    if (fromRegion != nullptr) {
-        fromRegion->NoteCopyInflight();
-    }
+    // EndCopy on the same page NoteCopy ran on (zForwarding.cpp:134-169).
+    // find() hits never enter (zRelocate.cpp:382-410).
     struct EndCopyInflight {
         RegionInfo* region;
         ~EndCopyInflight()
@@ -10064,7 +10076,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
                 region->EndCopyInflight();
             }
         }
-    } endCopy{ fromRegion };
+    } endCopy{ copyPage };
 
     if (!Collector::PlausibleManagedObjectGate("WCollector::ForwardObjectExclusive", obj)) {
         // Caller locked for a real object; unlock without claiming FORWARDED.

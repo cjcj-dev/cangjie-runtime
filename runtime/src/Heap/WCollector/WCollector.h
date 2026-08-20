@@ -679,7 +679,9 @@ protected:
     // dest is PlanRoute's answer, computed *before* TryLockObject so the LOCKED
     // critical section cannot RouteRegion / TakeRegion (zRelocate.cpp:354-372
     // relocate_object_inner: alloc+copy+insert, no safepoint; REPORT-routespin §5 乙1).
-    BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj);
+    // copyPage is the from-page NoteCopyInflight already ran on (TryLock success);
+    // Exclusive only EndCopyInflight after every UnlockObject.
+    BaseObject* ForwardObjectExclusive(BaseObject* obj, BaseObject* toObj, RegionInfo* copyPage);
 
     // waitfwd: spin until from is FORWARDED (or region COMPACTED); else return from.
     BaseObject* WaitRoutedTipReady(BaseObject* from, BaseObject* to, RegionInfo* forwarding) const;
