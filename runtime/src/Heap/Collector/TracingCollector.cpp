@@ -43,11 +43,14 @@ thread_local size_t g_currentThreadRootMapMissCount = 0;
 std::atomic<size_t> g_markTerminateContinue{ 0 };
 std::atomic<size_t> g_markTerminatePauses{ 0 };
 
-// Default OFF. MRT_GCV2_MARK_TERMINATE_PAUSE=1 decides termination inside a pause;
-// unset or 0 keeps the pre-existing behaviour. Read once; one getenv per process.
+// Compile-time constant, default false: the pre-existing behaviour (decide
+// termination while mutators run). Flip to true to decide it inside a pause.
+// A constant rather than an MRT_GCV2_ env var on purpose -- commit 05095555 cut
+// that surface from 194 to 3 as scaffolding rather than product configuration,
+// and this lane is not the place to grow it back.
 //
-// Off by default even though the pause is the correct shape, because the evidence
-// does not yet support making it the default:
+// False even though the pause is the correct shape, because the evidence does not
+// yet support making it the default:
 //   - it never recovered a record. NW 1GB paired, 90 runs, 544 pauses: ncontinue=0.
 //     The hole it closes is provable by construction but was not observed to fire.
 //   - it costs one extra stop-the-world per major cycle.
@@ -56,15 +59,12 @@ std::atomic<size_t> g_markTerminatePauses{ 0 };
 //     without) -- far short of significance at that n, and the same burst occurs
 //     without the pause so the pause does not cause it, but unexplained either way.
 // A change with no demonstrated benefit and an unexplained adverse number does not
-// get to be the default. Flip it on and re-run the ablation at larger n to decide.
-bool MarkTerminateInPauseEnabled()
-{
-    static const bool on = []() {
-        const char* v = std::getenv("MRT_GCV2_MARK_TERMINATE_PAUSE");
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
+// get to be the default. Set kMarkTerminateInPause and re-run the ablation at larger
+// n to decide. The two arms this lane measured were taken with an env switch before
+// it was folded into this constant; the code either side of it is unchanged.
+constexpr bool kMarkTerminateInPause = false;
+
+bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 // Entries the pause's flush actually delivered. Separates "the test was right"
 // (flushed > 0, ncontinue == 0) from "the flush reached nobody" (flushed == 0).
 std::atomic<size_t> g_markTerminateFlushed{ 0 };
