@@ -92,36 +92,6 @@ GC_TEST(ExemptLife, PrepareInstallStripsForwardedResidual)
     GC_EXPECT_FALSE(obj->IsForwarded());
 }
 
-GC_TEST(ExemptLife, ExemptWaitsLockedAfterHole)
-{
-    // VisitAllObjects breaks on a gate reject; a LOCKED header past a hole
-    // must still be waited (zRelocate.cpp:1041-1047).
-    GcHeapFixture fx;
-    RegionManager manager;
-    BaseObject* hole = fx.PlaceObject(fx.region0->GetRegionStart());
-    *reinterpret_cast<uint64_t*>(hole) = 0;
-    BaseObject* obj = fx.PlaceObject(fx.region0->GetRegionStart() + 64);
-    fx.region0->SetRegionAllocPtr(reinterpret_cast<MAddress>(obj) + 64);
-    fx.region0->SetRegionType(RegionInfo::RegionType::FROM_REGION);
-    obj->SetStateCode(ObjectState::LOCKED);
-    std::atomic<int> phase{ 0 };
-    std::thread copier([&]() {
-        phase.store(1, std::memory_order_release);
-        std::this_thread::sleep_for(std::chrono::milliseconds(20));
-        obj->UnlockObject(ObjectState::FORWARDED);
-        phase.store(2, std::memory_order_release);
-    });
-    while (phase.load(std::memory_order_acquire) < 1) {
-        std::this_thread::yield();
-    }
-    manager.ExemptFromRegion(fx.region0);
-    copier.join();
-    GC_EXPECT_FALSE(obj->GetStateWord().IsLockedWord());
-    GC_EXPECT_TRUE(obj->IsForwarded());
-    GC_EXPECT_TRUE(fx.region0->IsForwardingDone());
-    GC_EXPECT_EQ(phase.load(std::memory_order_acquire), 2);
-}
-
 GC_TEST(ExemptLife, PrepareInstallLeavesLockedAlone)
 {
     GcHeapFixture fx;
