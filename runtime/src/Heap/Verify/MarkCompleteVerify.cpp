@@ -19,6 +19,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/DiagGate.h"
+#include "Heap/Verify/NoTracedDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MClass.inline.h"
 #include "ObjectModel/RefField.h"
@@ -140,6 +141,12 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
     // The target's own two bits and the from-page route state are printed for the
     // same reason -- so the next reader does not have to re-derive them from the
     // address.
+    // Put the holder on the notraced watch list. It cannot answer for this cycle --
+    // the trace already happened -- but these edges repeat with the same addresses,
+    // so the next cycle says whether this holder is ever followed at all. That is
+    // the split between "painted live without a field scan" and "scanned, but the
+    // target did not get marked".
+    NoTracedDiag::Watch(holder);
     const unsigned holderMarked = RegionSpace::IsMarkedObject<Generation::Old>(holder) ? 1u : 0u;
     const unsigned holderResurrected = RegionSpace::IsResurrectedObject(holder) ? 1u : 0u;
     const unsigned targetMarkedBit = RegionSpace::IsMarkedObject<Generation::Old>(target) ? 1u : 0u;

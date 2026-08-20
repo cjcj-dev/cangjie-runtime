@@ -1,10 +1,34 @@
-// ⛔ HOLLOWED — the implementation in the matching .cpp is all no-ops: Enabled() returns false and
-// every sink body is empty.  The gate documented below therefore emits nothing, so a zero taken from
-// it is a false negative, not evidence that the arm never fires.  The contract, the gate name and the
-// product call sites were all left intact when the bodies were removed, which is precisely what makes
-// this readable as a live instrument.  Restore the sink you need first -- PermWhoAdmit.cpp shows the
-// shape: a compile-time constant gate (the campaign cut MRT_GCV2_* from 190 to 3) plus a line on the
-// zero case so a zero cannot be read as a dead probe.  Guard: runtime/tests/check_diag_not_hollow.py
+// Copyright (c) Huawei Technologies Co., Ltd. 2025. All rights reserved.
+// This source file is part of the Cangjie project, licensed under Apache-2.0
+// with Runtime Library Exception.
+//
+// See https://cangjie-lang.cn/pages/LICENSE for license information.
+
+// Restored 2026-08-20 (markport). Was HOLLOWED: Enabled() returned false and every
+// sink was empty, so the one question it exists to answer produced no output at all.
+//
+// notraced: was TraceObjectRefFields ever called for a holder?
+//
+// MarkCompleteVerify finds live holders whose ref fields name unmarked objects. Three
+// things can produce that, and they need different fixes:
+//   1. the holder's live bit was painted by a path that does not enqueue it, so its
+//      fields were never scanned  (traced == 0)
+//   2. the fields were scanned but TraceRefField did not mark those targets
+//      (traced > 0)
+//   3. the element was stored after the holder was scanned and the insertion barrier's
+//      record was dropped  (traced > 0)
+// The traced count splits 1 from 2/3, which is the split no amount of reading the
+// mark code settles.
+//
+// Protocol: a dead edge in cycle N registers its holder with Watch(); NoteTrace()
+// counts hits from cycle N+1 onward. That works because the edges observed so far
+// repeat across cycles with the same addresses. A holder that is never traced again
+// while its dead edge persists is case 1.
+//
+// Table is fixed-size and direct-mapped: one load and one compare per traced object,
+// no allocation on the mark path. Gated with MarkCompleteVerify so the two reports
+// arm together; costs nothing when that gate is off.
+
 #ifndef MRT_NO_TRACED_DIAG_H
 #define MRT_NO_TRACED_DIAG_H
 
@@ -14,22 +38,21 @@
 namespace MapleRuntime {
 class BaseObject;
 
-// notraced: was TraceObjectRefFields ever called for a holder?
-// Gate: MRT_GCV2_NOTRACED=1 or MRT_GCV2_DIAG token "notraced". Default off.
-// Records young-only entries at TraceObjectRefFields entry; copy-remaps for
-// move-independent crash join (same idea as whozero zero-ring remap).
 namespace NoTracedDiag {
 
 bool Enabled();
 
-// TraceObjectRefFields entry (hot path when on; young-only ring write).
+// Register a holder to watch. Idempotent; silently drops on table collision, which
+// Report() states rather than hides.
+void Watch(const BaseObject* obj);
+
+// TraceObjectRefFields entry (hot path when on: one direct-mapped probe).
 void NoteTrace(BaseObject* obj);
 
-// Object copy: remap ring addrs from→to when done!=0 (mirror HealPairDiag whozero).
+// Object copy: keep the watch list addressed correctly when a holder moves.
 void NoteCopy(const void* fromAddr, const void* toAddr, size_t size, uint32_t done);
 
-// Crash join: match holder identity against trace ring.
-// Prefer CAS-null-time hObj when available; crash-face r13 is fallback.
+// Crash join: match holder identity against the watch list.
 void NoteCrashJoin(uintptr_t holderCrash, uintptr_t holderCas);
 
 void Report(const char* point);
