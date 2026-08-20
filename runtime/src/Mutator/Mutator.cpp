@@ -1001,6 +1001,26 @@ bool Mutator::GcPhaseEnum(GCPhase newPhase, uint64_t stackScanEpoch, bool bySelf
         VisitHeapReferences(visitor, derivedVisitor);
         return true;
     }
+    // The concurrent stack-scan leg does not carry the derived visitor: the cursor's
+    // whole API takes a RootVisitor only (StackFrameCursor.h:39-55 ProcessOne /
+    // ProcessFrame), so base/derived pairs cannot be handed to it. ZGC's oopmap walk
+    // marks base and derived together (zMark.cpp:691-692 ZUncoloredRoot::mark), and
+    // when our Enum path last lost that pairing the symptom was introot's hang -- a
+    // live array whose only root was RawArray+8 was never marked, so its region was
+    // reclaimed under it.
+    //
+    // Nothing measures this today because MRT_GCV2_CONCURRENT_STACK_SCAN and
+    // MRT_GCV2_EPOCH_HANDSHAKE are both pinned off (MutatorManager.cpp:270-287), which
+    // is exactly why it needs to be loud rather than a comment: whoever turns the flag
+    // on should read this before spending a night on the hang.
+    static std::atomic<bool> warned{ false };
+    if (!warned.exchange(true, std::memory_order_relaxed)) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][enum] concurrent stack scan is enabled, but this path visits no derived "
+            "pointers: stack-map base/derived pairs are dropped, so an object reachable only "
+            "through an interior pointer will not be marked (StackFrameCursor takes a "
+            "RootVisitor only; ZGC pairs them at zMark.cpp:691-692)");
+    }
     size_t frames = 0;
     StackWatermark::Owner owner = bySelf ? StackWatermark::WM_OWNER_SELF : StackWatermark::WM_OWNER_GC;
     bool scanned = DrainStackWatermark(visitor, stackScanEpoch, owner, frames);
