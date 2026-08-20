@@ -17,6 +17,7 @@
 #include "Heap/Heap.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
+#include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/LoadGoodProbe.h"
 #include "Heap/Verify/RemsetPhaseProbe.h"
 #include "Heap/Verify/YyEdgeDiag.h"
@@ -527,6 +528,7 @@ void Barrier::WriteReference(BaseObject* obj, RefField<false>& field, BaseObject
     RefField<> prev(field.GetFieldValue());
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     WriteReferenceImpl(obj, field, ref);
+    SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_WRITE_REF);
     NoteInstalledSlot(field, theCollector, static_cast<uint8_t>(phase));
     if (!prevStoreGood) {
         NoteStoreSlowPath();
@@ -637,11 +639,12 @@ void Barrier::WriteStaticRef(RootSlot& field, BaseObject* ref) const
 {
     ref = theCollector.ResolveStoreValue(ref);
     if (phase != BarrierPhase::STW) {
-        return DispatchPhase(phase, *this, [&](const auto& barrier) {
-            return barrier.WriteStaticRef(field, ref);
-        });
+        DispatchPhase(phase, *this, [&](const auto& barrier) { return barrier.WriteStaticRef(field, ref); });
+        SurvNodeDiag::NoteStore(&field, nullptr, ref, SurvNodeDiag::STORE_WRITE_STATIC);
+        return;
     }
     WriteStaticRefPlain(field, ref);
+    SurvNodeDiag::NoteStore(&field, nullptr, ref, SurvNodeDiag::STORE_WRITE_STATIC);
 }
 
 void Barrier::WriteStaticRefPlain(RootSlot& field, BaseObject* ref) const
@@ -993,6 +996,7 @@ void Barrier::AtomicWriteReference(BaseObject* obj, RefField<true>& field, BaseO
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, ref);
     AtomicWriteReferenceImpl(obj, field, ref, order);
+    SurvNodeDiag::NoteStore(&field, to_object(prev.GetTargetObject()), ref, SurvNodeDiag::STORE_ATOMIC_WRITE);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -1031,6 +1035,7 @@ BaseObject* Barrier::AtomicSwapReference(BaseObject* obj, RefField<true>& field,
     RefField<> prev(field.GetFieldValue(order));
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     BaseObject* oldRef = AtomicSwapReferenceImpl(obj, field, newRef, order);
+    SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_SWAP);
     if (!prevStoreGood) {
         NoteStoreSlowPath();
         RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -1094,6 +1099,7 @@ bool Barrier::CompareAndSwapReference(BaseObject* obj, RefField<true>& field, Ba
     const bool prevStoreGood = PrevIsStoreGoodForTarget(theCollector, prev, newRef);
     bool success = CompareAndSwapReferenceImpl(obj, field, oldRef, newRef, succOrder, failOrder);
     if (success) {
+        SurvNodeDiag::NoteStore(&field, oldRef, newRef, SurvNodeDiag::STORE_CAS);
         if (!prevStoreGood) {
             NoteStoreSlowPath();
             RecordCrossGenEdge(obj, reinterpret_cast<MAddress>(&field), to_object(field.GetTargetObject()));
@@ -1160,6 +1166,13 @@ void Barrier::CopyRefArray(BaseObject* dstObj, MAddress dstField, MIndex dstSize
         }
     }
     CopyRefArrayImpl(dstObj, dstField, dstSize, srcObj, srcField, srcSize);
+    if (SurvNodeDiag::Enabled() && dstObj != nullptr && Heap::IsHeapAddress(dstObj)) {
+        MAddress end = dstField + dstSize;
+        for (MAddress current = dstField; current + sizeof(HeapSlot<>) <= end; current += sizeof(HeapSlot<>)) {
+            HeapSlot<>& slot = HeapSlotAt<>(current);
+            SurvNodeDiag::NoteStore(&slot, nullptr, to_object(slot.GetTargetObject()), SurvNodeDiag::STORE_COPY_REF);
+        }
+    }
     RecordCrossGenEdgesInRefArray(dstObj, dstField, dstSize, &snap);
 }
 

@@ -23,6 +23,7 @@
 #include "Heap/Verify/DiagGate.h"
 #include "Heap/Verify/InteriorEdgeClass.h"
 #include "Heap/Verify/NoTracedDiag.h"
+#include "Heap/Verify/SurvNodeDiag.h"
 #include "Mutator/MutatorManager.h"
 #include "ObjectModel/MArray.h"
 #include "ObjectModel/MClass.inline.h"
@@ -253,6 +254,11 @@ void ReportDeadEdge(Stats& stats, size_t maxSamples, const char* point, BaseObje
         targetResurrected, targetForwardedBit,
         targetRegion == nullptr ? 0u : static_cast<unsigned>(targetRegion->GetRouteState()), targetViewEpoch,
         targetSnapEpoch, static_cast<unsigned>(knownEmpty), stats.deadTarget);
+    if (targetRegion != nullptr &&
+        (targetRegion->IsFromRegion() || targetRegion->IsLoneFromRegion() ||
+         targetRegion->IsUnmovableFromRegion())) {
+        SurvNodeDiag::ReportOnDeadEdge(holder, &field, target, targetRegion);
+    }
 }
 
 void AccountInteriorKind(Stats& stats, size_t maxSamples, const char* point, BaseObject* holder, RefField<>& field,
@@ -733,6 +739,7 @@ void RunAtMarkEnd(const char* point)
         stats.rootsSeen, stats.rootDead, stats.regionsWalked, stats.regionsTruncated, stats.bytesUnwalked,
         static_cast<unsigned long long>(stats.costNs), stats.deadIntSlotNotRef, stats.deadIntRecoverFail,
         stats.deadIntBaseUnmarked, stats.deadIntValueCorrupt);
+    SurvNodeDiag::ReportAtMarkEnd(point);
 
     if (FatalOnFailure() && (stats.deadTarget != 0 || stats.rootDead != 0)) {
         CHECK_DETAIL(false,
