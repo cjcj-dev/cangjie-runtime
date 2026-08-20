@@ -36,6 +36,7 @@ set(GC_UNIT_SOURCES
     test_gc_trigger.cpp
     test_mutator_relocate.cpp
     test_expire_kept.cpp
+    test_exempt_unlock.cpp
     test_heal_coverage.cpp
 )
 

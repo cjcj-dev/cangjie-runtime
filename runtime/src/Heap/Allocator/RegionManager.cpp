@@ -14,6 +14,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <limits>
+#include <sched.h>
 #include <unistd.h>
 #include <vector>
 
@@ -1922,6 +1923,28 @@ void RegionManager::ForwardFromRegions(GCThreadPool* threadPool)
     }
 }
 
+namespace {
+// Wait until every walked header is not LOCKED. Copiers publish insert then
+// UnlockObject(FORWARDED) (WCollector.cpp:10055-10075; MutatorRelocate.h:124).
+// After-copy Exempt used to keep LOCKED/FORWARDED residuals across the next
+// cycle (REPORT-trainbisect §5-§6). ZGC never lets relocation residuals
+// outlive the page (zRelocate.cpp:1041-1047; zRelocationSet.cpp:91-96).
+void WaitCopiedObjectsUnlocked(RegionInfo* region)
+{
+    if (region == nullptr || region->IsFreeRegion()) {
+        return;
+    }
+    region->VisitAllObjects([](BaseObject* obj) {
+        if (obj == nullptr) {
+            return;
+        }
+        while (obj->GetStateWord().IsLockedWord()) {
+            sched_yield();
+        }
+    });
+}
+} // namespace
+
 void RegionManager::ParkUnmovableFromRegion(RegionInfo* region)
 {
     // youngconcfollow: callers already unlink the FROM node — TryDelete FROM here
@@ -1943,6 +1966,7 @@ void RegionManager::ExemptFromRegion(RegionInfo* region)
     // region-level wait can exit. Without this the wait never terminates
     // (cjpmnull3 wide-definition OOM). Hole pages are not collected this
     // cycle (cjpmnull2 Exempt).
+    WaitCopiedObjectsUnlocked(region);
     if (region != nullptr && !region->IsForwardingDone()) {
         static std::atomic<size_t> g_exemptKept{ 0 };
         const size_t n = g_exemptKept.fetch_add(1, std::memory_order_relaxed) + 1;
@@ -3496,6 +3520,10 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
         // permhit: last point at which a real receipt must already be tip-valid.
         PermhitReceiptAudit(region, "publish");
+        // insert-before-unlock (MutatorRelocate.h:124): a concurrent copier may
+        // still hold LOCKED after insert. Do not publish FORWARDED/done while
+        // those headers remain LOCKED — waiters treat done as "no live copier".
+        WaitCopiedObjectsUnlocked(region);
         region->SetRouteState(RegionInfo::RouteState::FORWARDED);
         // zRelocate.cpp:1152 — last act after every object on the page is relocated.
         region->MarkForwardingDone();
@@ -3551,7 +3579,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         // cjpm coll_live: first young (cgen=0 fpath=2), then after that Exempt
         // old (cgen=1 fpath=2 route=5 ke=0 gh=1 reason=HEU). Exempt both; the
         // next Assemble/PrepareYoung re-enlists, ghost + entries stay until
-        // PrepareFromRegionList.
+        // PrepareFromRegionList. Residuals are settled above before done.
         ExemptFromRegion(region);
         return;
     }
