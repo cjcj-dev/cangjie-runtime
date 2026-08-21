@@ -51,6 +51,7 @@
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/EatArmDiag.h"
 #include "Heap/Verify/RouteDestHold.h"
+#include "Heap/Verify/FromPageDetachCheck.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/FwdInflight.h"
 #include "Heap/Verify/MutatorRelocate.h"
@@ -1506,6 +1507,8 @@ public:
     {
         uintptr_t unitAddress = RegionInfo::GetUnitAddress(idx);
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(unitAddress),
+                                            FromPageDetach::Site::CLEAR_UNITS);
         DLOG(REGION, "clear dirty units[%zu+%zu, %zu) @[%#zx+%zu, %#zx)", idx, cnt, idx + cnt, unitAddress, size,
              RegionInfo::GetUnitAddress(idx + cnt));
         // gcfwdfix: ring of zeroed ranges for WAS_LIVE_BEFORE_CLEAR (MRT_GCV2_TRACE_CLEAR=1).
@@ -1518,6 +1521,8 @@ public:
     {
         void* unitAddress = reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx));
         size_t size = cnt * RegionInfo::UNIT_SIZE;
+        FromPageDetach::FromPageDetachCheck(RegionInfo::TryGetRegionInfoAt(reinterpret_cast<uintptr_t>(unitAddress)),
+                                            FromPageDetach::Site::RELEASE_UNITS);
         DLOG(REGION, "release physical memory for units [%zu+%zu, %zu) @[%p+%zu, 0x%zx)", idx, cnt, idx + cnt,
              unitAddress, size, RegionInfo::GetUnitAddress(idx + cnt));
 #if defined(_WIN64)
@@ -1553,6 +1558,17 @@ public:
         MAddress regionStart = GetRegionStart();
         DCHECK(metadata.regionEnd > regionStart);
         return metadata.regionEnd - regionStart;
+    }
+
+    // Read-only, defensive extent for the phase-1 detach census. InitRegionInfo
+    // calls the census before metadata.regionEnd is installed on a never-used
+    // unit, so that case is one unit rather than an underflowed stale extent.
+    size_t GetRegionSizeForDetachCheck() const
+    {
+        const MAddress start = GetRegionStart();
+        const MAddress end = metadata.regionEnd;
+        const MAddress heapEnd = GetUnitAddress(UnitInfo::totalUnitCount);
+        return end > start && end <= heapEnd ? end - start : UNIT_SIZE;
     }
 
     size_t GetUnitCount() const { return GetRegionSize() / UNIT_SIZE; }
@@ -1592,6 +1608,7 @@ public:
     // reset so that this region can be reused for allocation
     void InitFreeUnits()
     {
+        FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_FREE_UNITS);
         size_t nUnit = GetUnitCount();
         UnitInfo* unit = reinterpret_cast<UnitInfo*>(this);
         UnitInfo::UnitInfoArray array = UnitInfo::UnitInfoArray(unit, nUnit);
@@ -2381,6 +2398,10 @@ public:
     void WaitCopiedInflight() { ZForwardingLife::wait_copied(metadata.copyInflight); }
 
     int32_t CopyInflight() const { return metadata.copyInflight.load(std::memory_order_acquire); }
+
+    int32_t ForwardingRefCount() const { return metadata.fwdRefCount.load(std::memory_order_acquire); }
+
+    bool ForwardingClaimed() const { return metadata.fwdClaimed.load(std::memory_order_acquire); }
 
     void LockWriteRegion() { metadata.rwLock.LockWrite(); }
 
@@ -3525,6 +3546,7 @@ private:
     // bracket can be reordered with the payload stores between them.
     void InitRegionInfo(size_t nUnit, UnitRole uClass)
     {
+        FromPageDetach::FromPageDetachCheck(this, FromPageDetach::Site::INIT_REGION_INFO);
         SetUnitRole(UnitRole::FREE_UNITS);
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);

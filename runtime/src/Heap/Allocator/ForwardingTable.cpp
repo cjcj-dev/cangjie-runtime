@@ -274,6 +274,29 @@ void ForwardingTable::ReclaimRetired(const char* why)
     }
 }
 
+bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
+{
+    if (regionSize == 0) {
+        return false;
+    }
+    const MAddress regionEnd = regionStart + regionSize;
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    auto covers = [regionStart, regionEnd](const std::vector<ZForwarding*>& tables) {
+        for (ZForwarding* tab : tables) {
+            if (tab == nullptr) {
+                continue;
+            }
+            const MAddress tabStart = tab->start();
+            const MAddress tabEnd = tabStart + tab->size();
+            if (tabStart < regionEnd && regionStart < tabEnd) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return covers(g_retired) || covers(g_retiredAged);
+}
+
 ZForwarding* ForwardingTable::GetEntries(MAddress addr)
 {
     if (!Ready()) {

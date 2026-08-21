@@ -874,6 +874,9 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         if (node == nullptr) { break; }
         Index idx = node->GetIndex();
         UnitCount num = node->GetCount();
+        FromPageDetach::FromPageDetachCheck(
+            RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx)),
+            FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
         dirtyUnitTree.ReleaseRootNode();
 
         std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
@@ -1074,6 +1077,7 @@ void RegionManager::DumpScrubCostAndReset(const char* point)
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {
+    FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_DIRTY);
     // routedest: census, not a guard. The graft asked for CHECK(!IsRouteDestHeld()) here to
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
@@ -1100,6 +1104,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 {
+    FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_MARK_QUARANTINE);
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReclaimRegionToMarkQuarantine");
     size_t num = region->GetUnitCount();
@@ -1116,6 +1121,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
+    FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION);
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
     RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
@@ -1873,6 +1879,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     if (head != nullptr) {
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
         if (head->GetUnitCount() == num) {
+            FromPageDetach::FromPageDetachCheck(head, FromPageDetach::Site::TAKE_GARBAGE_REUSE);
             TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
                                         head->GetLiveByteCount(),
                                         static_cast<unsigned int>(head->IsGhostFromRegion()),
@@ -2175,6 +2182,7 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
+            FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::COLLECT_FROM_GARBAGE);
 #if defined(__OHOS__)
             if (region->IsGhostFromRegion()) {
                 garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);

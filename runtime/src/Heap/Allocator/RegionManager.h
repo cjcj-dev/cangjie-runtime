@@ -994,6 +994,7 @@ private:
             }
         }
         if (candidate != nullptr) {
+            FromPageDetach::FromPageDetachCheck(candidate, FromPageDetach::Site::TAKE_GARBAGE);
             RemoveRegionLocked(&garbageRegionList, candidate);
         }
         if (gatedBytes != nullptr) {
@@ -1020,6 +1021,7 @@ private:
                     RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
                     return false;
                 }
+                FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_AFTER_DISPEL);
                 RemoveRegionLocked(&garbageRegionList, region);
                 return true;
             }

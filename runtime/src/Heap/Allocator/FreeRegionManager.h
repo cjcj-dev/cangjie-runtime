@@ -59,6 +59,7 @@ public:
                 if (dirtyOk) {
                     MAddress start = RegionInfo::GetUnitAddress(idx);
                     RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
+                    FromPageDetach::FromPageDetachCheck(dirtyRegion, FromPageDetach::Site::TAKE_DIRTY_REUSE);
                     TraceClear::NoteRegionEvent(start, num * RegionInfo::UNIT_SIZE, "dirty_take", dirtyRegion, 0,
                                                 static_cast<unsigned int>(dirtyRegion->IsGhostFromRegion()),
                                                 static_cast<unsigned int>(dirtyRegion->GetRegionType()),
@@ -85,6 +86,10 @@ public:
                 bool releasedOk = releasedUnitTree.TakeUnits(num, idx);
 #endif
                 if (releasedOk) {
+                    RegionInfo* releasedRegion =
+                        RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+                    FromPageDetach::FromPageDetachCheck(releasedRegion,
+                                                        FromPageDetach::Site::TAKE_RELEASED_REUSE);
 #ifdef _WIN64
                     MemMap::CommitMemory(
                         reinterpret_cast<void*>(RegionInfo::GetUnitAddress(idx)), num * RegionInfo::UNIT_SIZE);

@@ -12,6 +12,8 @@
 #include <thread>
 
 #include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/Verify/FromPageDetachCheck.h"
+#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -169,4 +171,34 @@ GC_TEST(ZForwardingLife, ResetIdleWakesRetainClaimed)
     waiter.join();
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
     GC_EXPECT_FALSE(retained.load(std::memory_order_acquire));
+}
+
+GC_TEST(ZForwardingLife, DetachCheckMeasuresWithoutGating)
+{
+    GcHeapFixture fx;
+    const auto site = FromPageDetach::Site::TAKE_GARBAGE_REUSE;
+    const FromPageDetach::Counters before = FromPageDetach::GetCounters(site);
+
+    fx.region0->SetRouteDestHold(1);
+    ZForwardingLife::ResetForForwarding(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                                        fx.region0->metadata.fwdDone);
+    fx.region0->NoteCopyInflight();
+
+    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    const FromPageDetach::Counters after = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(after.checks, before.checks + 1);
+    GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
+    GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
+    GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
+    GC_EXPECT_EQ(after.copyInflight, before.copyInflight + 1);
+
+    // Phase 1 observes but neither drains nor clears any evidence word.
+    GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 1);
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
+    GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());
+
+    fx.region0->EndCopyInflight();
+    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                               fx.region0->metadata.fwdDone);
+    fx.region0->SetRouteDestHold(0);
 }
