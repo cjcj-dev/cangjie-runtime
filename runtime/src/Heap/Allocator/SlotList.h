@@ -27,6 +27,9 @@ public:
             // pinned allocation storage. The slot stays stranded until region reclamation.
             return;
         }
+        if (head != nullptr && MetadataWordHasColour(reinterpret_cast<Uptr>(head))) {
+            head = nullptr;
+        }
         headSlot->next = head;
         head = headSlot;
     }
@@ -52,22 +55,35 @@ public:
 private:
     friend struct FreePinnedSlotLists;
     friend struct SlotListTestAccess;
+    static bool MetadataWordHasColour(Uptr bits)
+    {
+        return bits != raw(uncolor_bits(to_zpointer(bits)));
+    }
+
     uintptr_t PopFront(size_t size)
     {
-        // getsizetrace: ObjectSlot::next overlays Future payload+8, which is a
-        // store-good heap ref. A coloured next makes `head` non-canonical;
-        // GetSize then #GPs (si_code=128, rdi remap|MY|MO|Rem, rbx=0xa8).
+        // getsizetrace / ZGC: ObjectSlot::next overlays Future payload+8, a
+        // store-good heap ref (ColourMask.h bit56). That word is not a
+        // successor slot. zPage::reset (zPage.cpp:103-121) recycles by
+        // resetting page metadata, never by following a coloured oop as
+        // a free-list next. Uncolor-and-hand-out would revive a live
+        // Future. Drop the metadata chain; bump alloc still works.
         // AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
-        // On reject: leave the node, return 0 — bump alloc still works.
         if (head == nullptr) {
             return 0;
         }
-        BaseObject* obj = from_region_addr(reinterpret_cast<Uptr>(head));
+        Uptr rawHead = reinterpret_cast<Uptr>(head);
+        if (MetadataWordHasColour(rawHead)) {
+            head = nullptr;
+            return 0;
+        }
+        BaseObject* obj = from_region_addr(rawHead);
         if (!PlausibleManagedObjectGate("SlotList::PopFront", obj) || size != obj->GetSize()) {
             return 0;
         }
         ObjectSlot* allocSlot = head;
-        head = head->next;
+        Uptr rawNext = reinterpret_cast<Uptr>(allocSlot->next);
+        head = MetadataWordHasColour(rawNext) ? nullptr : allocSlot->next;
         allocSlot->next = nullptr;
         return reinterpret_cast<uintptr_t>(allocSlot);
     }

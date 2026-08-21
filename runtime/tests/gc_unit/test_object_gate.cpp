@@ -103,6 +103,7 @@ namespace MapleRuntime {
 struct SlotListTestAccess {
     static uintptr_t PopFront(SlotList& list, size_t size) { return list.PopFront(size); }
     static void SetHead(SlotList& list, ObjectSlot* h) { list.head = h; }
+    static ObjectSlot* GetHead(SlotList& list) { return list.head; }
 };
 } // namespace MapleRuntime
 
@@ -110,6 +111,8 @@ struct SlotListTestAccess {
 // ObjectSlot::next overlays Future payload+8 (store-good colour). A coloured
 // next makes head non-canonical; GetSize then #GPs (si_code=128, rbx=0xa8).
 // AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
+// ZGC (zPage.cpp:103-121): recycle by resetting metadata, not by treating a
+// coloured oop as a free-list successor. Drop the chain; do not uncolor-and-hand-out.
 GC_TEST(ObjectGate, SlotListPopFrontRejectsColouredHead)
 {
     GcHeapFixture fx;
@@ -124,6 +127,26 @@ GC_TEST(ObjectGate, SlotListPopFrontRejectsColouredHead)
         reinterpret_cast<uintptr_t>(fx.obj0) | MapleRuntime::REMEMBERED_0);
     SlotListTestAccess::SetHead(list, coloured);
     GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), static_cast<uintptr_t>(0));
+    GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
+
+    // Drop, do not jam: a later PushFront of a plain slot must still succeed.
+    GC_EXPECT_TRUE(list.ClearExtraContent(fx.obj0));
+    list.PushFront(fx.obj0);
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
+}
+
+GC_TEST(ObjectGate, SlotListPopFrontDropsColouredNext)
+{
+    GcHeapFixture fx;
+    SlotList list;
+    GC_EXPECT_TRUE(list.ClearExtraContent(fx.obj0));
+    list.PushFront(fx.obj0);
+    size_t size = fx.obj0->GetSize();
+    auto* slot = reinterpret_cast<ObjectSlot*>(fx.obj0);
+    slot->next = reinterpret_cast<ObjectSlot*>(
+        reinterpret_cast<uintptr_t>(fx.obj1) | MapleRuntime::REMEMBERED_0);
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
+    GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
 }
 
 GC_TEST(ObjectGate, FreePinnedPushFrontRejectsFreeRegion)
