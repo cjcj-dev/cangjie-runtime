@@ -8,6 +8,7 @@
 // and by one subsequent ExpireKept (zRelocate.cpp:1018-1047).
 // Does not rebind ForwardingTable::Initialize (one-shot process map).
 
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Collector/ZForwarding.h"
 #include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
@@ -77,6 +78,24 @@ GC_TEST(ReceiptLife, ToLifeOverflowIsFailClosed)
     tab->note_to_life_record(0x1000u * (ZForwarding::kToLifeCap + 1), 1);
     GC_EXPECT_TRUE(tab->to_life_overflow());
     tab->Destroy();
+}
+
+GC_TEST(FwdTable, RetireSurvivesMinorReclaimUntilMajorEpoch)
+{
+    ForwardingTable::AdvanceMajorEpoch();
+    ForwardingTable::ReclaimRetired("test-drain");
+    ZForwarding* tab = ZForwarding::Create(4, 0x20000, 0, 0x1000);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const uint64_t held0 = ForwardingTable::RetiredHeldCount();
+    ForwardingTable::Retire(tab);
+    GC_EXPECT_EQ(ForwardingTable::RetiredHeldCount(), held0 + 1);
+    for (int i = 0; i < 3; ++i) {
+        ForwardingTable::ReclaimRetired("test-minor");
+        GC_EXPECT_EQ(ForwardingTable::RetiredHeldCount(), held0 + 1);
+    }
+    ForwardingTable::AdvanceMajorEpoch();
+    ForwardingTable::ReclaimRetired("test-major");
+    GC_EXPECT_EQ(ForwardingTable::RetiredHeldCount(), held0);
 }
 
 GC_TEST(ReceiptLife, KeptExpireLatchIsOnce)

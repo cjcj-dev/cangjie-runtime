@@ -47,7 +47,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
             }
         }
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, &field);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -66,7 +66,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, &field);
         if (loadGood == nullptr) {
             return nullptr;
         }

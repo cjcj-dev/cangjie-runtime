@@ -78,6 +78,9 @@ GC_TEST(I2ReadRef, ForwardedFromMissDoesNotHandFrom)
     const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
     field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0) | remap));
 
+    Barrier::SetI2ResolveNullForTest(true);
     BaseObject* got = barrier.ReadReference(fx.obj0, *field);
+    Barrier::SetI2ResolveNullForTest(false);
     GC_EXPECT_TRUE(got != fx.obj0);
+    GC_EXPECT_TRUE(got == nullptr);
 }

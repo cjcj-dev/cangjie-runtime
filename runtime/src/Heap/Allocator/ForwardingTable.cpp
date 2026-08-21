@@ -219,10 +219,10 @@ static void UnlinkThenDestroy(ZForwarding* tab)
 namespace {
 std::mutex g_retiredLock;
 std::vector<ZForwarding*> g_retired;
-std::vector<ZForwarding*> g_retiredAged;
 std::atomic<uint64_t> g_retiredTotal{ 0 };
 std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
+std::atomic<uint64_t> g_majorEpoch{ 0 };
 } // namespace
 
 void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSize)
@@ -247,7 +247,6 @@ void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSiz
             gens.swap(keep);
         };
         drop(g_retired);
-        drop(g_retiredAged);
     }
     for (ZForwarding* tab : victims) {
         UnlinkThenDestroy(tab);
@@ -259,20 +258,40 @@ void ForwardingTable::Retire(ZForwarding* tab)
     if (tab == nullptr) {
         return;
     }
+    tab->set_retired_at_major_epoch(g_majorEpoch.load(std::memory_order_acquire));
     std::lock_guard<std::mutex> lock(g_retiredLock);
     g_retired.push_back(tab);
     g_retiredTotal.fetch_add(1, std::memory_order_relaxed);
+}
+
+uint64_t ForwardingTable::CurrentMajorEpoch() { return g_majorEpoch.load(std::memory_order_acquire); }
+
+void ForwardingTable::AdvanceMajorEpoch() { g_majorEpoch.fetch_add(1, std::memory_order_acq_rel); }
+
+uint64_t ForwardingTable::RetiredHeldCount()
+{
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    return g_retired.size();
 }
 
 void ForwardingTable::ReclaimRetired(const char* why)
 {
     std::vector<ZForwarding*> victims;
     size_t heldNow = 0;
+    const uint64_t epoch = g_majorEpoch.load(std::memory_order_acquire);
     {
         std::lock_guard<std::mutex> lock(g_retiredLock);
-        victims.swap(g_retiredAged);
-        g_retiredAged.swap(g_retired);
-        heldNow = g_retiredAged.size();
+        std::vector<ZForwarding*> keep;
+        keep.reserve(g_retired.size());
+        for (ZForwarding* tab : g_retired) {
+            if (tab != nullptr && epoch > tab->retired_at_major_epoch()) {
+                victims.push_back(tab);
+            } else {
+                keep.push_back(tab);
+            }
+        }
+        g_retired.swap(keep);
+        heldNow = g_retired.size();
     }
     uint64_t peak = g_retiredHeldPeak.load(std::memory_order_relaxed);
     while (heldNow > peak && !g_retiredHeldPeak.compare_exchange_weak(peak, heldNow, std::memory_order_relaxed)) {
@@ -283,9 +302,10 @@ void ForwardingTable::ReclaimRetired(const char* why)
     if (!victims.empty() || heldNow != 0) {
         const uint64_t done = g_reclaimedTotal.fetch_add(victims.size(), std::memory_order_relaxed) + victims.size();
         LOG(RTLOG_ERROR,
-            "[FWDTABLE][reclaim] why=%s freed=%zu aged_held=%zu held_peak=%lu retired_total=%lu reclaimed_total=%lu",
+            "[FWDTABLE][reclaim] why=%s freed=%zu held=%zu held_peak=%lu retired_total=%lu reclaimed_total=%lu "
+            "majorEpoch=%lu",
             why == nullptr ? "?" : why, victims.size(), heldNow, g_retiredHeldPeak.load(std::memory_order_relaxed),
-            g_retiredTotal.load(std::memory_order_relaxed), done);
+            g_retiredTotal.load(std::memory_order_relaxed), done, epoch);
     }
 }
 
@@ -477,11 +497,7 @@ static MAddress FindRetiredTo(MAddress from)
         }
         return 0;
     };
-    const MAddress fresh = scan(g_retired);
-    if (fresh != 0) {
-        return fresh;
-    }
-    return scan(g_retiredAged);
+    return scan(g_retired);
 }
 
 MAddress ForwardingTable::FindTo(MAddress from)

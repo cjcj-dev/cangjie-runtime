@@ -158,7 +158,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                 // or painted an earlier one whose colour has come back around.
                 ZgcInvariants::NoteFastPathAccept(static_cast<uintptr_t>(raw(oldField.GetFieldValue())), oldTarget);
             }
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, &field);
             if (resolved != oldTarget && resolved != nullptr) {
                 if (!Heap::IsHeapAddress(resolved)) {
                     return resolved;
@@ -201,7 +201,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
             return loadGood;
         }
 
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, &field);
         if (loadGood == nullptr) {
             return nullptr;
         }

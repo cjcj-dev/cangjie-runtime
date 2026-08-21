@@ -88,6 +88,8 @@ public:
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
     bool kept_seen_expire() const { return _kept_seen_expire; }
+    void set_retired_at_major_epoch(uint64_t e) { _retiredAtMajorEpoch = e; }
+    uint64_t retired_at_major_epoch() const { return _retiredAtMajorEpoch; }
     static std::atomic<uint64_t>& StaleToLifeCount();
 
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
@@ -236,7 +238,8 @@ private:
           _done(false),
           _to_life_n(0),
           _to_life_overflow(false),
-          _kept_seen_expire(false)
+          _kept_seen_expire(false),
+          _retiredAtMajorEpoch(0)
     {
         for (uint8_t i = 0; i < kToLifeCap; ++i) {
             _to_lives[i] = ToLife{};
@@ -260,6 +263,7 @@ private:
     uint8_t _to_life_n;
     bool _to_life_overflow;
     bool _kept_seen_expire;
+    uint64_t _retiredAtMajorEpoch;
 };
 
 // Existing tests and ClearEntries still spell this name.

@@ -933,16 +933,7 @@ bool I2ResolveTraceOn()
     return on;
 }
 
-bool I2ResolveFatalOn()
-{
-    static const bool on = [] {
-        const char* e = std::getenv("CJ_I2_RESOLVE_FATAL");
-        return e != nullptr && e[0] == '1';
-    }();
-    return on;
-}
-
-void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const char* site)
+void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const char* site, const void* slot)
 {
     const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
     static std::atomic<uint64_t> dumpN{ 0 };
@@ -967,21 +958,43 @@ void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const
             published = space.FindPublishedRoute(target).dest;
             destWhy = ZForwarding::DestUnusableWhy(reinterpret_cast<MAddress>(published));
         }
+        unsigned holderRtype = 0xffu;
+        unsigned holderYoung = 0;
+        unsigned holderDestHeld = 0;
+        unsigned holderUnmov = 0;
+        if (slot != nullptr && Heap::IsHeapAddress(reinterpret_cast<MAddress>(slot))) {
+            RegionInfo* holder = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(slot));
+            if (holder != nullptr) {
+                holderRtype = static_cast<unsigned>(holder->GetRegionType());
+                holderYoung = holder->IsYoungRegion() ? 1u : 0u;
+                holderDestHeld = holder->IsRouteDestHeld() ? 1u : 0u;
+                holderUnmov = holder->IsUnmovableFromRegion() ? 1u : 0u;
+            }
+        }
         LOG(RTLOG_ERROR,
             "[I2][resolve-miss] site=%s n=%llu target=%p rtype=%u routeState=%u ghost=%u "
-            "lifeSeq=%u destHeld=%u published=%p destWhy=%s armedMiss=%llu",
+            "lifeSeq=%u destHeld=%u published=%p destWhy=%s slot=%p holderRtype=%u holderYoung=%u "
+            "holderDestHeld=%u holderUnmov=%u armedMiss=%llu",
             site, static_cast<unsigned long long>(n), static_cast<void*>(target), rtype, routeState, ghost,
-            lifeSeq, destHeld, static_cast<void*>(published), destWhy,
+            lifeSeq, destHeld, static_cast<void*>(published), destWhy, slot, holderRtype, holderYoung,
+            holderDestHeld, holderUnmov,
             static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
     } else if (I2ResolveTraceOn() && n <= 32) {
-        LOG(RTLOG_ERROR, "[I2][resolve-miss] site=%s n=%llu target=%p armedMiss=%llu", site,
-            static_cast<unsigned long long>(n), static_cast<void*>(target),
+        LOG(RTLOG_ERROR, "[I2][resolve-miss] site=%s n=%llu target=%p slot=%p armedMiss=%llu", site,
+            static_cast<unsigned long long>(n), static_cast<void*>(target), slot,
             static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
     }
 }
+
+std::atomic<bool> g_i2ResolveNullForTest{ false };
 } // namespace
 
-BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
+void Barrier::SetI2ResolveNullForTest(bool allow)
+{
+    g_i2ResolveNullForTest.store(allow, std::memory_order_release);
+}
+
+BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target, const void* slot) const
 {
     static std::atomic<bool> dumped{ false };
     bool expectDump = false;
@@ -1011,10 +1024,11 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (self != nullptr && self != target) {
         return self;
     }
-    NoteI2ResolveMiss(g_i2ResolveP1Miss, target, "P1");
-    if (I2ResolveFatalOn()) {
-        LOG(RTLOG_FATAL, "[I2] ResolveFromCopyForMutator miss target=%p", static_cast<void*>(target));
+    NoteI2ResolveMiss(g_i2ResolveP1Miss, target, "P1", slot);
+    if (g_i2ResolveNullForTest.load(std::memory_order_acquire)) {
+        return nullptr;
     }
+    LOG(RTLOG_FATAL, "[I2] ResolveFromCopyForMutator miss target=%p slot=%p", static_cast<void*>(target), slot);
     return nullptr;
 }
 
@@ -1027,7 +1041,7 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         if (kStaleGuard) {
             const TargetVerdict verdict = JudgeTarget(handed);
             if (verdict != TargetVerdict::Usable) {
-                BaseObject* resolved = ResolveFromCopyForMutator(handed);
+                BaseObject* resolved = ResolveFromCopyForMutator(handed, &field);
                 ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                                    obj, &field);
                 if (resolved != nullptr && resolved != handed) {
@@ -1110,9 +1124,9 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
         }
     }
     if (target != nullptr && JudgeTarget(target) != TargetVerdict::Usable) {
-        BaseObject* resolved = ResolveFromCopyForMutator(target);
+        BaseObject* resolved = ResolveFromCopyForMutator(target, &field);
         if (resolved == nullptr) {
-            NoteI2ResolveMiss(g_i2ResolveP3Miss, target, "P3");
+            NoteI2ResolveMiss(g_i2ResolveP3Miss, target, "P3", &field);
         }
         target = resolved;
     }
@@ -1201,7 +1215,7 @@ BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field,
         BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.AtomicReadReference(obj, field, order);
         });
-        BaseObject* resolved = ResolveFromCopyForMutator(handed);
+        BaseObject* resolved = ResolveFromCopyForMutator(handed, &field);
         if (resolved != handed && resolved != nullptr) {
             RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
             ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),

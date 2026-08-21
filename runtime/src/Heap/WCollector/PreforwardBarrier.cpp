@@ -25,7 +25,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, &field);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -56,7 +56,7 @@ BaseObject* PreforwardBarrier::ReadReference(BaseObject* obj, RefField<false>& f
             return loadGood;
         }
 
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, &field);
         if (loadGood == nullptr) {
             return nullptr;
         }

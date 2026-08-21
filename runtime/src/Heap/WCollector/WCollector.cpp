@@ -9347,6 +9347,8 @@ void WCollector::DoGarbageCollection()
     if (!skipPostflipWalk) {
         InvalidateOldTaggedRefs(false);
     }
+    ForwardingTable::AdvanceMajorEpoch();
+    ForwardingTable::ReclaimRetired("major-postflip");
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(

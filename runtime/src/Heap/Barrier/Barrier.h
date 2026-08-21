@@ -43,6 +43,7 @@ public:
     void WriteF64(BaseObject* obj, Field<double>& field, double val) const;
 
     BaseObject* ReadReference(BaseObject* obj, RefField<false>& field) const;
+    static void SetI2ResolveNullForTest(bool allow);
     BaseObject* ReadStaticRef(ReadOnlyRootSlot& field) const;
     BaseObject* ReadWeakRef(BaseObject* obj, RefField<false>& field) const;
     void ReadStruct(MAddress dst, BaseObject* obj, MAddress src, size_t size) const;
@@ -152,7 +153,7 @@ protected:
     // I2: FORWARDED/zero-header from-copy → FindToVersion to. Never hand from.
     // SkipLaunderingHeal may refuse to write from into the slot; the return value
     // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
-    BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+    BaseObject* ResolveFromCopyForMutator(BaseObject* target, const void* slot = nullptr) const;
 
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;

@@ -34,7 +34,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         RefField<> oldField(field);
         BaseObject* oldTarget = to_object(oldField.GetTargetObject());
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget, &field);
             if (resolved == oldTarget || resolved == nullptr) {
                 return resolved;
             }
@@ -53,7 +53,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
-        loadGood = ResolveFromCopyForMutator(loadGood);
+        loadGood = ResolveFromCopyForMutator(loadGood, &field);
         if (loadGood == nullptr) {
             return nullptr;
         }
@@ -239,7 +239,7 @@ BaseObject* TraceBarrier::AtomicReadReference(BaseObject* obj, RefField<true>& f
     BaseObject* target = nullptr;
     RefField<false> oldField(field.GetFieldValue(order));
     if (theCollector.IsCurrentPointer(oldField)) {
-        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()));
+        target = ResolveFromCopyForMutator(to_object(oldField.GetTargetObject()), &field);
         DLOG(TBARRIER, "atomic read obj %p ref@%p: %#zx -> %p", obj, &field, raw(oldField.GetFieldValue()), target);
         return target;
     }

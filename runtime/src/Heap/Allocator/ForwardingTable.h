@@ -51,6 +51,9 @@ public:
     static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
     static void Retire(ZForwarding* tab);
     static void ReclaimRetired(const char* why);
+    static uint64_t CurrentMajorEpoch();
+    static void AdvanceMajorEpoch();
+    static uint64_t RetiredHeldCount();
 
     // zForwardingTable.inline.hpp:43-62
     static ZForwarding* get(MAddress addr);
