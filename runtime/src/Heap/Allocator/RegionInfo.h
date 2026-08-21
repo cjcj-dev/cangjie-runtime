@@ -562,21 +562,29 @@ public:
     // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
     // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
     // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
-    // are actually preserved. Default off (MRT_GCV2_RETAINED_OWN_COPY=1).
-    static bool RetainedOwnCopyEnabled()
-    {
-        static const bool enabled = []() {
-            const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_RETAINED_OWN_COPY */;
-            return value != nullptr && std::strcmp(value, "1") == 0;
-        }();
-        return enabled;
-    }
+    // are actually preserved. ZGC keeps the page livemap valid through relocation
+    // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
+    static constexpr bool RetainedOwnCopyEnabled() { return true; }
 
     // Union of markBitmap and resurrectBitmap — the same two bitmaps LiveInfo::IsSurvivedObject
     // reads, collapsed into one array so the copy answers exactly the same question.
     void CaptureRetainedMarkWords(MarkView<Generation::Old> view, LiveInfo* liveInfo)
     {
         FreeRetainedMarkWords();
+        if (IsLargeRegion()) {
+            // ZGC large pages contain one object at page start (zPage.inline.hpp:53-58),
+            // but still represent its liveness with the page livemap (228-240). Mirror
+            // our large-region mark/resurrect single bits in retained word bit zero.
+            if (GetMarkedRegionFlag(view) != 1 && metadata.isResurrected != 1) {
+                return;
+            }
+            uint64_t* words = static_cast<uint64_t*>(malloc(sizeof(uint64_t)));
+            CHECK(words != nullptr);
+            words[0] = 1;
+            metadata.retainedMarkWords = words;
+            metadata.retainedMarkWordCnt = 1;
+            return;
+        }
         if (liveInfo == nullptr) {
             return;
         }
@@ -591,11 +599,7 @@ public:
             return;
         }
         uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
-        if (words == nullptr) {
-            // Out of memory for a diagnostic-grade copy: leave the snapshot absent. The
-            // consumer treats "no snapshot" as keep, i.e. this degrades to today's fail-open.
-            return;
-        }
+        CHECK(words != nullptr);
         for (size_t i = 0; i < wordCnt; ++i) {
             uint64_t bits = 0;
             if (i < markWords) {
@@ -647,7 +651,7 @@ public:
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
-        if (RetainedOwnCopyEnabled() && !IsLargeRegion()) {
+        if (RetainedOwnCopyEnabled()) {
             CaptureRetainedMarkWords(GetMarkView<Generation::Old>(), metadata.retainedLiveInfo);
         }
         if (IsLargeRegion()) {
