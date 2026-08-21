@@ -2190,10 +2190,28 @@ void WCollector::TraceHeap()
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw)
 {
     RefField<> oldField(field);
-    if (!IsOldPointer(oldField)) {
+    const bool oldPointer = IsOldPointer(oldField);
+    BaseObject* fromObj = to_object(oldField.GetTargetObject());
+    // ZGC heals the concrete oop slot after resolving through its forwarding
+    // table (zBarrier.inline.hpp:318-340), and remap_young_roots applies that
+    // barrier to every selected root/remset slot before the next relocate flip
+    // (zGeneration.cpp:1408-1523). A remap colour can wrap here, so colour alone
+    // cannot prove that the address is already the to-version. The postflip
+    // full-heap closure already owns every slot under STW; consume the current
+    // forwarding receipt before the table is retired.
+    BaseObject* receipt = nullptr;
+    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+        ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
+        if (forwarding != nullptr) {
+            const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
+            if (to != 0) {
+                receipt = reinterpret_cast<BaseObject*>(to);
+            }
+        }
+    }
+    if (!oldPointer && receipt == nullptr) {
         return;
     }
-    BaseObject* fromObj = to_object(oldField.GetTargetObject());
     // The non-heap arm below (:1845) already knows this field can hold a TypeInfo*, a binary
     // constant or immortal metadata -- but it tested `latest`, i.e. after the route lookup had
     // already run on `fromObj`. PlanRouteUnderStw -> PlanRoute -> PlanRouteLookup ->
@@ -2209,8 +2227,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     //
     // The three sibling sites all gate before the lookup -- ResolveMinorReference (:2849),
     // FindToVersion (WCollector.h:495) and ForwardUpdateRawRef (:1611).  This one did not.
-    BaseObject* latest = fromObj;
-    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+    BaseObject* latest = receipt != nullptr ? receipt : fromObj;
+    if (receipt == nullptr && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
         BaseObject* dest = PlanRouteUnderStw(fromObj, stw).dest;
         if (dest != nullptr) {
             latest = dest;
