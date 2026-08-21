@@ -72,6 +72,58 @@ GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndForwardEpochBump)
     fx.FreePlanted(live);
 }
 
+// unmovmark: in-place young promote captures retained words while the region
+// is still young (RegionManager.cpp:3212/3252/3477, WCollector.cpp:7391).
+// PromoteYoungRegion deliberately does not copy the Young face into Old
+// (RegionInfo.h:2540-2544). ZGC keeps the same page livemap across
+// flip-promote (zPage.cpp:103-113 reset generation_id; zPage.inline.hpp:254-256
+// still reads that livemap). Capture must therefore union the current Young
+// face, or UNMOVABLE_FROM holders stay bit=0 after promotion.
+GC_TEST(LiveMap, RetainedCaptureUnionsYoungFaceBeforePromotion)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* youngBitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
+
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
+
+    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
+    (void)region->PromoteYoungRegion(young);
+    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->FreeRetainedMarkWords();
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
+GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    region->SetRegionType(RegionInfo::RegionType::RECENT_LARGE_REGION);
+    region->SetYoungRegionFlag(1);
+    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
+    region->SetMarkedRegionFlag(young, 1);
+    region->SetRegionAllocPtr(region->GetRegionStart() + 64);
+    region->AddLiveByteCount(64);
+
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
+
+    region->FreeRetainedMarkWords();
+}
+
 // ZGC zPage.inline.hpp:53-58: a large page contains one object at page start.
 // Its retained livemap is therefore one persistent bit, including resurrection.
 GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
