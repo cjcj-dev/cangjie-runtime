@@ -1,7 +1,7 @@
 #!/bin/bash
 # youngflip: paired A/B large-sample + pause accounting + 12-wave + rec=stw.
 # A = MARK on (econ SO) / B = product default off. FOLLOW stays off.
-# Cores 160-189 (190-191 blacklisted). 15×2-core slots.
+# Cores 160-189 (190-191 blacklisted). 24 single-core slots use 160-183.
 set -u
 ROOT=/root/youngflip-run
 A=$ROOT/so-econ
@@ -15,7 +15,7 @@ GOLD_NW_12=635925223159200
 GOLD_SD=368685940367600
 CORES_LO=160
 CORES_HI=189
-NSLOT=15
+NSLOT=24
 SOAK_PID_FILE=/root/cjpmck-run/soak_paint/soak.pid
 export PATH=/usr/bin:/bin:/usr/local/bin
 mkdir -p "$ROOT/logs" "$ROOT/mega" "$ROOT/econ" "$ROOT/wave12" "$ROOT/recstw"
@@ -39,18 +39,16 @@ classify_file() {
 
 run_one_pair() {
   local spec=$1
-  IFS=, read -r arm so load heap i nme bin gold timeout_s <<< "$spec"
-  local slice=$(( (i - 1) % NSLOT ))
-  local c0=$(( CORES_LO + slice * 2 ))
-  local c1=$(( c0 + 1 ))
-  [ "$c1" -gt "$CORES_HI" ] && c1=$CORES_HI
+  IFS=, read -r arm so load heap i nme bin gold timeout_s slot_id <<< "$spec"
+  local slice=$(( (slot_id - 1) % NSLOT ))
+  local c0=$(( CORES_LO + slice ))
   local tag="${arm}_${load}_${heap}_$i"
   local f=$OUT/o_${tag}.txt
   local t0 t1 wall rc
   t0=$(date +%s.%N)
   LD_LIBRARY_PATH=$so cjHeapSize=$heap CANGJIE_CJHEAP_SIZE=$heap \
     MRT_GC_LOG=1 MRT_LOG_LEVEL=i \
-    taskset -c $c0-$c1 timeout "$timeout_s" "$bin" >"$f" 2>&1
+    taskset -c "$c0" timeout "$timeout_s" "$bin" >"$f" 2>&1
   rc=$?
   t1=$(date +%s.%N)
   wall=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}')
@@ -85,14 +83,18 @@ run_paired() {
   export -f run_one_pair classify_file
   export OUT NSLOT CORES_LO CORES_HI TOOLS
   local specs=()
-  local i
+  local i slot_id=0
   for i in $(seq 1 "$n"); do
     if [ $((i % 2)) -eq 1 ]; then
-      specs+=("A,$A,$load,$heap,$i,$name,$bin,$gold,$timeout_s")
-      specs+=("B,$B,$load,$heap,$i,$name,$bin,$gold,$timeout_s")
+      slot_id=$((slot_id + 1))
+      specs+=("A,$A,$load,$heap,$i,$name,$bin,$gold,$timeout_s,$slot_id")
+      slot_id=$((slot_id + 1))
+      specs+=("B,$B,$load,$heap,$i,$name,$bin,$gold,$timeout_s,$slot_id")
     else
-      specs+=("B,$B,$load,$heap,$i,$name,$bin,$gold,$timeout_s")
-      specs+=("A,$A,$load,$heap,$i,$name,$bin,$gold,$timeout_s")
+      slot_id=$((slot_id + 1))
+      specs+=("B,$B,$load,$heap,$i,$name,$bin,$gold,$timeout_s,$slot_id")
+      slot_id=$((slot_id + 1))
+      specs+=("A,$A,$load,$heap,$i,$name,$bin,$gold,$timeout_s,$slot_id")
     fi
   done
   printf '%s\n' "${specs[@]}" | xargs -P "$NSLOT" -I{} bash -c 'run_one_pair "$@"' _ {} > "$OUT/mega.tsv"
