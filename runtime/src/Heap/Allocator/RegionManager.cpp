@@ -1727,16 +1727,6 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if (kGcTriggerAllocRateEnabled && !kGcTriggerPinYoung32MB) {
             youngRegionTriggerBytes = gcStats.youngTriggerBytes.load(std::memory_order_acquire);
         }
-        // genperf: default-off arm B — raise young trigger out of reach so minor never fires;
-        // barriers/remset still run. Unset must match product path bit-for-bit.
-        // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
-        static const bool disableMinor = []() {
-            const char* disableMinorEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DISABLE_MINOR */;
-            return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
-        }();
-        if (disableMinor) {
-            youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
-        }
         size_t youngAllocated = GetYoungAllocatedSize();
         size_t allocated = Heap::GetHeap().GetAllocator().AllocatedBytes();
         // Occupancy young stays on the latched line (survival). Director uses the
@@ -1744,7 +1734,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // (12-wave NW). zDirector.cpp:296-306 / :331-381.
         const size_t directorMinorBytes = kGcTriggerYoungFixedBytes;
         bool requested = false;
-        if (kGcTriggerAllocRateEnabled && !disableMinor) {
+        if (kGcTriggerAllocRateEnabled) {
             MutatorAllocRateStats rate = MutatorAllocRate::stats();
             const uint64_t nowNs = TimeUtil::NanoSeconds();
             const uint64_t prevFinish = GCStats::GetPrevGCFinishTime();
@@ -3237,18 +3227,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
     }
 
-    // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
-    // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
-    // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
-    // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
-    static const bool forceInPlaceEnv = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool forceInPlace =
-        forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
     const bool stayYoung = youngRegion && StayYoungThisCycle(region);
-    if (forceInPlace || stayYoung || !RouteRegion(region)) {
+    if (stayYoung || !RouteRegion(region)) {
         if (youngRegion && stayYoung) {
             EnlistStayYoungSurvivor(region);
             return;

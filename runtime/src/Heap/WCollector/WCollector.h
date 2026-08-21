@@ -38,7 +38,7 @@ void EmitParamzeroCrashProbe(uintptr_t rbp, uintptr_t rbx, uintptr_t rip);
 // (zGeneration.cpp:665-669) — everything a young collector does between
 // pause_mark_start and pause_mark_end runs with mutators alive.
 // Every field below counts GC work performed *while the world is running*, so the
-// closed arm (MRT_GCV2_YOUNG_CONC_MARK unset) reports all-zero by construction:
+// closed arm (kYoungConcMark=false) reports all-zero by construction:
 // there is no window there. A non-zero windowNs with markedInWindow()==0 and
 // satbObjects==0 means the window exists but carries no marking work — report that,
 // do not read a duration as evidence of concurrency.

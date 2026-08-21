@@ -8137,15 +8137,8 @@ void WCollector::DoYoungGarbageCollection()
     FlipPromoDiag::OnBroadScanBegin(minorTotalRuns + 1);
     // Flags must be known before remset drain: FOLLOW STW1 only flips
     // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
-    static const bool youngConcMark = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    static const bool youngConcFollowRequested = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
+    constexpr bool youngConcMark = kYoungConcMark;
+    constexpr bool youngConcFollow = false;
     MinorSlotSet rememberedSlots;
     {
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
@@ -8291,7 +8284,7 @@ void WCollector::DoYoungGarbageCollection()
     }
     // youngconc: concurrent young mark (mutator-concurrent, not only STW-parallel).
     // Default OFF until STW2 remset/root fixpoint is checksum-clean (see REPORT-youngconc).
-    // MRT_GCV2_YOUNG_CONC_MARK=1 enables; reuses major TRACE barrier + SATB (no second family).
+    // kYoungConcMark=true enables; reuses major TRACE barrier + SATB (no second family).
     // STW1 = prepare + remset drain + root enum + STW1-snapshot mark (concwin);
     // STW2 = concurrent remset drain + re-enum + evacuate.
     // youngConcMark / youngConcFollow computed above (before remset drain).
