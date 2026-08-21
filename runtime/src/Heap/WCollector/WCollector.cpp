@@ -1927,15 +1927,13 @@ void WCollector::RemapYoungRoots()
         mutator.MutatorUnlock();
     });
 
-    if (DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
-            "static seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
-            "stack seen=%zu coloured=%zu flipSeq=%lu",
-            remsetSeen, remsetColoured, remsetRemapped, remsetDoubleBad, staticSeen, staticColoured,
-            staticRemapped, staticDoubleBad, stackSeen, stackColoured,
-            static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
-    }
+    LOG(RTLOG_ERROR,
+        "[A8REMAP] remset seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
+        "static seen=%zu coloured=%zu remapped=%zu doubleBad=%zu "
+        "stack seen=%zu coloured=%zu flipSeq=%lu",
+        remsetSeen, remsetColoured, remsetRemapped, remsetDoubleBad, staticSeen, staticColoured,
+        staticRemapped, staticDoubleBad, stackSeen, stackColoured,
+        static_cast<unsigned long>(FlipSeq().load(std::memory_order_relaxed)));
 }
 void WCollector::PreforwardFinalizerProcessorRoots()
 {

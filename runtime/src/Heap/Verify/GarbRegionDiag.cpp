@@ -11,7 +11,6 @@
 #include "Heap/Collector/GcStats.h"
 #include "Heap/Collector/LiveInfo.h"
 #include "Heap/Heap.h"
-#include "Heap/Verify/DiagGate.h"
 #include "ObjectModel/RefField.h"
 
 namespace MapleRuntime {
@@ -223,12 +222,11 @@ void CensusBeforeForward(const char* where)
         false);
     g_censusHolders.store(holders, std::memory_order_relaxed);
     g_censusSlots.store(slots, std::memory_order_relaxed);
-    if (DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[GCV2][garbregion][census] n=%zu where=%s holders=%zu slots=%zu regionsHit=%zu sat=%zu gc=%zu",
-            n, g_lastWhere, holders, slots, g_tabUsed.load(std::memory_order_relaxed),
-            g_tabSat.load(std::memory_order_relaxed), g_gcCount.load(std::memory_order_relaxed));
-    }
+    std::fprintf(stderr,
+                 "[GCV2][garbregion][census] n=%zu where=%s holders=%zu slots=%zu regionsHit=%zu sat=%zu gc=%zu\n",
+                 n, g_lastWhere, holders, slots, g_tabUsed.load(std::memory_order_relaxed),
+                 g_tabSat.load(std::memory_order_relaxed), g_gcCount.load(std::memory_order_relaxed));
+    std::fflush(stderr);
 }
 
 void NoteCollectEnter(RegionInfo* region)
@@ -238,8 +236,8 @@ void NoteCollectEnter(RegionInfo* region)
     }
     EnsureAtexit();
     size_t n = g_enter.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (n == 1 && DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE, "[GCV2][garbregion] armed first n=1 census=%u", static_cast<unsigned>(kCensus));
+    if (n == 1) {
+        LOG(RTLOG_ERROR, "[GCV2][garbregion] armed first n=1 census=%u", static_cast<unsigned>(kCensus));
     }
     if (region == nullptr) {
         return;
@@ -307,20 +305,23 @@ void NoteCollectEnter(RegionInfo* region)
     const char* cls = EmptyClass(auth, large, liveinfoNull, epochStale, knownEmpty);
     size_t slog = g_sampleLogged.fetch_add(1, std::memory_order_relaxed);
     const bool loud = (slots > 0) || (slog < kSampleCap);
-    if (loud && DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[GCV2][garbregion][collect] n=%zu region=%p start=%#zx alloc=%#zx type=%u route=%u "
-            "routeGen=%u young=%u large=%u live=%llu auth=%u knownEmpty=%u neverExamined=%u "
-            "liveinfo=%p faceEp=%llu snapEp=%llu bitmap=%p cls=%s "
-            "slots=%zu markedH=%zu unmarkedH=%zu youngH=%zu oldH=%zu join=%u gc=%zu where=%s",
-            n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
-            static_cast<unsigned>(region->GetRegionType()), static_cast<unsigned>(region->GetRouteState()),
-            static_cast<unsigned>(region->GetRouteMarkGeneration()), static_cast<unsigned>(young),
-            static_cast<unsigned>(large), static_cast<unsigned long long>(liveBytes), static_cast<unsigned>(auth),
-            static_cast<unsigned>(knownEmpty), static_cast<unsigned>(neverExamined), liveInfo,
-            static_cast<unsigned long long>(faceEp), static_cast<unsigned long long>(snapEp), mb, cls, slots,
-            markedH, unmarkedH, youngH, oldH, static_cast<unsigned>(row != nullptr),
-            g_gcCount.load(std::memory_order_relaxed), g_lastWhere);
+    if (loud) {
+        std::fprintf(stderr,
+                     "[GCV2][garbregion][collect] n=%zu region=%p start=%#zx alloc=%#zx type=%u route=%u "
+                     "routeGen=%u young=%u large=%u live=%llu auth=%u knownEmpty=%u neverExamined=%u "
+                     "liveinfo=%p faceEp=%llu snapEp=%llu bitmap=%p cls=%s "
+                     "slots=%zu markedH=%zu unmarkedH=%zu youngH=%zu oldH=%zu join=%u gc=%zu where=%s\n",
+                     n, region, region->GetRegionStart(), region->GetRegionAllocPtr(),
+                     static_cast<unsigned>(region->GetRegionType()),
+                     static_cast<unsigned>(region->GetRouteState()),
+                     static_cast<unsigned>(region->GetRouteMarkGeneration()),
+                     static_cast<unsigned>(young), static_cast<unsigned>(large),
+                     static_cast<unsigned long long>(liveBytes), static_cast<unsigned>(auth),
+                     static_cast<unsigned>(knownEmpty), static_cast<unsigned>(neverExamined), liveInfo,
+                     static_cast<unsigned long long>(faceEp), static_cast<unsigned long long>(snapEp), mb, cls,
+                     slots, markedH, unmarkedH, youngH, oldH, static_cast<unsigned>(row != nullptr),
+                     g_gcCount.load(std::memory_order_relaxed), g_lastWhere);
+        std::fflush(stderr);
     }
 }
 
@@ -359,43 +360,46 @@ void NoteF3Join(RegionInfo* latestRegion, BaseObject* latest, const char* reason
     const bool auth = latestRegion->IsLiveCountAuthoritative();
     LiveInfo* liveInfo = latestRegion->GetLiveInfo();
     size_t slog = g_f3SampleLogged.fetch_add(1, std::memory_order_relaxed);
-    if ((slots > 0 || slog < kSampleCap) && DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[GCV2][garbregion][f3] n=%zu reason=%s region=%p latest=%p type=%u route=%u "
-            "routeGen=%u live=%llu auth=%u knownEmpty=%u liveinfo=%p "
-            "slots=%zu markedH=%zu unmarkedH=%zu join=%u gc=%zu",
-            n, reason != nullptr ? reason : "?", latestRegion, latest,
-            static_cast<unsigned>(latestRegion->GetRegionType()), static_cast<unsigned>(latestRegion->GetRouteState()),
-            static_cast<unsigned>(latestRegion->GetRouteMarkGeneration()),
-            static_cast<unsigned long long>(latestRegion->GetLiveByteCount()), static_cast<unsigned>(auth),
-            static_cast<unsigned>(knownEmpty), liveInfo, slots, markedH, unmarkedH,
-            static_cast<unsigned>(row != nullptr), g_gcCount.load(std::memory_order_relaxed));
+    if (slots > 0 || slog < kSampleCap) {
+        std::fprintf(stderr,
+                     "[GCV2][garbregion][f3] n=%zu reason=%s region=%p latest=%p type=%u route=%u "
+                     "routeGen=%u live=%llu auth=%u knownEmpty=%u liveinfo=%p "
+                     "slots=%zu markedH=%zu unmarkedH=%zu join=%u gc=%zu\n",
+                     n, reason != nullptr ? reason : "?", latestRegion, latest,
+                     static_cast<unsigned>(latestRegion->GetRegionType()),
+                     static_cast<unsigned>(latestRegion->GetRouteState()),
+                     static_cast<unsigned>(latestRegion->GetRouteMarkGeneration()),
+                     static_cast<unsigned long long>(latestRegion->GetLiveByteCount()),
+                     static_cast<unsigned>(auth), static_cast<unsigned>(knownEmpty), liveInfo, slots, markedH,
+                     unmarkedH, static_cast<unsigned>(row != nullptr), g_gcCount.load(std::memory_order_relaxed));
+        std::fflush(stderr);
     }
 }
 
 void Report(const char* point)
 {
-    if (!kGarbRegion || !DiagGate::VerboseOn()) {
+    if (!kGarbRegion) {
         return;
     }
-    LOG(RTLOG_VERBOSE,
-        "[GCV2][garbregion] point=%s censusN=%zu holders=%zu slots=%zu regionsHit=%zu sat=%zu "
-        "enter=%zu enter_ke=%zu enter_join=%zu enter_miss=%zu enter_liveGt0=%zu enter_liveMarkedGt0=%zu "
-        "cls_noAuth=%zu cls_liveinfoNull=%zu cls_epochStale=%zu cls_largeUnmarked=%zu "
-        "cls_notEmpty=%zu cls_neverExamined=%zu "
-        "f3=%zu f3_garbage=%zu f3_free=%zu f3_join=%zu f3_liveGt0=%zu where=%s",
-        point != nullptr ? point : "?", g_censusN.load(std::memory_order_relaxed),
-        g_censusHolders.load(std::memory_order_relaxed), g_censusSlots.load(std::memory_order_relaxed),
-        g_tabUsed.load(std::memory_order_relaxed), g_tabSat.load(std::memory_order_relaxed),
-        g_enter.load(std::memory_order_relaxed), g_enterKnownEmpty.load(std::memory_order_relaxed),
-        g_enterJoinHit.load(std::memory_order_relaxed), g_enterJoinMiss.load(std::memory_order_relaxed),
-        g_enterLiveGt0.load(std::memory_order_relaxed), g_enterLiveMarkedGt0.load(std::memory_order_relaxed),
-        g_clsNoAuth.load(std::memory_order_relaxed), g_clsLiveinfoNull.load(std::memory_order_relaxed),
-        g_clsEpochStale.load(std::memory_order_relaxed), g_clsLargeUnmarked.load(std::memory_order_relaxed),
-        g_clsNotEmpty.load(std::memory_order_relaxed), g_clsNeverExamined.load(std::memory_order_relaxed),
-        g_f3Hits.load(std::memory_order_relaxed), g_f3Garbage.load(std::memory_order_relaxed),
-        g_f3Free.load(std::memory_order_relaxed), g_f3JoinHit.load(std::memory_order_relaxed),
-        g_f3LiveGt0.load(std::memory_order_relaxed), g_lastWhere);
+    std::fprintf(stderr,
+                 "[GCV2][garbregion] point=%s censusN=%zu holders=%zu slots=%zu regionsHit=%zu sat=%zu "
+                 "enter=%zu enter_ke=%zu enter_join=%zu enter_miss=%zu enter_liveGt0=%zu enter_liveMarkedGt0=%zu "
+                 "cls_noAuth=%zu cls_liveinfoNull=%zu cls_epochStale=%zu cls_largeUnmarked=%zu "
+                 "cls_notEmpty=%zu cls_neverExamined=%zu "
+                 "f3=%zu f3_garbage=%zu f3_free=%zu f3_join=%zu f3_liveGt0=%zu where=%s\n",
+                 point != nullptr ? point : "?", g_censusN.load(std::memory_order_relaxed),
+                 g_censusHolders.load(std::memory_order_relaxed), g_censusSlots.load(std::memory_order_relaxed),
+                 g_tabUsed.load(std::memory_order_relaxed), g_tabSat.load(std::memory_order_relaxed),
+                 g_enter.load(std::memory_order_relaxed), g_enterKnownEmpty.load(std::memory_order_relaxed),
+                 g_enterJoinHit.load(std::memory_order_relaxed), g_enterJoinMiss.load(std::memory_order_relaxed),
+                 g_enterLiveGt0.load(std::memory_order_relaxed), g_enterLiveMarkedGt0.load(std::memory_order_relaxed),
+                 g_clsNoAuth.load(std::memory_order_relaxed), g_clsLiveinfoNull.load(std::memory_order_relaxed),
+                 g_clsEpochStale.load(std::memory_order_relaxed), g_clsLargeUnmarked.load(std::memory_order_relaxed),
+                 g_clsNotEmpty.load(std::memory_order_relaxed), g_clsNeverExamined.load(std::memory_order_relaxed),
+                 g_f3Hits.load(std::memory_order_relaxed), g_f3Garbage.load(std::memory_order_relaxed),
+                 g_f3Free.load(std::memory_order_relaxed), g_f3JoinHit.load(std::memory_order_relaxed),
+                 g_f3LiveGt0.load(std::memory_order_relaxed), g_lastWhere);
+    std::fflush(stderr);
 }
 
 } // namespace GarbRegionDiag

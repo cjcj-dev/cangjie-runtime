@@ -1530,7 +1530,6 @@ size_t RegionManager::ExemptFromRegions()
                 static std::atomic<size_t> gCsetEmptyMarked{ 0 };
                 static std::atomic<size_t> gCsetEmptyKeep{ 0 };
                 static std::atomic<bool> gCsetEmptyAtexit{ false };
-                static const bool diagVerbose = DiagGate::VerboseOn();
                 const size_t n = gCsetEmpty.fetch_add(1, std::memory_order_relaxed) + 1;
                 if (residual != 0) {
                     gCsetEmptyResidual.fetch_add(1, std::memory_order_relaxed);
@@ -1541,18 +1540,19 @@ size_t RegionManager::ExemptFromRegions()
                 if (!freeEmpty) {
                     gCsetEmptyKeep.fetch_add(1, std::memory_order_relaxed);
                 }
-                if (diagVerbose && !gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
+                if (!gCsetEmptyAtexit.exchange(true, std::memory_order_relaxed)) {
                     std::atexit([]() {
-                        LOG(RTLOG_VERBOSE,
-                            "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu keep=%zu",
-                            gCsetEmpty.load(std::memory_order_relaxed),
-                            gCsetEmptyResidual.load(std::memory_order_relaxed),
-                            gCsetEmptyMarked.load(std::memory_order_relaxed),
-                            gCsetEmptyKeep.load(std::memory_order_relaxed));
+                        std::fprintf(stderr,
+                                     "[WHODEAD][cset-empty] atexit n=%zu residualPages=%zu markedPages=%zu keep=%zu\n",
+                                     gCsetEmpty.load(std::memory_order_relaxed),
+                                     gCsetEmptyResidual.load(std::memory_order_relaxed),
+                                     gCsetEmptyMarked.load(std::memory_order_relaxed),
+                                     gCsetEmptyKeep.load(std::memory_order_relaxed));
+                        std::fflush(stderr);
                     });
                 }
-                if (diagVerbose && (n <= 8 || (n & (n - 1)) == 0)) {
-                    LOG(RTLOG_VERBOSE,
+                if (n <= 8 || (n & (n - 1)) == 0) {
+                    LOG(RTLOG_ERROR,
                         "[WHODEAD][cset-empty] n=%zu region=%p start=%#zx live=%zu residual=%zu fwd=%zu marked=%zu "
                         "route=%u ke=%u ghost=%u alloc=%u reason=%u free=%u",
                         n, del, start, liveBytes, residual, residualFwd, marked, rs, ke,

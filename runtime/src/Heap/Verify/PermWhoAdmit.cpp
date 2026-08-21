@@ -3,7 +3,6 @@
 #include <atomic>
 
 #include "Base/Log.h"
-#include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {
 namespace PermWhoAdmit {
@@ -55,8 +54,8 @@ void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjec
     if (forwardedObjects == 0) {
         // Positive control: proves the walk reached the sink even when nothing is stale, so a zero
         // in the line below cannot be confused with a dead probe.
-        if (n == 1 && DiagGate::VerboseOn()) {
-            LOG(RTLOG_VERBOSE, "[PERMWHO][abandon] armed first n=1 walked=%zu forwarded=0", walkedObjects);
+        if (n == 1) {
+            LOG(RTLOG_ERROR, "[PERMWHO][abandon] armed first n=1 walked=%zu forwarded=0", walkedObjects);
         }
         return;
     }
@@ -66,13 +65,11 @@ void NoteAbandon(RegionInfo* region, size_t walkedObjects, size_t forwardedObjec
     if ((bad & (bad - 1)) != 0) { // powers of two: the subject dies by SIGSEGV, so no atexit
         return;
     }
-    if (DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[PERMWHO][abandon] stale_receipts region=%p walked=%zu forwarded=%zu | abandons=%lu "
-            "with_forwarded=%lu forwarded_total=%lu walked_total=%lu",
-            static_cast<void*>(region), walkedObjects, forwardedObjects, n, bad, fwdTotal,
-            g_walkedTotal.load(std::memory_order_relaxed));
-    }
+    LOG(RTLOG_ERROR,
+        "[PERMWHO][abandon] stale_receipts region=%p walked=%zu forwarded=%zu | abandons=%lu "
+        "with_forwarded=%lu forwarded_total=%lu walked_total=%lu",
+        static_cast<void*>(region), walkedObjects, forwardedObjects, n, bad, fwdTotal,
+        g_walkedTotal.load(std::memory_order_relaxed));
 }
 
 void DumpSummary()
@@ -80,12 +77,9 @@ void DumpSummary()
     if (!kPermWhoAdmit) {
         return;
     }
-    if (DiagGate::VerboseOn()) {
-        LOG(RTLOG_VERBOSE,
-            "[PERMWHO][summary] abandons=%lu with_forwarded=%lu forwarded_total=%lu walked_total=%lu",
-            g_abandons.load(std::memory_order_relaxed), g_abandonsWithForwarded.load(std::memory_order_relaxed),
-            g_forwardedTotal.load(std::memory_order_relaxed), g_walkedTotal.load(std::memory_order_relaxed));
-    }
+    LOG(RTLOG_ERROR, "[PERMWHO][summary] abandons=%lu with_forwarded=%lu forwarded_total=%lu walked_total=%lu",
+        g_abandons.load(std::memory_order_relaxed), g_abandonsWithForwarded.load(std::memory_order_relaxed),
+        g_forwardedTotal.load(std::memory_order_relaxed), g_walkedTotal.load(std::memory_order_relaxed));
 }
 } // namespace PermWhoAdmit
 } // namespace MapleRuntime

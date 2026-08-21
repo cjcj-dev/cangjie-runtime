@@ -81,12 +81,6 @@ bool SelfTestOn()
     return EnvIsOne("MRT_GCV2_IDLEEDGE_SELFTEST") || EnvIsOne("MRT_GCV2_DIAG_SELFTEST") || TokenOn("selftest");
 }
 
-bool VerboseOn()
-{
-    static const bool enabled = EnvIsOne("MRT_GCV2_DIAG_VERBOSE");
-    return enabled;
-}
-
 void MaybeAnnounce()
 {
     static std::atomic<bool> announced{ false };
