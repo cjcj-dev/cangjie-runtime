@@ -186,7 +186,9 @@ ForwardingTable::ReaderScope::ReaderScope(ReaderKind kind, const void* slot, con
     : previousKind(g_readerContext.kind), previousSlot(g_readerContext.slot), previousHolder(g_readerContext.holder),
       previousCaller(g_readerContext.caller), previousOrigin(g_readerContext.origin)
 {
-    g_readerContext = ReaderContext{ kind, slot, holder, caller, origin != nullptr ? origin : previousOrigin };
+    g_readerContext = ReaderContext{ kind, slot != nullptr ? slot : previousSlot,
+                                     holder != nullptr ? holder : previousHolder, caller,
+                                     origin != nullptr ? origin : previousOrigin };
 }
 
 ForwardingTable::ReaderScope::~ReaderScope()
