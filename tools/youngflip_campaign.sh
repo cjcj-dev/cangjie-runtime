@@ -1,6 +1,6 @@
 #!/bin/bash
-# youngflip campaign: STOP soak → smoke → four paired cells → wave12 → rec=stw → CONT soak.
-# File markers only. No pid capture, no pkill.
+# youngflip campaign: smoke → paired cells → STOP soak → wave12 + rec=stw → CONT soak.
+# File markers only. No pid capture, no process-group signal, no pkill.
 set -u
 ROOT=/root/youngflip-run
 LOG=$ROOT/logs/campaign.log
@@ -11,28 +11,22 @@ echo "===== CAMPAIGN_START $(date -Is) ====="
 echo "MemAvailable=$(awk '/MemAvailable/{print $2}' /proc/meminfo) kB"
 echo "load=$(cat /proc/loadavg)"
 
-soak=$(cat "$SOAK_PID_FILE")
-echo "SOAK_PID=$soak"
-cleanup() {
-  if [ -n "${soak:-}" ] && [ -d "/proc/$soak" ]; then
-    echo "CLEANUP_CONT soak.pid=$soak"
-    kill -CONT -- -"$soak" || true
+soak_stopped=0
+resume_soak() {
+  if [ "$soak_stopped" = 1 ] && [ -s "$SOAK_PID_FILE" ]; then
+    echo "RECSTW_CONT soak.pid=$(cat "$SOAK_PID_FILE")"
+    kill -CONT "$(cat "$SOAK_PID_FILE")" || true
+    soak_stopped=0
   fi
+}
+cleanup() {
+  resume_soak
   if [ -f /dev/shm/MEASURE_ACTIVE ]; then
     grep -v 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE > /dev/shm/MEASURE_ACTIVE.tmp || true
     mv /dev/shm/MEASURE_ACTIVE.tmp /dev/shm/MEASURE_ACTIVE
   fi
 }
 trap cleanup EXIT
-if [ -d "/proc/$soak" ]; then
-  echo "RECSTW_STOP soak.pid=$soak"
-  kill -STOP -- -"$soak" || true
-else
-  echo "SOAK_ABSENT"
-fi
-sleep 3
-echo "STAT_160_189_after_STOP"
-ps -eo pid,psr,stat,comm --no-headers | awk '$2>=160 && $2<=189 && $3 ~ /T|R/' | grep -E 'paint|wave|dense|timeout' | head -20 || true
 
 until=$(( $(date +%s) + 43200 ))
 if ! grep -q 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE 2>/dev/null; then
@@ -101,11 +95,24 @@ mem_ok && bash tools/youngflip_driver.sh pair-nw256 50
 mem_ok && bash tools/youngflip_driver.sh pair-sd256 50
 mem_ok && bash tools/youngflip_driver.sh pair-nw1g 100
 
+if [ -s "$SOAK_PID_FILE" ]; then
+  echo "RECSTW_STOP soak.pid=$(cat "$SOAK_PID_FILE")"
+  if kill -STOP "$(cat "$SOAK_PID_FILE")"; then
+    soak_stopped=1
+  fi
+else
+  echo "SOAK_ABSENT"
+fi
+sleep 3
+echo "STAT_160_189_after_STOP"
+ps -eo pid,psr,stat,comm --no-headers | awk '$2>=160 && $2<=189 && $3 ~ /T|R/' | grep -E 'paint|wave|dense|timeout' | head -20 || true
+
 echo "WAVE12_START $(date -Is)"
 mem_ok && bash tools/youngflip_driver.sh wave12 8
 
 echo "RECSTW_START $(date -Is)"
 mem_ok && bash tools/youngflip_driver.sh recstw 5
+resume_soak
 
 echo "===== CAMPAIGN_END $(date -Is) ====="
 echo 0 > "$ROOT/campaign.rc"
