@@ -15,7 +15,6 @@
 #include "Common/ScopedObjectAccess.h"
 #include "Concurrency/ConcurrencyModel.h"
 #include "Heap/Collector/FinalizerProcessor.h"
-#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/EnumPushDiag.h"
 #include "Heap/Verify/StartWhoDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
@@ -1046,8 +1045,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&refFieldAddr)).second) { return; }
-            ForwardingTable::ReaderScope reader(
-                ForwardingTable::ReaderKind::StackObjectField, static_cast<const void*>(&rootField));
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj != nullptr && oldObj != toObj) {
                 HealRoot(rootField, from_object(toObj), HealSite::MutatorPreForwardStackField);
@@ -1069,8 +1066,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             if (host != nullptr && collector.IsGhostFromObject(host) &&
                 !collector.IsUnmovableFromObject(host)) {
                 if (rootFieldSet.insert((void*)(&root)).second) {
-                    ForwardingTable::ReaderScope reader(
-                        ForwardingTable::ReaderKind::StackOrRegisterRoot, static_cast<const void*>(&root));
                     BaseObject* toHost = collector.ForwardObject(host);
                     if (toHost != nullptr && toHost != host) {
                         HealRoot(root, to_zaddress(reinterpret_cast<MAddress>(toHost) +
@@ -1084,8 +1079,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
         if (Heap::IsHeapAddress(oldObj) && collector.IsGhostFromObject(oldObj) &&
             !collector.IsUnmovableFromObject(oldObj)) {
             if (!rootFieldSet.insert((void*)(&root)).second) { return; }
-            ForwardingTable::ReaderScope reader(
-                ForwardingTable::ReaderKind::StackOrRegisterRoot, static_cast<const void*>(&root));
             BaseObject* toObj = collector.ForwardObject(oldObj);
             if (toObj != nullptr && oldObj != toObj) {
                 HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
@@ -1119,8 +1112,6 @@ inline void Mutator::GCPhasePreForward(GCPhase newPhase)
             RebaseDerived(derivedPtr, base, offset);
             return;
         }
-        ForwardingTable::ReaderScope reader(
-            ForwardingTable::ReaderKind::StackOrRegisterRoot, static_cast<const void*>(&derivedPtr));
         BaseObject* toVersion = collector.FindLatestVersion(fromVersion);
         if (fromVersion != toVersion && toVersion != nullptr) {
             RootSlot toBase;
