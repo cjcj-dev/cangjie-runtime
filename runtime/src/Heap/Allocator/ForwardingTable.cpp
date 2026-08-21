@@ -33,6 +33,23 @@ ZGranuleMap<ZForwarding*> g_membership;
 ZGranuleMap<ZForwarding*> g_entries;
 std::atomic<bool> g_ready{ false };
 
+std::atomic<uint64_t> g_cmpTotal{ 0 };
+std::atomic<uint64_t> g_cmpAgree{ 0 };
+std::atomic<uint64_t> g_cmpTableOnly{ 0 };
+std::atomic<uint64_t> g_cmpLegacyOnly{ 0 };
+constexpr unsigned kTypeBuckets = 16;
+std::atomic<uint64_t> g_tableOnlyByType[kTypeBuckets] = {};
+std::atomic<uint64_t> g_legacyOnlyByType[kTypeBuckets] = {};
+
+std::atomic<uint64_t> g_destTotal{ 0 };
+std::atomic<uint64_t> g_destAgree{ 0 };
+std::atomic<uint64_t> g_destDisagree{ 0 };
+std::atomic<uint64_t> g_destPending{ 0 };
+std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
+std::atomic<uint64_t> g_armedHit{ 0 };
+std::atomic<uint64_t> g_armedMiss{ 0 };
+std::atomic<uint64_t> g_unarmed{ 0 };
+
 } // namespace
 
 bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); }
@@ -408,6 +425,7 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
     if (tab != nullptr) {
         const MAddress to = tab->find(from);
         if (to != 0) {
+            g_armedHit.fetch_add(1, std::memory_order_relaxed);
             if (answer != nullptr) {
                 *answer = ToAnswer::ArmedHit;
             }
@@ -416,20 +434,116 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
     }
     const MAddress retired = FindRetiredTo(from);
     if (retired != 0) {
+        g_armedHit.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedHit;
         }
         return retired;
     }
     if (tab != nullptr) {
+        g_armedMiss.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedMiss;
         }
         return 0;
     }
+    g_unarmed.fetch_add(1, std::memory_order_relaxed);
     if (answer != nullptr) {
         *answer = ToAnswer::Unarmed;
     }
     return 0;
+}
+
+uint64_t ForwardingTable::ArmedHitCount() { return g_armedHit.load(std::memory_order_relaxed); }
+uint64_t ForwardingTable::ArmedMissCount() { return g_armedMiss.load(std::memory_order_relaxed); }
+uint64_t ForwardingTable::UnarmedCount() { return g_unarmed.load(std::memory_order_relaxed); }
+
+void ForwardingTable::NoteCompare(MAddress addr, bool legacy)
+{
+    if (!Ready()) {
+        return;
+    }
+    const bool table = get(addr) != nullptr;
+    const uint64_t n = g_cmpTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (table == legacy) {
+        g_cmpAgree.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(addr);
+        const unsigned rtype = region == nullptr ? kTypeBuckets - 1
+                                                 : static_cast<unsigned>(region->GetRegionType());
+        const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
+        const unsigned ghost = (region != nullptr && region->IsGhostFromRegion()) ? 1u : 0u;
+        if (table) {
+            const uint64_t c = g_cmpTableOnly.fetch_add(1, std::memory_order_relaxed) + 1;
+            g_tableOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
+            if (c <= 64) {
+                LOG(RTLOG_ERROR, "[FWDTABLE][tableOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
+                    static_cast<size_t>(addr), rtype, ghost);
+            }
+        } else {
+            const uint64_t c = g_cmpLegacyOnly.fetch_add(1, std::memory_order_relaxed) + 1;
+            g_legacyOnlyByType[bucket].fetch_add(1, std::memory_order_relaxed);
+            if (c <= 64) {
+                LOG(RTLOG_ERROR, "[FWDTABLE][legacyOnly] n=%lu addr=%#zx rtype=%u ghost=%u", c,
+                    static_cast<size_t>(addr), rtype, ghost);
+            }
+        }
+    }
+    if ((n & (n - 1)) == 0) {
+        DumpCompare("periodic");
+    }
+}
+
+void ForwardingTable::NoteDestCompare(MAddress from, MAddress geometricTo)
+{
+    if (!Ready()) {
+        return;
+    }
+    const MAddress stored = FindTo(from);
+    const uint64_t n = g_destTotal.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (stored == 0) {
+        g_destPending.fetch_add(1, std::memory_order_relaxed);
+    } else if (stored == geometricTo) {
+        g_destAgree.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_destDisagree.fetch_add(1, std::memory_order_relaxed);
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(from);
+        const unsigned rtype = region == nullptr ? kTypeBuckets - 1
+                                                 : static_cast<unsigned>(region->GetRegionType());
+        const unsigned bucket = rtype < kTypeBuckets ? rtype : kTypeBuckets - 1;
+        g_destDisagreeByType[bucket].fetch_add(1, std::memory_order_relaxed);
+        LOG(RTLOG_ERROR, "[FWDENT][disagree] from=%#zx table=%#zx geo=%#zx rtype=%u", static_cast<size_t>(from),
+            static_cast<size_t>(stored), static_cast<size_t>(geometricTo), rtype);
+    }
+    if ((n & (n - 1)) == 0) {
+        DumpCompare("dest-periodic");
+    }
+}
+
+void ForwardingTable::DumpCompare(const char* why)
+{
+    if (!Ready()) {
+        return;
+    }
+    LOG(RTLOG_ERROR, "[FWDTABLE][cmp] why=%s total=%lu agree=%lu tableOnly=%lu legacyOnly=%lu",
+        why == nullptr ? "?" : why, g_cmpTotal.load(std::memory_order_relaxed),
+        g_cmpAgree.load(std::memory_order_relaxed), g_cmpTableOnly.load(std::memory_order_relaxed),
+        g_cmpLegacyOnly.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[FWDENT][dest] why=%s total=%lu agree=%lu disagree=%lu pending=%lu",
+        why == nullptr ? "?" : why, g_destTotal.load(std::memory_order_relaxed),
+        g_destAgree.load(std::memory_order_relaxed), g_destDisagree.load(std::memory_order_relaxed),
+        g_destPending.load(std::memory_order_relaxed));
+    LOG(RTLOG_ERROR, "[FWDENT][sole] why=%s armedHit=%lu armedMiss=%lu unarmed=%lu", why == nullptr ? "?" : why,
+        g_armedHit.load(std::memory_order_relaxed), g_armedMiss.load(std::memory_order_relaxed),
+        g_unarmed.load(std::memory_order_relaxed));
+    for (unsigned t = 0; t < kTypeBuckets; ++t) {
+        const uint64_t to = g_tableOnlyByType[t].load(std::memory_order_relaxed);
+        const uint64_t lo = g_legacyOnlyByType[t].load(std::memory_order_relaxed);
+        const uint64_t dd = g_destDisagreeByType[t].load(std::memory_order_relaxed);
+        if (to != 0 || lo != 0 || dd != 0) {
+            LOG(RTLOG_ERROR, "[FWDTABLE][bytype] rtype=%u tableOnly=%lu legacyOnly=%lu destDisagree=%lu", t, to, lo,
+                dd);
+        }
+    }
 }
 } // namespace MapleRuntime

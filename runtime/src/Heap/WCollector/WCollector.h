@@ -543,9 +543,14 @@ public:
     static constexpr bool kLoneFromIsFrom = true;
     mutable std::atomic<uint64_t> loneFromHits{ 0 };
 
-    // Membership is answered by address, the way ZGC answers it
-    // (ZGeneration::relocate_or_remap_object -> _forwarding_table.get(addr)). A region type is
-    // rewritten as relocation progresses; the forwarding table is the relocation-set truth.
+    // PORT_ZFORWARDING step 2: membership answered by address, the way ZGC answers it
+    // (ZGeneration::relocate_or_remap_object -> _forwarding_table.get(addr)).  Step 1 established
+    // the two answers are equivalent: 1.68e8 comparisons across 10 runs, tableOnly=0 legacyOnly=0.
+    //
+    // The old path stays as the control arm.  What changes is *which* answer is authoritative: a
+    // region type is rewritten as relocation progresses, and a predicate reading it can be right
+    // one instant and wrong the next -- that shape produced several of this session's dead ends.
+    // An address either is in the set or is not.
     static constexpr bool kMembershipFromTable = ForwardingTable::kZfwdTableConsume;
 
     bool IsFromObject(BaseObject* obj) const override
@@ -659,6 +664,9 @@ public:
         }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
+        if (geometric != nullptr) {
+            ForwardingTable::NoteDestCompare(fromAddr, reinterpret_cast<MAddress>(geometric));
+        }
         if constexpr (ForwardingTable::kConsumeEntries) {
             return stored != nullptr ? stored : geometric;
         }
@@ -915,6 +923,21 @@ protected:
         }
         const bool stale = IsFromObject(target) || IsGhostFromObject(target) ||
             (kAskObjectState && target->IsForwarded());
+        // PORT_ZFORWARDING step 1: compare the address-keyed answer against the region-keyed one at
+        // the busiest place both are meaningful.  Nothing acts on the table yet -- the point is the
+        // disagreement count.  legacyOnly > 0 would mean the port loses information and must be
+        // fixed before step 2; tableOnly > 0 is the interesting direction, since the table answers
+        // from an address and cannot be fooled by a region type that has since moved on.
+        if (target != nullptr && Heap::IsHeapAddress(target)) {
+            // The baseline has to be the *whole* legacy answer.  Comparing against
+            // IsFromObject || IsGhostFromObject alone produced 1.2M tableOnly at rtype=5
+            // (UNMOVABLE_FROM_REGION) and 24k at rtype=9 (RAW_POINTER_PINNED_REGION) -- both of
+            // which the legacy side does recognise, just through a third predicate.  That was a
+            // defect in the comparison, not in the table.
+            ForwardingTable::NoteCompare(reinterpret_cast<MAddress>(target),
+                                         IsFromObject(target) || IsGhostFromObject(target) ||
+                                             IsUnmovableFromObject(target));
+        }
         NoteRouteAsk(target, stale);
         return stale;
     }

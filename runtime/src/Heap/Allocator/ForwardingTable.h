@@ -29,7 +29,10 @@ public:
     // Miss is "no to" — never invent a destination from route geometry.
     // Unarmed regions still use geometry (transition). zForwarding.inline.hpp:248-252.
     static constexpr bool kEntriesSoleWhenArmed = true;
-    // IsFromObject / membership consume the table.
+    // PORT_ZFORWARDING step ②: IsFromObject / membership consume the table.
+    // Disagreements vs region-type are legacyOnly at FROM/UNMOVABLE_FROM after
+    // Dispel unlinked membership — old path reading a type that has moved.
+    // tableOnly is the other old-path miss (type not yet FROM while table is).
     static constexpr bool kZfwdTableConsume = true;
 
     enum class ToAnswer : uint8_t { ArmedHit, ArmedMiss, Unarmed };
@@ -63,6 +66,13 @@ public:
     static MAddress FindTo(MAddress from);
     static bool EntriesArmed(MAddress from);
     static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
+    static uint64_t ArmedHitCount();
+    static uint64_t ArmedMissCount();
+    static uint64_t UnarmedCount();
+
+    static void NoteCompare(MAddress addr, bool legacy);
+    static void NoteDestCompare(MAddress from, MAddress geometricTo);
+    static void DumpCompare(const char* why);
 
     static bool Ready();
 
