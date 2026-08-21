@@ -36,7 +36,7 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
             BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
             if (resolved == oldTarget || resolved == nullptr) {
-                return oldTarget;
+                return resolved;
             }
             if (!Heap::IsHeapAddress(resolved)) {
                 return resolved;
@@ -54,6 +54,9 @@ BaseObject* TraceBarrier::ReadReference(BaseObject* obj, RefField<false>& field)
             return loadGood;
         }
         loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
+        }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): the exact observed value is
         // the CAS expected value. A concurrent GC update therefore wins rather than being

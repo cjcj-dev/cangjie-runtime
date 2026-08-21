@@ -168,7 +168,7 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
                                     HealSite::ForwardReadReference);
                 return resolved;
             }
-            return oldTarget;
+            return resolved;
         }
 
         ToverFailDiag::NoteSlowEnter();
@@ -202,6 +202,9 @@ BaseObject* ForwardBarrier::ReadReference(BaseObject* obj, RefField<false>& fiel
         }
 
         loadGood = ResolveFromCopyForMutator(loadGood);
+        if (loadGood == nullptr) {
+            return nullptr;
+        }
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         // OpenJDK ZBarrier::self_heal (zBarrier.inline.hpp:72-107): retain the exact
         // observed value as the CAS expected value and retry after a concurrent update.
