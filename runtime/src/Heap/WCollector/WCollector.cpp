@@ -385,6 +385,19 @@ bool HolderObjectIsLive(BaseObject* holder)
     if (RegionIsAllocatingPage(region)) {
         return true;
     }
+    // ZGC answers this from the page livemap until relocation completes
+    // (zPage.inline.hpp:239-240). Our current LiveInfo face can already have
+    // been unbound here, so use the mark-time retained copy while it covers
+    // this holder and still belongs to the current old-generation epoch.
+    MAddress holderAddress = reinterpret_cast<MAddress>(holder);
+    RegionInfo::RetainedLiveInfoState retainedState = region->GetRetainedLiveInfoState();
+    if (retainedState != RegionInfo::RetainedLiveInfoState::NEVER_EXAMINED &&
+        region->IsRetainedSnapshotValid() &&
+        holderAddress < region->GetRetainedLiveInfoCoveredUpTo()) {
+        size_t holderOffset = region->GetAddressOffset(holderAddress);
+        return retainedState == RegionInfo::RetainedLiveInfoState::SNAPSHOT_VALID &&
+            region->HasRetainedMarkWords() && region->RetainedMarkWordsSay(holderOffset);
+    }
     if (region->IsYoungRegion()) {
         return RegionSpace::IsMarkedObject<Generation::Young>(holder);
     }
