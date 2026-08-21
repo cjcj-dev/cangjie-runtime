@@ -165,10 +165,8 @@ void NoteRetiredReader(MAddress from, MAddress to)
     std::call_once(reportOnce, []() { std::atexit(DumpRetiredReaders); });
     const uint64_t sample = g_retiredReaderSamples.fetch_add(1, std::memory_order_relaxed) + 1;
     if (sample <= 256) {
-        RegionInfo* fromRegion = !Heap::IsHeapAddress(reinterpret_cast<const void*>(from))
-            ? nullptr
-            : RegionInfo::TryGetRegionInfoAt(from);
-        RegionInfo* holderRegion = context.holder == nullptr || !Heap::IsHeapAddress(context.holder)
+        RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(from);
+        RegionInfo* holderRegion = context.holder == nullptr
             ? nullptr
             : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(context.holder));
         const intptr_t callerDelta = static_cast<intptr_t>(reinterpret_cast<uintptr_t>(context.caller)) -
