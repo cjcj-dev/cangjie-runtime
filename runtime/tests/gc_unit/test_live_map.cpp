@@ -47,8 +47,8 @@ GC_TEST(LiveMap, MarkAndSurvive)
 }
 
 // livemap: retained own-copy is the mark-time authority after the borrowed
-// LiveInfo has been unbound and a minor has advanced its independent epoch.
-GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndYoungEpochBump)
+// LiveInfo has been unbound and forwarding has retired the current mark face.
+GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndForwardEpochBump)
 {
     GcHeapFixture fx;
     RegionInfo* region = fx.region0;
@@ -63,7 +63,7 @@ GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndYoungEpochBump)
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
     region->CheckAndClearLiveInfo(live);
-    region->BumpMarkSnapshotEpoch<Generation::Young>();
+    region->ResetLiveMapAfterForward(region->GetMarkView<Generation::Old>());
     GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), holderOffset));
     GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
@@ -85,12 +85,12 @@ GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
     MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
     GC_EXPECT_FALSE(region->MarkObject(old, holder, holder->GetSize()));
 
-    region->PreserveRetainedLiveInfo();
+    // Product write site: CollectLargeGarbage resets the one-bit face after
+    // mark and ResetMarkBit must preserve it first.
+    region->ResetMarkBit(old);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
 
-    region->SetMarkedRegionFlag(old, 0);
-    region->BumpMarkSnapshotEpoch<Generation::Young>();
     GC_EXPECT_FALSE(region->IsMarkedObject(old, holder));
     GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
