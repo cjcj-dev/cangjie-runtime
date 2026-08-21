@@ -20,6 +20,7 @@
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Verify/DiagGate.h"
 
 namespace MapleRuntime {
 namespace {
@@ -48,8 +49,10 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
         return;
     }
     g_ready.store(true, std::memory_order_release);
-    LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
-        heapSize, unitSize, g_membership.size());
+    if (DiagGate::VerboseOn()) {
+        LOG(RTLOG_VERBOSE, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu",
+            static_cast<size_t>(heapStart), heapSize, unitSize, g_membership.size());
+    }
 }
 
 uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)

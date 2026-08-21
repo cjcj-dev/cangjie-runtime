@@ -47,6 +47,10 @@ bool LegacyOrToken(const char* legacyEnv, const char* token);
 // True if self-test requested (legacy or token "selftest" / DIAG_SELFTEST).
 bool SelfTestOn();
 
+// True if periodic GC diagnostics should emit verbose logs.
+// Process-lifetime switch: MRT_GCV2_DIAG_VERBOSE=1.
+bool VerboseOn();
+
 // Emit HELP / ACTIVE banners once if those envs are set. Safe to call often.
 void MaybeAnnounce();
 
