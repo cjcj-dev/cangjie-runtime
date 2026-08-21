@@ -70,6 +70,13 @@ smoke_cell() {
     sd256) src=$ROOT/mega/pair_sd_256MB ;;
     nw1g) src=$ROOT/mega/pair_nw_1GB ;;
   esac
+  if ! grep -q 'stw2_pos=1/1' "$src/summary_A.txt" ||
+     ! grep -q 'stw2_pos=0/1' "$src/summary_B.txt"; then
+    echo "SMOKE_POSCTRL_FAIL $tag"
+    cat "$src/summary_A.txt" "$src/summary_B.txt" 2>/dev/null || true
+    return 3
+  fi
+  echo "SMOKE_POSCTRL_PASS $tag A=1/1 B=0/1"
   mkdir -p "$smoke_dir"
   if [ -d "$src" ]; then
     cp -a "$src/summary_A.txt" "$src/summary_B.txt" "$src/mega.tsv" "$smoke_dir/" 2>/dev/null || true
@@ -86,7 +93,12 @@ smoke_cell() {
 
 # cheap smoke first
 mem_ok || { echo CAMPAIGN_DEFER; echo 2 > "$ROOT/campaign.rc"; touch "$ROOT/campaign.done"; exit 0; }
-smoke_cell sd1g 1
+smoke_cell sd1g 1 || {
+  echo "CAMPAIGN_ABORT smoke positive control failed"
+  echo 3 > "$ROOT/campaign.rc"
+  touch "$ROOT/campaign.done"
+  exit 3
+}
 
 # full cells. smoke already used N=1 on sd1g so that cell starts from empty DONE.
 echo "FULL_START $(date -Is)"
