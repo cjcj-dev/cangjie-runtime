@@ -135,13 +135,15 @@ case "$cmd" in
       t0=$(date +%s.%N)
       LD_LIBRARY_PATH=$A cjHeapSize=1GB CANGJIE_CJHEAP_SIZE=1GB \
         MRT_GC_LOG=1 MRT_LOG_LEVEL=i \
-        taskset -c $CORES_LO-$CORES_HI timeout 180 "$NW_12" >"$f" 2>&1
+        taskset -c $CORES_LO-$CORES_HI timeout 300 "$NW_TRAIN" >"$f" 2>&1
       rc=$?
       t1=$(date +%s.%N)
       wall=$(awk -v a="$t0" -v b="$t1" 'BEGIN{printf "%.3f", b-a}')
       cs=$(grep -oE "_OK checksum=[0-9]+" "$f" | tail -1)
       python3 "$TOOLS/youngflip_metrics.py" "$f" "$OUT/met_A_$i.tsv" "$wall" "$rc"
-      echo "wave12 A_$i rc=$rc $cs wall=$wall"
+      gold=n
+      [ "$rc" = 0 ] && [ "$cs" = "_OK checksum=$GOLD_NW_TRAIN" ] && gold=y
+      echo "wave12 A_$i rc=$rc gold=$gold $cs wall=$wall"
     done
     echo "WAVE12_END $(date -Is)"
     ;;
