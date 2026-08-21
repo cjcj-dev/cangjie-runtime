@@ -44,6 +44,7 @@ struct Counters {
     uint64_t retiredTable;
     uint64_t routeDestHeld;
     uint64_t forwardingPositive;
+    uint64_t forwardingReaders;
     uint64_t forwardingClaimed;
     uint64_t forwardingReleased;
     uint64_t copyInflight;

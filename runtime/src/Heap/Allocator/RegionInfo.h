@@ -1567,7 +1567,7 @@ public:
     {
         const MAddress start = GetRegionStart();
         const MAddress end = metadata.regionEnd;
-        const MAddress heapEnd = GetUnitAddress(UnitInfo::totalUnitCount);
+        const MAddress heapEnd = UnitInfo::heapStartAddress + UnitInfo::totalUnitCount * UNIT_SIZE;
         return end > start && end <= heapEnd ? end - start : UNIT_SIZE;
     }
 

@@ -190,6 +190,7 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresWithoutGating)
     GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
     GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
     GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
+    GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);
     GC_EXPECT_EQ(after.copyInflight, before.copyInflight + 1);
 
     // Phase 1 observes but neither drains nor clears any evidence word.

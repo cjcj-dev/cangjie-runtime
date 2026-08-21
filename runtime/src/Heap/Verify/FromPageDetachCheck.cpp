@@ -25,6 +25,7 @@ struct AtomicCounters {
     std::atomic<uint64_t> retiredTable{ 0 };
     std::atomic<uint64_t> routeDestHeld{ 0 };
     std::atomic<uint64_t> forwardingPositive{ 0 };
+    std::atomic<uint64_t> forwardingReaders{ 0 };
     std::atomic<uint64_t> forwardingClaimed{ 0 };
     std::atomic<uint64_t> forwardingReleased{ 0 };
     std::atomic<uint64_t> copyInflight{ 0 };
@@ -89,17 +90,24 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site)
     const bool routeDestHeld = region->IsRouteDestHeld();
     const int32_t refCount = region->ForwardingRefCount();
     const bool forwardingPositive = refCount > 0;
+    // ref==1 is the relocation worker's construction token, not an external
+    // reader. Only the surplus is evidence that detach would still wait.
+    const bool forwardingReaders = refCount > 1;
     const bool forwardingClaimed = refCount < 0 || region->ForwardingClaimed();
     const bool forwardingReleased = refCount == 0 && region->IsForwardingDone();
     const bool copyInflight = region->CopyInflight() != 0;
-    const bool any = activeTable || retiredTable || routeDestHeld || forwardingPositive || forwardingClaimed ||
-        copyInflight;
+    // An active table and its construction token are normal until detach. Keep
+    // them visible in the census, but do not call them an unhealed reader. A
+    // retired covering table is different: reuse can erase the only remaining
+    // answer for a stale slot, which is the i2 two-clock population.
+    const bool any = retiredTable || routeDestHeld || forwardingReaders || forwardingClaimed || copyInflight;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
     out.activeTable.fetch_add(activeTable ? 1 : 0, std::memory_order_relaxed);
     out.retiredTable.fetch_add(retiredTable ? 1 : 0, std::memory_order_relaxed);
     out.routeDestHeld.fetch_add(routeDestHeld ? 1 : 0, std::memory_order_relaxed);
     out.forwardingPositive.fetch_add(forwardingPositive ? 1 : 0, std::memory_order_relaxed);
+    out.forwardingReaders.fetch_add(forwardingReaders ? 1 : 0, std::memory_order_relaxed);
     out.forwardingClaimed.fetch_add(forwardingClaimed ? 1 : 0, std::memory_order_relaxed);
     out.forwardingReleased.fetch_add(forwardingReleased ? 1 : 0, std::memory_order_relaxed);
     out.copyInflight.fetch_add(copyInflight ? 1 : 0, std::memory_order_relaxed);
@@ -112,8 +120,8 @@ Counters GetCounters(Site site)
 {
     AtomicCounters& c = At(site);
     return Counters{ Load(c.checks), Load(c.withEvidence), Load(c.activeTable), Load(c.retiredTable),
-                     Load(c.routeDestHeld), Load(c.forwardingPositive), Load(c.forwardingClaimed),
-                     Load(c.forwardingReleased), Load(c.copyInflight) };
+                     Load(c.routeDestHeld), Load(c.forwardingPositive), Load(c.forwardingReaders),
+                     Load(c.forwardingClaimed), Load(c.forwardingReleased), Load(c.copyInflight) };
 }
 
 void DumpSummary()
@@ -124,13 +132,14 @@ void DumpSummary()
         std::fprintf(stderr,
                      "[GCV2][detach-check] phase=measure site=%s checks=%llu evidence=%llu "
                      "active_table=%llu retired_table=%llu route_dest_held=%llu fwd_positive=%llu "
-                     "fwd_claimed=%llu fwd_released=%llu copy_inflight=%llu\n",
+                     "fwd_readers=%llu fwd_claimed=%llu fwd_released=%llu copy_inflight=%llu\n",
                      SiteName(site), static_cast<unsigned long long>(c.checks),
                      static_cast<unsigned long long>(c.withEvidence),
                      static_cast<unsigned long long>(c.activeTable),
                      static_cast<unsigned long long>(c.retiredTable),
                      static_cast<unsigned long long>(c.routeDestHeld),
                      static_cast<unsigned long long>(c.forwardingPositive),
+                     static_cast<unsigned long long>(c.forwardingReaders),
                      static_cast<unsigned long long>(c.forwardingClaimed),
                      static_cast<unsigned long long>(c.forwardingReleased),
                      static_cast<unsigned long long>(c.copyInflight));
