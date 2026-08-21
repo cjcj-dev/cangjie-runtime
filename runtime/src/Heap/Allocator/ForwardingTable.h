@@ -33,6 +33,10 @@ public:
         StackOrRegisterRoot,
         StackObjectField,
         RuntimeRoot,
+        RelocateOrRemap,
+        GetForwardPointer,
+        FindToVersion,
+        WaitRoutedTipReady,
         PositiveControl,
         Count,
     };
