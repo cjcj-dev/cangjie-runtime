@@ -19,6 +19,17 @@ def med(xs):
     return statistics.median(xs) if xs else float("nan")
 
 
+def mean(xs):
+    return statistics.mean(xs) if xs else float("nan")
+
+
+def p99(xs):
+    if not xs:
+        return float("nan")
+    ordered = sorted(xs)
+    return ordered[int(0.99 * (len(ordered) - 1))]
+
+
 def dump(arm):
     cls = collections.Counter()
     rc = collections.Counter()
@@ -27,12 +38,16 @@ def dump(arm):
     ok = 0
     n = 0
     walls = []
+    held_all = []
     young_med = []
     young_p99 = []
     young_sum = []
     young_n = []
     minor = []
     stw2 = []
+    gctrigger_atexit = []
+    gctrigger_armed = []
+    gctrigger_turned = []
     for p in rows:
         if p[0] != arm:
             continue
@@ -80,12 +95,22 @@ def dump(arm):
                     return 0.0
 
             walls.append(f("wall"))
+            vals = rec.get("young_values_ns", "-")
+            if vals != "-":
+                for value in vals.split(","):
+                    try:
+                        held_all.append(float(value))
+                    except ValueError:
+                        pass
             young_med.append(f("young_med_ns"))
             young_p99.append(f("young_p99_ns"))
             young_sum.append(f("young_sum_ns"))
             young_n.append(f("young_n"))
             minor.append(f("minor_cycles"))
             stw2.append(f("stw2"))
+            gctrigger_atexit.append(f("gctrigger_atexit"))
+            gctrigger_armed.append(f("gctrigger_armed"))
+            gctrigger_turned.append(f("gctrigger_turned"))
     line = (
         f"ARM {arm} n={n} golden={ok} GOLD={cls['GOLD']} "
         f"A_locked={cls['A_locked']} A2_phase={cls['A2_phase']} "
@@ -96,9 +121,15 @@ def dump(arm):
         f"rc={dict(rc)} abort={dict(abort)} si_top={si.most_common(5)}"
     )
     econ = (
-        f"ECON {arm} n={n} wall_med={med(walls):.3f} young_med_ms={med(young_med)/1e6:.3f} "
-        f"young_p99_ms={med(young_p99)/1e6:.3f} young_sum_s={med(young_sum)/1e9:.3f} "
-        f"young_n_med={med(young_n)} minor_cyc_med={med(minor)} stw2_med={med(stw2)} "
+        f"ECON {arm} n={n} wall_med={med(walls):.3f} wall_p99={p99(walls):.3f} "
+        f"wall_mean={mean(walls):.3f} young_held_n={len(held_all)} "
+        f"young_held_med_ms={med(held_all)/1e6:.3f} young_held_p99_ms={p99(held_all)/1e6:.3f} "
+        f"young_run_sum_med_s={med(young_sum)/1e9:.3f} young_n_med={med(young_n)} "
+        f"minor_cyc_med={med(minor)} minor_cyc_sum={int(sum(minor))} "
+        f"gctrigger_atexit_pos={sum(1 for x in gctrigger_atexit if x>0)}/{len(gctrigger_atexit)} "
+        f"gctrigger_armed_med={med(gctrigger_armed)} gctrigger_armed_sum={int(sum(gctrigger_armed))} "
+        f"gctrigger_turned_med={med(gctrigger_turned)} gctrigger_turned_sum={int(sum(gctrigger_turned))} "
+        f"stw2_med={med(stw2)} "
         f"stw2_pos={sum(1 for x in stw2 if x>0)}/{len(stw2)}"
     )
     open(os.path.join(out, f"summary_{arm}.txt"), "w").write(line + "\n" + econ + "\n")
