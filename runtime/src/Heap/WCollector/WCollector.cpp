@@ -7461,6 +7461,25 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
+        // ZRelocate::relocate tail adds remembered fields for flip-promoted
+        // pages before release_page/detach_page (zRelocate.cpp:1257-1306,
+        // 1018-1047). Discharge resolves the promoted fields, so it must
+        // consume their forwarding receipts before PrepareForwardTable
+        // retires those receipts below.
+        if (PromotedRegionDomain::Enabled()) {
+            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
+            size_t domainEdges = PromotedRegionDomain::DischargeAll(
+                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
+                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
+            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
+                                                 /*site*/ 3, domainEdges);
+            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "pre_retire_promote_walk");
+            PromotedRegionDomain::DumpProcessTotals("pre_retire_promote_walk");
+            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
+        } else {
+            PromotedRegionDomain::DumpCoverageByReason("pre_retire_promote_walk_domain_off");
+        }
+
         static const bool readerHoldAudit = []() {
             const char* value = std::getenv("MRT_GCV2_READERHOLD_AUDIT");
             return value != nullptr && std::strcmp(value, "1") == 0;
@@ -9286,29 +9305,10 @@ void WCollector::DoYoungGarbageCollection()
              minorTotalRuns + 1, remsetSnap.size());
     }
 
-    // ZRelocate::relocate tail (zRelocate.cpp:1303-1306): after concurrent copy,
-    // still in Relocate, walk flip-promoted pages and add remset. Residual
-    // Register happens in STW3, so the walk cannot live in young.concurrent_relocate
-    // (those pages are not registered yet). Release STW3 first; stay in FORWARD
-    // so colour / store-good masks match the STW3 walk. Then IDLE.
+    // Residual Register and the remset walk now both complete in STW3, before
+    // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.
     if (stw != nullptr) {
         stw.reset();
-    }
-    {
-        MRT_PHASE_TIMER("young.conc_promote_walk");
-        if (PromotedRegionDomain::Enabled()) {
-            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
-            size_t domainEdges = PromotedRegionDomain::DischargeAll(
-                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
-                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
-            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
-                                                 /*site*/ 3, domainEdges);
-            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "conc_promote_walk");
-            PromotedRegionDomain::DumpProcessTotals("conc_promote_walk");
-            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
-        } else {
-            PromotedRegionDomain::DumpCoverageByReason("conc_promote_walk_domain_off");
-        }
     }
 
     {
