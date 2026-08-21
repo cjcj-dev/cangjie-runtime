@@ -1166,11 +1166,12 @@ void RegionManager::ExpireKeptFromPreviousCycle()
             const RegionInfo::RouteState rs = region->GetRouteState();
             if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
                 // After-copy Exempt parks FORWARDED+done on unmovableFrom.
-                // Do not drop the receipt (CSet empty-select still needs
-                // residual FORWARDED headers / route=FORWARDED). Retire the
-                // live table so find() cannot hand last cycle's dest
-                // (zRelocationSet.cpp:91-96; REPORT-trainbisect §6 knife B).
-                ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+                // Keep its receipt through the new mark/ref-fix closure. The
+                // next PrepareForwardableRegion retires it immediately before
+                // installing the new table (RegionInfo.h:1958-1972), matching
+                // ZGC reset_relocation_set at the next install
+                // (zRelocationSet.cpp:91-96). Retiring it here makes the new
+                // mark repair read a retired table by construction.
                 return;
             }
             ++expired;
