@@ -140,9 +140,10 @@ a proven win and prevents an unfavorable cell from disappearing.
 Per `workload × heap`, the result is a vector:
 `wall / throughput / p50 / p99 / p999 / peak-memory`. It is
 `UNIFORMLY_SUPERIOR` only when all non-derived metrics are `SUPERIOR` and
-correctness is valid. It is `MIXED` when the vector contains both favorable
-and unfavorable or inconclusive entries. No weighted average, geometric mean,
-or single score is produced.
+correctness is valid. It is `UNIFORMLY_INFERIOR` when all non-derived metrics
+are `INFERIOR` and correctness is valid. It is `MIXED` when the vector contains
+both favorable and unfavorable or inconclusive entries. No weighted average,
+geometric mean, or single score is produced.
 
 The unqualified sentence “GC is superior to the official runtime” is allowed
 only if every preregistered workload and heap cell is
