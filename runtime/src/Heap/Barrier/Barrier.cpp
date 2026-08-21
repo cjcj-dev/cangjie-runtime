@@ -8,6 +8,7 @@
 #include "Barrier.inline.h"
 #include "Base/Macros.h"
 #include "Heap/Allocator/AllocBuffer.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Verify/ZgcInvariants.h"
@@ -917,6 +918,8 @@ static inline TargetVerdict JudgeTarget(BaseObject* target)
 
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
+    ForwardingTable::ReaderScope reader(
+        ForwardingTable::ReaderKind::LoadBarrier, static_cast<const void*>(&field), obj);
     if (phase != BarrierPhase::STW) {
         BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadReference(obj, field);
@@ -953,6 +956,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
 
 BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 {
+    ForwardingTable::ReaderScope reader(
+        ForwardingTable::ReaderKind::LoadBarrier, static_cast<const void*>(&field), obj);
     if (phase != BarrierPhase::STW) {
         return DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.ReadWeakRef(obj, field);
@@ -969,6 +974,8 @@ BaseObject* Barrier::ReadWeakRef(BaseObject* obj, RefField<false>& field) const
 
 BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
 {
+    ForwardingTable::ReaderScope reader(
+        ForwardingTable::ReaderKind::RuntimeRoot, static_cast<const void*>(&field));
     zaddress_unsafe observed = field.LoadPlain();
     if (is_null(observed)) {
         if (UNLIKELY(LoadGoodProbe::Enabled())) {
@@ -1082,6 +1089,8 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
 
 BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
+    ForwardingTable::ReaderScope reader(
+        ForwardingTable::ReaderKind::AtomicLoadBarrier, static_cast<const void*>(&field), obj);
     if (phase != BarrierPhase::STW) {
         return DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.AtomicReadReference(obj, field, order);
