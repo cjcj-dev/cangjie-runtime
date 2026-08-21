@@ -3305,6 +3305,30 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
     RefField<> value(field);
     BaseObject* object = to_object(value.GetTargetObject());
     if (!IsOldPointer(value)) {
+        // zBarrier.inline.hpp:318-340 resolves through the forwarding before
+        // self-healing the concrete oop slot. zRelocate.cpp:1018-1047 keeps
+        // that receipt available until relocated fields have been repaired.
+        // After-copy Exempt makes our page UNMOVABLE_FROM before this bulk
+        // ref-fix runs, so the ghost-only arm below cannot observe a completed
+        // copy. Consume its still-active receipt before PrepareForwardTable
+        // retires the table.
+        if (object != nullptr && Heap::IsHeapAddress(object)) {
+            ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object));
+            if (forwarding != nullptr) {
+                const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
+                BaseObject* to = receipt == 0 ? nullptr : reinterpret_cast<BaseObject*>(receipt);
+                if (to != nullptr && Heap::IsHeapAddress(to)) {
+                    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
+                    if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
+                        to->IsValidObject()) {
+                        MAddress expected = raw(value.GetFieldValue());
+                        (void)CasInstallResolvedTarget(field, expected, to,
+                                                       HealSite::WCollectorMinorResolveLoadGoodForward);
+                        return to;
+                    }
+                }
+            }
+        }
         // hangfloor: plain stack/reg roots (and any load-good colour) make IsOldPointer
         // structurally false — that predicate needs IsLoadBad, which plain never is.
         // After young prepare, from-space still needs ghost routing; without it
