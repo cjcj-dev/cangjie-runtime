@@ -342,6 +342,11 @@ unsigned SiteBucket(const char* site)
     if (std::strstr(site, "CompactRegion") != nullptr) {
         return 12;
     }
+    // getsizetrace: pinned free-slot list GetSize (PopFront / PushFront).
+    if (std::strstr(site, "SlotList") != nullptr ||
+        std::strstr(site, "FreePinnedSlotLists") != nullptr) {
+        return 13;
+    }
     return 14;
 }
 } // namespace
@@ -649,7 +654,7 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
         "[GCV2][markfloor-obj-gate] bysite MarkObject=%zu TraceRefField=%zu EnumRefField=%zu "
         "EnumAndTagRawRoot=%zu ForwardUpdateRawRef=%zu ForwardObject=%zu TryForward=%zu "
         "ForwardObjectExclusive=%zu TraceYoungClosure=%zu PushYoungObject=%zu "
-        "VisitLiveObjects=%zu VisitAllObjects=%zu CompactRegion=%zu other=%zu",
+        "VisitLiveObjects=%zu VisitAllObjects=%zu CompactRegion=%zu SlotList=%zu other=%zu",
         g_plausibleObjGateBySite[0].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[1].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[2].load(std::memory_order_relaxed),
@@ -663,6 +668,7 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
         g_plausibleObjGateBySite[10].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[11].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[12].load(std::memory_order_relaxed),
+        g_plausibleObjGateBySite[13].load(std::memory_order_relaxed),
         g_plausibleObjGateBySite[14].load(std::memory_order_relaxed));
 }
 

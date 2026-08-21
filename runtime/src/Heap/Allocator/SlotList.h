@@ -51,9 +51,19 @@ public:
 
 private:
     friend struct FreePinnedSlotLists;
+    friend struct SlotListTestAccess;
     uintptr_t PopFront(size_t size)
     {
-        if (head == nullptr || size != from_region_addr(reinterpret_cast<Uptr>(head))->GetSize()) {
+        // getsizetrace: ObjectSlot::next overlays Future payload+8, which is a
+        // store-good heap ref. A coloured next makes `head` non-canonical;
+        // GetSize then #GPs (si_code=128, rdi remap|MY|MO|Rem, rbx=0xa8).
+        // AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
+        // On reject: leave the node, return 0 — bump alloc still works.
+        if (head == nullptr) {
+            return 0;
+        }
+        BaseObject* obj = from_region_addr(reinterpret_cast<Uptr>(head));
+        if (!PlausibleManagedObjectGate("SlotList::PopFront", obj) || size != obj->GetSize()) {
             return 0;
         }
         ObjectSlot* allocSlot = head;
