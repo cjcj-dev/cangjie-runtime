@@ -13,6 +13,17 @@ echo "load=$(cat /proc/loadavg)"
 
 soak=$(cat "$SOAK_PID_FILE")
 echo "SOAK_PID=$soak"
+cleanup() {
+  if [ -n "${soak:-}" ] && [ -d "/proc/$soak" ]; then
+    echo "CLEANUP_CONT soak.pid=$soak"
+    kill -CONT -- -"$soak" || true
+  fi
+  if [ -f /dev/shm/MEASURE_ACTIVE ]; then
+    grep -v 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE > /dev/shm/MEASURE_ACTIVE.tmp || true
+    mv /dev/shm/MEASURE_ACTIVE.tmp /dev/shm/MEASURE_ACTIVE
+  fi
+}
+trap cleanup EXIT
 if [ -d "/proc/$soak" ]; then
   echo "RECSTW_STOP soak.pid=$soak"
   kill -STOP -- -"$soak" || true
@@ -95,21 +106,6 @@ mem_ok && bash tools/youngflip_driver.sh wave12 8
 
 echo "RECSTW_START $(date -Is)"
 mem_ok && bash tools/youngflip_driver.sh recstw 5
-
-# recstw already CONT'd soak. If recstw skipped, CONT here.
-if [ -d "/proc/$soak" ]; then
-  stat=$(ps -o stat= -p "$soak" | tr -d ' ')
-  case "$stat" in
-    T*) echo "RECSTW_CONT soak.pid=$soak (campaign tail)"; kill -CONT -- -"$soak" || true ;;
-    *) echo "SOAK_STAT=$stat already running" ;;
-  esac
-fi
-
-# drop our MEASURE line only
-if [ -f /dev/shm/MEASURE_ACTIVE ]; then
-  grep -v 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE > /dev/shm/MEASURE_ACTIVE.tmp || true
-  mv /dev/shm/MEASURE_ACTIVE.tmp /dev/shm/MEASURE_ACTIVE
-fi
 
 echo "===== CAMPAIGN_END $(date -Is) ====="
 echo 0 > "$ROOT/campaign.rc"
