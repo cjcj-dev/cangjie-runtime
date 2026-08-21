@@ -43,7 +43,6 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
   "$SRC/gc_unit_main.cpp" \
   "$SRC/gc_unit_stubs.cpp" \
   "$ROOT/runtime/src/Heap/Allocator/ForwardingTable.cpp" \
-  "$ROOT/runtime/src/Heap/Verify/Stw2CurrentAudit.cpp" \
   "$SRC/test_colour_address.cpp" \
   "$SRC/test_trustp1_phase1.cpp" \
   "$SRC/test_route_info.cpp" \

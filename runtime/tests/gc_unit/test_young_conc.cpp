@@ -3,7 +3,7 @@
 // with Runtime Library Exception.
 
 // Young concurrent-mark window invariants (REPORT-youngconc 6/20).
-// Product YOUNG_CONC_MARK stays compile-time off (RegionSpace.h kYoungConcMark).
+// Product YOUNG_CONC_MARK stays pinned-off (RegionSpace.cpp:307-310).
 // These tests reconstruct the three mutator actions inside the TRACE window:
 //   1. TraceBarrier-shaped SATB pre-image (ShouldEnqueue skip after paint)
 //   2. TRACE-window AllocBlack (paint + grey ledger)

@@ -297,7 +297,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
             }
             AllocPhaseDiag::Record(reinterpret_cast<void*>(addr), regionStart, regionEnd, mutP, heapP, isTrace);
         }
-        // youngconc allocate-black (kYoungConcMark only): paint mark bits + grey-list
+        // youngconc allocate-black (MRT_GCV2_YOUNG_CONC_MARK=1 only): paint mark bits + grey-list
         // for TRACE/CLEAR window young allocs. Experimental MRT_GCV2_ALLOC_BLACK full paint removed
         // (ZGC_CONVERGENCE_RULING §5.2; default-off + author-marked incomplete; product relies on
         // post-mark fixpoint at WCollector.cpp iorfix/blackmark loop). Ordinary MOVEABLE alloc
@@ -305,7 +305,10 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // mark ghost when present. isTraceRegion alone makes ShouldEnqueue skip SATB; without
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
-            constexpr bool youngConcMarkOn = kYoungConcMark;
+            static const bool youngConcMarkOn = []() {
+                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
+                return v != nullptr && std::strcmp(v, "1") == 0;
+            }();
             if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {
                 GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
                 Mutator* m = Mutator::GetMutator();

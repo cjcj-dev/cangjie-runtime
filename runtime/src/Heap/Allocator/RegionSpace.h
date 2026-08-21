@@ -25,10 +25,6 @@
 #endif
 
 namespace MapleRuntime {
-// Concurrent young mark (ZGC zGeneration.cpp:665-669). Compile-time, not an
-// MRT_GCV2_ env. Product remains OFF after REPORT-youngflip's NO-GO verdict.
-constexpr bool kYoungConcMark = false;
-
 // RegionSpace aims to be the API for other components of runtime
 // the complication of implementation is delegated to RegionManager
 // allocator should not depend on any assumptions on the details of RegionManager
