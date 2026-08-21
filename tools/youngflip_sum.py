@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Summarize a paired mega.tsv into ARM/ECON lines."""
 import collections
+import math
 import os
 import re
 import statistics
@@ -27,7 +28,7 @@ def p99(xs):
     if not xs:
         return float("nan")
     ordered = sorted(xs)
-    return ordered[int(0.99 * (len(ordered) - 1))]
+    return ordered[math.ceil(0.99 * len(ordered)) - 1]
 
 
 def dump(arm):
