@@ -44,7 +44,7 @@ public:
     class ReaderScope {
     public:
         ReaderScope(ReaderKind kind, const void* slot, const BaseObject* holder = nullptr,
-                    const void* caller = nullptr);
+                    const void* caller = nullptr, const void* origin = nullptr);
         ~ReaderScope();
 
         ReaderScope(const ReaderScope&) = delete;
@@ -55,6 +55,7 @@ public:
         const void* previousSlot;
         const BaseObject* previousHolder;
         const void* previousCaller;
+        const void* previousOrigin;
     };
 
     // Compile-time: FindToVersion prefers a stored entry, then falls back to geometry

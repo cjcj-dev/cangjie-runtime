@@ -54,6 +54,7 @@ struct ReaderContext {
     const void* slot = nullptr;
     const BaseObject* holder = nullptr;
     const void* caller = nullptr;
+    const void* origin = nullptr;
 };
 
 thread_local ReaderContext g_readerContext;
@@ -166,29 +167,31 @@ void NoteRetiredReader(MAddress from, MAddress to)
     if (sample <= 256) {
         const intptr_t callerDelta = static_cast<intptr_t>(reinterpret_cast<uintptr_t>(context.caller)) -
                                      static_cast<intptr_t>(reinterpret_cast<uintptr_t>(&ForwardingTable::FindTo));
+        const intptr_t originDelta = static_cast<intptr_t>(reinterpret_cast<uintptr_t>(context.origin)) -
+                                     static_cast<intptr_t>(reinterpret_cast<uintptr_t>(&ForwardingTable::FindTo));
         LOG(RTLOG_ERROR,
             "[FWDTABLE][retired-reader] n=%lu from=%#zx to=%#zx source=%s slot=%p slotRegion=%s "
-            "slotHeap=%u holder=%p holderHeap=%u caller=%p callerDelta=%zd",
+            "slotHeap=%u holder=%p holderHeap=%u caller=%p callerDelta=%zd origin=%p originDelta=%zd",
             sample, static_cast<size_t>(from), static_cast<size_t>(to), ReaderKindName(context.kind), context.slot,
             VerifyRoots::RegionName(slotRegion), static_cast<unsigned>(slotRegion == AddrRegion::HEAP), context.holder,
             static_cast<unsigned>(context.holder != nullptr && Heap::IsHeapAddress(context.holder)), context.caller,
-            static_cast<ssize_t>(callerDelta));
+            static_cast<ssize_t>(callerDelta), context.origin, static_cast<ssize_t>(originDelta));
     }
 }
 
 } // namespace
 
 ForwardingTable::ReaderScope::ReaderScope(ReaderKind kind, const void* slot, const BaseObject* holder,
-                                         const void* caller)
+                                         const void* caller, const void* origin)
     : previousKind(g_readerContext.kind), previousSlot(g_readerContext.slot), previousHolder(g_readerContext.holder),
-      previousCaller(g_readerContext.caller)
+      previousCaller(g_readerContext.caller), previousOrigin(g_readerContext.origin)
 {
-    g_readerContext = ReaderContext{ kind, slot, holder, caller };
+    g_readerContext = ReaderContext{ kind, slot, holder, caller, origin != nullptr ? origin : previousOrigin };
 }
 
 ForwardingTable::ReaderScope::~ReaderScope()
 {
-    g_readerContext = ReaderContext{ previousKind, previousSlot, previousHolder, previousCaller };
+    g_readerContext = ReaderContext{ previousKind, previousSlot, previousHolder, previousCaller, previousOrigin };
 }
 
 bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); }
