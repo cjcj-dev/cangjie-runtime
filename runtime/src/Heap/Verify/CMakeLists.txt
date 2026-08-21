@@ -62,6 +62,7 @@ set(SRC_LIST
     "HealCoverage.cpp"
     "Stw2CurrentAudit.cpp"
     "CsetEmptyWho.cpp"
+    "FillerZeroDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

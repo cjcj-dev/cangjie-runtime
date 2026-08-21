@@ -11,6 +11,7 @@ set(SRC_LIST
     "RegionSpace.cpp"
     "RegionManager.cpp"
     "CartesianTree.cpp"
+    "HeapFiller.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

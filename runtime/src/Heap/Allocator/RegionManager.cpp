@@ -41,6 +41,8 @@
 #include "Heap/Verify/OffpastDiag.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Heap/Verify/TraceClear.h"
+#include "Heap/Verify/FillerZeroDiag.h"
+#include "Heap/Allocator/HeapFiller.h"
 #include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/WCollector/RelocationSetSelector.h"
 #include "Heap/Verify/Zap.h"
@@ -1893,7 +1895,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 // The wipe is of the payload (GetUnitAddress(idx)), not of the UnitInfo
                 // array, so the lock itself survives the body.
                 RegionInfo::DrainScope drain(head, MutatorRelocate::Retire::TAKE_GARBAGE);
-                RegionInfo::ClearUnits(idx, num);
+                RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_GARBAGE);
             }
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             MutatorAllocRate::sample_allocation(size);
@@ -1944,7 +1946,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 TagHugePage(region, num);
             }
             if (expectPhysicalMem) {
-                RegionInfo::ClearUnits(idx, num);
+                RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::TAKE_INACTIVE);
             }
             MutatorAllocRate::sample_allocation(size);
             return region;
@@ -2841,8 +2843,8 @@ void RegionManager::CompactRegion(RegionInfo* region)
         size_t reclaimSize = regionLimit - cur;
         TraceClear::NoteRange(cur, reclaimSize, "compact", region, region->GetLiveByteCount());
         if (!TraceClear::SkipCompactMemset()) {
-            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
-                         "clear buffer failed");
+            FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT, cur, reclaimSize);
+            HeapFiller::ZeroAndFill(cur, reclaimSize);
         } else {
             VLOG(REPORT, "[GCV2][block] skip compact memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
                  static_cast<size_t>(cur), static_cast<size_t>(regionLimit));
@@ -2994,8 +2996,8 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
         size_t reclaimSize = regionLimit - cur;
         TraceClear::NoteRange(cur, reclaimSize, "compact_partial", region, region->GetLiveByteCount());
         if (!TraceClear::SkipCompactMemset()) {
-            CHECK_DETAIL(memset_s(reinterpret_cast<void*>(cur), reclaimSize, 0, reclaimSize) == EOK,
-                         "clear buffer failed");
+            FillerZeroDiag::Note(FillerZeroDiag::Site::COMPACT_PARTIAL, cur, reclaimSize);
+            HeapFiller::ZeroAndFill(cur, reclaimSize);
         } else {
             VLOG(REPORT, "[GCV2][block] skip compact_partial memset range=[%#zx,%#zx) env=MRT_GCV2_SKIP_COMPACT_MEMSET=1",
                  static_cast<size_t>(cur), static_cast<size_t>(regionLimit));

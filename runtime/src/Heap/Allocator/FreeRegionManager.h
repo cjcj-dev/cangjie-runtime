@@ -68,7 +68,7 @@ public:
                         RegionInfo::GetUnitAddress(idx + num), dirtyUnitTree.GetTotalCount());
 
                     // it makes sense to slow down allocation by clearing region memory.
-                    RegionInfo::ClearUnits(idx, num);
+                    RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::DIRTY_TAKE);
                     RegionInfo* region = RegionInfo::InitRegion(idx, num, uclass);
                     dirtyUnitTreeMutex.unlock();
                     return region;
@@ -220,7 +220,7 @@ private:
     inline void PrehandleReleasedUnit(bool expectPhysicalMem, size_t idx, size_t num) const
     {
         if (expectPhysicalMem) {
-            RegionInfo::ClearUnits(idx, num);
+            RegionInfo::ClearUnits(idx, num, FillerZeroDiag::Site::RELEASED_PRE);
         }
     }
     RegionManager& regionManager;

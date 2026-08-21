@@ -10,6 +10,7 @@
 
 #include "Common/BaseObject.h"
 #include "Heap/Collector/ManagedObjectGate.h"
+#include "Heap/Verify/FillerZeroDiag.h"
 
 namespace MapleRuntime {
 struct ObjectSlot {
@@ -47,6 +48,7 @@ public:
         size_t size = slot->GetSize() - sizeof(ObjectSlot);
         if (size > 0) {
             MAddress start = reinterpret_cast<uintptr_t>(slot) + sizeof(ObjectSlot);
+            FillerZeroDiag::Note(FillerZeroDiag::Site::SLOT_EXTRA, start, size);
             CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
         }
         return true;

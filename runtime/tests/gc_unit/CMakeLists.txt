@@ -44,6 +44,7 @@ set(GC_UNIT_SOURCES
     test_interior_edge_class.cpp
     test_isfromreg.cpp
     test_current_object_ref.cpp
+    test_fillerobj.cpp
 )
 
 add_executable(cj_gc_unit ${GC_UNIT_SOURCES})
