@@ -1748,6 +1748,8 @@ BaseObject* WCollector::GetAndTryTagObj(RefSlotKind kind, BaseObject* obj, RefFi
 
 BaseObject* WCollector::ForwardUpdateRawRef(ObjectRef& root)
 {
+    ForwardingTable::ReaderScope reader(
+        ForwardingTable::ReaderKind::RuntimeRoot, static_cast<const void*>(&root));
     zaddress_unsafe observed = root.LoadPlain();
     HeapSlot<> observedBits(to_zpointer(raw(observed)));
     BaseObject* oldObj = to_object(observedBits.GetTargetObject());
