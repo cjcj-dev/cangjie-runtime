@@ -6,7 +6,9 @@ path, out, wall, rc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
 held = []
 reasons = {}
 cycles_minor = 0
-gctrigger = 0
+gctrigger_atexit = 0
+gctrigger_armed = 0
+gctrigger_turned = 0
 stw2 = 0
 si = ""
 try:
@@ -29,8 +31,18 @@ for line in lines:
                 pass
     if "[GCLOG]" in line and "rec=cycle" in line and "kind=minor" in line:
         cycles_minor += 1
-    if "[GCV2][gctrigger]" in line:
-        gctrigger += 1
+    if "[GCV2][gctrigger] atexit" in line:
+        gctrigger_atexit += 1
+        rec = {}
+        for tok in line.split():
+            if "=" in tok:
+                k, v = tok.split("=", 1)
+                rec[k] = v
+        try:
+            gctrigger_armed += int(rec.get("armed", 0))
+            gctrigger_turned += int(rec.get("turned", 0))
+        except ValueError:
+            pass
     if "stw2_fixpoint" in line:
         stw2 += 1
     if "si_addr=" in line and not si:
@@ -52,8 +64,11 @@ if held:
     p99 = held[int(0.99 * (len(held) - 1))]
 tot = sum(held) if held else 0
 rs = ",".join(f"{k}:{v}" for k, v in sorted(reasons.items()))
+held_values = ",".join(str(v) for v in held) or "-"
 open(out, "w").write(
     f"wall={wall}\trc={rc}\tyoung_n={len(held)}\tyoung_med_ns={int(med)}\t"
     f"young_p99_ns={int(p99)}\tyoung_sum_ns={tot}\tminor_cycles={cycles_minor}\t"
-    f"stw2={stw2}\tgctrigger={gctrigger}\tsi={si or '-'}\treasons={rs}\n"
+    f"stw2={stw2}\tgctrigger_atexit={gctrigger_atexit}\t"
+    f"gctrigger_armed={gctrigger_armed}\tgctrigger_turned={gctrigger_turned}\t"
+    f"young_values_ns={held_values}\tsi={si or '-'}\treasons={rs}\n"
 )
