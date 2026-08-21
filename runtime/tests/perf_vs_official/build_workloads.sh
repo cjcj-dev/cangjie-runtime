@@ -21,7 +21,7 @@ runtime_lib="$sdk/runtime/lib/linux_x86_64_cjnative"
 install -d "$out/bin" "$out/logs"
 
 compiler_sha=$(sha256sum "$cjc" | awk '{print $1}')
-compiler_stamp=$(strings "$cjc" | grep -oE 'CJCJ-COMMIT:[0-9a-f-]+' | sort -u | paste -sd, -)
+compiler_stamp=$(strings "$cjc" | grep -oE 'CJCJ-COMMIT:[0-9a-f-]+' | sort -u | paste -sd, - || true)
 [[ -n "$compiler_stamp" ]] || compiler_stamp=NO_PROVENANCE_STAMP
 
 printf '%s\n' \
