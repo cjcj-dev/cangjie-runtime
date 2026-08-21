@@ -306,8 +306,13 @@ def main() -> int:
             })
 
         independent = ["wall", "pause_p50", "pause_p99", "pause_p999", "peak_memory"]
-        cell_status = "UNIFORMLY_SUPERIOR" if valid_cell and all(statuses[name] == "SUPERIOR" for name in independent) else "MIXED"
-        if not valid_cell:
+        if valid_cell and all(statuses[name] == "SUPERIOR" for name in independent):
+            cell_status = "UNIFORMLY_SUPERIOR"
+        elif valid_cell and all(statuses[name] == "INFERIOR" for name in independent):
+            cell_status = "UNIFORMLY_INFERIOR"
+        elif valid_cell:
+            cell_status = "MIXED"
+        else:
             cell_status = "INVALID" if not all_correct or not same_output else "INSUFFICIENT"
         cell_rows.append({
             "workload": workload,
