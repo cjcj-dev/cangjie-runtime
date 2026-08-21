@@ -105,6 +105,30 @@ GC_TEST(LiveMap, RetainedCaptureUnionsYoungFaceBeforePromotion)
     fx.FreePlanted(live);
 }
 
+// After a real copy, MarkForwardingDone is published first
+// (RegionManager.cpp:3544). Young bits then name FROM copies and must
+// not enter the retained snapshot (nw256 GOLD 9→3 when they did).
+GC_TEST(LiveMap, RetainedCaptureSkipsYoungFaceAfterForwardingDone)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* youngBitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
+
+    region->MarkForwardingDone();
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->FreeRetainedMarkWords();
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
 {
     GcHeapFixture fx;

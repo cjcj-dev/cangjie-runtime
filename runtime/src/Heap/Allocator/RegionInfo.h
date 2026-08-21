@@ -581,7 +581,12 @@ public:
             // PromoteYoungRegion (RegionManager.cpp:3212), while the Old flag is
             // still clear (RegionInfo.h:2540-2544). Union the current Young flag.
             bool marked = GetMarkedRegionFlag(view) == 1 || metadata.isResurrected == 1;
-            if (IsYoungRegion() && GetMarkedRegionFlag(GetMarkView<Generation::Young>()) == 1) {
+            // In-place young promote captures before MarkForwardingDone
+            // (RegionManager.cpp:3212). After a real copy, forwarding is already
+            // done (RegionManager.cpp:3544) and the Young bits name FROM copies
+            // that must not stay live.
+            if (IsYoungRegion() && !IsForwardingDone() &&
+                GetMarkedRegionFlag(GetMarkView<Generation::Young>()) == 1) {
                 marked = true;
             }
             if (!marked) {
@@ -606,7 +611,7 @@ public:
         // it, and only before promotion so a later major cannot resurrect
         // objects the Old closure left unmarked.
         RegionBitmap* youngMark = nullptr;
-        if (IsYoungRegion()) {
+        if (IsYoungRegion() && !IsForwardingDone()) {
             LiveInfo::MarkFace& youngFace = liveInfo->GetMarkFace<Generation::Young>();
             youngMark =
                 youngFace.epoch.load(std::memory_order_acquire) == GetMarkSnapshotEpoch<Generation::Young>()
