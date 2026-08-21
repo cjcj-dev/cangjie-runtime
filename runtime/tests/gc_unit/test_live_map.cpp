@@ -83,7 +83,7 @@ GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
     BaseObject* holder = fx.PlaceObject(region->GetRegionStart());
     region->SetRegionAllocPtr(region->GetRegionStart() + holder->GetSize());
     MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
-    region->SetMarkedRegionFlag(old, 1);
+    GC_EXPECT_FALSE(region->MarkObject(old, holder, holder->GetSize()));
 
     region->PreserveRetainedLiveInfo();
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
