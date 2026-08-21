@@ -388,7 +388,6 @@ public:
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(fromAddr)) {
-                ForwardingTable::ReaderScope reader(ForwardingTable::ReaderKind::RelocateOrRemap, nullptr);
                 const MAddress stored = ForwardingTable::FindTo(fromAddr);
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
@@ -597,7 +596,6 @@ public:
         const MAddress fromAddr = reinterpret_cast<MAddress>(fromObj);
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(fromAddr)) {
-                ForwardingTable::ReaderScope reader(ForwardingTable::ReaderKind::GetForwardPointer, nullptr);
                 const MAddress to = ForwardingTable::FindTo(fromAddr);
                 return to == 0 ? nullptr : reinterpret_cast<BaseObject*>(to);
             }
@@ -650,7 +648,6 @@ public:
         ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
-            ForwardingTable::ReaderScope reader(ForwardingTable::ReaderKind::FindToVersion, nullptr);
             const MAddress to = ForwardingTable::LookupTo(fromAddr, &ans);
             if (to != 0) {
                 stored = reinterpret_cast<BaseObject*>(to);

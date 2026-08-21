@@ -9727,7 +9727,6 @@ BaseObject* WCollector::WaitRoutedTipReady(BaseObject* from, BaseObject* to, Reg
     auto lookupTo = [&]() -> BaseObject* {
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
             if (ForwardingTable::EntriesArmed(reinterpret_cast<MAddress>(from))) {
-                ForwardingTable::ReaderScope reader(ForwardingTable::ReaderKind::WaitRoutedTipReady, nullptr);
                 const MAddress stored = ForwardingTable::FindTo(reinterpret_cast<MAddress>(from));
                 return stored == 0 ? nullptr : reinterpret_cast<BaseObject*>(stored);
             }

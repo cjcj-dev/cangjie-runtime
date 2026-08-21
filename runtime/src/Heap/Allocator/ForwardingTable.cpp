@@ -76,14 +76,6 @@ const char* ReaderKindName(ForwardingTable::ReaderKind kind)
             return "stack-object-field";
         case ForwardingTable::ReaderKind::RuntimeRoot:
             return "runtime-root";
-        case ForwardingTable::ReaderKind::RelocateOrRemap:
-            return "relocate-or-remap";
-        case ForwardingTable::ReaderKind::GetForwardPointer:
-            return "get-forward-pointer";
-        case ForwardingTable::ReaderKind::FindToVersion:
-            return "find-to-version";
-        case ForwardingTable::ReaderKind::WaitRoutedTipReady:
-            return "wait-routed-tip-ready";
         case ForwardingTable::ReaderKind::PositiveControl:
             return "positive-control";
         default:
@@ -113,8 +105,7 @@ void DumpRetiredReaders()
 {
     LOG(RTLOG_ERROR,
         "[FWDTABLE][retired-reader-summary] internal=%lu load=%lu atomic=%lu stackRoot=%lu "
-        "stackField=%lu runtimeRoot=%lu remap=%lu getForward=%lu findVersion=%lu waitRouted=%lu "
-        "positive=%lu heapSlot=%lu stackSlot=%lu otherSlot=%lu",
+        "stackField=%lu runtimeRoot=%lu positive=%lu heapSlot=%lu stackSlot=%lu otherSlot=%lu",
         g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::Internal)].load(
             std::memory_order_relaxed),
         g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::LoadBarrier)].load(
@@ -126,14 +117,6 @@ void DumpRetiredReaders()
         g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::StackObjectField)].load(
             std::memory_order_relaxed),
         g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::RuntimeRoot)].load(
-            std::memory_order_relaxed),
-        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::RelocateOrRemap)].load(
-            std::memory_order_relaxed),
-        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::GetForwardPointer)].load(
-            std::memory_order_relaxed),
-        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::FindToVersion)].load(
-            std::memory_order_relaxed),
-        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::WaitRoutedTipReady)].load(
             std::memory_order_relaxed),
         g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::PositiveControl)].load(
             std::memory_order_relaxed),
