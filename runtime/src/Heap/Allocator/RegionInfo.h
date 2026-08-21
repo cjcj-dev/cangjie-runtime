@@ -2957,6 +2957,12 @@ public:
     void ResetLiveMapAfterForward(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);
+        // Forwarding is the last reader of this mark face. Copy it while the
+        // supplied view is still current; a partially forwarded page may stay
+        // UNMOVABLE_FROM after the epoch bump and still contain live holders.
+        if (!IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+        }
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);
