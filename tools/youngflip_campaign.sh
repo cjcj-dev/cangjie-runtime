@@ -21,18 +21,16 @@ resume_soak() {
 }
 cleanup() {
   resume_soak
-  if [ -f /dev/shm/MEASURE_ACTIVE ]; then
-    grep -v 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE > /dev/shm/MEASURE_ACTIVE.tmp || true
-    mv /dev/shm/MEASURE_ACTIVE.tmp /dev/shm/MEASURE_ACTIVE
-  fi
 }
 trap cleanup EXIT
 
-until=$(( $(date +%s) + 43200 ))
-if ! grep -q 'youngflip-1 cores=160-189' /dev/shm/MEASURE_ACTIVE 2>/dev/null; then
-  echo "youngflip-1 cores=160-189 host=kkk2 since=$(date -u +%Y-%m-%dT%H:%M:%SZ) until=$until" >> /dev/shm/MEASURE_ACTIVE
-fi
-echo "MEASURE_LINE=$(grep youngflip /dev/shm/MEASURE_ACTIVE)"
+/root/cj_build/tools/cjops claim --lane youngflip-1 --cores 160-189 \
+  --table /dev/shm/MEASURE_ACTIVE || {
+  echo "CAMPAIGN_ABORT core claim validation failed"
+  echo 4 > "$ROOT/campaign.rc"
+  touch "$ROOT/campaign.done"
+  exit 4
+}
 
 mem_ok() {
   local avail
