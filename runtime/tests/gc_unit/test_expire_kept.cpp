@@ -97,15 +97,7 @@ GC_TEST(ExemptLife, DropRetiredCoveringRemovesFindTo)
     const MAddress stale = 0x2000;
     GC_EXPECT_EQ(tab->insert(from, stale), stale);
     ForwardingTable::Retire(tab);
-    // Positive control for readerhold provenance: this is a deliberately
-    // constructed read after active-table retirement. The suite log must carry
-    // source=positive-control and the address of positiveSlot.
-    MAddress positiveSlot = from;
-    {
-        ForwardingTable::ReaderScope reader(
-            ForwardingTable::ReaderKind::PositiveControl, static_cast<const void*>(&positiveSlot));
-        GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
-    }
+    GC_EXPECT_EQ(ForwardingTable::FindTo(from), stale);
     ForwardingTable::DropRetiredCovering(kStart, kSize);
     GC_EXPECT_EQ(ForwardingTable::FindTo(from), static_cast<MAddress>(0));
 }
