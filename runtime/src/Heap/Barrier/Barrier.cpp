@@ -955,6 +955,16 @@ void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const
 
 BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
 {
+    static std::atomic<bool> dumped{ false };
+    bool expectDump = false;
+    if (dumped.compare_exchange_strong(expectDump, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr, "[I2][resolve-miss] atexit P1=%llu P3=%llu armedMiss=%llu\n",
+                         static_cast<unsigned long long>(g_i2ResolveP1Miss.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(g_i2ResolveP3Miss.load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
+        });
+    }
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
         return target;
     }

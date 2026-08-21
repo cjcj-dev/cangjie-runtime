@@ -82,6 +82,7 @@ public:
     void note_to_life_record(MAddress start, uint8_t seq);
     uint8_t to_life_n() const { return _to_life_n; }
     bool to_life_overflow() const { return _to_life_overflow; }
+    static bool DestUsable(MAddress to);
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
@@ -195,6 +196,10 @@ public:
         }
         (void)find(fromIndex, &cursor);
         const size_t toOffset = static_cast<size_t>(to - _heapBase);
+        if (toOffset > ForwardingEntry::kMaxToOffset) {
+            OverflowRefusals().fetch_add(1, std::memory_order_relaxed);
+            return 0;
+        }
         const size_t finalOff = insert(fromIndex, toOffset, &cursor);
         if (finalOff == kNotStored) {
             return 0;
