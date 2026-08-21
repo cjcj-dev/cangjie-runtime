@@ -378,6 +378,41 @@ bool ZForwarding::DestUsable(MAddress to)
     return st != ObjectState::FORWARDED && st != ObjectState::FORWARDING;
 }
 
+const char* ZForwarding::DestUnusableWhy(MAddress to)
+{
+    if (to == 0) {
+        return "null";
+    }
+    if (!Heap::IsHeapAddress(to)) {
+        return "non_heap";
+    }
+    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
+    if (!obj->IsValidObject()) {
+        return "invalid_object";
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    if (toRegion == nullptr) {
+        return "no_region";
+    }
+    if (toRegion->IsFreeRegion()) {
+        return "free_region";
+    }
+    if (toRegion->IsGarbageRegion()) {
+        return "garbage_region";
+    }
+    if (to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
+        return "outside_alloc";
+    }
+    const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
+    if (st == ObjectState::FORWARDED) {
+        return "to_forwarded";
+    }
+    if (st == ObjectState::FORWARDING) {
+        return "to_forwarding";
+    }
+    return "ok";
+}
+
 MAddress ZForwarding::resolve_live(MAddress to) const
 {
     if (to == 0 || !Heap::IsHeapAddress(to)) {

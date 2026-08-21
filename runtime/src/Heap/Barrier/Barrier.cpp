@@ -945,7 +945,35 @@ bool I2ResolveFatalOn()
 void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const char* site)
 {
     const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (I2ResolveTraceOn() && n <= 32) {
+    static std::atomic<uint64_t> dumpN{ 0 };
+    const uint64_t d = dumpN.fetch_add(1, std::memory_order_relaxed);
+    if (d < 8 && target != nullptr) {
+        const MAddress addr = reinterpret_cast<MAddress>(target);
+        RegionInfo* ri = Heap::IsHeapAddress(addr) ? RegionInfo::TryGetRegionInfoAt(addr) : nullptr;
+        unsigned rtype = 0xffu;
+        unsigned routeState = 0xffu;
+        unsigned ghost = 0;
+        unsigned lifeSeq = 0;
+        unsigned destHeld = 0;
+        BaseObject* published = nullptr;
+        const char* destWhy = "no_pub";
+        if (ri != nullptr) {
+            rtype = static_cast<unsigned>(ri->GetRegionType());
+            routeState = static_cast<unsigned>(ri->GetRouteState());
+            ghost = ri->IsGhostFromRegion() ? 1u : 0u;
+            lifeSeq = ri->GetRegionLifeSeq();
+            destHeld = ri->IsRouteDestHeld() ? 1u : 0u;
+            RegionSpace& space = static_cast<RegionSpace&>(Heap::GetHeap().GetAllocator());
+            published = space.FindPublishedRoute(target).dest;
+            destWhy = ZForwarding::DestUnusableWhy(reinterpret_cast<MAddress>(published));
+        }
+        LOG(RTLOG_ERROR,
+            "[I2][resolve-miss] site=%s n=%llu target=%p rtype=%u routeState=%u ghost=%u "
+            "lifeSeq=%u destHeld=%u published=%p destWhy=%s armedMiss=%llu",
+            site, static_cast<unsigned long long>(n), static_cast<void*>(target), rtype, routeState, ghost,
+            lifeSeq, destHeld, static_cast<void*>(published), destWhy,
+            static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
+    } else if (I2ResolveTraceOn() && n <= 32) {
         LOG(RTLOG_ERROR, "[I2][resolve-miss] site=%s n=%llu target=%p armedMiss=%llu", site,
             static_cast<unsigned long long>(n), static_cast<void*>(target),
             static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
@@ -959,10 +987,14 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     bool expectDump = false;
     if (dumped.compare_exchange_strong(expectDump, true, std::memory_order_relaxed)) {
         std::atexit([]() {
-            std::fprintf(stderr, "[I2][resolve-miss] atexit P1=%llu P3=%llu armedMiss=%llu\n",
+            std::fprintf(stderr,
+                         "[I2][resolve-miss] atexit P1=%llu P3=%llu armedMiss=%llu full=%llu overflow=%llu\n",
                          static_cast<unsigned long long>(g_i2ResolveP1Miss.load(std::memory_order_relaxed)),
                          static_cast<unsigned long long>(g_i2ResolveP3Miss.load(std::memory_order_relaxed)),
-                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
+                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
+                         static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)));
         });
     }
     if (target == nullptr || !Heap::IsHeapAddress(target)) {

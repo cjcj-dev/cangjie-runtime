@@ -83,6 +83,7 @@ public:
     uint8_t to_life_n() const { return _to_life_n; }
     bool to_life_overflow() const { return _to_life_overflow; }
     static bool DestUsable(MAddress to);
+    static const char* DestUnusableWhy(MAddress to);
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
