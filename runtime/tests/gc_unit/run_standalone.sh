@@ -74,6 +74,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_heal_coverage.cpp" \
     "$SRC/test_diag_gate.cpp" \
     "$SRC/test_interior_edge_class.cpp" \
+    "$SRC/test_isfromreg.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"
