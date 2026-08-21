@@ -93,7 +93,7 @@ def parse_attempt(directory: Path, root: Path, manifest: dict[str, dict[str, str
     round_number = int(match.group(1))
     arm = match.group(2)
     rc = int((directory / "rc").read_text().strip())
-    time_match = TIME_RE.fullmatch((directory / "time.tsv").read_text().strip())
+    time_match = TIME_RE.search((directory / "time.tsv").read_text().strip())
     if time_match is None:
         raise ValueError(f"bad time record: {relative}")
     wall = float(time_match.group(1))
