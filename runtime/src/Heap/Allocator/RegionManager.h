@@ -110,6 +110,7 @@ class RegionManager {
     friend class TagReuseProbe;
     friend struct PinRootTestAccess;
     friend struct IkeKeepTestAccess;
+    friend struct IsFromRegTestAccess;
 
 public:
     /* region memory layout:
@@ -504,16 +505,29 @@ public:
         RegionInfo* region = RegionInfo::GetRegionInfoAt(rawAddr);
         region->IncRawPointerObjectCount();
         PinFireDiag::NoteAddRawPointer();
-        if (region->IsFromRegion() && fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
-                                           RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
-            GCPhase phase = Heap::GetHeap().GetGCPhase();
-            CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
-            if (phase == GCPhase::GC_PHASE_POST_TRACE) {
-                region->ClearGhostRegionBit();
+        // CSet empty-free (ExemptFromRegions) TryDeletes FROM under the same
+        // list lock (zGeneration.cpp:211-221 register_empty_page). Inc first so
+        // a GC that already claimed GARBAGE still sees rawPtrCnt>0. Retry the
+        // unlisted window between TryDelete and Prepend.
+        for (;;) {
+            if (fromRegionList.TryDeleteRegion(region, RegionInfo::RegionType::FROM_REGION,
+                                               RegionInfo::RegionType::RAW_POINTER_PINNED_REGION) ||
+                garbageRegionList.TryDeleteRegion(region, RegionInfo::RegionType::GARBAGE_REGION,
+                                                  RegionInfo::RegionType::RAW_POINTER_PINNED_REGION)) {
+                GCPhase phase = Heap::GetHeap().GetGCPhase();
+                CHECK(phase != GCPhase::GC_PHASE_FORWARD && phase != GCPhase::GC_PHASE_PREFORWARD);
+                if (phase == GCPhase::GC_PHASE_POST_TRACE) {
+                    region->ClearGhostRegionBit();
+                }
+                rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+                break;
             }
-            rawPointerPinnedRegionList.PrependRegion(region, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
-        } else {
-            CHECK(region->GetRegionType() != RegionInfo::RegionType::LONE_FROM_REGION);
+            const RegionInfo::RegionType t = region->GetRegionType();
+            if (t != RegionInfo::RegionType::FROM_REGION && t != RegionInfo::RegionType::GARBAGE_REGION) {
+                CHECK(t != RegionInfo::RegionType::LONE_FROM_REGION);
+                break;
+            }
+            std::this_thread::yield();
         }
     }
 
@@ -968,7 +982,7 @@ private:
              region = region->GetNextRegion()) {
             if (region->IsGhostFromRegion()) {
                 bytes += region->GetGhostRegionSize();
-            } else if (candidate == nullptr &&
+            } else if (candidate == nullptr && region->GetRawPointerObjectCount() == 0 &&
                        !RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_GARBAGE)) {
                 // routedest: defence in depth. A held region should never have reached
                 // garbageRegionList — the two Assemble gates and the two young gates refuse
@@ -1002,7 +1016,8 @@ private:
                 CHECK(!region->IsGhostFromRegion());
                 // routedest: refuse a held region here too, so it is neither quarantined nor
                 // reclaimed. Same defence-in-depth role as TakeReclaimableGarbageRegion.
-                if (RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
+                if (region->GetRawPointerObjectCount() > 0 ||
+                    RouteDestHold::HoldsBack(region, RouteDestHold::Site::TAKE_AFTER_DISPEL)) {
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);

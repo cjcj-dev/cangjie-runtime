@@ -1398,6 +1398,28 @@ void RemoveRegionLocked(RegionList* regionList, RegionInfo* region)
     regionList->DeleteRegionLocked(region);
 }
 
+namespace {
+// Claim FROM under the from-list lock. AddRawPointerObject may retype to
+// PINNED after ExemptFromRegions snapshots the list (RegionManager.h:507;
+// CI face del->IsFromRegion at post_trace). ZGC skips !is_relocatable
+// (zGeneration.cpp:211-213); a lost claim is the same skip, not a relaxed CHECK.
+bool ClaimFromRegion(RegionList& fromList, RegionInfo* del, RegionInfo::RegionType newType, const char* site)
+{
+    if (fromList.TryDeleteRegion(del, RegionInfo::RegionType::FROM_REGION, newType)) {
+        return true;
+    }
+    const unsigned t = static_cast<unsigned>(del->GetRegionType());
+    const unsigned rs = static_cast<unsigned>(del->GetRouteState());
+    LOG(RTLOG_ERROR, "[GCV2][isfromreg] site=%s skip type=%u route=%u young=%u", site, t, rs,
+        static_cast<unsigned>(del->IsYoungRegion()));
+    CHECK_DETAIL(del->GetRegionType() == RegionInfo::RegionType::RAW_POINTER_PINNED_REGION ||
+                     del->GetRegionType() == RegionInfo::RegionType::UNMOVABLE_FROM_REGION ||
+                     del->GetRegionType() == RegionInfo::RegionType::GARBAGE_REGION,
+                 "[isfromreg] site=%s unexpected type=%u route=%u", site, t, rs);
+    return false;
+}
+} // namespace
+
 // ZGC zGeneration.cpp:211-213: !is_relocatable (is_allocating) pages are not
 // registered with the selector. HasMarkStartAllocGap ≡ zPage.inline.hpp:180-185.
 // Called at CSet select (ExemptFromRegions) and again before PrepareForwardable
@@ -1424,14 +1446,13 @@ size_t RegionManager::ExemptMarkStartAllocatingFromCSet()
             continue;
         }
         ++armed;
-        if (!fromRegion->IsFromRegion()) {
+        if (!ClaimFromRegion(fromRegionList, fromRegion, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "markwater")) {
             continue;
         }
         DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) markwater skip CSet: %zu units, %zu live bytes",
              fromRegion, fromRegion->GetRegionStart(), fromRegion->GetRegionAllocatedSize(),
              fromRegion->GetRegionEnd(), fromRegion->GetUnitCount(), fromRegion->GetLiveByteCount());
         fromRegion->PreserveRetainedLiveInfo();
-        RemoveRegionLocked(&fromRegionList, fromRegion);
         ExemptFromRegion(fromRegion);
         ++turned;
     }
@@ -1488,7 +1509,6 @@ size_t RegionManager::ExemptFromRegions()
         if (kFreeEmptyAtCSetSelect && liveBytes == 0 && rawPtrCnt == 0 &&
             !fromRegion->HasMarkStartAllocGap() && !fromRegion->IsYoungRegion()) {
             RegionInfo* del = fromRegion;
-            CHECK(del->IsFromRegion());
             const unsigned rs = static_cast<unsigned>(del->GetRouteState());
             const unsigned ke = del->IsKnownEmpty(del->GetMarkView<Generation::Old>()) ? 1u : 0u;
             size_t residual = 0;
@@ -1566,12 +1586,18 @@ size_t RegionManager::ExemptFromRegions()
                 CsetEmptyWho::NoteKeep(del, residual, residualFwd, marked);
                 continue;
             }
+            if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::GARBAGE_REGION, "cset-empty")) {
+                continue;
+            }
+            if (del->GetRawPointerObjectCount() > 0) {
+                rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
+                continue;
+            }
             RegionLifeDiag::SetNextFreePath(RegionLifeDiag::PATH_CSET_EMPTY);
             TraceClear::NoteRange(del->GetRegionStart(), del->GetRegionSize(),
                                   residual != 0 ? "coll_live" : "coll_empty", del, liveBytes,
                                   static_cast<unsigned>(Generation::Old),
                                   RegionLifeDiag::PATH_CSET_EMPTY);
-            RemoveRegionLocked(&fromRegionList, del);
             ScrubRememberedSetForRegion(del);
             garbageRegionList.PrependRegion(del, RegionInfo::RegionType::GARBAGE_REGION);
             continue;
@@ -1581,11 +1607,12 @@ size_t RegionManager::ExemptFromRegions()
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) pinned by forwarding: %zu units, %zu live bytes rawPtr cnt %u",
                 del, del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount(), rawPtrCnt);
-            CHECK(del->IsFromRegion());
+            if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION, "cset-rawpin")) {
+                continue;
+            }
             if (liveBytes > 0) {
                 del->PreserveRetainedLiveInfo();
             }
-            RemoveRegionLocked(&fromRegionList, del);
             rawPointerPinnedRegionList.PrependRegion(del, RegionInfo::RegionType::RAW_POINTER_PINNED_REGION);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
             continue;
@@ -1594,9 +1621,10 @@ size_t RegionManager::ExemptFromRegions()
             size_t threshold = static_cast<size_t>(exempt * fromRegion->GetRegionSize());
             if (liveBytes > threshold) {
                 RegionInfo* del = fromRegion;
-                CHECK(del->IsFromRegion());
+                if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-thresh")) {
+                    continue;
+                }
                 del->PreserveRetainedLiveInfo();
-                RemoveRegionLocked(&fromRegionList, del);
                 ExemptFromRegion(del);
                 floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
             }
@@ -1627,9 +1655,10 @@ size_t RegionManager::ExemptFromRegions()
             DLOG(REGION, "region %p @[0x%zx+%zu, 0x%zx) exempted by relocsel: %zu units, %zu live bytes", del,
                 del->GetRegionStart(), del->GetRegionAllocatedSize(), del->GetRegionEnd(),
                 del->GetUnitCount(), del->GetLiveByteCount());
-            CHECK(del->IsFromRegion());
+            if (!ClaimFromRegion(fromRegionList, del, RegionInfo::RegionType::UNMOVABLE_FROM_REGION, "cset-relocsel")) {
+                continue;
+            }
             del->PreserveRetainedLiveInfo();
-            RemoveRegionLocked(&fromRegionList, del);
             ExemptFromRegion(del);
             floatingGarbage += (del->GetRegionSize() - del->GetLiveByteCount());
         }
