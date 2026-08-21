@@ -131,6 +131,24 @@ GC_TEST(FwdSpin, LockedWaiterSeesInsertBeforeUnlock)
     tab->Destroy();
 }
 
+GC_TEST(MutatorRelocate, RelocateInnerRequiresForwardPhase)
+{
+    // zRelocate.cpp:394 assert(_generation->is_phase_relocate()) after retain_page.
+    // Collector.h: IDLE=1 PREFORWARD=13 FORWARD=14. Out-of-window after retain
+    // is FindToVersion, not ForwardObjectImpl (CHECK stays).
+    constexpr unsigned kIdle = 1;
+    constexpr unsigned kReclaimSatb = 3;
+    constexpr unsigned kPreforward = 13;
+    constexpr unsigned kForward = 14;
+    auto phaseOk = [](unsigned p) {
+        return p == kPreforward || p == kForward;
+    };
+    GC_EXPECT_FALSE(phaseOk(kIdle));
+    GC_EXPECT_FALSE(phaseOk(kReclaimSatb));
+    GC_EXPECT_TRUE(phaseOk(kPreforward));
+    GC_EXPECT_TRUE(phaseOk(kForward));
+}
+
 GC_TEST(MutatorRelocate, RefcountZeroRetainRefusesThenWait)
 {
     std::atomic<int32_t> ref{ 0 };

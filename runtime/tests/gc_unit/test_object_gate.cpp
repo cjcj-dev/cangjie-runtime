@@ -15,6 +15,7 @@
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/ManagedObjectGate.h"
 #include "gc_heap_fixture.hpp"
+#include "Heap/Allocator/RegionManager.h"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -96,4 +97,62 @@ GC_TEST(ObjectGate, HeaderConsumersRejectFreeRegion)
     // sizecaller: EnqueueObject is the third header-inline GetSize caller.
     // Gate reject must report already-enqueued so ShouldEnqueue does not SATB-push.
     GC_EXPECT_TRUE(fx.region0->EnqueueObject(fx.obj0, 0));
+}
+
+namespace MapleRuntime {
+struct SlotListTestAccess {
+    static uintptr_t PopFront(SlotList& list, size_t size) { return list.PopFront(size); }
+    static void SetHead(SlotList& list, ObjectSlot* h) { list.head = h; }
+    static ObjectSlot* GetHead(SlotList& list) { return list.head; }
+};
+} // namespace MapleRuntime
+
+// getsizetrace: SlotList::PopFront used to call GetSize on `head` with no gate.
+// ObjectSlot::next overlays Future payload+8 (store-good colour). A coloured
+// next makes head non-canonical; GetSize then #GPs (si_code=128, rbx=0xa8).
+// AllocPinnedFromFreeList (RegionManager.cpp:3611) is the soak caller.
+// ZGC (zPage.cpp:103-121): recycle by resetting metadata, not by treating a
+// coloured oop as a free-list successor. Drop the chain; do not uncolor-and-hand-out.
+GC_TEST(ObjectGate, SlotListPopFrontRejectsColouredHead)
+{
+    GcHeapFixture fx;
+    SlotList list;
+    GC_EXPECT_TRUE(list.ClearExtraContent(fx.obj0));
+    list.PushFront(fx.obj0);
+    size_t size = fx.obj0->GetSize();
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
+
+    // Coloured head: Remembered bit 56 (store-good) makes the word non-canonical.
+    auto coloured = reinterpret_cast<ObjectSlot*>(
+        reinterpret_cast<uintptr_t>(fx.obj0) | MapleRuntime::REMEMBERED_0);
+    SlotListTestAccess::SetHead(list, coloured);
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), static_cast<uintptr_t>(0));
+    GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
+
+    // Drop, do not jam: a later PushFront of a plain slot must still succeed.
+    GC_EXPECT_TRUE(list.ClearExtraContent(fx.obj0));
+    list.PushFront(fx.obj0);
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
+}
+
+GC_TEST(ObjectGate, SlotListPopFrontDropsColouredNext)
+{
+    GcHeapFixture fx;
+    SlotList list;
+    GC_EXPECT_TRUE(list.ClearExtraContent(fx.obj0));
+    list.PushFront(fx.obj0);
+    size_t size = fx.obj0->GetSize();
+    auto* slot = reinterpret_cast<ObjectSlot*>(fx.obj0);
+    slot->next = reinterpret_cast<ObjectSlot*>(
+        reinterpret_cast<uintptr_t>(fx.obj1) | MapleRuntime::REMEMBERED_0);
+    GC_EXPECT_EQ(SlotListTestAccess::PopFront(list, size), reinterpret_cast<uintptr_t>(fx.obj0));
+    GC_EXPECT_TRUE(SlotListTestAccess::GetHead(list) == nullptr);
+}
+
+GC_TEST(ObjectGate, FreePinnedPushFrontRejectsFreeRegion)
+{
+    GcHeapFixture fx;
+    fx.region0->SetRegionType(RegionInfo::RegionType::FREE_REGION);
+    FreePinnedSlotLists lists;
+    lists.PushFront(fx.obj0);
 }

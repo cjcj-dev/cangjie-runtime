@@ -562,44 +562,78 @@ public:
     // Measured: 100% of remset holders read NEVER_EXAMINED, and for 2113/2115 of them the last
     // thing that touched the snapshot was that unbind ([RETLIVE][why-never] lastOp=clrChecked).
     // So keep our own copy of the bits — regionSize/512 bytes, allocated only for regions that
-    // are actually preserved. Default off (MRT_GCV2_RETAINED_OWN_COPY=1).
-    static bool RetainedOwnCopyEnabled()
-    {
-        static const bool enabled = []() {
-            const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_RETAINED_OWN_COPY */;
-            return value != nullptr && std::strcmp(value, "1") == 0;
-        }();
-        return enabled;
-    }
+    // are actually preserved. ZGC keeps the page livemap valid through relocation
+    // (zLiveMap.inline.hpp:38-40,86-90); this copy is the equivalent persistent carrier.
+    static constexpr bool RetainedOwnCopyEnabled() { return true; }
 
-    // Union of markBitmap and resurrectBitmap — the same two bitmaps LiveInfo::IsSurvivedObject
-    // reads, collapsed into one array so the copy answers exactly the same question.
+    // Union of the mark faces that proved this holder live, plus resurrectBitmap.
+    // While the region is still young, that includes the current Young face
+    // (zPage.cpp:103-113 keeps the same livemap across flip-promote).
     void CaptureRetainedMarkWords(MarkView<Generation::Old> view, LiveInfo* liveInfo)
     {
         FreeRetainedMarkWords();
+        if (IsLargeRegion()) {
+            // ZGC large pages contain one object at page start (zPage.inline.hpp:53-58),
+            // but still represent its liveness with the page livemap (228-240). Mirror
+            // our large-region mark/resurrect single bits in retained word bit zero.
+            // zPage.cpp:103-113 flip-promote only retargets generation_id; the
+            // livemap bits stay. In-place young promote captures before
+            // PromoteYoungRegion (RegionManager.cpp:3212), while the Old flag is
+            // still clear (RegionInfo.h:2540-2544). Union the current Young flag.
+            bool marked = GetMarkedRegionFlag(view) == 1 || metadata.isResurrected == 1;
+            // In-place young promote captures before MarkForwardingDone
+            // (RegionManager.cpp:3212). After a real copy, forwarding is already
+            // done (RegionManager.cpp:3544) and the Young bits name FROM copies
+            // that must not stay live.
+            if (IsYoungRegion() && !IsForwardingDone() &&
+                GetMarkedRegionFlag(GetMarkView<Generation::Young>()) == 1) {
+                marked = true;
+            }
+            if (!marked) {
+                return;
+            }
+            uint64_t* words = static_cast<uint64_t*>(malloc(sizeof(uint64_t)));
+            CHECK(words != nullptr);
+            words[0] = 1;
+            metadata.retainedMarkWords = words;
+            metadata.retainedMarkWordCnt = 1;
+            return;
+        }
         if (liveInfo == nullptr) {
             return;
         }
         LiveInfo::MarkFace& oldFace = liveInfo->GetMarkFace<Generation::Old>();
         RegionBitmap* mark = oldFace.epoch.load(std::memory_order_acquire) == view.GetEpoch()
             ? __atomic_load_n(&oldFace.bitmap, std::memory_order_acquire) : nullptr;
+        // Same seqnum retarget as zPage.cpp:103-113: while the region is still
+        // young, the Young face is the mark that proved these objects live.
+        // Do not copy it into Old (genface); only the retained snapshot unions
+        // it, and only before promotion so a later major cannot resurrect
+        // objects the Old closure left unmarked.
+        RegionBitmap* youngMark = nullptr;
+        if (IsYoungRegion() && !IsForwardingDone()) {
+            LiveInfo::MarkFace& youngFace = liveInfo->GetMarkFace<Generation::Young>();
+            youngMark =
+                youngFace.epoch.load(std::memory_order_acquire) == GetMarkSnapshotEpoch<Generation::Young>()
+                ? __atomic_load_n(&youngFace.bitmap, std::memory_order_acquire) : nullptr;
+        }
         RegionBitmap* resurrect = liveInfo->resurrectBitmap;
         size_t markWords = mark == nullptr ? 0 : mark->wordCnt.load(std::memory_order_acquire);
+        size_t youngWords = youngMark == nullptr ? 0 : youngMark->wordCnt.load(std::memory_order_acquire);
         size_t resurrectWords = resurrect == nullptr ? 0 : resurrect->wordCnt.load(std::memory_order_acquire);
-        size_t wordCnt = std::max(markWords, resurrectWords);
+        size_t wordCnt = std::max(markWords, std::max(youngWords, resurrectWords));
         if (wordCnt == 0) {
             return;
         }
         uint64_t* words = static_cast<uint64_t*>(malloc(wordCnt * sizeof(uint64_t)));
-        if (words == nullptr) {
-            // Out of memory for a diagnostic-grade copy: leave the snapshot absent. The
-            // consumer treats "no snapshot" as keep, i.e. this degrades to today's fail-open.
-            return;
-        }
+        CHECK(words != nullptr);
         for (size_t i = 0; i < wordCnt; ++i) {
             uint64_t bits = 0;
             if (i < markWords) {
                 bits |= mark->markWords[i].load(std::memory_order_acquire);
+            }
+            if (i < youngWords) {
+                bits |= youngMark->markWords[i].load(std::memory_order_acquire);
             }
             if (i < resurrectWords) {
                 bits |= resurrect->markWords[i].load(std::memory_order_acquire);
@@ -647,7 +681,7 @@ public:
         metadata.retainedLiveInfo = GetLiveInfo();
         metadata.retainedLiveInfoEpoch = GetSnapshotEpoch();
         metadata.retainedLiveInfoCoveredUpTo = GetRegionAllocPtr();
-        if (RetainedOwnCopyEnabled() && !IsLargeRegion()) {
+        if (RetainedOwnCopyEnabled()) {
             CaptureRetainedMarkWords(GetMarkView<Generation::Old>(), metadata.retainedLiveInfo);
         }
         if (IsLargeRegion()) {
@@ -757,6 +791,12 @@ public:
     {
         if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return false;
+        }
+        // An owned copy is the persistent livemap carrier. Its lifetime is
+        // ended explicitly by ClearLiveInfo<Old> or region reinitialization;
+        // forwarding's epoch bump only retires the borrowed LiveInfo face.
+        if (metadata.retainedMarkWords != nullptr) {
+            return true;
         }
         return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
@@ -957,6 +997,12 @@ public:
     void ResetMarkBit(MarkView<Generation::Old> view)
     {
         SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_RESET_MARK_BIT, false);
+        // CollectLargeGarbage calls this for a live large page immediately
+        // after mark. Preserve its one-object livemap before clearing the
+        // current face, just as ZPage keeps its live bit through relocation.
+        if (IsLargeRegion() && IsSurvivedObject(view, 0)) {
+            PreserveRetainedLiveInfo();
+        }
         SetMarkedRegionFlag(view, 0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
@@ -2941,6 +2987,12 @@ public:
     void ResetLiveMapAfterForward(MarkView<G> view)
     {
         CHECK(view.GetRegion() == this);
+        // Forwarding is the last reader of this mark face. Copy it while the
+        // supplied view is still current; a partially forwarded page may stay
+        // UNMOVABLE_FROM after the epoch bump and still contain live holders.
+        if (!IsLargeRegion()) {
+            PreserveRetainedLiveInfo();
+        }
         __atomic_store_n(&metadata.liveByteCount, LIVE_AUTHORITY_BIT, std::memory_order_release);
         if (IsLargeRegion()) {
             SetMarkedRegionFlag(view, 0);

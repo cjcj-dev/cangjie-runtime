@@ -77,6 +77,12 @@ private:
 public:
     void PushFront(BaseObject* slot)
     {
+        // getsizetrace: GetSize before the SlotList gate. CollectFreePinnedSlots
+        // already gated, but this public entry must not SEGV on a coloured /
+        // dead-region slot (same #GP family as SlotList::PopFront).
+        if (!PlausibleManagedObjectGate("FreePinnedSlotLists::PushFront", slot)) {
+            return;
+        }
         size_t size = slot->GetSize();
         switch (size) {
             case ATOMIC_OBJECT_SIZE:
