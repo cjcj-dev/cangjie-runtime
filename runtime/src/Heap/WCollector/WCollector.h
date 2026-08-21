@@ -760,9 +760,6 @@ protected:
     // forwarding identity is a per-address ZForwarding lookup.
     RefField<> GetAndTryTagRefField(BaseObject* target) const override
     {
-        const void* origin = __builtin_extract_return_addr(__builtin_return_address(0));
-        ForwardingTable::ReaderScope originScope(
-            ForwardingTable::ReaderKind::Internal, nullptr, nullptr, nullptr, origin);
         // Null carries no colour (ZGC zAddress: null is never load-bad).
         if (target == nullptr) {
             return RefField<>(static_cast<BaseObject*>(nullptr));
