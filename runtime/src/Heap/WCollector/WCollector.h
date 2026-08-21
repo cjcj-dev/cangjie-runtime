@@ -650,9 +650,7 @@ public:
         ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
         BaseObject* stored = nullptr;
         if constexpr (ForwardingTable::kConsumeEntries) {
-            const void* caller = __builtin_extract_return_addr(__builtin_return_address(0));
-            ForwardingTable::ReaderScope reader(
-                ForwardingTable::ReaderKind::FindToVersion, nullptr, nullptr, caller);
+            ForwardingTable::ReaderScope reader(ForwardingTable::ReaderKind::FindToVersion, nullptr);
             const MAddress to = ForwardingTable::LookupTo(fromAddr, &ans);
             if (to != 0) {
                 stored = reinterpret_cast<BaseObject*>(to);
