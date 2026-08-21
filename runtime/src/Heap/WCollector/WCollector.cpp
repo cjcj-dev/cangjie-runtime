@@ -6311,18 +6311,21 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
             }
         }
         OffpastDiag::NoteFixMissSlot(static_cast<void*>(&root), target);
-        // youngstatic / ZGC zBarrier "Never heal with null": a live RootSlot must not be
-        // cleared when ForwardObject misses. Leave the slot alone (still names from/ghost);
-        // mutator load-barrier / later STW can remap. Heap-field CAS-null path is separate.
-        // ⛔ Do not reinstall from as a "fix"; ⛔ do not StorePlain(null) on roots.
-        // statresid: leave-alone is residual only after force-domain+retry; preferred
-        // path is grant-before-route so Forward succeeds and from is not reclaimed.
+        // I2: Forward miss still consults FindToVersion/receipt. Stale miss
+        // refuses silently leaving from (seqnum-bounded table already rejects
+        // expired entries). ⛔ Do not reinstall from; ⛔ do not StorePlain(null).
+        BaseObject* viaTable = FindToVersion(target);
+        if (viaTable != nullptr && viaTable != target && Heap::IsHeapAddress(viaTable) &&
+            viaTable->IsValidObject()) {
+            HealRoot(root, from_object(viaTable), HealSite::WCollectorFixRootForwarded);
+            return true;
+        }
         static std::atomic<size_t> g_ysRootLeaveAlone{ 0 };
         size_t la = g_ysRootLeaveAlone.fetch_add(1, std::memory_order_relaxed) + 1;
         if (la <= 32) {
             LOG(RTLOG_ERROR,
                 "[GCV2][youngstatic] root_fwd_null_leave_alone n=%zu root=%p target=%p "
-                "(ZGC never-heal-null; mark miss residual after force-domain)",
+                "(ZGC never-heal-null; table miss after force-domain)",
                 la, static_cast<void*>(&root), static_cast<void*>(target));
         }
         return false;

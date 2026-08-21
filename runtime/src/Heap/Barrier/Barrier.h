@@ -149,6 +149,11 @@ protected:
     void ZgcSelfHealLoadGood(RefField<true>& field, zpointer observed, zpointer healPtr,
                              HealSite site) const;
 
+    // I2: FORWARDED/zero-header from-copy → FindToVersion to. Never hand from.
+    // SkipLaunderingHeal may refuse to write from into the slot; the return value
+    // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
+    BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;
     // storecov: optional pre-store snapshot of store-good (addr,target) pairs; nullptr = always Record
