@@ -6065,14 +6065,7 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
                 return true;
             }
         }
-        // Gate rejected; host unknown or not forwarded — still plain interior (03fc21ed).
-        MAddress oldVal = raw(oldField.GetFieldValue());
-        MAddress plainVal = reinterpret_cast<MAddress>(target);
-        if (oldVal != plainVal) {
-            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), target,
-                                          HealSite::WCollectorMinorFixInteriorPreserve);
-        }
+        // Gate rejected. ⛔ Do not write from (zRelocate.cpp:371). Leave the slot.
         return false;
     }
     HeapSlot<> oldBits(oldField);
@@ -6158,13 +6151,6 @@ bool WCollector::FixMinorEvacuatedSlot(RefField<>& field, BaseObject* knownBase,
     }
     // ForwardObject may return the same interior if gated; re-check before colouring.
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        MAddress oldVal = raw(field.GetFieldValue());
-        MAddress plainVal = reinterpret_cast<MAddress>(current);
-        if (oldVal != plainVal) {
-            ScopedPlainWriter tag(PlainWriterSite::FixMinorInterior);
-            (void)CasInstallInteriorPlain(field, to_zpointer(oldVal), current,
-                                          HealSite::WCollectorMinorFixInteriorPostForward);
-        }
         return false;
     }
     // plainroots: stack/reg root slots → plain current; heap remset/fields → Phase C colour.
@@ -6217,7 +6203,6 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
                 return true;
             }
         }
-        HealRoot(root, from_object(target), HealSite::WCollectorPreserveRootInterior);
         return false;
     }
     HeapSlot<> oldBits(to_zpointer(oldValue));
@@ -6331,7 +6316,6 @@ bool WCollector::FixMinorEvacuatedSlot(RootSlot& root, const ScopedStopTheWorld*
         return false;
     }
     if (!Collector::PlausibleManagedObjectGate("FixMinorEvacuatedSlot.postfwd", current)) {
-        HealRoot(root, from_object(current), HealSite::WCollectorFixRootPostForwardInterior);
         return false;
     }
     MAddress newValue = reinterpret_cast<MAddress>(current);
