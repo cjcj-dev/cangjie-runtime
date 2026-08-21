@@ -9872,6 +9872,16 @@ BaseObject* WCollector::TryMutatorRelocate(BaseObject* obj, RegionInfo* forwardi
         MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::RETAIN_FAILED);
         return nullptr;
     }
+    // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
+    // SetGCPhase publishes before handshake, so a mutator that retained across
+    // FORWARD→IDLE must not enter ForwardObjectImpl's CHECK. Release and let
+    // the existing FindToVersion / wait legs consume the published table.
+    phase = GetGCPhase();
+    if (phase != GCPhase::GC_PHASE_PREFORWARD && phase != GCPhase::GC_PHASE_FORWARD) {
+        forwarding->UnlockReadFromRegion();
+        MutatorRelocate::NoteFallback(MutatorRelocate::Fallback::PHASE);
+        return nullptr;
+    }
     MutatorRelocate::NoteRetainOk();
     // The scope is what lets ForwardObjectExclusive attribute the copy to this thread. Counting
     // at this call site instead would conflate "this mutator copied the object" with "this
@@ -10017,11 +10027,26 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
         // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
         for (;;) {
             if (region->TryLockReadFromRegion()) {
+                // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
+                // The loop has no safepoint, so SetGCPhase can publish IDLE while
+                // this thread still holds the read lock. CHECK in ForwardObjectImpl
+                // stays; out-of-window after retain is table lookup, not copy.
+                const GCPhase retainedPhase = GetGCPhase();
+                if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
+                    retainedPhase != GCPhase::GC_PHASE_FORWARD) {
+                    region->UnlockReadFromRegion();
+                    return FindToVersion(obj);
+                }
                 BaseObject* toVersion = ForwardObjectImpl(obj, region);
                 region->UnlockReadFromRegion();
                 return toVersion;
             }
             if (obj->IsForwarded()) {
+                return FindToVersion(obj);
+            }
+            const GCPhase spinPhase = GetGCPhase();
+            if (spinPhase != GCPhase::GC_PHASE_PREFORWARD &&
+                spinPhase != GCPhase::GC_PHASE_FORWARD) {
                 return FindToVersion(obj);
             }
             sched_yield();
