@@ -324,18 +324,23 @@ void ZForwarding::note_to_life(MAddress to)
     if (toRegion == nullptr) {
         return;
     }
-    const MAddress start = toRegion->GetRegionStart();
-    const uint8_t seq = toRegion->GetRegionLifeSeq();
+    note_to_life_record(toRegion->GetRegionStart(), toRegion->GetRegionLifeSeq());
+}
+
+void ZForwarding::note_to_life_record(MAddress start, uint8_t seq)
+{
     for (uint8_t i = 0; i < _to_life_n; ++i) {
         if (_to_lives[i].start == start) {
             return;
         }
     }
-    if (_to_life_n < 3) {
+    if (_to_life_n < kToLifeCap) {
         _to_lives[_to_life_n].start = start;
         _to_lives[_to_life_n].seq = seq;
         ++_to_life_n;
+        return;
     }
+    _to_life_overflow = true;
 }
 
 MAddress ZForwarding::resolve_live(MAddress to) const
@@ -354,13 +359,21 @@ MAddress ZForwarding::resolve_live(MAddress to) const
     if (to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
         return 0;
     }
-    if (_to_life_n != 0) {
+    if (_to_life_n != 0 || _to_life_overflow) {
         const MAddress start = toRegion->GetRegionStart();
         const uint8_t seq = toRegion->GetRegionLifeSeq();
+        bool known = false;
         for (uint8_t i = 0; i < _to_life_n; ++i) {
-            if (_to_lives[i].start == start && _to_lives[i].seq != seq) {
-                return 0;
+            if (_to_lives[i].start == start) {
+                known = true;
+                if (_to_lives[i].seq != seq) {
+                    return 0;
+                }
+                break;
             }
+        }
+        if (_to_life_overflow && !known) {
+            return 0;
         }
     }
     const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();

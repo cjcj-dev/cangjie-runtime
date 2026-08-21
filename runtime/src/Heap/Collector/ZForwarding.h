@@ -77,7 +77,11 @@ public:
     // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
     // Record the to-region start+regionLifeSeq at insert; consume rejects when
     // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
+    static constexpr uint8_t kToLifeCap = 16;
     void note_to_life(MAddress to);
+    void note_to_life_record(MAddress start, uint8_t seq);
+    uint8_t to_life_n() const { return _to_life_n; }
+    bool to_life_overflow() const { return _to_life_overflow; }
     MAddress resolve_live(MAddress to) const;
     bool receipt_live(MAddress to) const;
     void note_kept_expire() { _kept_seen_expire = true; }
@@ -225,11 +229,12 @@ private:
           _ref_count(1),
           _done(false),
           _to_life_n(0),
+          _to_life_overflow(false),
           _kept_seen_expire(false)
     {
-        _to_lives[0] = ToLife{};
-        _to_lives[1] = ToLife{};
-        _to_lives[2] = ToLife{};
+        for (uint8_t i = 0; i < kToLifeCap; ++i) {
+            _to_lives[i] = ToLife{};
+        }
     }
 
     const MAddress _start;
@@ -245,8 +250,9 @@ private:
         MAddress start;
         uint8_t seq;
     };
-    ToLife _to_lives[3];
+    ToLife _to_lives[kToLifeCap];
     uint8_t _to_life_n;
+    bool _to_life_overflow;
     bool _kept_seen_expire;
 };
 

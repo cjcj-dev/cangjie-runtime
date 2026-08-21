@@ -54,6 +54,31 @@ GC_TEST(ReceiptLife, DestLaterForwardedHeaderRejectsReceipt)
     tab->Destroy();
 }
 
+GC_TEST(ReceiptLife, FourDestsDoNotDropLifeStamp)
+{
+    ZForwarding* tab = ZForwarding::Create(4, 0x10000, 0, 0x1000);
+    GC_EXPECT_TRUE(tab != nullptr);
+    for (uint8_t i = 0; i < 4; ++i) {
+        tab->note_to_life_record(0x1000u * (i + 1), i + 1);
+    }
+    GC_EXPECT_EQ(tab->to_life_n(), static_cast<uint8_t>(4));
+    GC_EXPECT_FALSE(tab->to_life_overflow());
+    tab->Destroy();
+}
+
+GC_TEST(ReceiptLife, ToLifeOverflowIsFailClosed)
+{
+    ZForwarding* tab = ZForwarding::Create(4, 0x10000, 0, 0x1000);
+    GC_EXPECT_TRUE(tab != nullptr);
+    for (uint8_t i = 0; i < ZForwarding::kToLifeCap; ++i) {
+        tab->note_to_life_record(0x1000u * (i + 1), 1);
+    }
+    GC_EXPECT_EQ(tab->to_life_n(), ZForwarding::kToLifeCap);
+    tab->note_to_life_record(0x1000u * (ZForwarding::kToLifeCap + 1), 1);
+    GC_EXPECT_TRUE(tab->to_life_overflow());
+    tab->Destroy();
+}
+
 GC_TEST(ReceiptLife, KeptExpireLatchIsOnce)
 {
     ZForwarding* tab = ZForwarding::Create(4, 0x10000, 0, 0x1000);
