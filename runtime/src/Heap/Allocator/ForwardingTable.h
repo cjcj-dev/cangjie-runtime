@@ -62,6 +62,7 @@ public:
 
     // After copy: zRelocate.cpp:367-372
     static MAddress InsertMapping(MAddress from, MAddress to);
+    static uint64_t StaleToLifeCount();
     static MAddress FindTo(MAddress from);
     static bool EntriesArmed(MAddress from);
     static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);

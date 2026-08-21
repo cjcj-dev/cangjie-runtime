@@ -2209,8 +2209,11 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
         ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
         if (forwarding != nullptr) {
             const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
-            if (to != 0) {
-                receipt = reinterpret_cast<BaseObject*>(to);
+            const MAddress live = to == 0 ? 0 : forwarding->resolve_live(to);
+            if (live != 0) {
+                receipt = reinterpret_cast<BaseObject*>(live);
+            } else if (to != 0) {
+                ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
             }
         }
     }
@@ -3322,16 +3325,16 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
                 : nullptr;
             if (forwarding != nullptr) {
                 const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
-                BaseObject* to = receipt == 0 ? nullptr : reinterpret_cast<BaseObject*>(receipt);
-                if (to != nullptr && Heap::IsHeapAddress(to)) {
-                    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(to));
-                    if (toRegion != nullptr && !toRegion->IsFreeRegion() && !toRegion->IsGarbageRegion() &&
-                        to->IsValidObject()) {
-                        MAddress expected = raw(value.GetFieldValue());
-                        (void)CasInstallResolvedTarget(field, expected, to,
-                                                       HealSite::WCollectorMinorResolveLoadGoodForward);
-                        return to;
-                    }
+                const MAddress live = receipt == 0 ? 0 : forwarding->resolve_live(receipt);
+                if (live != 0) {
+                    BaseObject* to = reinterpret_cast<BaseObject*>(live);
+                    MAddress expected = raw(value.GetFieldValue());
+                    (void)CasInstallResolvedTarget(field, expected, to,
+                                                   HealSite::WCollectorMinorResolveLoadGoodForward);
+                    return to;
+                }
+                if (receipt != 0) {
+                    ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
                 }
             }
         }
@@ -7301,6 +7304,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
+            manager.ExpireKeptFromPreviousCycle();
             postEvacPoint("post-fix-pre-forward", true);
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
@@ -7373,6 +7377,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
+            manager.ExpireKeptFromPreviousCycle();
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
                     currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
@@ -9355,6 +9360,7 @@ void WCollector::DoGarbageCollection()
     if (!skipPostflipWalk) {
         InvalidateOldTaggedRefs(false);
     }
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");
