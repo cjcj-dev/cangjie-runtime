@@ -18,6 +18,7 @@
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Verify/VerifyRoots.h"
 
 namespace MapleRuntime {
 namespace {
@@ -47,7 +48,108 @@ std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
 
+struct ReaderContext {
+    ForwardingTable::ReaderKind kind = ForwardingTable::ReaderKind::Internal;
+    const void* slot = nullptr;
+    const BaseObject* holder = nullptr;
+};
+
+thread_local ReaderContext g_readerContext;
+constexpr size_t kReaderKindCount = static_cast<size_t>(ForwardingTable::ReaderKind::Count);
+std::atomic<uint64_t> g_retiredReaderByKind[kReaderKindCount] = {};
+std::atomic<uint64_t> g_retiredReaderHeapSlot{ 0 };
+std::atomic<uint64_t> g_retiredReaderStackSlot{ 0 };
+std::atomic<uint64_t> g_retiredReaderOtherSlot{ 0 };
+std::atomic<uint64_t> g_retiredReaderSamples{ 0 };
+
+const char* ReaderKindName(ForwardingTable::ReaderKind kind)
+{
+    switch (kind) {
+        case ForwardingTable::ReaderKind::LoadBarrier:
+            return "load-barrier";
+        case ForwardingTable::ReaderKind::AtomicLoadBarrier:
+            return "atomic-load-barrier";
+        case ForwardingTable::ReaderKind::StackOrRegisterRoot:
+            return "stack-or-register-root";
+        case ForwardingTable::ReaderKind::StackObjectField:
+            return "stack-object-field";
+        case ForwardingTable::ReaderKind::RuntimeRoot:
+            return "runtime-root";
+        case ForwardingTable::ReaderKind::PositiveControl:
+            return "positive-control";
+        default:
+            return "internal";
+    }
+}
+
+void DumpRetiredReaders()
+{
+    LOG(RTLOG_ERROR,
+        "[FWDTABLE][retired-reader-summary] internal=%lu load=%lu atomic=%lu stackRoot=%lu "
+        "stackField=%lu runtimeRoot=%lu positive=%lu heapSlot=%lu stackSlot=%lu otherSlot=%lu",
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::Internal)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::LoadBarrier)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::AtomicLoadBarrier)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::StackOrRegisterRoot)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::StackObjectField)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::RuntimeRoot)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderByKind[static_cast<size_t>(ForwardingTable::ReaderKind::PositiveControl)].load(
+            std::memory_order_relaxed),
+        g_retiredReaderHeapSlot.load(std::memory_order_relaxed),
+        g_retiredReaderStackSlot.load(std::memory_order_relaxed),
+        g_retiredReaderOtherSlot.load(std::memory_order_relaxed));
+}
+
+void NoteRetiredReader(MAddress from, MAddress to)
+{
+    const ReaderContext context = g_readerContext;
+    const size_t kind = static_cast<size_t>(context.kind);
+    if (kind < kReaderKindCount) {
+        g_retiredReaderByKind[kind].fetch_add(1, std::memory_order_relaxed);
+    }
+
+    const AddrRegion slotRegion = VerifyRoots::ClassifyAddress(reinterpret_cast<uintptr_t>(context.slot));
+    if (slotRegion == AddrRegion::HEAP) {
+        g_retiredReaderHeapSlot.fetch_add(1, std::memory_order_relaxed);
+    } else if (slotRegion == AddrRegion::STACK) {
+        g_retiredReaderStackSlot.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        g_retiredReaderOtherSlot.fetch_add(1, std::memory_order_relaxed);
+    }
+
+    static std::once_flag reportOnce;
+    std::call_once(reportOnce, []() { std::atexit(DumpRetiredReaders); });
+    const uint64_t sample = g_retiredReaderSamples.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (sample <= 256) {
+        LOG(RTLOG_ERROR,
+            "[FWDTABLE][retired-reader] n=%lu from=%#zx to=%#zx source=%s slot=%p slotRegion=%s "
+            "slotHeap=%u holder=%p holderHeap=%u",
+            sample, static_cast<size_t>(from), static_cast<size_t>(to), ReaderKindName(context.kind), context.slot,
+            VerifyRoots::RegionName(slotRegion), static_cast<unsigned>(slotRegion == AddrRegion::HEAP), context.holder,
+            static_cast<unsigned>(context.holder != nullptr &&
+                                  VerifyRoots::ClassifyAddress(reinterpret_cast<uintptr_t>(context.holder)) ==
+                                      AddrRegion::HEAP));
+    }
+}
+
 } // namespace
+
+ForwardingTable::ReaderScope::ReaderScope(ReaderKind kind, const void* slot, const BaseObject* holder)
+    : previousKind(g_readerContext.kind), previousSlot(g_readerContext.slot), previousHolder(g_readerContext.holder)
+{
+    g_readerContext = ReaderContext{ kind, slot, holder };
+}
+
+ForwardingTable::ReaderScope::~ReaderScope()
+{
+    g_readerContext = ReaderContext{ previousKind, previousSlot, previousHolder };
+}
 
 bool ForwardingTable::Ready() { return g_ready.load(std::memory_order_acquire); }
 
@@ -332,7 +434,11 @@ MAddress ForwardingTable::FindTo(MAddress from)
             return to;
         }
     }
-    return FindRetiredTo(from);
+    const MAddress retired = FindRetiredTo(from);
+    if (retired != 0) {
+        NoteRetiredReader(from, retired);
+    }
+    return retired;
 }
 
 bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != nullptr; }
@@ -352,6 +458,7 @@ MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
     }
     const MAddress retired = FindRetiredTo(from);
     if (retired != 0) {
+        NoteRetiredReader(from, retired);
         g_armedHit.fetch_add(1, std::memory_order_relaxed);
         if (answer != nullptr) {
             *answer = ToAnswer::ArmedHit;

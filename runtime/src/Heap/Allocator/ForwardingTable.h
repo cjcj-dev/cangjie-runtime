@@ -22,6 +22,35 @@ class BaseObject;
 // ClearEntries. ZGC has one map because reset_relocation_set is the only unlink.
 class ForwardingTable {
 public:
+    // Diagnostic provenance for a reader that can still name a from address
+    // after the active forwarding entry has been detached. ZGC normally
+    // excludes this state by remapping the source slot in its load/root
+    // barriers (zBarrier.inline.hpp:294-340; zGeneration.cpp:1408-1523).
+    enum class ReaderKind : uint8_t {
+        Internal = 0,
+        LoadBarrier,
+        AtomicLoadBarrier,
+        StackOrRegisterRoot,
+        StackObjectField,
+        RuntimeRoot,
+        PositiveControl,
+        Count,
+    };
+
+    class ReaderScope {
+    public:
+        ReaderScope(ReaderKind kind, const void* slot, const BaseObject* holder = nullptr);
+        ~ReaderScope();
+
+        ReaderScope(const ReaderScope&) = delete;
+        ReaderScope& operator=(const ReaderScope&) = delete;
+
+    private:
+        ReaderKind previousKind;
+        const void* previousSlot;
+        const BaseObject* previousHolder;
+    };
+
     // Compile-time: FindToVersion prefers a stored entry, then falls back to geometry
     // until the entry exists.  After route retirement only the entry can answer.
     static constexpr bool kConsumeEntries = true;
