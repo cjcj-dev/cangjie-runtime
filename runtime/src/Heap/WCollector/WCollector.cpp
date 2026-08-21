@@ -7437,6 +7437,26 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
+        // ZGC repairs the relocated page's remembered fields before release_page
+        // and detach_page (zRelocate.cpp:1018-1047). Exempt keeps an incomplete
+        // Cangjie from-page on unmovableFrom, so its live object fields must consume
+        // the current forwarding receipts before PrepareForwardTable retires them.
+        // The ordinary to-space closure was fixed above; only the kept from-page is
+        // the extra reference surface.
+        for (RegionInfo* region : minorCandidateRegions) {
+            if (region == nullptr || !region->IsUnmovableFromRegion() || !region->IsForwardingDone()) {
+                continue;
+            }
+            region->VisitAllObjects([this, &stw](BaseObject* object) {
+                if (object == nullptr || !object->IsValidObject() || !object->HasRefField()) {
+                    return;
+                }
+                object->ForEachRefField([this, object, &stw](RefField<>& field) {
+                    FixOldTaggedRefField(object, field, **stw);
+                });
+            });
+        }
+
         {
         // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
         MRT_PHASE_TIMER("young.evac_prepare_next");
