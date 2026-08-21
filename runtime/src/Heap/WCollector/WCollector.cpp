@@ -1386,12 +1386,6 @@ void WCollector::EnumRefFieldRoot(RefField<>& field, RootSet& rootSet) const
     CHECK_DETAIL(latest->IsValidObject(), "Enum static root %p(%p) encounters invalid object", latest, &field);
     // static roots stay Phase-C coloured (writable statics need colour; rostatic skips non-heap CAS).
     // plainroots only applies to stack/reg ObjectRef slots (RootSlotWriteback via !IsHeapAddress).
-    // ZGC ZMark::follow_object visits the concrete oop slot through its
-    // barrier closure (zMark.cpp:371-383). Keep that slot/holder attached to
-    // the nested forwarding lookup so a retired hit is attributable to the
-    // heap field rather than only to the lookup funnel.
-    ForwardingTable::ReaderScope retiredReader(
-        ForwardingTable::ReaderKind::Internal, static_cast<const void*>(&field), obj);
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(ENUM, "enum static ref@%p: %#zx -> %p<%p>(%zu)", &field, raw(oldField.GetFieldValue()), latest,
@@ -1543,6 +1537,12 @@ void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& wo
     CHECK_DETAIL(latest->IsValidObject(), "Invalid object %p is referenced by strong object %p: %s and offset %zd",
                  latest, obj, obj == nullptr ? "<partial-array chunk>" : obj->GetTypeInfo()->GetName(),
                  obj == nullptr ? static_cast<ssize_t>(-1) : BaseObject::FieldOffset(obj, &field));
+    // ZGC ZMark::follow_object visits the concrete oop slot through its
+    // barrier closure (zMark.cpp:371-383). Keep that slot/holder attached to
+    // the nested forwarding lookup so a retired hit is attributable to the
+    // heap field rather than only to the lookup funnel.
+    ForwardingTable::ReaderScope retiredReader(
+        ForwardingTable::ReaderKind::Internal, static_cast<const void*>(&field), obj);
     RefField<> newField = GetAndTryTagRefField(latest);
     if (oldField.GetFieldValue() == newField.GetFieldValue()) {
         DLOG(TRACE, "trace obj %p ref@%p: %p<%p>(%zu)", obj, &field, latest, latest->GetTypeInfo(), latest->GetSize());
