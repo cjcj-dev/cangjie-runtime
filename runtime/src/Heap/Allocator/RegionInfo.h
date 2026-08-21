@@ -762,6 +762,12 @@ public:
         if (metadata.retainedLiveInfoState == RetainedLiveInfoState::NEVER_EXAMINED) {
             return false;
         }
+        // An owned copy is the persistent livemap carrier. Its lifetime is
+        // ended explicitly by ClearLiveInfo<Old> or region reinitialization;
+        // forwarding's epoch bump only retires the borrowed LiveInfo face.
+        if (metadata.retainedMarkWords != nullptr) {
+            return true;
+        }
         return metadata.retainedLiveInfoEpoch == GetSnapshotEpoch();
     }
 
@@ -961,6 +967,12 @@ public:
     void ResetMarkBit(MarkView<Generation::Old> view)
     {
         SurvNodeDiag::NoteClear(this, SurvNodeDiag::CLEAR_RESET_MARK_BIT, false);
+        // CollectLargeGarbage calls this for a live large page immediately
+        // after mark. Preserve its one-object livemap before clearing the
+        // current face, just as ZPage keeps its live bit through relocation.
+        if (IsLargeRegion() && IsSurvivedObject(view, 0)) {
+            PreserveRetainedLiveInfo();
+        }
         SetMarkedRegionFlag(view, 0);
         SetEnqueuedRegionFlag(0);
         SetResurrectedRegionFlag(0);
