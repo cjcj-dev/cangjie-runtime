@@ -3296,8 +3296,6 @@ bool WCollector::CasInstallResolvedTarget(RefField<>& field, MAddress expected, 
 
 BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedStopTheWorld* stw) const
 {
-    ForwardingTable::ReaderScope retiredReader(
-        ForwardingTable::ReaderKind::Internal, static_cast<const void*>(&field));
     auto plannedTo = [this, stw](BaseObject* from) -> BaseObject* {
         return stw != nullptr ? PlanRouteUnderStw(from, *stw).dest : FindToVersion(from);
     };
