@@ -46,6 +46,58 @@ GC_TEST(LiveMap, MarkAndSurvive)
     fx.FreePlanted(live);
 }
 
+// livemap: retained own-copy is the mark-time authority after the borrowed
+// LiveInfo has been unbound and forwarding has retired the current mark face.
+GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndForwardEpochBump)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetRegionType(RegionInfo::RegionType::UNMOVABLE_FROM_REGION);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* bm = fx.PlantMarkBitmap(live, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)bm->MarkBits(holderOffset, 8, region->GetRegionSize());
+
+    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
+    region->ResetLiveMapAfterForward(old);
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->CheckAndClearLiveInfo(live);
+    GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), holderOffset));
+    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->FreeRetainedMarkWords();
+    fx.FreePlanted(live);
+}
+
+// ZGC zPage.inline.hpp:53-58: a large page contains one object at page start.
+// Its retained livemap is therefore one persistent bit, including resurrection.
+GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetUnitRole(RegionInfo::UnitRole::LARGE_SIZED_UNITS);
+    region->SetRegionType(RegionInfo::RegionType::LARGE_REGION);
+    BaseObject* holder = fx.PlaceObject(region->GetRegionStart());
+    region->SetRegionAllocPtr(region->GetRegionStart() + holder->GetSize());
+    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
+    GC_EXPECT_FALSE(region->MarkObject(old, holder, holder->GetSize()));
+
+    // Product write site: CollectLargeGarbage resets the one-bit face after
+    // mark and ResetMarkBit must preserve it first.
+    region->ResetMarkBit(old);
+    GC_EXPECT_TRUE(region->HasRetainedMarkWords());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
+
+    GC_EXPECT_FALSE(region->IsMarkedObject(old, holder));
+    GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
+    GC_EXPECT_TRUE(region->RetainedMarkWordsSay(0));
+
+    region->FreeRetainedMarkWords();
+}
+
 // U4: liveInfo0 snapshot survives clearing current liveInfo.
 GC_TEST(LiveMap, LiveInfo0SnapshotSurvivesClear)
 {
