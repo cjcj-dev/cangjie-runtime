@@ -39,12 +39,20 @@ public:
 
         CHECK(oldType != newType);
         std::lock_guard<std::mutex> lock(listMutex);
-        if (del->GetRegionType() == oldType) {
-            DeleteRegionLocked(del);
-            del->SetRegionType(newType);
-            return true;
+        if (del->GetRegionType() != oldType) {
+            return false;
         }
-        return false;
+        // Type maps 1:1 to list except the window after this CAS-like claim
+        // unlinks and before the caller Prepends onto the destination list.
+        // An unlisted node has prev==null and is not head (DeleteRegionLocked
+        // clears both links). Refuse so a concurrent TryDelete on the dest
+        // list cannot DecCounts a list that does not own the node.
+        if (listHead != del && del->GetPrevRegion() == nullptr) {
+            return false;
+        }
+        DeleteRegionLocked(del);
+        del->SetRegionType(newType);
+        return true;
     }
 
 #ifdef MRT_DEBUG
