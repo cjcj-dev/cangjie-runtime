@@ -193,6 +193,11 @@ public:
         return __atomic_load_n(&metadata.snapshotEpoch, std::memory_order_acquire);
     }
 
+    uint8_t GetRegionLifeSeq() const
+    {
+        return static_cast<uint8_t>(__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) >> 1);
+    }
+
     template<Generation G>
     uint64_t GetMarkSnapshotEpoch() const
     {
@@ -2531,11 +2536,13 @@ public:
     // Do NOT turn this into a reference count without handling that double publish.
     void SetRouteDestHold(uint8_t flag)
     {
-        __atomic_store_n(&metadata.routeDestHold, flag, __ATOMIC_RELEASE);
+        uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
+        uint8_t next = static_cast<uint8_t>((cur & ~1u) | (flag != 0 ? 1u : 0u));
+        __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
     }
     bool IsRouteDestHeld() const
     {
-        return __atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) != 0;
+        return (__atomic_load_n(&metadata.routeDestHold, __ATOMIC_ACQUIRE) & 1u) != 0;
     }
     void SetInGhostRegion(uint8_t flag)
     {
@@ -3521,6 +3528,12 @@ private:
         SetUnitRole(UnitRole::FREE_UNITS);
         // See DispelGhostFromRegion: retire the route before detaching its compact table.
         SetRouteState(NORMAL);
+        {
+            uint8_t cur = __atomic_load_n(&metadata.routeDestHold, __ATOMIC_RELAXED);
+            uint8_t seq = static_cast<uint8_t>(((cur >> 1) + 1) & 0x7f);
+            uint8_t next = static_cast<uint8_t>((cur & 1u) | (seq << 1));
+            __atomic_store_n(&metadata.routeDestHold, next, __ATOMIC_RELEASE);
+        }
         ZForwardingLife::ResetIdle(metadata.fwdRefCount, metadata.fwdClaimed, metadata.fwdDone);
         metadata.copyInflight.store(0, std::memory_order_relaxed);
         ForwardingTable::ClearEntries(GetRegionStart(), nUnit * RegionInfo::UNIT_SIZE);

@@ -2195,10 +2195,31 @@ void WCollector::TraceHeap()
 void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, const ScopedStopTheWorld& stw)
 {
     RefField<> oldField(field);
-    if (!IsOldPointer(oldField)) {
+    const bool oldPointer = IsOldPointer(oldField);
+    BaseObject* fromObj = to_object(oldField.GetTargetObject());
+    // ZGC heals the concrete oop slot after resolving through its forwarding
+    // table (zBarrier.inline.hpp:318-340), and remap_young_roots applies that
+    // barrier to every selected root/remset slot before the next relocate flip
+    // (zGeneration.cpp:1408-1523). A remap colour can wrap here, so colour alone
+    // cannot prove that the address is already the to-version. The postflip
+    // full-heap closure already owns every slot under STW; consume the current
+    // forwarding receipt before the table is retired.
+    BaseObject* receipt = nullptr;
+    if (!oldPointer && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+        ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
+        if (forwarding != nullptr) {
+            const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
+            const MAddress live = to == 0 ? 0 : forwarding->resolve_live(to);
+            if (live != 0) {
+                receipt = reinterpret_cast<BaseObject*>(live);
+            } else if (to != 0) {
+                ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+    }
+    if (!oldPointer && receipt == nullptr) {
         return;
     }
-    BaseObject* fromObj = to_object(oldField.GetTargetObject());
     // The non-heap arm below (:1845) already knows this field can hold a TypeInfo*, a binary
     // constant or immortal metadata -- but it tested `latest`, i.e. after the route lookup had
     // already run on `fromObj`. PlanRouteUnderStw -> PlanRoute -> PlanRouteLookup ->
@@ -2214,8 +2235,8 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     //
     // The three sibling sites all gate before the lookup -- ResolveMinorReference (:2849),
     // FindToVersion (WCollector.h:495) and ForwardUpdateRawRef (:1611).  This one did not.
-    BaseObject* latest = fromObj;
-    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+    BaseObject* latest = receipt != nullptr ? receipt : fromObj;
+    if (receipt == nullptr && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
         BaseObject* dest = PlanRouteUnderStw(fromObj, stw).dest;
         if (dest != nullptr) {
             latest = dest;
@@ -3290,6 +3311,33 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
     RefField<> value(field);
     BaseObject* object = to_object(value.GetTargetObject());
     if (!IsOldPointer(value)) {
+        // zBarrier.inline.hpp:318-340 resolves through the forwarding before
+        // self-healing the concrete oop slot. zRelocate.cpp:1018-1047 keeps
+        // that receipt available until relocated fields have been repaired.
+        // After-copy Exempt makes our page UNMOVABLE_FROM before this bulk
+        // ref-fix runs, so the ghost-only arm below cannot observe a completed
+        // copy. Consume its still-active receipt before PrepareForwardTable
+        // retires the table.
+        if (object != nullptr && Heap::IsHeapAddress(object)) {
+            RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            ZForwarding* forwarding = fromRegion != nullptr && fromRegion->IsForwardingDone()
+                ? ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object))
+                : nullptr;
+            if (forwarding != nullptr) {
+                const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
+                const MAddress live = receipt == 0 ? 0 : forwarding->resolve_live(receipt);
+                if (live != 0) {
+                    BaseObject* to = reinterpret_cast<BaseObject*>(live);
+                    MAddress expected = raw(value.GetFieldValue());
+                    (void)CasInstallResolvedTarget(field, expected, to,
+                                                   HealSite::WCollectorMinorResolveLoadGoodForward);
+                    return to;
+                }
+                if (receipt != 0) {
+                    ZForwarding::StaleToLifeCount().fetch_add(1, std::memory_order_relaxed);
+                }
+            }
+        }
         // hangfloor: plain stack/reg roots (and any load-good colour) make IsOldPointer
         // structurally false — that predicate needs IsLoadBad, which plain never is.
         // After young prepare, from-space still needs ghost routing; without it
@@ -7256,6 +7304,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
+            manager.ExpireKeptFromPreviousCycle();
             postEvacPoint("post-fix-pre-forward", true);
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
@@ -7328,6 +7377,7 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
                     rej, rec, unr);
             }
             ValidateMinorReferences("before-return", &reachableVec);
+            manager.ExpireKeptFromPreviousCycle();
             if (HealCoverage::kHealCoverageCensus) {
                 HealCoverage::CensusAfterPublication(
                     currentRemapColour, FlipSeq().load(std::memory_order_relaxed),
@@ -7421,6 +7471,25 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
              promotedPathRecords, residualPromoteRecords, liveYoungRegions);
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
+
+        // ZRelocate::relocate tail adds remembered fields for flip-promoted
+        // pages before release_page/detach_page (zRelocate.cpp:1257-1306,
+        // 1018-1047). Discharge resolves the promoted fields, so it must
+        // consume their forwarding receipts before PrepareForwardTable
+        // retires those receipts below.
+        if (PromotedRegionDomain::Enabled()) {
+            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
+            size_t domainEdges = PromotedRegionDomain::DischargeAll(
+                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
+                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
+            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
+                                                 /*site*/ 3, domainEdges);
+            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "pre_retire_promote_walk");
+            PromotedRegionDomain::DumpProcessTotals("pre_retire_promote_walk");
+            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
+        } else {
+            PromotedRegionDomain::DumpCoverageByReason("pre_retire_promote_walk_domain_off");
+        }
 
         {
         // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
@@ -9179,29 +9248,10 @@ void WCollector::DoYoungGarbageCollection()
              minorTotalRuns + 1, remsetSnap.size());
     }
 
-    // ZRelocate::relocate tail (zRelocate.cpp:1303-1306): after concurrent copy,
-    // still in Relocate, walk flip-promoted pages and add remset. Residual
-    // Register happens in STW3, so the walk cannot live in young.concurrent_relocate
-    // (those pages are not registered yet). Release STW3 first; stay in FORWARD
-    // so colour / store-good masks match the STW3 walk. Then IDLE.
+    // Residual Register and the remset walk now both complete in STW3, before
+    // EvacuateYoungRegions retires the forwarding receipts. Then enter IDLE.
     if (stw != nullptr) {
         stw.reset();
-    }
-    {
-        MRT_PHASE_TIMER("young.conc_promote_walk");
-        if (PromotedRegionDomain::Enabled()) {
-            RememberedSet& remsetForDomain = Heap::GetHeap().GetRememberedSet();
-            size_t domainEdges = PromotedRegionDomain::DischargeAll(
-                [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); },
-                [&remsetForDomain](MAddress slot) { remsetForDomain.Record(slot); });
-            PromotedRegionDomain::NoteRecordCall(static_cast<uint32_t>(GC_REASON_YOUNG),
-                                                 /*site*/ 3, domainEdges);
-            PromotedRegionDomain::DumpReconcile(minorTotalRuns + 1, "conc_promote_walk");
-            PromotedRegionDomain::DumpProcessTotals("conc_promote_walk");
-            VLOG(REPORT, "[PROMODOMAIN] dischargeEdges=%zu", domainEdges);
-        } else {
-            PromotedRegionDomain::DumpCoverageByReason("conc_promote_walk_domain_off");
-        }
     }
 
     {
@@ -9310,6 +9360,7 @@ void WCollector::DoGarbageCollection()
     if (!skipPostflipWalk) {
         InvalidateOldTaggedRefs(false);
     }
+    reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().ExpireKeptFromPreviousCycle();
     if (HealCoverage::kHealCoverageCensus) {
         HealCoverage::CensusAfterPublication(
             currentRemapColour, FlipSeq().load(std::memory_order_relaxed), "major-postflip");

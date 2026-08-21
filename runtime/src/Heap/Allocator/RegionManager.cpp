@@ -1166,11 +1166,20 @@ void RegionManager::ExpireKeptFromPreviousCycle()
             const RegionInfo::RouteState rs = region->GetRouteState();
             if (rs == RegionInfo::RouteState::FORWARDED || rs == RegionInfo::RouteState::COMPACTED) {
                 // After-copy Exempt parks FORWARDED+done on unmovableFrom.
-                // Do not drop the receipt (CSet empty-select still needs
-                // residual FORWARDED headers / route=FORWARDED). Retire the
-                // live table so find() cannot hand last cycle's dest
-                // (zRelocationSet.cpp:91-96; REPORT-trainbisect §6 knife B).
-                ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+                // Keep its receipt through ONE subsequent mark/ref-fix closure
+                // (ab0e2b397). The next ExpireKept after that closure retires
+                // it (zRelocate.cpp:1018-1047; zRelocationSet.cpp:91-96). A
+                // kept page that never re-enters CSet otherwise lives until
+                // InitRegionInfo reuses the to-region (seqnum mismatch then
+                // rejects the stale dest).
+                ZForwarding* tab = ForwardingTable::GetEntries(region->GetRegionStart());
+                if (tab != nullptr && tab->kept_seen_expire()) {
+                    ForwardingTable::ClearEntries(region->GetRegionStart(), region->GetRegionSize());
+                    return;
+                }
+                if (tab != nullptr) {
+                    tab->note_kept_expire();
+                }
                 return;
             }
             ++expired;

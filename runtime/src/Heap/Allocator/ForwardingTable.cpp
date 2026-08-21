@@ -16,6 +16,8 @@
 #include <vector>
 
 #include "Base/Log.h"
+#include "Common/BaseObject.h"
+#include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
 
@@ -298,8 +300,85 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
     if (tab == nullptr) {
         return 0;
     }
-    return tab->insert(from, to);
+    const MAddress stored = tab->insert(from, to);
+    if (stored != 0) {
+        tab->note_to_life(stored);
+    }
+    return stored;
 }
+
+std::atomic<uint64_t>& ZForwarding::StaleToLifeCount()
+{
+    static std::atomic<uint64_t> n{ 0 };
+    return n;
+}
+
+uint64_t ForwardingTable::StaleToLifeCount()
+{
+    return ZForwarding::StaleToLifeCount().load(std::memory_order_relaxed);
+}
+
+void ZForwarding::note_to_life(MAddress to)
+{
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    if (toRegion == nullptr) {
+        return;
+    }
+    const MAddress start = toRegion->GetRegionStart();
+    const uint8_t seq = toRegion->GetRegionLifeSeq();
+    for (uint8_t i = 0; i < _to_life_n; ++i) {
+        if (_to_lives[i].start == start) {
+            return;
+        }
+    }
+    if (_to_life_n < 3) {
+        _to_lives[_to_life_n].start = start;
+        _to_lives[_to_life_n].seq = seq;
+        ++_to_life_n;
+    }
+}
+
+MAddress ZForwarding::resolve_live(MAddress to) const
+{
+    if (to == 0 || !Heap::IsHeapAddress(to)) {
+        return 0;
+    }
+    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
+    if (!obj->IsValidObject()) {
+        return 0;
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
+        return 0;
+    }
+    if (to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
+        return 0;
+    }
+    if (_to_life_n != 0) {
+        const MAddress start = toRegion->GetRegionStart();
+        const uint8_t seq = toRegion->GetRegionLifeSeq();
+        for (uint8_t i = 0; i < _to_life_n; ++i) {
+            if (_to_lives[i].start == start && _to_lives[i].seq != seq) {
+                return 0;
+            }
+        }
+    }
+    const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
+    if (st != ObjectState::FORWARDED && st != ObjectState::FORWARDING) {
+        return to;
+    }
+    ZForwarding* next = ForwardingTable::GetEntries(to);
+    if (next == nullptr || next == this) {
+        return 0;
+    }
+    const MAddress chained = next->find(to);
+    if (chained == 0 || chained == to) {
+        return 0;
+    }
+    return next->resolve_live(chained);
+}
+
+bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
 static MAddress FindRetiredTo(MAddress from)
 {

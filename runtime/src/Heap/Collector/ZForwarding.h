@@ -74,6 +74,16 @@ public:
     RegionInfo* page() { return _page; }
     uint32_t length() const { return static_cast<uint32_t>(_entries.length()); }
 
+    // zPage.inline.hpp:176-185 seqnum bounds livemap/forwarding to one page life.
+    // Record the to-region start+regionLifeSeq at insert; consume rejects when
+    // InitRegionInfo has bumped that seq (RegionInfo.h:InitRegionInfo).
+    void note_to_life(MAddress to);
+    MAddress resolve_live(MAddress to) const;
+    bool receipt_live(MAddress to) const;
+    void note_kept_expire() { _kept_seen_expire = true; }
+    bool kept_seen_expire() const { return _kept_seen_expire; }
+    static std::atomic<uint64_t>& StaleToLifeCount();
+
     bool covers(MAddress addr) const { return _size != 0 && addr >= _start && addr < _start + _size; }
 
     uintptr_t index(MAddress from) const { return static_cast<uintptr_t>((from - _start) >> kAlignShift); }
@@ -213,8 +223,13 @@ private:
           _claimed(false),
           _ref_lock(),
           _ref_count(1),
-          _done(false)
+          _done(false),
+          _to_life_n(0),
+          _kept_seen_expire(false)
     {
+        _to_lives[0] = ToLife{};
+        _to_lives[1] = ToLife{};
+        _to_lives[2] = ToLife{};
     }
 
     const MAddress _start;
@@ -226,6 +241,13 @@ private:
     mutable std::mutex _ref_lock;
     std::atomic<int32_t> _ref_count;
     std::atomic<bool> _done;
+    struct ToLife {
+        MAddress start;
+        uint8_t seq;
+    };
+    ToLife _to_lives[3];
+    uint8_t _to_life_n;
+    bool _kept_seen_expire;
 };
 
 // Existing tests and ClearEntries still spell this name.
