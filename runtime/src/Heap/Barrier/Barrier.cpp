@@ -78,6 +78,8 @@ private:
 //   zero header      target payload already cleared by reclamation
 //   FORWARDED header the object moved; healing the from would launder a dead address
 //   movable ghost-from, not FORWARDED  keep-from of a relocation candidate not yet copied
+// Skip heal ≠ hand from to the mutator (I2). Callers must FindToVersion first and
+// heal the *to* address (plain/load-good). Skipping only refuses to publish from.
 // Unmovable-from objects stay healable: their region is pinned for the cycle and the from
 // address is the object's real home (ForwardBarrier takes the same exemption on resolve).
 std::atomic<uint64_t> g_keepFromHealSkipTotal{ 0 };
@@ -915,6 +917,21 @@ static inline TargetVerdict JudgeTarget(BaseObject* target)
     return TargetVerdict::Usable;
 }
 
+BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
+{
+    if (target == nullptr || !Heap::IsHeapAddress(target)) {
+        return target;
+    }
+    if (JudgeTarget(target) == TargetVerdict::Usable) {
+        return target;
+    }
+    BaseObject* to = theCollector.FindToVersion(target);
+    if (to != nullptr && to != target) {
+        return to;
+    }
+    return target;
+}
+
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
 {
     if (phase != BarrierPhase::STW) {
@@ -927,8 +944,11 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
                 BaseObject* resolved = theCollector.FindToVersion(handed);
                 ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                                    obj, &field);
-                if (resolved != nullptr) {
+                if (resolved != nullptr && resolved != handed) {
                     handed = resolved;
+                    RefField<> goodField = theCollector.GetAndTryTagRefField(handed);
+                    ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
+                                        HealSite::IdleReadReference);
                 }
             }
         }
@@ -1083,9 +1103,17 @@ BaseObject* Barrier::AtomicSwapReferenceImpl(BaseObject* obj, RefField<true>& fi
 BaseObject* Barrier::AtomicReadReference(BaseObject* obj, RefField<true>& field, MemoryOrder order) const
 {
     if (phase != BarrierPhase::STW) {
-        return DispatchPhase(phase, *this, [&](const auto& barrier) {
+        BaseObject* handed = DispatchPhase(phase, *this, [&](const auto& barrier) {
             return barrier.AtomicReadReference(obj, field, order);
         });
+        BaseObject* resolved = ResolveFromCopyForMutator(handed);
+        if (resolved != handed && resolved != nullptr) {
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            ZgcSelfHealLoadGood(field, field.GetFieldValue(order), goodField.GetFieldValue(),
+                                HealSite::IdleAtomicReadReference);
+            return resolved;
+        }
+        return handed;
     }
     RefField<false> tmpField(field.GetFieldValue(order));
     if (theCollector.IsOldPointer(tmpField)) {

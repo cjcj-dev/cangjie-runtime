@@ -78,6 +78,7 @@ $CXX -std=gnu++17 -O0 -g -Wall -Wextra -pthread -fno-rtti \
     "$SRC/test_isfromreg.cpp" \
      "$SRC/test_current_object_ref.cpp" \
      "$SRC/test_fillerobj.cpp" \
+    "$SRC/test_i2_readref.cpp" \
   -L"$RUNTIME_LIB_DIR" -Wl,-rpath,"$RUNTIME_LIB_DIR" \
   -lcangjie-runtime -lboundscheck \
   -o "$OUT/cj_gc_unit"

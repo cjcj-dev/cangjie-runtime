@@ -47,7 +47,17 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
             }
         }
         if (oldTarget == nullptr || LIKELY(theCollector.is_load_good(oldField))) {
-            return oldTarget;
+            BaseObject* resolved = ResolveFromCopyForMutator(oldTarget);
+            if (resolved == oldTarget || resolved == nullptr) {
+                return oldTarget;
+            }
+            if (!Heap::IsHeapAddress(resolved)) {
+                return resolved;
+            }
+            RefField<> goodField = theCollector.GetAndTryTagRefField(resolved);
+            ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
+                                HealSite::IdleReadReference);
+            return resolved;
         }
 
         BaseObject* loadGood = theCollector.make_load_good(oldField);
@@ -56,6 +66,7 @@ BaseObject* IdleBarrier::ReadReference(BaseObject* obj, RefField<false>& field) 
         if (loadGood != nullptr && !Heap::IsHeapAddress(loadGood)) {
             return loadGood;
         }
+        loadGood = ResolveFromCopyForMutator(loadGood);
         RefField<> goodField = theCollector.GetAndTryTagRefField(loadGood);
         ZgcSelfHealLoadGood(field, oldField.GetFieldValue(), goodField.GetFieldValue(),
                             HealSite::IdleReadReference);
