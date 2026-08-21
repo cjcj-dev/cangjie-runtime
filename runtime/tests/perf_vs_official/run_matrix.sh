@@ -55,14 +55,15 @@ printf '%s\n' $'workload\theap\tround\tstatus\tdetail' >"$out/deferred.tsv"
 
 run_attempt() {
     local id=$1 heap=$2 round=$3 arm=$4 binary=$5 marker=$6 work_units=$7 unit_name=$8
-    local run_dir="$out/runs/$id/$heap/r$(printf '%02d' "$round")-$arm"
+    local run_dir
+    run_dir="$out/runs/$id/$heap/r$(printf '%02d' "$round")-$arm"
     "$script_dir/run_one.sh" "$run_dir" "$arm" "$heap" "$binary" "$marker" \
         "$work_units" "$unit_name" \
         "$([[ "$arm" == subject ]] && printf '%s' "$subject_rt" || printf '%s' "$official_rt")" \
         "$cores" "$timeout_seconds" | tee -a "$out/campaign.log"
 }
 
-while IFS=$'\t' read -r id source source_sha compiler compiler_sha compiler_stamp binary binary_sha marker work_units unit_name; do
+while IFS=$'\t' read -r id _source _source_sha _compiler _compiler_sha _compiler_stamp binary binary_sha marker work_units unit_name; do
     [[ "$id" == workload ]] && continue
     [[ -n "$id" ]] || continue
     [[ $(sha256sum "$binary" | awk '{print $1}') == "$binary_sha" ]] || {
