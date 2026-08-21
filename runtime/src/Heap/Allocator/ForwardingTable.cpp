@@ -18,6 +18,7 @@
 #include "Base/Log.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Heap.h"
 #include "Heap/Verify/VerifyRoots.h"
 
 namespace MapleRuntime {
@@ -82,6 +83,24 @@ const char* ReaderKindName(ForwardingTable::ReaderKind kind)
     }
 }
 
+AddrRegion ReaderSlotRegion(const ReaderContext& context)
+{
+    if (context.slot == nullptr) {
+        return AddrRegion::NULL_ADDR;
+    }
+    if (Heap::IsHeapAddress(context.slot)) {
+        return AddrRegion::HEAP;
+    }
+    switch (context.kind) {
+        case ForwardingTable::ReaderKind::StackOrRegisterRoot:
+        case ForwardingTable::ReaderKind::StackObjectField:
+        case ForwardingTable::ReaderKind::PositiveControl:
+            return AddrRegion::STACK;
+        default:
+            return AddrRegion::OTHER;
+    }
+}
+
 void DumpRetiredReaders()
 {
     LOG(RTLOG_ERROR,
@@ -114,7 +133,7 @@ void NoteRetiredReader(MAddress from, MAddress to)
         g_retiredReaderByKind[kind].fetch_add(1, std::memory_order_relaxed);
     }
 
-    const AddrRegion slotRegion = VerifyRoots::ClassifyAddress(reinterpret_cast<uintptr_t>(context.slot));
+    const AddrRegion slotRegion = ReaderSlotRegion(context);
     if (slotRegion == AddrRegion::HEAP) {
         g_retiredReaderHeapSlot.fetch_add(1, std::memory_order_relaxed);
     } else if (slotRegion == AddrRegion::STACK) {
@@ -132,9 +151,7 @@ void NoteRetiredReader(MAddress from, MAddress to)
             "slotHeap=%u holder=%p holderHeap=%u",
             sample, static_cast<size_t>(from), static_cast<size_t>(to), ReaderKindName(context.kind), context.slot,
             VerifyRoots::RegionName(slotRegion), static_cast<unsigned>(slotRegion == AddrRegion::HEAP), context.holder,
-            static_cast<unsigned>(context.holder != nullptr &&
-                                  VerifyRoots::ClassifyAddress(reinterpret_cast<uintptr_t>(context.holder)) ==
-                                      AddrRegion::HEAP));
+            static_cast<unsigned>(context.holder != nullptr && Heap::IsHeapAddress(context.holder)));
     }
 }
 
