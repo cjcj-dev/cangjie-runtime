@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Parse one run's stderr into metrics.tsv (youngflip)."""
+import math
 import sys
 
 path, out, wall, rc = sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4]
@@ -61,7 +62,7 @@ if held:
         med = held[len(held) // 2]
     else:
         med = (held[len(held) // 2 - 1] + held[len(held) // 2]) // 2
-    p99 = held[int(0.99 * (len(held) - 1))]
+    p99 = held[math.ceil(0.99 * len(held)) - 1]
 tot = sum(held) if held else 0
 rs = ",".join(f"{k}:{v}" for k, v in sorted(reasons.items()))
 held_values = ",".join(str(v) for v in held) or "-"
