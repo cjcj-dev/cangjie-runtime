@@ -178,6 +178,22 @@ GC_TEST(ZForwardingEntries, OutOfRangeFromIndexIsRefusedNotTruncated)
     tab->Destroy();
 }
 
+// D7-a: from_index 23 bits covers a 64 MiB region. 3 MiB used to overflow 18 bits.
+GC_TEST(ZForwardingEntries, LargeFromIndexRoundTrip)
+{
+    constexpr MAddress kStart = 0x1000;
+    constexpr size_t kAlign = size_t(1) << 3;
+    ForwardingEntries* tab = ForwardingEntries::Create(8, kStart, 0);
+    GC_EXPECT_TRUE(tab != nullptr);
+    const MAddress from = kStart + ((size_t(3) << 20) / kAlign) * kAlign;
+    GC_EXPECT_TRUE(((from - kStart) >> 3) > ((size_t(1) << 18) - 1));
+    GC_EXPECT_TRUE(((from - kStart) >> 3) <= ForwardingEntry::kMaxFromIndex);
+    const MAddress dest = 0x9000;
+    GC_EXPECT_EQ(tab->insert(from, dest), dest);
+    GC_EXPECT_EQ(tab->find(from), dest);
+    tab->Destroy();
+}
+
 // ---------------------------------------------------------------------------------------------
 // The two defects a real collection found and this suite did not.
 //

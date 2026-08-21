@@ -399,11 +399,24 @@ public:
                     }
                     return to;
                 }
+                if (!obj->IsForwarded()) {
+                    // Armed miss on a not-yet-copied object: do not invent geometry.
+                } else {
+                    BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
+                    if (geometric != nullptr &&
+                        ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+                        (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+                        if (funnel) {
+                            receiptCount.fetch_add(1, std::memory_order_relaxed);
+                        }
+                        return geometric;
+                    }
+                }
             }
         }
         BaseObject* to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
         if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-            if (ForwardingTable::EntriesArmed(fromAddr)) {
+            if (ForwardingTable::EntriesArmed(fromAddr) && !obj->IsForwarded()) {
                 to = nullptr;
             }
         }
@@ -653,8 +666,11 @@ public:
                 stored = reinterpret_cast<BaseObject*>(to);
             }
             if constexpr (ForwardingTable::kEntriesSoleWhenArmed) {
-                if (ans != ForwardingTable::ToAnswer::Unarmed) {
+                if (ans == ForwardingTable::ToAnswer::ArmedHit) {
                     return stored;
+                }
+                if (ans == ForwardingTable::ToAnswer::ArmedMiss && !obj->IsForwarded()) {
+                    return nullptr;
                 }
             }
         }
@@ -667,8 +683,14 @@ public:
         if (geometric != nullptr) {
             ForwardingTable::NoteDestCompare(fromAddr, reinterpret_cast<MAddress>(geometric));
         }
+        if (geometric != nullptr && ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric))) {
+            if (stored == nullptr) {
+                (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
+            }
+            return geometric;
+        }
         if constexpr (ForwardingTable::kConsumeEntries) {
-            return stored != nullptr ? stored : geometric;
+            return stored != nullptr ? stored : nullptr;
         }
         return geometric;
     }

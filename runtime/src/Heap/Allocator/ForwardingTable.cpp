@@ -10,6 +10,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -67,6 +68,20 @@ void ForwardingTable::Initialize(MAddress heapStart, size_t heapSize, size_t uni
     g_ready.store(true, std::memory_order_release);
     LOG(RTLOG_ERROR, "[FWDTABLE] armed base=%#zx size=%zu unit=%zu entries=%zu", static_cast<size_t>(heapStart),
         heapSize, unitSize, g_membership.size());
+    static std::atomic<bool> dumped{ false };
+    bool expected = false;
+    if (dumped.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
+        std::atexit([]() {
+            std::fprintf(stderr,
+                         "[FWDTABLE][refuse] atexit full=%llu overflow=%llu armedHit=%llu armedMiss=%llu unarmed=%llu\n",
+                         static_cast<unsigned long long>(ZForwarding::FullRefusals().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(
+                             ZForwarding::OverflowRefusals().load(std::memory_order_relaxed)),
+                         static_cast<unsigned long long>(ForwardingTable::ArmedHitCount()),
+                         static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()),
+                         static_cast<unsigned long long>(ForwardingTable::UnarmedCount()));
+        });
+    }
 }
 
 uint32_t ForwardingTable::EstimateLiveObjects(RegionInfo* region, size_t regionSize)
@@ -363,6 +378,26 @@ void ZForwarding::note_to_life(MAddress to)
     }
 }
 
+bool ZForwarding::DestUsable(MAddress to)
+{
+    if (to == 0 || !Heap::IsHeapAddress(to)) {
+        return false;
+    }
+    BaseObject* obj = reinterpret_cast<BaseObject*>(to);
+    if (!obj->IsValidObject()) {
+        return false;
+    }
+    RegionInfo* toRegion = RegionInfo::TryGetRegionInfoAt(to);
+    if (toRegion == nullptr || toRegion->IsFreeRegion() || toRegion->IsGarbageRegion()) {
+        return false;
+    }
+    if (to < toRegion->GetRegionStart() || to >= toRegion->GetRegionAllocPtr()) {
+        return false;
+    }
+    const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
+    return st != ObjectState::FORWARDED && st != ObjectState::FORWARDING;
+}
+
 MAddress ZForwarding::resolve_live(MAddress to) const
 {
     if (to == 0 || !Heap::IsHeapAddress(to)) {
@@ -388,8 +423,7 @@ MAddress ZForwarding::resolve_live(MAddress to) const
             }
         }
     }
-    const ObjectState::ObjectStateCode st = obj->GetObjectState().GetStateCode();
-    if (st != ObjectState::FORWARDED && st != ObjectState::FORWARDING) {
+    if (DestUsable(to)) {
         return to;
     }
     ZForwarding* next = ForwardingTable::GetEntries(to);
@@ -431,6 +465,15 @@ MAddress ForwardingTable::FindTo(MAddress from)
 {
     ZForwarding* tab = GetEntries(from);
     if (tab != nullptr) {
+        if (!tab->covers(from)) {
+            static std::atomic<uint64_t> g_findToUncovered{ 0 };
+            const uint64_t n = g_findToUncovered.fetch_add(1, std::memory_order_relaxed) + 1;
+            if (n <= 8) {
+                LOG(RTLOG_ERROR, "[FWDTABLE] FindTo !covers from=%p tabStart=%p size=%zu n=%llu",
+                    reinterpret_cast<void*>(from), reinterpret_cast<void*>(tab->start()), tab->size(),
+                    static_cast<unsigned long long>(n));
+            }
+        }
         const MAddress to = tab->find(from);
         if (to != 0) {
             return to;
