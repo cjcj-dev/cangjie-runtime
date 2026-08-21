@@ -58,12 +58,12 @@ GC_TEST(LiveMap, RetainedMarkWordsSurviveUnbindAndForwardEpochBump)
     size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
     (void)bm->MarkBits(holderOffset, 8, region->GetRegionSize());
 
-    region->PreserveRetainedLiveInfo();
+    MarkView<Generation::Old> old = region->GetMarkView<Generation::Old>();
+    region->ResetLiveMapAfterForward(old);
     GC_EXPECT_TRUE(region->HasRetainedMarkWords());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
 
     region->CheckAndClearLiveInfo(live);
-    region->ResetLiveMapAfterForward(region->GetMarkView<Generation::Old>());
     GC_EXPECT_FALSE(region->IsMarkedObject(region->GetMarkView<Generation::Old>(), holderOffset));
     GC_EXPECT_TRUE(region->IsRetainedSnapshotValid());
     GC_EXPECT_TRUE(region->RetainedMarkWordsSay(holderOffset));
