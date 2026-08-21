@@ -7437,6 +7437,74 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         FlipPromoDiag::OnPromotePhaseEnd(minorTotalRuns + 1, promotedPathRecords, residualPromoteRecords);
         FlipPromoDiag::DumpProcessTotals("post-promote");
 
+        static const bool readerHoldAudit = []() {
+            const char* value = std::getenv("MRT_GCV2_READERHOLD_AUDIT");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        if (readerHoldAudit) {
+            std::unordered_set<BaseObject*> reachableSet(reachableVec.begin(), reachableVec.end());
+            size_t receiptSlots = 0;
+            size_t reachableHolders = 0;
+            size_t rememberedReceiptSlots = 0;
+            size_t neither = 0;
+            std::array<size_t, 15> holderTypes{};
+            reinterpret_cast<RegionSpace&>(theAllocator).ForEachObj(
+                [&reachableSet, &rememberedSlots, &receiptSlots, &reachableHolders,
+                 &rememberedReceiptSlots, &neither, &holderTypes](BaseObject* holder) {
+                    if (holder == nullptr || !holder->IsValidObject() || !holder->HasRefField()) {
+                        return;
+                    }
+                    holder->ForEachRefField(
+                        [holder, &reachableSet, &rememberedSlots, &receiptSlots, &reachableHolders,
+                         &rememberedReceiptSlots, &neither, &holderTypes](RefField<>& field) {
+                            BaseObject* from = to_object(field.GetTargetObject());
+                            if (from == nullptr || !Heap::IsHeapAddress(from)) {
+                                return;
+                            }
+                            ZForwarding* forwarding =
+                                ForwardingTable::GetEntries(reinterpret_cast<MAddress>(from));
+                            if (forwarding == nullptr) {
+                                return;
+                            }
+                            const MAddress to = forwarding->find(reinterpret_cast<MAddress>(from));
+                            if (to == 0 || to == reinterpret_cast<MAddress>(from)) {
+                                return;
+                            }
+                            const bool reachable = reachableSet.find(holder) != reachableSet.end();
+                            const bool remembered = rememberedSlots.find(reinterpret_cast<MAddress>(&field)) !=
+                                rememberedSlots.end();
+                            ++receiptSlots;
+                            reachableHolders += static_cast<size_t>(reachable);
+                            rememberedReceiptSlots += static_cast<size_t>(remembered);
+                            neither += static_cast<size_t>(!reachable && !remembered);
+                            RegionInfo* holderRegion =
+                                RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(holder));
+                            if (holderRegion != nullptr) {
+                                const size_t type = static_cast<size_t>(holderRegion->GetRegionType());
+                                if (type < holderTypes.size()) {
+                                    ++holderTypes[type];
+                                }
+                            }
+                            if (receiptSlots <= 16) {
+                                LOG(RTLOG_ERROR,
+                                    "[FWDTABLE][pre-retire-slot] n=%zu holder=%p slot=%p from=%p to=%#zx "
+                                    "reachable=%u remembered=%u holderRtype=%u holderYoung=%u",
+                                    receiptSlots, holder, &field, from, static_cast<size_t>(to),
+                                    static_cast<unsigned>(reachable), static_cast<unsigned>(remembered),
+                                    holderRegion == nullptr ? UINT32_MAX :
+                                        static_cast<unsigned>(holderRegion->GetRegionType()),
+                                    static_cast<unsigned>(holderRegion != nullptr && holderRegion->IsYoungRegion()));
+                            }
+                        });
+                },
+                false);
+            LOG(RTLOG_ERROR,
+                "[FWDTABLE][pre-retire-summary] receiptSlots=%zu reachable=%zu remembered=%zu neither=%zu "
+                "rtype1=%zu rtype2=%zu rtype3=%zu rtype4=%zu rtype5=%zu rtype6=%zu",
+                receiptSlots, reachableHolders, rememberedReceiptSlots, neither,
+                holderTypes[1], holderTypes[2], holderTypes[3], holderTypes[4], holderTypes[5], holderTypes[6]);
+        }
+
         {
         // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
         MRT_PHASE_TIMER("young.evac_prepare_next");
