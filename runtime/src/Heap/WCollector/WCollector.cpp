@@ -3303,7 +3303,10 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
         // copy. Consume its still-active receipt before PrepareForwardTable
         // retires the table.
         if (object != nullptr && Heap::IsHeapAddress(object)) {
-            ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object));
+            RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
+            ZForwarding* forwarding = fromRegion != nullptr && fromRegion->IsForwardingDone()
+                ? ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object))
+                : nullptr;
             if (forwarding != nullptr) {
                 const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
                 BaseObject* to = receipt == 0 ? nullptr : reinterpret_cast<BaseObject*>(receipt);
