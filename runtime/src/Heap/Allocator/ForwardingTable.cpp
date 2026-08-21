@@ -165,9 +165,6 @@ void NoteRetiredReader(MAddress from, MAddress to)
     std::call_once(reportOnce, []() { std::atexit(DumpRetiredReaders); });
     const uint64_t sample = g_retiredReaderSamples.fetch_add(1, std::memory_order_relaxed) + 1;
     if (sample <= 256) {
-        RegionInfo* slotHeapRegion = context.slot == nullptr || !Heap::IsHeapAddress(context.slot)
-            ? nullptr
-            : RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(context.slot));
         RegionInfo* fromRegion = !Heap::IsHeapAddress(reinterpret_cast<const void*>(from))
             ? nullptr
             : RegionInfo::TryGetRegionInfoAt(from);
@@ -180,13 +177,10 @@ void NoteRetiredReader(MAddress from, MAddress to)
                                      static_cast<intptr_t>(reinterpret_cast<uintptr_t>(&ForwardingTable::FindTo));
         LOG(RTLOG_ERROR,
             "[FWDTABLE][retired-reader] n=%lu from=%#zx to=%#zx source=%s slot=%p slotRegion=%s "
-            "slotHeap=%u slotRtype=%u slotYoung=%u holder=%p holderHeap=%u "
-            "fromRtype=%u fromYoung=%u holderRtype=%u holderYoung=%u "
+            "slotHeap=%u holder=%p holderHeap=%u fromRtype=%u fromYoung=%u holderRtype=%u holderYoung=%u "
             "caller=%p callerDelta=%zd origin=%p originDelta=%zd",
             sample, static_cast<size_t>(from), static_cast<size_t>(to), ReaderKindName(context.kind), context.slot,
-            VerifyRoots::RegionName(slotRegion), static_cast<unsigned>(slotRegion == AddrRegion::HEAP),
-            slotHeapRegion == nullptr ? UINT32_MAX : static_cast<unsigned>(slotHeapRegion->GetRegionType()),
-            static_cast<unsigned>(slotHeapRegion != nullptr && slotHeapRegion->IsYoungRegion()), context.holder,
+            VerifyRoots::RegionName(slotRegion), static_cast<unsigned>(slotRegion == AddrRegion::HEAP), context.holder,
             static_cast<unsigned>(context.holder != nullptr && Heap::IsHeapAddress(context.holder)),
             fromRegion == nullptr ? UINT32_MAX : static_cast<unsigned>(fromRegion->GetRegionType()),
             static_cast<unsigned>(fromRegion != nullptr && fromRegion->IsYoungRegion()),
