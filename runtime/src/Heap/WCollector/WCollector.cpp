@@ -2192,7 +2192,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     // full-heap closure already owns every slot under STW; consume the current
     // forwarding receipt before the table is retired.
     BaseObject* receipt = nullptr;
-    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
+    if (!oldPointer && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
         ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
         if (forwarding != nullptr) {
             const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
