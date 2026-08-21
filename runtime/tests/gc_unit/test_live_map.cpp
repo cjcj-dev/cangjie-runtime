@@ -124,6 +124,29 @@ GC_TEST(LiveMap, RetainedCaptureUnionsYoungLargeFlagBeforePromotion)
     region->FreeRetainedMarkWords();
 }
 
+// After promotion the region is old. A later Preserve must not resurrect
+// objects the Old closure left unmarked by unioning a leftover Young face.
+GC_TEST(LiveMap, RetainedCaptureDoesNotUnionYoungFaceAfterPromotion)
+{
+    GcHeapFixture fx;
+    RegionInfo* region = fx.region0;
+    region->SetYoungRegionFlag(1);
+    LiveInfo* live = fx.PlantLiveInfo(region);
+    RegionBitmap* youngBitmap = fx.PlantMarkBitmap<Generation::Young>(live, region->GetRegionSize());
+    (void)fx.PlantMarkBitmap<Generation::Old>(live, region->GetRegionSize());
+    size_t holderOffset = region->GetAddressOffset(reinterpret_cast<MAddress>(fx.obj0));
+    (void)youngBitmap->MarkBits(holderOffset, 8, region->GetRegionSize());
+
+    MarkView<Generation::Young> young = region->GetMarkView<Generation::Young>();
+    (void)region->PromoteYoungRegion(young);
+    region->PreserveRetainedLiveInfo();
+    GC_EXPECT_FALSE(region->RetainedMarkWordsSay(holderOffset));
+
+    region->FreeRetainedMarkWords();
+    region->metadata.liveInfo = nullptr;
+    fx.FreePlanted(live);
+}
+
 // ZGC zPage.inline.hpp:53-58: a large page contains one object at page start.
 // Its retained livemap is therefore one persistent bit, including resurrection.
 GC_TEST(LiveMap, RetainedLargeMarkBitSurvivesCurrentFaceLoss)
