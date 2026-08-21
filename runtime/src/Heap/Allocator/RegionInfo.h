@@ -2481,9 +2481,8 @@ public:
     {
         metadata.regionStateBitField.SetAtomicValue(RegionStateBitPos::REGION_TYPE_FLAG, BIT_LENGTH,
                                                     static_cast<uint8_t>(type));
-        // PORT_ZFORWARDING step 1, continued.  Inserting only at PrepareForwardableRegion left the
-        // table 15.6% short of what the region predicates answer (legacyOnly=2.6M of 16.8M), because
-        // membership of the relocation set is established at many scattered sites here --
+        // Inserting only at PrepareForwardableRegion misses relocation-set membership established
+        // at scattered sites here --
         // fromRegionList.PrependRegion(..., FROM_REGION) appears in AssembleSmallGarbageCandidates,
         // PrepareYoungGarbageCandidates and several others -- while ZGC establishes it once, in
         // ZRelocationSet::install.
@@ -2496,11 +2495,8 @@ public:
             ForwardingTable::EnsureEntries(this);
         } else if (type == RegionType::FREE_REGION || type == RegionType::GARBAGE_REGION ||
                    type == RegionType::TO_REGION) {
-            // The ghost bit is part of membership and outlives the type change: all six residual
-            // legacyOnly disagreements were rtype=14 (GARBAGE_REGION) with ghost still set, i.e.
-            // the type moved on while IsGhostFromObject still answered yes.  Dropping the entry
-            // there is exactly the "membership has no single source of truth" problem this port
-            // exists to remove, so keep it until the ghost is actually dispelled
+            // The ghost bit is part of membership and outlives the type change. Keep the entry
+            // until the ghost is actually dispelled
             // (DispelGhostFromRegion already calls Remove).
             if (!IsGhostFromRegion()) {
                 ForwardingTable::Remove(GetRegionStart(), GetRegionSize());
