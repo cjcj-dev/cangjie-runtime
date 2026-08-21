@@ -42,6 +42,10 @@ public:
     TracingCollector& GetCurrentCollector() const { return *currentCollector; }
 
     BaseObject* FindToVersion(BaseObject* obj) const override { return currentCollector->FindToVersion(obj); }
+    BaseObject* TryMutatorRelocateFromCopy(BaseObject* obj) const override
+    {
+        return currentCollector->TryMutatorRelocateFromCopy(obj);
+    }
     BaseObject* ResolveStoreValue(BaseObject* ref) const override
     {
         return currentCollector->ResolveStoreValue(ref);

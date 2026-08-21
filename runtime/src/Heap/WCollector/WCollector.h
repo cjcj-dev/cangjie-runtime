@@ -673,6 +673,18 @@ public:
         return geometric;
     }
 
+    BaseObject* TryMutatorRelocateFromCopy(BaseObject* obj) const override
+    {
+        if (obj == nullptr || !Heap::IsHeapAddress(obj)) {
+            return nullptr;
+        }
+        RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(obj));
+        if (forwarding == nullptr) {
+            return nullptr;
+        }
+        return TryMutatorRelocate(obj, forwarding);
+    }
+
 protected:
     BaseObject* ForwardObjectImpl(BaseObject* obj, RegionInfo* ghostFromRegion);
     BaseObject* ForwardObjectExclusive(BaseObject* obj) override;

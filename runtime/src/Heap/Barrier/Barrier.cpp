@@ -6,7 +6,10 @@
 
 
 #include "Barrier.inline.h"
+#include "Base/Log.h"
 #include "Base/Macros.h"
+#include "Heap/Allocator/ForwardingTable.h"
+#include <cstdlib>
 #include "Heap/Allocator/AllocBuffer.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Allocator/RegionInfo.h"
@@ -917,6 +920,39 @@ static inline TargetVerdict JudgeTarget(BaseObject* target)
     return TargetVerdict::Usable;
 }
 
+namespace {
+std::atomic<uint64_t> g_i2ResolveP1Miss{ 0 };
+std::atomic<uint64_t> g_i2ResolveP3Miss{ 0 };
+
+bool I2ResolveTraceOn()
+{
+    static const bool on = [] {
+        const char* e = std::getenv("CJ_I2_RESOLVE_TRACE");
+        return e != nullptr && e[0] == '1';
+    }();
+    return on;
+}
+
+bool I2ResolveFatalOn()
+{
+    static const bool on = [] {
+        const char* e = std::getenv("CJ_I2_RESOLVE_FATAL");
+        return e != nullptr && e[0] == '1';
+    }();
+    return on;
+}
+
+void NoteI2ResolveMiss(std::atomic<uint64_t>& counter, BaseObject* target, const char* site)
+{
+    const uint64_t n = counter.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (I2ResolveTraceOn() && n <= 32) {
+        LOG(RTLOG_ERROR, "[I2][resolve-miss] site=%s n=%llu target=%p armedMiss=%llu", site,
+            static_cast<unsigned long long>(n), static_cast<void*>(target),
+            static_cast<unsigned long long>(ForwardingTable::ArmedMissCount()));
+    }
+}
+} // namespace
+
 BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
 {
     if (target == nullptr || !Heap::IsHeapAddress(target)) {
@@ -929,7 +965,15 @@ BaseObject* Barrier::ResolveFromCopyForMutator(BaseObject* target) const
     if (to != nullptr && to != target) {
         return to;
     }
-    return target;
+    BaseObject* self = theCollector.TryMutatorRelocateFromCopy(target);
+    if (self != nullptr && self != target) {
+        return self;
+    }
+    NoteI2ResolveMiss(g_i2ResolveP1Miss, target, "P1");
+    if (I2ResolveFatalOn()) {
+        LOG(RTLOG_FATAL, "[I2] ResolveFromCopyForMutator miss target=%p", static_cast<void*>(target));
+    }
+    return nullptr;
 }
 
 BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) const
@@ -941,7 +985,7 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
         if (kStaleGuard) {
             const TargetVerdict verdict = JudgeTarget(handed);
             if (verdict != TargetVerdict::Usable) {
-                BaseObject* resolved = theCollector.FindToVersion(handed);
+                BaseObject* resolved = ResolveFromCopyForMutator(handed);
                 ZgcInvariants::NoteStaleGuardFired(verdict == TargetVerdict::ZeroHeader, resolved != nullptr, handed,
                                                    obj, &field);
                 if (resolved != nullptr && resolved != handed) {
@@ -949,6 +993,8 @@ BaseObject* Barrier::ReadReference(BaseObject* obj, RefField<false>& field) cons
                     RefField<> goodField = theCollector.GetAndTryTagRefField(handed);
                     ZgcSelfHealLoadGood(field, field.GetFieldValue(), goodField.GetFieldValue(),
                                         HealSite::IdleReadReference);
+                } else {
+                    handed = resolved;
                 }
             }
         }
@@ -1020,6 +1066,13 @@ BaseObject* Barrier::ReadStaticRef(ReadOnlyRootSlot& field) const
                                            reinterpret_cast<uintptr_t>(before),
                                            reinterpret_cast<uintptr_t>(target));
         }
+    }
+    if (target != nullptr && JudgeTarget(target) != TargetVerdict::Usable) {
+        BaseObject* resolved = ResolveFromCopyForMutator(target);
+        if (resolved == nullptr) {
+            NoteI2ResolveMiss(g_i2ResolveP3Miss, target, "P3");
+        }
+        target = resolved;
     }
     return target;
 }

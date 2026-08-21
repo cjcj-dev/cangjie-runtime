@@ -61,3 +61,23 @@ GC_TEST(I2ReadRef, ForwardedFromReturnsTo)
     GC_EXPECT_EQ(reinterpret_cast<uintptr_t>(got), reinterpret_cast<uintptr_t>(fx.obj1));
     GC_EXPECT_TRUE(got != fx.obj0);
 }
+
+GC_TEST(I2ReadRef, ForwardedFromMissDoesNotHandFrom)
+{
+    GcHeapFixture fx;
+    ToCollector collector;
+    collector.from = fx.obj0;
+    collector.to = nullptr;
+    fx.obj0->SetStateCode(ObjectState::FORWARDED);
+
+    RememberedSet rs;
+    rs.Initialize(fx.heapStart, 2 * RegionInfo::UNIT_SIZE);
+    EnumBarrier barrier(collector, rs);
+
+    auto* field = &HeapSlotAt<>(reinterpret_cast<MAddress>(fx.obj0) + TYPEINFO_PTR_SIZE);
+    const uintptr_t remap = ColourPredicates::current_remapped(static_cast<uintptr_t>(::g_cjLoadBadMask));
+    field->StoreColoured(to_zpointer(reinterpret_cast<MAddress>(fx.obj0) | remap));
+
+    BaseObject* got = barrier.ReadReference(fx.obj0, *field);
+    GC_EXPECT_TRUE(got != fx.obj0);
+}

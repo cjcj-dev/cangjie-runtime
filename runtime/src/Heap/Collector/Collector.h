@@ -115,6 +115,7 @@ public:
     // stale residue and must not CAS-null non-heap slots (may be RO static roots).
     // F5 (Collector.cpp) covers (1) on the FindLatestVersion path only.
     virtual BaseObject* FindToVersion(BaseObject* obj) const = 0;
+    virtual BaseObject* TryMutatorRelocateFromCopy(BaseObject*) const { return nullptr; }
 
     // OpenJDK zBarrier.inline.hpp:695-716 store_barrier / color_store_good:
     // a stored reference must already be the current version (remap included).
