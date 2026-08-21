@@ -94,7 +94,6 @@ echo "WAVE12_START $(date -Is)"
 mem_ok && bash tools/youngflip_driver.sh wave12 8
 
 echo "RECSTW_START $(date -Is)"
-# soak already STOP'd; recstw will STOP again (ok) then CONT at end
 mem_ok && bash tools/youngflip_driver.sh recstw 5
 
 # recstw already CONT'd soak. If recstw skipped, CONT here.

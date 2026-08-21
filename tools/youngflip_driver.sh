@@ -147,10 +147,7 @@ case "$cmd" in
     n=${2:-5}
     OUT=$ROOT/recstw
     mkdir -p "$OUT"
-    soak=$(cat "$SOAK_PID_FILE")
-    echo "RECSTW_STOP soak.pid=$soak"
-    kill -STOP -- -"$soak" || true
-    echo "RECSTW_START N=$n $(date -Is)"
+    echo "RECSTW_START N=$n $(date -Is) (soak already STOP'd by campaign)"
     for i in $(seq 1 "$n"); do
       f=$OUT/A_$i.txt
       t0=$(date +%s.%N)
@@ -177,8 +174,6 @@ print("held_n",len(held),"med",med)
 ' "$f" "$OUT/held_A_$i.txt"
       echo "recstw A_$i rc=$rc wall=$wall held_med=$(cat $OUT/held_A_$i.txt)"
     done
-    echo "RECSTW_CONT soak.pid=$soak"
-    kill -CONT -- -"$soak" || true
     python3 -c '
 import pathlib, statistics, sys
 root=pathlib.Path(sys.argv[1])
