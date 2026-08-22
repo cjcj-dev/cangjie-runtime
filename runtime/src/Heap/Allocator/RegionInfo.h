@@ -66,6 +66,10 @@
 #endif
 
 namespace MapleRuntime {
+// A release notification only: transaction retirement reuses the existing
+// ZForwardingLife refcount and FromPageDetachCheck checkpoint.
+void NotifyRelocationTxnReaderExit();
+
 template<typename T>
 class BitField {
 public:
@@ -2534,7 +2538,11 @@ public:
         return ZForwardingLife::retain_page(metadata.fwdRefCount, metadata.fwdDone);
     }
 
-    void ReleaseForwarding() { ZForwardingLife::release_page(metadata.fwdRefCount); }
+    void ReleaseForwarding()
+    {
+        ZForwardingLife::release_page(metadata.fwdRefCount);
+        NotifyRelocationTxnReaderExit();
+    }
 
     // ZForwarding::retain_page: the three-state count is the gate, not the list
     // type. After ForwardRegion, CollectRegion moves the region to garbage
@@ -2680,6 +2688,7 @@ public:
             region->MarkForwardingDone();
             if (region->metadata.fwdRefCount.load(std::memory_order_acquire) != 0) {
                 ZForwardingLife::release_page(region->metadata.fwdRefCount);
+                NotifyRelocationTxnReaderExit();
             }
         }
 

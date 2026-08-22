@@ -44,11 +44,18 @@ public:
     static void Remove(MAddress regionStart, size_t regionSize);
     static void EnsureEntries(RegionInfo* region);
     static void ClearEntries(MAddress regionStart, size_t regionSize);
+    // Transaction close: unlink and retire only if the maps still name this
+    // exact envelope. A newly published overlapping envelope is untouched.
+    static void RetireEnvelope(ZForwarding* envelope);
     // After-copy Exempt parks a live table; ClearEntries unlinks it into the
     // retired generation. FindTo/LookupTo still scan that generation, so a
     // kept page re-armed next cycle would find() last cycle's dest. Drop the
     // covering tables at the next install (zRelocationSet.cpp:91-96).
-    static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
+    // Enforced transactions keep retired envelopes until their detach permit
+    // reaches this function. Other callers retain the legacy two-generation
+    // behaviour only while CJRT_RELOC_TXN is off.
+    static void DropRetiredCovering(MAddress regionStart, size_t regionSize,
+                                    bool detachPermit = false);
     static void Retire(ZForwarding* tab);
     static void ReclaimRetired(const char* why);
     // Measurement face for FROM_PAGE_DETACH_GATE. True while either retired
@@ -63,6 +70,9 @@ public:
 
     static ZForwarding* Get(MAddress addr) { return get(addr); }
     static ZForwarding* GetEntries(MAddress addr);
+    // Install-only raw lookup. Readers use GetEntries, which acquires the
+    // active transaction handle when CJRT_RELOC_TXN=1.
+    static ZForwarding* GetEntriesForInstall(MAddress addr);
 
     // After copy: zRelocate.cpp:367-372
     static MAddress InsertMapping(MAddress from, MAddress to);

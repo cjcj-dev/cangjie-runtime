@@ -21,6 +21,7 @@
 #include "Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
 #include "Heap/Allocator/ZGranuleMap.h"
+#include "Heap/Collector/RelocationSetTxn.h"
 
 namespace MapleRuntime {
 namespace {
@@ -49,6 +50,24 @@ std::atomic<uint64_t> g_destDisagreeByType[kTypeBuckets] = {};
 std::atomic<uint64_t> g_armedHit{ 0 };
 std::atomic<uint64_t> g_armedMiss{ 0 };
 std::atomic<uint64_t> g_unarmed{ 0 };
+
+ZForwarding* ReaderEntries(MAddress addr, RelocationSetTxn::Handle& handle)
+{
+    if (RelocationSetTxn::Enabled()) {
+        handle = RelocationSetTxn::AcquireForAddress(addr);
+        ZForwarding* forwarding = handle ? handle.GetEnvelope() : nullptr;
+        if (forwarding == nullptr || !forwarding->covers(addr) ||
+            !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+            return nullptr;
+        }
+        return forwarding;
+    }
+    ZForwarding* forwarding = g_entries.get(addr);
+    if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
+        return nullptr;
+    }
+    return forwarding;
+}
 
 } // namespace
 
@@ -125,6 +144,10 @@ ZForwarding* ForwardingTable::get(MAddress addr)
 {
     if (!Ready()) {
         return nullptr;
+    }
+    if (RelocationSetTxn::Enabled()) {
+        RelocationSetTxn::Handle handle;
+        return ReaderEntries(addr, handle);
     }
     ZForwarding* forwarding = g_membership.get(addr);
     if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
@@ -204,6 +227,32 @@ void ForwardingTable::ClearEntries(MAddress regionStart, size_t regionSize)
     }
 }
 
+void ForwardingTable::RetireEnvelope(ZForwarding* envelope)
+{
+    if (!Ready() || envelope == nullptr) {
+        return;
+    }
+    ZForwarding* expected = envelope;
+    if (!g_entries.compare_exchange(envelope->start(), expected, nullptr)) {
+        return;
+    }
+    const size_t granule = g_entries.granule();
+    const size_t first = g_entries.index_for_offset(envelope->start());
+    const size_t count = granule == 0 ? 0
+        : envelope->size() / granule + ((envelope->size() % granule) != 0 ? 1 : 0);
+    for (size_t i = 1; i < count && first != SIZE_MAX && first + i < g_entries.size(); ++i) {
+        expected = envelope;
+        (void)g_entries.compare_exchange(g_entries.base() + (first + i) * granule,
+                                         expected, nullptr);
+    }
+    for (size_t i = 0; i < count && first != SIZE_MAX && first + i < g_membership.size(); ++i) {
+        expected = envelope;
+        (void)g_membership.compare_exchange(g_membership.base() + (first + i) * granule,
+                                            expected, nullptr);
+    }
+    Retire(envelope);
+}
+
 static void UnlinkThenDestroy(ZForwarding* tab)
 {
     if (tab == nullptr) {
@@ -231,9 +280,9 @@ std::atomic<uint64_t> g_reclaimedTotal{ 0 };
 std::atomic<uint64_t> g_retiredHeldPeak{ 0 };
 } // namespace
 
-void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSize)
+void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSize, bool detachPermit)
 {
-    if (regionSize == 0) {
+    if (regionSize == 0 || (RelocationSetTxn::Enabled() && !detachPermit)) {
         return;
     }
     const MAddress regionEnd = regionStart + regionSize;
@@ -275,6 +324,24 @@ void ForwardingTable::Retire(ZForwarding* tab)
 
 void ForwardingTable::ReclaimRetired(const char* why)
 {
+    if (RelocationSetTxn::Enabled()) {
+        size_t heldNow = 0;
+        {
+            std::lock_guard<std::mutex> lock(g_retiredLock);
+            heldNow = g_retired.size() + g_retiredAged.size();
+        }
+        uint64_t peak = g_retiredHeldPeak.load(std::memory_order_relaxed);
+        while (heldNow > peak &&
+               !g_retiredHeldPeak.compare_exchange_weak(peak, heldNow, std::memory_order_relaxed)) {
+        }
+        if (heldNow != 0) {
+            LOG(RTLOG_ERROR,
+                "[FWDTABLE][reclaim] why=%s txn_authority=1 legacy_would_reclaim=%zu held_peak=%lu",
+                why == nullptr ? "?" : why, heldNow,
+                g_retiredHeldPeak.load(std::memory_order_relaxed));
+        }
+        return;
+    }
     std::vector<ZForwarding*> victims;
     size_t heldNow = 0;
     {
@@ -336,6 +403,15 @@ ZForwarding* ForwardingTable::GetEntries(MAddress addr)
     if (!Ready()) {
         return nullptr;
     }
+    RelocationSetTxn::Handle handle;
+    return ReaderEntries(addr, handle);
+}
+
+ZForwarding* ForwardingTable::GetEntriesForInstall(MAddress addr)
+{
+    if (!Ready()) {
+        return nullptr;
+    }
     ZForwarding* forwarding = g_entries.get(addr);
     if (forwarding != nullptr && !forwarding->page_life_current(RegionLifeClock::Carrier::ARMED_ENTRY)) {
         return nullptr;
@@ -354,8 +430,12 @@ bool ZForwarding::page_life_current(RegionLifeClock::Carrier carrier) const
 
 MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
 {
-    ZForwarding* tab = GetEntries(from);
+    RelocationSetTxn::Handle txnHandle;
+    ZForwarding* tab = ReaderEntries(from, txnHandle);
     if (tab == nullptr) {
+        if (RelocationSetTxn::Enabled()) {
+            return 0;
+        }
         RegionInfo* region = nullptr;
         ZForwarding* membership = get(from);
         if (membership != nullptr) {
@@ -365,7 +445,7 @@ MAddress ForwardingTable::InsertMapping(MAddress from, MAddress to)
             region = RegionInfo::TryGetRegionInfoAt(from);
         }
         EnsureEntries(region);
-        tab = GetEntries(from);
+        tab = ReaderEntries(from, txnHandle);
     }
     if (tab == nullptr) {
         return 0;
@@ -483,7 +563,8 @@ MAddress ZForwarding::resolve_live(MAddress to) const
     if (DestUsable(to)) {
         return to;
     }
-    ZForwarding* next = ForwardingTable::GetEntries(to);
+    RelocationSetTxn::Handle txnHandle;
+    ZForwarding* next = ReaderEntries(to, txnHandle);
     if (next == nullptr || next == this) {
         return 0;
     }
@@ -498,6 +579,9 @@ bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0
 
 static MAddress FindRetiredTo(MAddress from)
 {
+    if (RelocationSetTxn::Enabled()) {
+        return 0;
+    }
     std::lock_guard<std::mutex> lock(g_retiredLock);
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {
@@ -525,7 +609,8 @@ static MAddress FindRetiredTo(MAddress from)
 
 MAddress ForwardingTable::FindTo(MAddress from)
 {
-    ZForwarding* tab = GetEntries(from);
+    RelocationSetTxn::Handle txnHandle;
+    ZForwarding* tab = ReaderEntries(from, txnHandle);
     if (tab != nullptr) {
         if (!tab->covers(from)) {
             static std::atomic<uint64_t> g_findToUncovered{ 0 };
@@ -548,7 +633,8 @@ bool ForwardingTable::EntriesArmed(MAddress from) { return GetEntries(from) != n
 
 MAddress ForwardingTable::LookupTo(MAddress from, ToAnswer* answer)
 {
-    ZForwarding* tab = GetEntries(from);
+    RelocationSetTxn::Handle txnHandle;
+    ZForwarding* tab = ReaderEntries(from, txnHandle);
     if (tab != nullptr) {
         const MAddress to = tab->find(from);
         if (to != 0) {

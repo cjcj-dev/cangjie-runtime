@@ -76,6 +76,7 @@
 #include "Heap/Verify/HeldFreeDiag.h"
 #include "Heap/Verify/YyEdgeDiag.h"
 #include "Heap/Collector/PromotedRegionDomain.h"
+#include "Heap/Collector/RelocationSetTxn.h"
 #include "Heap/Verify/CsetEmptyWho.h"
 #include "Common/ColourPredicates.h"
 #include "Heap/WCollector/RemapYoungRoots.h"
@@ -2219,7 +2220,14 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     // forwarding receipt before the table is retired.
     BaseObject* receipt = nullptr;
     if (!oldPointer && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
-        ZForwarding* forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
+        RelocationSetTxn::Handle txnHandle;
+        ZForwarding* forwarding = nullptr;
+        if (RelocationSetTxn::Enabled()) {
+            txnHandle = RelocationSetTxn::AcquireForAddress(reinterpret_cast<MAddress>(fromObj));
+            forwarding = txnHandle ? txnHandle.GetEnvelope() : nullptr;
+        } else {
+            forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(fromObj));
+        }
         if (forwarding != nullptr) {
             const MAddress to = forwarding->find(reinterpret_cast<MAddress>(fromObj));
             const MAddress live = to == 0 ? 0 : forwarding->resolve_live(to);
@@ -3333,9 +3341,16 @@ BaseObject* WCollector::ResolveMinorReference(RefField<>& field, const ScopedSto
         // retires the table.
         if (object != nullptr && Heap::IsHeapAddress(object)) {
             RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(object));
-            ZForwarding* forwarding = fromRegion != nullptr && fromRegion->IsForwardingDone()
-                ? ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object))
-                : nullptr;
+            RelocationSetTxn::Handle txnHandle;
+            ZForwarding* forwarding = nullptr;
+            if (fromRegion != nullptr && fromRegion->IsForwardingDone()) {
+                if (RelocationSetTxn::Enabled()) {
+                    txnHandle = RelocationSetTxn::AcquireForAddress(reinterpret_cast<MAddress>(object));
+                    forwarding = txnHandle ? txnHandle.GetEnvelope() : nullptr;
+                } else {
+                    forwarding = ForwardingTable::GetEntries(reinterpret_cast<MAddress>(object));
+                }
+            }
             if (forwarding != nullptr) {
                 const MAddress receipt = forwarding->find(reinterpret_cast<MAddress>(object));
                 const MAddress live = receipt == 0 ? 0 : forwarding->resolve_live(receipt);
@@ -7525,12 +7540,21 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         {
         // PROBE evacct: how much of young.evac_finish is the second PrepareForwardTable<Young>?
         MRT_PHASE_TIMER("young.evac_prepare_next");
-        fwdTable.PrepareForwardTable<Generation::Young>();
+        if (RelocationSetTxn::Enabled()) {
+            // The first install remains the authority. Residual regions finish
+            // against that fixed membership instead of installing after flip.
+            RelocationSetTxn::NoteFinishIncomplete(Generation::Young);
+        } else {
+            fwdTable.PrepareForwardTable<Generation::Young>();
+        }
         }
         ValidateMinorReferences("after-dispel", nullptr);
         // zRelocate.cpp:1041-1047 cycle-end completeness: no ROUTED-unfinished page.
         manager.FinishIncompleteFromRegions();
         manager.ReassembleFromSpace();
+        RelocationSetTxn::CloseCopy(Generation::Young);
+        RelocationSetTxn::CloseRemap(Generation::Young);
+        manager.ReleaseDetachQuarantineAfterMinor();
     }
 }
 
@@ -9360,6 +9384,8 @@ void WCollector::DoGarbageCollection()
 
     ForwardFromSpace();
     reinterpret_cast<RegionSpace&>(theAllocator).GetRegionManager().FinishIncompleteFromRegions();
+    RelocationSetTxn::CloseCopy(Generation::Old);
+    RelocationSetTxn::CloseRemap(Generation::Old);
 
     // Publish a clean full-GC buffer before mutators return to IDLE. The phase
     // transition is the grace period for writers that had already loaded the old

@@ -36,6 +36,7 @@
 #include "Heap/Verify/SealCheck.h"
 #include "Heap/Verify/PermWhoAdmit.h"
 #include "Heap/Verify/PinFireDiag.h"
+#include "Heap/Collector/RelocationSetTxn.h"
 #include "securec.h"
 #include "SlotList.h"
 #include "Sync/Sync.h"
@@ -779,14 +780,17 @@ public:
 
             CHECK(oldState == MapleRuntime::RegionInfo::FORWARDABLE);
             if (fromRegionInfo->TryLockRouting(oldState)) {
+                RelocationSetTxn::NotePlan(fromRegionInfo, RelocationSetTxn::PlanSlot::PLANNING);
                 // sealcheck E_seal (per-region): face freezes before geometry read.
                 // RouteOrCompactRegionImpl reads GetLiveByteCount / VisitLiveObjects next.
                 SealCheck::NoteSeal(fromRegionInfo);
                 if (RouteOrCompactRegionImpl(fromRegionInfo)) {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::ROUTED);
+                    RelocationSetTxn::NotePlan(fromRegionInfo, RelocationSetTxn::PlanSlot::PLANNED);
                     return true;
                 } else {
                     fromRegionInfo->SetRouteState(RegionInfo::RouteState::COMPACTED);
+                    RelocationSetTxn::NotePlan(fromRegionInfo, RelocationSetTxn::PlanSlot::IN_PLACE);
                     return false;
                 }
             }
@@ -850,14 +854,41 @@ public:
         // left from-copies). zGeneration.cpp:211-213, zPage.inline.hpp:180-185.
         (void)ExemptMarkStartAllocatingFromCSet();
 
-        fromRegionList.VisitAllRegions([](RegionInfo* region) {
+        // Snapshot final CSet membership only after the non-relocatable pages
+        // have been removed. Like ZRelocationSet::install, construction of the
+        // full envelope precedes every product entry installation.
+        RelocationSetTxn::Builder relocationTxn(G);
+        fromRegionList.VisitAllRegions([&relocationTxn](RegionInfo* region) {
+            (void)relocationTxn.AddParticipant(region);
+        });
+        if (RelocationSetTxn::Enabled()) {
+            CHECK_DETAIL(relocationTxn.BuildSucceeded(),
+                         "CJRT_RELOC_TXN install failure before product prepare participants=%zu",
+                         relocationTxn.Size());
+        }
+
+        fromRegionList.VisitAllRegions([&relocationTxn](RegionInfo* region) {
             DLOG(REGION, "visit from region %p@[%#zx+%zu, %#zx)", region, region->GetRegionStart(),
                  region->GetLiveByteCount(), region->GetRegionEnd());
             MarkView<G> view = region->GetMarkView<G>();
             region->PrepareForwardableRegion(view);
+            if (relocationTxn.BuildSucceeded()) {
+                (void)relocationTxn.AttachEnvelope(
+                    region, ForwardingTable::GetEntriesForInstall(region->GetRegionStart()));
+            }
         });
 
         fromRegionList.CopyListTo(ghostFromRegionList);
+        if (RelocationSetTxn::Enabled()) {
+            CHECK_DETAIL(relocationTxn.BuildSucceeded(),
+                         "CJRT_RELOC_TXN install failure during product prepare participants=%zu",
+                         relocationTxn.Size());
+            relocationTxn.PublishOrFatal();
+        } else if (relocationTxn.BuildSucceeded()) {
+            (void)relocationTxn.TryPublish();
+        } else {
+            relocationTxn.Rollback();
+        }
     }
 
     // Release point for OPTION_2 mark-epoch gate: major PostTrace after PrepareForwardTable.
@@ -879,6 +910,18 @@ public:
              heldBefore * RegionInfo::UNIT_SIZE);
         const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
         VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
+             detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
+    }
+
+    // A young relocation transaction closes the same reader grace condition
+    // as a major transaction. Recheck the existing detach quarantine at that
+    // closure so a minor-only workload does not wait for an unrelated major
+    // cycle to return its supply. This consumes the existing gate/checkpoint;
+    // it does not create another reuse admission path.
+    void ReleaseDetachQuarantineAfterMinor()
+    {
+        const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
+        VLOG(REPORT, "[GCV2][detach-quarantine] minor_released_units=%zu minor_released_bytes=%zu",
              detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
     }
 
@@ -950,7 +993,17 @@ public:
 private:
     RoutePlan PlanRouteLookup(BaseObject* fromObj)
     {
-        RegionInfo* fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
+        RelocationSetTxn::Handle txnHandle;
+        RegionInfo* fromRegionInfo = nullptr;
+        if (RelocationSetTxn::Enabled()) {
+            txnHandle = RelocationSetTxn::AcquireForAddress(reinterpret_cast<MAddress>(fromObj));
+            if (!txnHandle) {
+                return RoutePlan{ nullptr };
+            }
+            fromRegionInfo = txnHandle.GetRegion();
+        } else {
+            fromRegionInfo = RegionInfo::GetGhostFromRegionAt(reinterpret_cast<MAddress>(fromObj));
+        }
         if (fromRegionInfo == nullptr) {
             return RoutePlan{ nullptr };
         }
