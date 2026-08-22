@@ -287,39 +287,6 @@ BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* known
     return RecoverInteriorBaseImpl(obj, knownBase);
 }
 
-void Collector::ReportGateBaseCounts()
-{
-    if (!PlausibleObjGateAccountOn()) {
-        return;
-    }
-    size_t gateBaseReason[GATEBASE_REASON_COUNT] = {};
-    size_t gateBaseOffset[9] = {};
-    size_t gateBaseTotal = 0;
-    size_t gateBaseInterior = 0;
-    for (unsigned i = 0; i < GATEBASE_REASON_COUNT; ++i) {
-        gateBaseReason[i] = g_gateBaseRejectByReason[i].exchange(0, std::memory_order_relaxed);
-        gateBaseTotal += gateBaseReason[i];
-    }
-    for (unsigned i = 0; i < 9; ++i) {
-        gateBaseOffset[i] = g_gateBaseInteriorByOffset[i].exchange(0, std::memory_order_relaxed);
-        if (i != 0) {
-            gateBaseInterior += gateBaseOffset[i];
-        }
-    }
-    LOG(RTLOG_ERROR,
-        "[GCV2][gatebase] gc=%zu reject=%zu interior=%zu bad=%zu "
-        "reason=[nonheap:%zu,dead:%zu,null:%zu,small:%zu,misalign:%zu,4g:%zu,inheap:%zu,resident:%zu,cross:%zu] "
-        "offset=[none:%zu,8:%zu,16:%zu,24:%zu,32:%zu,40:%zu,48:%zu,56:%zu,64:%zu]",
-        g_gcCount.load(std::memory_order_relaxed), gateBaseTotal, gateBaseInterior,
-        gateBaseTotal - gateBaseInterior, gateBaseReason[GATEBASE_NON_HEAP],
-        gateBaseReason[GATEBASE_DEAD_REGION], gateBaseReason[GATEBASE_NULL_TIP],
-        gateBaseReason[GATEBASE_SMALL_INT], gateBaseReason[GATEBASE_MISALIGNED],
-        gateBaseReason[GATEBASE_4G_ALIGNED], gateBaseReason[GATEBASE_TIP_IN_HEAP],
-        gateBaseReason[GATEBASE_NOT_RESIDENT], gateBaseReason[GATEBASE_CROSS_END], gateBaseOffset[0],
-        gateBaseOffset[1], gateBaseOffset[2], gateBaseOffset[3], gateBaseOffset[4], gateBaseOffset[5],
-        gateBaseOffset[6], gateBaseOffset[7], gateBaseOffset[8]);
-}
-
 void Collector::ReportPlausibleManagedObjectGateCounts()
 {
     std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",

@@ -290,8 +290,6 @@ public:
     // (zMarkStackEntry.hpp:81 object_address bits 63-5; zPage.inline.hpp:188 is_in).
     // Count rejects under MRT_GCV2_MARKFLOOR_OBJ_GATE=1.
     static bool PlausibleManagedObjectGate(const char* site, BaseObject* obj);
-    // Flush the mark-and-remember-only reject census once per collection. Default-off.
-    static void ReportGateBaseCounts();
     static void ReportPlausibleManagedObjectGateCounts();
     // introot: if obj is a heap interior (RawArray+8/...), return host object base; else nullptr.
     // writeback2: when knownBase is non-null (derived channel already paired base↔derived),
