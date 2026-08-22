@@ -9,7 +9,6 @@
 
 #include <algorithm>
 #include <atomic>
-#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -18,7 +17,6 @@
 #include <map>
 #include <mutex>
 #include <set>
-#include <thread>
 #include <unordered_map>
 #include <vector>
 #ifdef _WIN64
@@ -1325,11 +1323,7 @@ public:
 
     static bool MarkEpochAssertEnabled()
     {
-        static const bool on = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MARK_EPOCH_ASSERT */;
-            return v != nullptr && std::strcmp(v, "1") == 0;
-        }();
-        return on;
+        return false;
     }
 
     static void ReportMarkEpochCounts(const char* point)
@@ -1374,15 +1368,6 @@ public:
         }
         EnsureMarkEpochAtexit();
         size_t n = markEpochStaleReadCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (MarkEpochAssertEnabled()) {
-            LOG(RTLOG_FATAL,
-                "[GCV2][mark-epoch] stale LiveInfo read generation=%s region=%p "
-                "viewEpoch=%llu faceEpoch=%llu regionEpoch=%llu n=%zu "
-                "env=MRT_GCV2_MARK_EPOCH_ASSERT=1",
-                G == Generation::Young ? "young" : "old", this,
-                static_cast<unsigned long long>(view.GetEpoch()), static_cast<unsigned long long>(face),
-                static_cast<unsigned long long>(now), n);
-        }
         if (n <= 8) {
             LOG(RTLOG_ERROR,
                 "[GCV2][mark-epoch] stale_read generation=%s region=%p "
@@ -1867,210 +1852,12 @@ public:
                 }
             }
         }
-        // Domain-eq probe (admitstart): MRT_GCV2_DOMAINEQ=1. Counts survived-but-not-start
-        // (would-have-been-Admit under old multi-bit guard). Product fix rejects those.
-        // Inject: MRT_GCV2_DOMAINEQ_INJECT=1 forces one synthetic interior count so a silent
-        // harness is visible. Default off — zero product side effect.
-        static const int domainEqMode = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DOMAINEQ */;
-            if (v != nullptr && v[0] == '1' && v[1] == '\0') {
-                return 1;
-            }
-            return 0;
-        }();
-        if (domainEqMode != 0) {
-            static std::atomic<size_t> g_deAdmitOk{ 0 };
-            static std::atomic<size_t> g_deSurvivedNotStart{ 0 };
-            static std::atomic<size_t> g_deInject{ 0 };
-            static std::atomic<bool> g_deAtexit{ false };
-            bool expect = false;
-            if (g_deAtexit.compare_exchange_strong(expect, true, std::memory_order_relaxed)) {
-                std::atexit([]() {
-                    const char* inj = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DOMAINEQ_INJECT */;
-                    if (inj != nullptr && inj[0] == '1' && inj[1] == '\0') {
-                        g_deInject.store(1, std::memory_order_relaxed);
-                        g_deSurvivedNotStart.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    std::fprintf(stderr,
-                                 "[GCV2][domaineq] admitOk=%zu survivedNotStart=%zu inject=%zu "
-                                 "env=MRT_GCV2_DOMAINEQ=1\n",
-                                 g_deAdmitOk.load(std::memory_order_relaxed),
-                                 g_deSurvivedNotStart.load(std::memory_order_relaxed),
-                                 g_deInject.load(std::memory_order_relaxed));
-                    std::fflush(stderr);
-                });
-            }
-            if (survived && startOk) {
-                g_deAdmitOk.fetch_add(1, std::memory_order_relaxed);
-            } else if (survived && !startOk) {
-                g_deSurvivedNotStart.fetch_add(1, std::memory_order_relaxed);
-            }
-        }
         if (!survived || !startOk) {
-            // H1/H2 producer diag (routeorigin): size mismatch vs mark miss.
-            // Gate: MRT_GCV2_NULLROUTE_DIAG=1 (default off). Positive control: off → zero lines.
-            static const bool nullRouteDiag = []() {
-                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_NULLROUTE_DIAG */;
-                return v != nullptr && v[0] == '1' && v[1] == '\0';
-            }();
-            // eatarm: only ROUTED/FORWARDABLE/ROUTING (same exclusive arm as IOR CHECK).
             if (EatArmDiag::Enabled()) {
                 RouteState rsEat = GetRouteState();
                 if (rsEat == RouteState::ROUTED || rsEat == RouteState::FORWARDABLE ||
                     rsEat == RouteState::ROUTING) {
                     EatArmDiag::NoteIorTarget(fromObj, EatArmDiag::GetFixHost(), offset);
-                }
-            }
-            if (nullRouteDiag) {
-                // Prefer ROUTED (exclusive CHECK arm). Skip FORWARDED flood that
-                // exhausts the sample budget before the size=16 region-end hits.
-                RouteState rs = GetRouteState();
-                if (rs == RouteState::ROUTED || rs == RouteState::FORWARDABLE ||
-                    rs == RouteState::ROUTING) {
-                    static std::atomic<size_t> g_nullRouteDiagN{ 0 };
-                    size_t n = g_nullRouteDiagN.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (n <= 64) {
-                        size_t ghostSz = (metadata.regionEnd0 > GetRegionStart())
-                            ? static_cast<size_t>(metadata.regionEnd0 - GetRegionStart())
-                            : 0;
-                        size_t curSz = GetRegionSize();
-                        size_t bitCover = 0;
-                        size_t wordCnt = 0;
-                        bool markNull = true;
-                        bool resNull = true;
-                        bool liveMarked = false;
-                        bool live0Marked = false;
-                        bool regionMarked = false;
-                        size_t allocOff = 0;
-                        if (metadata.allocPtr > GetRegionStart()) {
-                            allocOff = static_cast<size_t>(metadata.allocPtr - GetRegionStart());
-                        }
-                        if (ghostLiveInfo != nullptr) {
-                            RegionBitmap* mb = GetRouteMarkGeneration() == Generation::Young
-                                ? GetMarkBitmap(GetRouteMarkView<Generation::Young>(), ghostLiveInfo)
-                                : GetMarkBitmap(GetRouteMarkView<Generation::Old>(), ghostLiveInfo);
-                            RegionBitmap* rb = ghostLiveInfo->resurrectBitmap;
-                            markNull = (mb == nullptr);
-                            resNull = (rb == nullptr);
-                            if (mb != nullptr) {
-                                wordCnt = mb->wordCnt.load(std::memory_order_acquire);
-                                bitCover = wordCnt * kMarkedBytesPerBit * kBitsPerWord;
-                                live0Marked = mb->IsMarked(offset);
-                            }
-                            if (!live0Marked && rb != nullptr) {
-                                live0Marked = rb->IsMarked(offset);
-                            }
-                        }
-                        LiveInfo* curLive = GetLiveInfo();
-                        if (GetRouteMarkGeneration() == Generation::Young) {
-                            MarkView<Generation::Young> view = GetRouteMarkView<Generation::Young>();
-                            liveMarked = IsSurvivedObject(view, curLive, offset);
-                            regionMarked = IsSurvivedObject(view, offset);
-                        } else {
-                            MarkView<Generation::Old> view = GetRouteMarkView<Generation::Old>();
-                            liveMarked = IsSurvivedObject(view, curLive, offset);
-                            regionMarked = IsSurvivedObject(view, offset);
-                        }
-                        // marklate: per-region last-alloc phase (no TLS).
-                        // blackmark: isTraceAtAlloc + clearTraceCnt for H3.
-                        AllocPhaseDiag::Lookup ap =
-                            AllocPhaseDiag::Find(fromObj, GetRegionStart());
-                        unsigned curIsTrace = static_cast<unsigned>(IsTraceRegion());
-                        // iorsource/alotior: slot provenance + host (only on sample path).
-                        BaseObject* hostObj =
-                            reinterpret_cast<BaseObject*>(NullRouteCaller::Host());
-                        uintptr_t slotAddr = NullRouteCaller::Slot();
-                        if (hostObj == nullptr && slotAddr != 0) {
-                            RegionInfo* hostReg = TryGetRegionInfoAt(slotAddr);
-                            if (hostReg != nullptr && !hostReg->IsFreeRegion() &&
-                                !hostReg->IsGarbageRegion()) {
-                                hostReg->VisitAllObjects(
-                                    [&hostObj, slotAddr](BaseObject* holder) {
-                                        if (hostObj != nullptr || holder == nullptr ||
-                                            !holder->HasRefField()) {
-                                            return;
-                                        }
-                                        holder->ForEachRefField(
-                                            [holder, &hostObj, slotAddr](RefField<>& field) {
-                                                if (reinterpret_cast<uintptr_t>(&field) ==
-                                                    slotAddr) {
-                                                    hostObj = holder;
-                                                }
-                                            });
-                                    });
-                            }
-                        }
-                        unsigned hostKnown = 0;
-                        unsigned hostMarked = 0;
-                        unsigned hostYoung = 0;
-                        unsigned hostType = 0;
-                        unsigned hostFree = 0;
-                        unsigned hostGarbage = 0;
-                        unsigned hostGhost = 0;
-                        size_t fieldOff = 0;
-                        if (hostObj != nullptr &&
-                            Heap::IsHeapAddress(reinterpret_cast<MAddress>(hostObj))) {
-                            hostKnown = 1;
-                            if (slotAddr >= reinterpret_cast<uintptr_t>(hostObj)) {
-                                fieldOff = slotAddr - reinterpret_cast<uintptr_t>(hostObj);
-                            }
-                            RegionInfo* hr =
-                                TryGetRegionInfoAt(reinterpret_cast<MAddress>(hostObj));
-                            if (hr != nullptr) {
-                                hostYoung = static_cast<unsigned>(hr->IsYoungRegion());
-                                hostType = static_cast<unsigned>(hr->GetRegionType());
-                                hostFree = static_cast<unsigned>(hr->IsFreeRegion());
-                                hostGarbage = static_cast<unsigned>(hr->IsGarbageRegion());
-                                hostGhost = static_cast<unsigned>(hr->IsFromRegion());
-                                if (GetRouteMarkGeneration() == Generation::Young && hr->IsYoungRegion()) {
-                                    MarkView<Generation::Young> hostView = hr->GetMarkView<Generation::Young>();
-                                    hostMarked = static_cast<unsigned>(hr->IsMarkedObject(hostView, hostObj));
-                                } else {
-                                    MarkView<Generation::Old> hostView = hr->GetMarkView<Generation::Old>();
-                                    hostMarked = static_cast<unsigned>(hr->IsMarkedObject(hostView, hostObj));
-                                }
-                            }
-                        }
-                        LOG(RTLOG_ERROR,
-                            "[GCV2][nullroute-diag] n=%zu obj=%p offset=%zu ghostSz=%zu curSz=%zu "
-                            "bitCover=%zu wordCnt=%zu markNull=%u resNull=%u live0Surv=%u "
-                            "curLiveSurv=%u regionSurv=%u routeState=%u liveBytes=%zu young=%u "
-                            "type=%u oob=%u allocOff=%zu nearEnd=%u "
-                            "allocPhaseFound=%u isRegionLast=%u usedFrozen=%u usedNear=%u "
-                            "allocMutPhase=%u(%s) allocHeapPhase=%u(%s) allocInMarkNew=%u "
-                            "lastObj=%#zx curIsTrace=%u isTraceAtAlloc=%u clearTraceCnt=%u "
-                            "everWasTrace=%u caller=%s edgeSrc=%s slot=%#zx host=%p "
-                            "fieldOff=%zu hostKnown=%u hostMarked=%u hostYoung=%u hostType=%u "
-                            "hostFree=%u hostGarbage=%u hostGhost=%u",
-                            n, fromObj, offset, ghostSz, curSz, bitCover, wordCnt,
-                            static_cast<unsigned>(markNull), static_cast<unsigned>(resNull),
-                            static_cast<unsigned>(live0Marked), static_cast<unsigned>(liveMarked),
-                            static_cast<unsigned>(regionMarked),
-                            static_cast<unsigned>(rs), GetLiveByteCount(),
-                            static_cast<unsigned>(IsYoungRegion()),
-                            static_cast<unsigned>(GetRegionType()),
-                            static_cast<unsigned>(offset >= bitCover && bitCover > 0),
-                            allocOff,
-                            static_cast<unsigned>(ghostSz > 0 && offset + 16 >= ghostSz),
-                            static_cast<unsigned>(ap.found),
-                            static_cast<unsigned>(ap.isRegionLast),
-                            static_cast<unsigned>(ap.usedFrozen),
-                            static_cast<unsigned>(ap.usedNear),
-                            static_cast<unsigned>(ap.mutatorPhase),
-                            AllocPhaseDiag::PhaseName(ap.mutatorPhase),
-                            static_cast<unsigned>(ap.heapPhase),
-                            AllocPhaseDiag::PhaseName(ap.heapPhase),
-                            static_cast<unsigned>(ap.found &&
-                                AllocPhaseDiag::IsMarkNewPhase(ap.mutatorPhase)),
-                            static_cast<size_t>(ap.lastObj),
-                            curIsTrace,
-                            static_cast<unsigned>(ap.isTraceAtAlloc),
-                            static_cast<unsigned>(ap.clearTraceCnt),
-                            static_cast<unsigned>(ap.everWasTrace),
-                            NullRouteCaller::Current(), NullRouteCaller::EdgeSrc(),
-                            static_cast<size_t>(slotAddr), hostObj, fieldOff, hostKnown,
-                            hostMarked, hostYoung, hostType, hostFree, hostGarbage, hostGhost);
-                    }
                 }
             }
             return OptionalRouteTicket();
@@ -2667,27 +2454,6 @@ public:
                 return;
             }
             this->region = region;
-            // Forced collision: hold a retainer on another thread so claim_page
-            // must wait. Default off. Proves detach waits rather than racing a
-            // recycled table (task §六③).
-            static const int holdUs = []() {
-                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ZLIFE_INJECT_HOLD_US */;
-                if (v == nullptr || *v == '\0') {
-                    return 0;
-                }
-                return std::atoi(v);
-            }();
-            const int holdCopy = holdUs;
-            if (holdCopy > 0 && before > 0) {
-                std::thread holder([region, holdCopy]() {
-                    if (region->RetainForwarding()) {
-                        std::this_thread::sleep_for(std::chrono::microseconds(holdCopy));
-                        region->ReleaseForwarding();
-                    }
-                });
-                holder.detach();
-                std::this_thread::sleep_for(std::chrono::microseconds(200));
-            }
             if (before > 0) {
                 ZForwardingLife::in_place_relocation_claim_page(region->metadata.fwdRefCount);
             }
@@ -3294,10 +3060,6 @@ public:
             return;
         }
         size_t n = liveCrossMismatchCount.fetch_add(1, std::memory_order_relaxed) + 1;
-        static const bool abortOn = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_LIVE_CROSSCHECK */;
-            return v != nullptr && std::strcmp(v, "1") == 0;
-        }();
         if (!liveCrossAtexitInstalled.exchange(true, std::memory_order_relaxed)) {
             std::atexit([]() {
                 std::fprintf(stderr, "[GCV2][livesame][crosscheck] atexit checks=%zu mismatch=%zu\n",
@@ -3306,8 +3068,8 @@ public:
                 std::fflush(stderr);
             });
         }
-        if (n <= 32 || abortOn) {
-            LOG(abortOn ? RTLOG_FATAL : RTLOG_ERROR,
+        if (n <= 32) {
+            LOG(RTLOG_ERROR,
                 "[GCV2][livesame][crosscheck] where=%s region=%p liveBytes=%llu emptyByMark=%u "
                 "emptyByLive=%u n=%zu",
                 where != nullptr ? where : "?", this, static_cast<unsigned long long>(liveBytes),
@@ -3413,13 +3175,6 @@ private:
                 static_cast<unsigned>(phase));
         } else if ((n & 0x3ffU) == 0) {
             LOG(RTLOG_ERROR, "[GCV2][tipguard][TYPEINFO_IN_HEAP_COUNT] total=%zu", n);
-        }
-        const char* fatal = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_TIPINHEAP_FATAL */;
-        if (fatal != nullptr && fatal[0] == '1' && fatal[1] == '\0') {
-            LOG(RTLOG_FATAL,
-                "[GCV2][tipguard][TYPEINFO_IN_HEAP_FATAL] obj=%p tip=%p objSize=%zu hits=%zu",
-                obj, tip, objSize, n);
-            std::abort();
         }
     }
 
