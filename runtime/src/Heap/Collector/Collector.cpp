@@ -753,18 +753,8 @@ BaseObject* Collector::TryRecoverInteriorBase(BaseObject* obj, BaseObject* known
     return RecoverInteriorBaseImpl(obj, knownBase);
 }
 
-void Collector::ReportPlausibleManagedObjectGateCounts()
+void Collector::ReportGateBaseCounts()
 {
-    std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
-                 g_geomCrossEndReject.load(std::memory_order_relaxed));
-    std::fflush(stderr);
-    if (GateEquivOn()) {
-        LOG(RTLOG_ERROR,
-            "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
-            g_gateEquivChecked.load(std::memory_order_relaxed),
-            g_gateEquivMismatch.load(std::memory_order_relaxed),
-            g_gateEquivInjected.load(std::memory_order_relaxed));
-    }
     if (!PlausibleObjGateAccountOn()) {
         return;
     }
@@ -783,17 +773,35 @@ void Collector::ReportPlausibleManagedObjectGateCounts()
         }
     }
     LOG(RTLOG_ERROR,
-        "[GCV2][gatebase] reject=%zu interior=%zu bad=%zu "
+        "[GCV2][gatebase] gc=%zu reject=%zu interior=%zu bad=%zu "
         "reason=[nonheap:%zu,dead:%zu,null:%zu,small:%zu,misalign:%zu,4g:%zu,inheap:%zu,resident:%zu,cross:%zu] "
         "offset=[none:%zu,8:%zu,16:%zu,24:%zu,32:%zu,40:%zu,48:%zu,56:%zu,64:%zu]",
-        gateBaseTotal, gateBaseInterior, gateBaseTotal - gateBaseInterior,
-        gateBaseReason[GATEBASE_NON_HEAP], gateBaseReason[GATEBASE_DEAD_REGION],
-        gateBaseReason[GATEBASE_NULL_TIP], gateBaseReason[GATEBASE_SMALL_INT],
-        gateBaseReason[GATEBASE_MISALIGNED], gateBaseReason[GATEBASE_4G_ALIGNED],
-        gateBaseReason[GATEBASE_TIP_IN_HEAP], gateBaseReason[GATEBASE_NOT_RESIDENT],
-        gateBaseReason[GATEBASE_CROSS_END], gateBaseOffset[0], gateBaseOffset[1], gateBaseOffset[2],
-        gateBaseOffset[3], gateBaseOffset[4], gateBaseOffset[5], gateBaseOffset[6], gateBaseOffset[7],
-        gateBaseOffset[8]);
+        g_gcCount.load(std::memory_order_relaxed), gateBaseTotal, gateBaseInterior,
+        gateBaseTotal - gateBaseInterior, gateBaseReason[GATEBASE_NON_HEAP],
+        gateBaseReason[GATEBASE_DEAD_REGION], gateBaseReason[GATEBASE_NULL_TIP],
+        gateBaseReason[GATEBASE_SMALL_INT], gateBaseReason[GATEBASE_MISALIGNED],
+        gateBaseReason[GATEBASE_4G_ALIGNED], gateBaseReason[GATEBASE_TIP_IN_HEAP],
+        gateBaseReason[GATEBASE_NOT_RESIDENT], gateBaseReason[GATEBASE_CROSS_END], gateBaseOffset[0],
+        gateBaseOffset[1], gateBaseOffset[2], gateBaseOffset[3], gateBaseOffset[4], gateBaseOffset[5],
+        gateBaseOffset[6], gateBaseOffset[7], gateBaseOffset[8]);
+}
+
+void Collector::ReportPlausibleManagedObjectGateCounts()
+{
+    std::fprintf(stderr, "[GCV2][tailslot] geom_cross_end=%zu\n",
+                 g_geomCrossEndReject.load(std::memory_order_relaxed));
+    std::fflush(stderr);
+    if (GateEquivOn()) {
+        LOG(RTLOG_ERROR,
+            "[GCV2][gateequiv] checked=%zu mismatch=%zu inject=%zu env=MRT_GCV2_GATEEQUIV=1",
+            g_gateEquivChecked.load(std::memory_order_relaxed),
+            g_gateEquivMismatch.load(std::memory_order_relaxed),
+            g_gateEquivInjected.load(std::memory_order_relaxed));
+    }
+    if (!PlausibleObjGateAccountOn()) {
+        return;
+    }
+    ReportGateBaseCounts();
     LOG(RTLOG_ERROR, "[GCV2][markfloor-obj-gate] reject=%zu geom_cross_end=%zu env=MRT_GCV2_MARKFLOOR_OBJ_GATE=1",
         g_plausibleObjGateReject.load(std::memory_order_relaxed),
         g_geomCrossEndReject.load(std::memory_order_relaxed));

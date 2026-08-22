@@ -9392,6 +9392,7 @@ void WCollector::DoGarbageCollection()
     if (gcReason == GC_REASON_YOUNG) {
         DoYoungGarbageCollection();
         Collector::ReportMarkGoodHeapGateCounts();
+        Collector::ReportGateBaseCounts();
         return;
     }
     // oracleblack: a major is young + old, as in ZGC (zGeneration.cpp ZGenerationOld
@@ -9467,6 +9468,7 @@ void WCollector::DoGarbageCollection()
     // in-place promote paths that already Preserve + RecordPromotedCrossGenEdges.
     ForwardDataManager::GetForwardDataManager().UnbindPreviousLiveInfo();
     Collector::ReportMarkGoodHeapGateCounts();
+    Collector::ReportGateBaseCounts();
     O2ORemsetDiag::DumpAndMaybeReset("post-major", /*reset*/ true);
 }
 
