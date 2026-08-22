@@ -53,11 +53,19 @@ public:
         while (tryDirtyTree || tryReleasedTree) {
             // first try to get a dirty region.
             if (tryDirtyTree && dirtyUnitTreeMutex.try_lock()) {
+                bool dirtyOk = false;
+                {
+                    // TakeUnits may refresh the residual free-tree node via
+                    // InitRegionInfo before returning the selected extent.
+                    // Carry a structural permit only across that maintenance;
+                    // the selected extent is checked immediately afterwards.
+                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
-                bool dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
+                    dirtyOk = dirtyUnitTree.TakeUnitsLowAddr(num, idx);
 #else
-                bool dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
+                    dirtyOk = dirtyUnitTree.TakeUnits(num, idx);
 #endif
+                }
                 if (dirtyOk) {
                     MAddress start = RegionInfo::GetUnitAddress(idx);
                     RegionInfo* dirtyRegion = RegionInfo::TryGetRegionInfoAt(start);
@@ -88,11 +96,15 @@ public:
 
             // then try to get a released region.
             if (tryReleasedTree && releasedUnitTreeMutex.try_lock()) {
+                bool releasedOk = false;
+                {
+                    FromPageDetach::ReusePermitScope treePermit;
 #if defined(__OHOS__)
-                bool releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
+                    releasedOk = releasedUnitTree.TakeUnitsLowAddr(num, idx);
 #else
-                bool releasedOk = releasedUnitTree.TakeUnits(num, idx);
+                    releasedOk = releasedUnitTree.TakeUnits(num, idx);
 #endif
+                }
                 if (releasedOk) {
                     RegionInfo* releasedRegion =
                         RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
