@@ -155,6 +155,9 @@ protected:
     // SkipLaunderingHeal may refuse to write from into the slot; the return value
     // still resolves. zBarrier.inline.hpp:294-340 relocate-or-remap then self-heal to.
     BaseObject* ResolveFromCopyForMutator(BaseObject* target) const;
+    // zBarrier.inline.hpp:294-340 make_load_good then mutate the to-address.
+    // WriteGenericImpl used to HasRefField the from-copy after ClearUnits.
+    BaseObject* RelocateHolderForWrite(BaseObject* obj, void*& fieldPtr) const;
 
     // obj may be null for static/global fields (source treated as old).
     void RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const;

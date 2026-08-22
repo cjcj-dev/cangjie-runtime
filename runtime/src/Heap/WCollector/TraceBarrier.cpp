@@ -361,35 +361,39 @@ void TraceBarrier::CopyStructArrayImpl(BaseObject* dstObj, MAddress dstField, MI
 
 void TraceBarrier::WriteGenericImpl(const ObjectPtr obj, void* fieldPtr, const ObjectPtr src, size_t size) const
 {
-    NoteZeroTip(obj, "TraceBarrier.WriteGenericImpl");
-    if ((obj != nullptr && !obj->HasRefField()) || (!Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
-        CHECK_DETAIL(memcpy_s(fieldPtr, size,
-                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE),
+    ObjectPtr dst = obj;
+    void* fp = fieldPtr;
+    dst = RelocateHolderForWrite(dst, fp);
+    ObjectPtr from = ResolveFromCopyForMutator(src);
+    NoteZeroTip(dst, "TraceBarrier.WriteGenericImpl");
+    if ((dst != nullptr && !dst->HasRefField()) || (!Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
+        CHECK_DETAIL(memcpy_s(fp, size,
+                              reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE),
                               size) == EOK,
                      "WriteGeneric memcpy_s failed");
 #if defined(CANGJIE_TSAN_SUPPORT)
-        if (Heap::IsHeapAddress(src)) {
+        if (Heap::IsHeapAddress(from)) {
             Sanitizer::TsanReadMemoryRange(
-                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(src) + TYPEINFO_PTR_SIZE), size);
+                reinterpret_cast<void*>(reinterpret_cast<uintptr_t>(from) + TYPEINFO_PTR_SIZE), size);
         }
-        if (Heap::IsHeapAddress(obj)) {
-            Sanitizer::TsanWriteMemoryRange(fieldPtr, size);
+        if (Heap::IsHeapAddress(dst)) {
+            Sanitizer::TsanWriteMemoryRange(fp, size);
         }
 #endif
-    } else if (!Heap::IsHeapAddress(obj) && Heap::IsHeapAddress(src)) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
-        ReadStruct(dstAddr, src, srcAddr, size);
-    } else if ((Heap::IsHeapAddress(obj) && !Heap::IsHeapAddress(src))) {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
-        WriteStruct(obj, dstAddr, size, srcAddr, size);
+    } else if (!Heap::IsHeapAddress(dst) && Heap::IsHeapAddress(from)) {
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+        ReadStruct(dstAddr, from, srcAddr, size);
+    } else if ((Heap::IsHeapAddress(dst) && !Heap::IsHeapAddress(from))) {
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
+        WriteStruct(dst, dstAddr, size, srcAddr, size);
     } else {
-        MAddress dstAddr = reinterpret_cast<MAddress>(fieldPtr);
-        MAddress srcAddr = reinterpret_cast<MAddress>(src) + TYPEINFO_PTR_SIZE;
+        MAddress dstAddr = reinterpret_cast<MAddress>(fp);
+        MAddress srcAddr = reinterpret_cast<MAddress>(from) + TYPEINFO_PTR_SIZE;
         void* tmp = malloc(size);
-        ReadStruct((MAddress)tmp, src, srcAddr, size);
-        WriteStruct(obj, dstAddr, size, (MAddress)tmp, size);
+        ReadStruct((MAddress)tmp, from, srcAddr, size);
+        WriteStruct(dst, dstAddr, size, (MAddress)tmp, size);
         free(tmp);
     }
 }
