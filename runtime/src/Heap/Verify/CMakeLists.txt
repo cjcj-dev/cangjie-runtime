@@ -65,6 +65,7 @@ set(SRC_LIST
     "FillerZeroDiag.cpp"
     "HoleWhoDiag.cpp"
     "FromPageDetachCheck.cpp"
+    "StkSlotDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)

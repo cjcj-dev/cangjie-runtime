@@ -17,6 +17,7 @@
 // module internal interfaces
 #include "MArray.h"
 #include "MClass.inline.h"
+#include "Heap/Verify/StkSlotDiag.h"
 
 namespace MapleRuntime {
 constexpr MOffset MArray::GetContentOffset() { return sizeof(MArray); }
@@ -133,6 +134,7 @@ inline MArray* MArray::NewKnownWidthArray(MIndex nElems, TypeInfo& arrayClass, c
     if (LIKELY(address != NULL_ADDRESS)) {
         MArray* newArray = reinterpret_cast<MArray*>(SetClassInfo(address, &arrayClass));
         newArray->SetLength(nElems);
+        StkSlotDiag::NoteAlloc(newArray, nElems);
 #if defined(__OHOS__) && (__OHOS__ == 1)
         if (CjAllocData::GetCjAllocData()->IsRecording()) {
             CjAllocData::GetCjAllocData()->RecordAllocNodes(&arrayClass, arraySize);

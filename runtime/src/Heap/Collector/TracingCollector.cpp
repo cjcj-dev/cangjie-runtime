@@ -23,6 +23,7 @@
 #include "Heap/Verify/NoTracedDiag.h"
 #include "Heap/Verify/SurvNodeDiag.h"
 #include "Heap/Verify/StackRootSlotAttest.h"
+#include "Heap/Verify/StkSlotDiag.h"
 #include "Heap/Verify/VerifyRoots.h"
 #include "ObjectModel/RefField.inline.h"
 
@@ -513,6 +514,22 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
             visitor(root);
         };
     }
+    if (StkSlotDiag::kArmed) {
+        auto prevSlot = slotDebugFunc;
+        slotDebugFunc = [prevSlot](SlotBias off, zaddress_unsafe root) {
+            StkSlotDiag::NoteMapSlot(off, reinterpret_cast<BaseObject*>(raw(root)));
+            if (prevSlot) {
+                prevSlot(off, root);
+            }
+        };
+        auto prevReg = regDebugFunc;
+        regDebugFunc = [prevReg](RegisterNum i, zaddress_unsafe root) {
+            StkSlotDiag::NoteMapReg(static_cast<int>(i), reinterpret_cast<BaseObject*>(raw(root)));
+            if (prevReg) {
+                prevReg(i, root);
+            }
+        };
+    }
     if (heapMap.IsValid()) {
         heapMap.VisitSlotRoots(slotVisitor, slotDebugFunc);
         if (!heapMap.VisitRegRoots(regVisitor, regDebugFunc, regSlotsMap)) {
@@ -551,6 +568,16 @@ void TracingCollector::VisitStackRoots(const RootVisitor& visitor, RegSlotsMap& 
     mutator.PushFrameInfoForTrace(gcInfo);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
+    if (StkSlotDiag::kArmed) {
+        static thread_local char stkslotNameBuf[256];
+        stkslotNameBuf[0] = '\0';
+        CString fname = frame.GetFuncName();
+        if (fname.Str() != nullptr) {
+            std::strncpy(stkslotNameBuf, fname.Str(), sizeof(stkslotNameBuf) - 1);
+            stkslotNameBuf[sizeof(stkslotNameBuf) - 1] = '\0';
+        }
+        StkSlotDiag::AfterFrame(startIP, frameIP, frameAddress, heapMap.IsValid(), stkslotNameBuf);
+    }
     if (attestFrame) {
         StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
     }
@@ -654,6 +681,22 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
         };
 #endif
     }
+    if (StkSlotDiag::kArmed) {
+        auto prevSlot2 = slotDebugFunc;
+        slotDebugFunc = [prevSlot2](SlotBias off, zaddress_unsafe root) {
+            StkSlotDiag::NoteMapSlot(off, reinterpret_cast<BaseObject*>(raw(root)));
+            if (prevSlot2) {
+                prevSlot2(off, root);
+            }
+        };
+        auto prevReg2 = regDebugFunc;
+        regDebugFunc = [prevReg2](RegisterNum i, zaddress_unsafe root) {
+            StkSlotDiag::NoteMapReg(static_cast<int>(i), reinterpret_cast<BaseObject*>(raw(root)));
+            if (prevReg2) {
+                prevReg2(i, root);
+            }
+        };
+    }
     if (heapMap.IsValid()) {
         if (!heapMap.VisitRegRoots(attestRegVisitor, regDebugFunc, regSlotsMap)) {
 #if defined(GCINFO_DEBUG) && GCINFO_DEBUG
@@ -672,6 +715,16 @@ void TracingCollector::VisitHeapReferencesOnStack(const RootVisitor& regRootVisi
     mutator.PushFrameInfoForFix(infoNode);
 #endif
     heapMap.RecordCalleeSaved(regSlotsMap);
+    if (StkSlotDiag::kArmed) {
+        static thread_local char stkslotNameBuf2[256];
+        stkslotNameBuf2[0] = '\0';
+        CString fname2 = frame.GetFuncName();
+        if (fname2.Str() != nullptr) {
+            std::strncpy(stkslotNameBuf2, fname2.Str(), sizeof(stkslotNameBuf2) - 1);
+            stkslotNameBuf2[sizeof(stkslotNameBuf2) - 1] = '\0';
+        }
+        StkSlotDiag::AfterFrame(startIP, frameIP, frameAddress, heapMap.IsValid(), stkslotNameBuf2);
+    }
     if (attestFrame) {
         StackRootSlotAttest::CheckFrame(frameIP, heapMap.IsValid(), mutator, declaredCounts, visitedCounts);
     }

@@ -1,4 +1,5 @@
 #include "Heap/Allocator/HeapFiller.h"
+#include "Heap/Verify/StkSlotDiag.h"
 
 #include <atomic>
 #include <cstdlib>
@@ -97,6 +98,7 @@ void ZeroAndFill(uintptr_t start, size_t size)
     if (size == 0) {
         return;
     }
+    StkSlotDiag::NoteZero(start, size);
     CHECK_E((memset_s(reinterpret_cast<void*>(start), size, 0, size) != EOK), "memset_s fail");
     if (Enabled()) {
         Overlay(start, size);
