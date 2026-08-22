@@ -59,25 +59,35 @@
 namespace MapleRuntime {
 
 namespace {
-struct NwReadSnapshot {
-    bool armed { false };
-    bool captured { false };
-    int64_t probe { -1 };
-    int64_t expected { 0 };
-    MAddress slot { 0 };
-    MAddress slotRaw { 0 };
-    MAddress peeledTarget { 0 };
-    MAddress returnedTarget { 0 };
-    uintptr_t targetHeader0 { 0 };
-    uintptr_t targetHeader1 { 0 };
-    uintptr_t returnedHeader0 { 0 };
-    uintptr_t returnedHeader1 { 0 };
+struct NwTargetSnapshot {
+    MAddress address { 0 };
+    uintptr_t header { 0 };
+    uintptr_t word1 { 0 };
+    MAddress typeInfo { 0 };
+    unsigned stateCode { 0 };
     MAddress regionStart { 0 };
     MAddress regionAlloc { 0 };
     MAddress regionEnd { 0 };
     unsigned regionType { 0 };
-    MAddress returnedRegionStart { 0 };
-    unsigned returnedRegionType { 0 };
+    unsigned regionYoung { 0 };
+    unsigned youngAge { 0 };
+    int youngFace { -1 };
+    int youngMark { -1 };
+    int oldFace { -1 };
+    int oldMark { -1 };
+};
+
+struct NwReadSnapshot {
+    bool armed { false };
+    bool captured { false };
+    bool returnedCaptured { false };
+    int64_t probe { -1 };
+    int64_t expected { 0 };
+    MAddress slot { 0 };
+    MAddress slotRaw { 0 };
+    GCPhase phase { GCPhase::GC_PHASE_IDLE };
+    NwTargetSnapshot peeled;
+    NwTargetSnapshot returned;
 };
 
 thread_local NwReadSnapshot g_nwReadSnapshot;
@@ -92,10 +102,28 @@ bool NwReadDiagEnabled()
     return enabled;
 }
 
-void SnapshotNwTarget(MAddress address, uintptr_t& header0, uintptr_t& header1,
-                      MAddress& regionStart, MAddress& regionAlloc, MAddress& regionEnd,
-                      unsigned& regionType)
+template<Generation G>
+void SnapshotNwMark(RegionInfo* region, MAddress address, int& facePresent, int& marked)
 {
+    MarkView<G> view = region->GetMarkView<G>();
+    facePresent = 0;
+    marked = 0;
+    if (region->IsLargeRegion()) {
+        facePresent = 1;
+        marked = region->GetMarkedRegionFlag(view) == 1 ? 1 : 0;
+        return;
+    }
+    RegionBitmap* bitmap = region->GetMarkBitmap(view);
+    if (bitmap == nullptr) {
+        return;
+    }
+    facePresent = 1;
+    marked = bitmap->IsMarked(region->GetAddressOffset(address)) ? 1 : 0;
+}
+
+void SnapshotNwTarget(MAddress address, NwTargetSnapshot& target)
+{
+    target.address = address;
     if (address == 0 || !Heap::IsHeapAddress(address)) {
         return;
     }
@@ -103,16 +131,29 @@ void SnapshotNwTarget(MAddress address, uintptr_t& header0, uintptr_t& header1,
     if (region == nullptr) {
         return;
     }
-    regionStart = region->GetRegionStart();
-    regionAlloc = region->GetRegionAllocPtr();
-    regionEnd = region->GetRegionEnd();
-    regionType = static_cast<unsigned>(region->GetRegionType());
+    target.regionStart = region->GetRegionStart();
+    target.regionAlloc = region->GetRegionAllocPtr();
+    target.regionEnd = region->GetRegionEnd();
+    target.regionType = static_cast<unsigned>(region->GetRegionType());
+    target.regionYoung = region->IsYoungRegion() ? 1u : 0u;
+    target.youngAge = region->GetYoungAge();
     const uintptr_t* words = reinterpret_cast<const uintptr_t*>(address);
-    header0 = words[0];
-    header1 = words[1];
+    target.header = words[0];
+    target.word1 = words[1];
+    target.typeInfo = target.header & ((static_cast<uintptr_t>(1) << StateWord::ADDRESS_BIT_COUNT) - 1);
+    target.stateCode = static_cast<unsigned>(
+        (target.header >> StateWord::ADDRESS_BIT_COUNT) &
+        ((static_cast<uintptr_t>(1) << ObjectState::STATE_BIT_COUNT) - 1));
+
+    // A young face cannot be bound to an old region.  -1 therefore means
+    // "not applicable" rather than "unmarked" for an old target.
+    if (target.regionYoung != 0 && region->IsYoungRegion()) {
+        SnapshotNwMark<Generation::Young>(region, address, target.youngFace, target.youngMark);
+    }
+    SnapshotNwMark<Generation::Old>(region, address, target.oldFace, target.oldMark);
 }
 
-void CaptureNwRead(RefField<false>* field, MAddress rawBefore, ObjectPtr result)
+void CaptureNwReadBefore(RefField<false>* field, MAddress rawBefore)
 {
     NwReadSnapshot& sample = g_nwReadSnapshot;
     if (!sample.armed || sample.captured) {
@@ -121,14 +162,18 @@ void CaptureNwRead(RefField<false>* field, MAddress rawBefore, ObjectPtr result)
     sample.captured = true;
     sample.slot = reinterpret_cast<MAddress>(field);
     sample.slotRaw = rawBefore;
-    sample.peeledTarget = RefField<>(rawBefore).GetAddress();
-    sample.returnedTarget = RefField<>(reinterpret_cast<MAddress>(result)).GetAddress();
-    SnapshotNwTarget(sample.peeledTarget, sample.targetHeader0, sample.targetHeader1,
-                     sample.regionStart, sample.regionAlloc, sample.regionEnd, sample.regionType);
-    MAddress unusedAlloc = 0;
-    MAddress unusedEnd = 0;
-    SnapshotNwTarget(sample.returnedTarget, sample.returnedHeader0, sample.returnedHeader1,
-                     sample.returnedRegionStart, unusedAlloc, unusedEnd, sample.returnedRegionType);
+    sample.phase = Heap::GetHeap().GetGCPhase();
+    SnapshotNwTarget(RefField<>(rawBefore).GetAddress(), sample.peeled);
+}
+
+void CaptureNwReadAfter(ObjectPtr result)
+{
+    NwReadSnapshot& sample = g_nwReadSnapshot;
+    if (!sample.captured || sample.returnedCaptured) {
+        return;
+    }
+    sample.returnedCaptured = true;
+    SnapshotNwTarget(RefField<>(reinterpret_cast<MAddress>(result)).GetAddress(), sample.returned);
 }
 } // namespace
 
@@ -156,24 +201,35 @@ extern "C" MRT_EXPORT void MRT_NwReadDiagFinish(int64_t got)
     }
     std::fprintf(stderr,
                  "[GCV2][nwread] n=%zu probe=%lld expected=%lld got=%lld captured=%u "
-                 "slot=%#llx slot_raw=%#llx peeled=%#llx target_header=%#llx target_word1=%#llx "
-                 "region_type=%u region=[%#llx,%#llx,%#llx) returned=%#llx "
-                 "returned_header=%#llx returned_word1=%#llx returned_region_type=%u "
-                 "returned_region=%#llx\n",
+                 "slot=%#llx slot_raw=%#llx phase=%s(%u) "
+                 "peeled=%#llx target_header=%#llx target_typeinfo=%#llx target_state=%u "
+                 "target_word1=%#llx region_type=%u region_young=%u young_age=%u "
+                 "region=[%#llx,%#llx,%#llx) young_face=%d young_mark=%d old_face=%d old_mark=%d "
+                 "returned=%#llx returned_header=%#llx returned_typeinfo=%#llx returned_state=%u "
+                 "returned_word1=%#llx returned_region_type=%u returned_region_young=%u "
+                 "returned_young_age=%u returned_region=%#llx returned_young_face=%d "
+                 "returned_young_mark=%d returned_old_face=%d returned_old_mark=%d\n",
                  line, static_cast<long long>(sample.probe), static_cast<long long>(sample.expected),
                  static_cast<long long>(got), sample.captured ? 1u : 0u,
                  static_cast<unsigned long long>(sample.slot),
                  static_cast<unsigned long long>(sample.slotRaw),
-                 static_cast<unsigned long long>(sample.peeledTarget),
-                 static_cast<unsigned long long>(sample.targetHeader0),
-                 static_cast<unsigned long long>(sample.targetHeader1), sample.regionType,
-                 static_cast<unsigned long long>(sample.regionStart),
-                 static_cast<unsigned long long>(sample.regionAlloc),
-                 static_cast<unsigned long long>(sample.regionEnd),
-                 static_cast<unsigned long long>(sample.returnedTarget),
-                 static_cast<unsigned long long>(sample.returnedHeader0),
-                 static_cast<unsigned long long>(sample.returnedHeader1), sample.returnedRegionType,
-                 static_cast<unsigned long long>(sample.returnedRegionStart));
+                 Collector::GetGCPhaseName(sample.phase), static_cast<unsigned>(sample.phase),
+                 static_cast<unsigned long long>(sample.peeled.address),
+                 static_cast<unsigned long long>(sample.peeled.header),
+                 static_cast<unsigned long long>(sample.peeled.typeInfo), sample.peeled.stateCode,
+                 static_cast<unsigned long long>(sample.peeled.word1), sample.peeled.regionType,
+                 sample.peeled.regionYoung, sample.peeled.youngAge,
+                 static_cast<unsigned long long>(sample.peeled.regionStart),
+                 static_cast<unsigned long long>(sample.peeled.regionAlloc),
+                 static_cast<unsigned long long>(sample.peeled.regionEnd), sample.peeled.youngFace,
+                 sample.peeled.youngMark, sample.peeled.oldFace, sample.peeled.oldMark,
+                 static_cast<unsigned long long>(sample.returned.address),
+                 static_cast<unsigned long long>(sample.returned.header),
+                 static_cast<unsigned long long>(sample.returned.typeInfo), sample.returned.stateCode,
+                 static_cast<unsigned long long>(sample.returned.word1), sample.returned.regionType,
+                 sample.returned.regionYoung, sample.returned.youngAge,
+                 static_cast<unsigned long long>(sample.returned.regionStart), sample.returned.youngFace,
+                 sample.returned.youngMark, sample.returned.oldFace, sample.returned.oldMark);
     std::fflush(stderr);
 }
 
@@ -2051,6 +2107,9 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
         RefField<> fvSlotBefore(rawBefore);
         fvLoadGoodBefore = Heap::GetHeap().GetCollector().is_load_good(fvSlotBefore);
     }
+    if (NwReadDiagEnabled()) {
+        CaptureNwReadBefore(field, rawBefore);
+    }
     ObjectPtr result = nullptr;
     if (isGlobal) {
         result = Heap::GetBarrier().ReadStaticRef(
@@ -2059,7 +2118,7 @@ extern "C" ObjectPtr CJ_MCC_ReadRefField(const ObjectPtr obj, RefField<false>* f
         result = Heap::GetBarrier().ReadReference(obj, *field);
     }
     if (NwReadDiagEnabled()) {
-        CaptureNwRead(field, rawBefore, result);
+        CaptureNwReadAfter(result);
     }
     // Log when ret is null. 乙 (raw/addr non-zero → barrier null) always logged (rare).
     // 甲 (slot already 0) only in concurrent GC windows so idle Option nulls don't exhaust cap.
