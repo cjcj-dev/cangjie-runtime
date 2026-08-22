@@ -116,7 +116,7 @@ void CopyCollector::RunGarbageCollection(uint64_t gcIndex, GCReason reason)
         size_t maxCapacity = Heap::GetHeap().GetMaxCapacity();
         uint64_t heuMinInterval = g_gcRequests[GC_REASON_HEU].GetMinInterval();
         // Default on; an exact 0 is the operational rollback for young HEU deferral.
-        const char* minorDefersHeuEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_MINOR_DEFERS_HEU */;
+        const char* minorDefersHeuEnv = std::getenv("MRT_GCV2_MINOR_DEFERS_HEU");
         const bool minorDefersHeu =
             minorDefersHeuEnv == nullptr || std::strcmp(minorDefersHeuEnv, "0") != 0;
         gcStats.RecordYoungStats(gcStats.youngCandidateBytes, gcStats.youngPromotedBytes, gcStats.collectedBytes,

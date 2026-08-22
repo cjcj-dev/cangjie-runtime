@@ -44,7 +44,6 @@ void Mutator::RememberObjectInSatbBuffer(const BaseObject* target)
     // consumer to reinterpret an interior address as an object start.
     BaseObject* mutableTarget = const_cast<BaseObject*>(target);
     BaseObject* knownBase = Collector::TryRecoverInteriorBase(mutableTarget);
-    SatbBuffer::MaybeInjectCarryProbe(mutableTarget, knownBase);
     RememberObjectInSatbBuffer(mutableTarget, knownBase);
 }
 
@@ -311,13 +310,6 @@ void Mutator::RequestEpochHandshake(uint64_t epoch)
 void Mutator::MarkBornCleanForEpoch(uint64_t epoch)
 {
     CHECK_DETAIL(epoch != 0, "born-clean epoch must not use epoch zero");
-    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
-                     "concurrent stack-scan join before ENUM barrier publication");
-        bool began = stackWatermark.TryBegin(epoch, StackWatermark::WM_OWNER_SELF, 0);
-        CHECK_DETAIL(began, "born-clean mutator failed to close empty stack watermark");
-        stackWatermark.Finish(StackWatermark::WM_OWNER_SELF);
-    }
     // Publish completion before state so a concurrent FinishedEpochHandshake
     // observer that sees ACKNOWLEDGED also sees the matching completion.
     epochHandshakeRequest.store(epoch, std::memory_order_relaxed);
@@ -342,20 +334,6 @@ bool Mutator::AcknowledgeEpochHandshake(uint64_t epoch, bool bySelf)
         return false;
     }
 
-    if (UNLIKELY(MutatorManager::ConcurrentStackScanEnabled())) {
-        // S1/S3/S5 publication order: the first short STW must publish the ENUM
-        // barrier before an ack can snapshot roots. The acquire phase read pairs
-        // with Collector::SetGCPhase's release store and therefore also observes
-        // the preceding InstallBarrier.
-        CHECK_DETAIL(Heap::GetHeap().GetGCPhase() == GCPhase::GC_PHASE_ENUM,
-                     "concurrent stack scan ack before ENUM barrier publication");
-        size_t frames = 0;
-        bool scanned = GcPhaseEnum(GCPhase::GC_PHASE_ENUM, epoch, bySelf, &frames);
-        MutatorManager::Instance().RecordEpochHandshakeStackScan(scanned, frames);
-        if (scanned) {
-            SetMutatorPhase(GCPhase::GC_PHASE_ENUM);
-        }
-    }
     ClearSuspensionFlag(SUSPENSION_FOR_EPOCH_HANDSHAKE);
     SetSafepointActive(HasAnySuspensionRequest());
     MutatorManager::Instance().RecordEpochHandshakeAck(*this, epoch, bySelf);

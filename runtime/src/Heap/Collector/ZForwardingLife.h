@@ -87,8 +87,14 @@ public:
                 return false;
             }
             if (n < 0) {
+                // Try-lock: refuse claimed pages immediately. Waiting here deadlocks
+                // when this thread already holds a retain on the same count
+                // (TryMutatorRelocate retain + PlanRoute nested RetainScope) while
+                // DrainScope inverted n→-n and WaitUntilRef(-1). ZGC's retain_page
+                // waits because the caller does not already pin; our mutator path
+                // is a try-lock (WCollector.cpp:9976-9977). zForwarding.cpp:95-100.
                 g_retainRefusedClaimed.fetch_add(1, std::memory_order_relaxed);
-                WaitUntilDone(refCount, done);
+                (void)done;
                 return false;
             }
             if (refCount.compare_exchange_weak(n, n + 1, std::memory_order_acq_rel, std::memory_order_acquire)) {

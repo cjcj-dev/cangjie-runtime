@@ -315,7 +315,7 @@ public:
     static bool RemapFunnelOn()
     {
         static const int on = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_WAITFWD */;
+            const char* v = std::getenv("MRT_GCV2_WAITFWD");
             return (v != nullptr && v[0] == '1' && v[1] == '\0') ? 1 : 0;
         }();
         return on != 0;
@@ -355,26 +355,6 @@ public:
         // toverfail reuses the same arm split as MRT_GCV2_WAITFWD (e49a5bcc), under its
         // own gate so product path is unchanged when both are off.
         const bool tv = ToverFailDiag::Enabled();
-        if (funnel) {
-            static std::atomic<bool> installed{ false };
-            bool expected = false;
-            if (installed.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-                std::atexit([]() {
-                    std::fprintf(stderr,
-                                 "[GCV2][remapfunnel] atexit call=%llu nonHeap=%llu noGhost=%llu "
-                                 "routeNull=%llu receipt=%llu wait=%llu giveFrom=%llu\n",
-                                 static_cast<unsigned long long>(callCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(nonHeapCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(noGhostCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(routeNullCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(receiptCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(waitCount.load(std::memory_order_relaxed)),
-                                 static_cast<unsigned long long>(giveFromCount.load(std::memory_order_relaxed)));
-                    std::fflush(stderr);
-                });
-            }
-            callCount.fetch_add(1, std::memory_order_relaxed);
-        }
         if (tv) {
             ToverFailDiag::NoteRemapCall();
         }
@@ -412,9 +392,6 @@ public:
             MutatorRelocate::NoteFunnelCall(funnelRole);
         }
         if (!Heap::IsHeapAddress(obj)) {
-            if (funnel) {
-                nonHeapCount.fetch_add(1, std::memory_order_relaxed);
-            }
             if (tv) {
                 ToverFailDiag::NoteRemapNonHeap();
             }
@@ -423,9 +400,6 @@ public:
         const MAddress fromAddr = reinterpret_cast<MAddress>(obj);
         RegionInfo* forwarding = RegionInfo::GetGhostFromRegionAt(fromAddr);
         if (forwarding == nullptr || forwarding->generation_id() != generation) {
-            if (funnel) {
-                noGhostCount.fetch_add(1, std::memory_order_relaxed);
-            }
             if (tv) {
                 ToverFailDiag::NoteRemapNoGhost(); // 乙
             }
@@ -462,9 +436,6 @@ public:
                 if (stored != 0) {
                     BaseObject* to = reinterpret_cast<BaseObject*>(stored);
                     if (ToHeaderCovered(to)) {
-                        if (funnel) {
-                            receiptCount.fetch_add(1, std::memory_order_relaxed);
-                        }
                         if (tv) {
                             ToverFailDiag::NoteRemapReceipt();
                         }
@@ -479,9 +450,6 @@ public:
                         ZForwarding::DestUsable(reinterpret_cast<MAddress>(geometric)) &&
                         ToHeaderCovered(geometric)) {
                         (void)ForwardingTable::InsertMapping(fromAddr, reinterpret_cast<MAddress>(geometric));
-                        if (funnel) {
-                            receiptCount.fetch_add(1, std::memory_order_relaxed);
-                        }
                         return geometric;
                     }
                 }
@@ -495,18 +463,12 @@ public:
         }
         if (to != nullptr) {
             if (LIKELY(!Heap::IsHeapAddress(to))) {
-                if (funnel) {
-                    receiptCount.fetch_add(1, std::memory_order_relaxed);
-                }
                 if (tv) {
                     ToverFailDiag::NoteRemapReceipt();
                 }
                 return to;
             }
             if ((obj->IsForwarded() || forwarding->IsCompacted()) && to->IsValidObject()) {
-                if (funnel) {
-                    receiptCount.fetch_add(1, std::memory_order_relaxed);
-                }
                 if (tv) {
                     ToverFailDiag::NoteRemapReceipt();
                 }
@@ -515,9 +477,6 @@ public:
         } else if (obj->IsForwarded()) {
             BaseObject* published = FindToVersion(obj);
             if (published != nullptr) {
-                if (funnel) {
-                    receiptCount.fetch_add(1, std::memory_order_relaxed);
-                }
                 return published;
             }
         }
@@ -528,18 +487,12 @@ public:
         }
         to = space.GetRegionManager().FindPublishedRoute(obj, forwarding).dest;
         if (to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject()) {
-            if (funnel) {
-                receiptCount.fetch_add(1, std::memory_order_relaxed);
-            }
             return to;
         }
         // ③ table still empty. oraclecut §4: wait for the region-level
         // publish (FORWARDED/COMPACTED/kept). After publish, a miss is the
         // VisitLive hole and keep-from is legal. Not the object-level empty
         // wait 47595a33 deleted.
-        if (funnel) {
-            waitCount.fetch_add(1, std::memory_order_relaxed);
-        }
         if (tv) {
             ToverFailDiag::NoteRemapWait();
         }
@@ -549,10 +502,6 @@ public:
         BaseObject* resolved = WaitRoutedTipReady(obj, to, forwarding);
         if (resolved != nullptr && resolved != obj) {
             return resolved;
-        }
-        if (funnel) {
-            giveFromCount.fetch_add(1, std::memory_order_relaxed);
-            routeNullCount.fetch_add(1, std::memory_order_relaxed);
         }
         return obj;
     }
@@ -1073,7 +1022,7 @@ protected:
     static bool PlainRootsEnabled()
     {
         static const bool on = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PLAIN_ROOTS */;
+            const char* v = std::getenv("MRT_GCV2_PLAIN_ROOTS");
             if (v == nullptr) {
                 return true;
             }
@@ -1082,12 +1031,6 @@ protected:
         return on;
     }
 
-    // TRUST_STATE_KILL_PLAN Phase 1 item 2: named overloads replace address-guess wash.
-    // HeapSlot → always current colour (Phase C). RootSlot/DerivedSlot → plain when
-    // PLAIN_ROOTS on (ZGC uncolored root). Callers must pass the real slot type.
-    //
-    // nullslot non-heap arm: FixOldTaggedRefField recolour-only path uses the HeapSlot
-    // overload (field is a heap RefField). Non-heap *targets* still recolour — never CAS null.
     RefField<> RootSlotWriteback(BaseObject* target, const RefField<>& /*slot*/) const
     {
         return GetAndTryTagRefField(target);
@@ -1101,12 +1044,13 @@ protected:
         return GetAndTryTagRefField(target);
     }
 
-    RefField<> RootSlotWriteback(BaseObject* target, const DerivedSlot& /*slot*/) const
+    bool HealRootWriteback(RootSlot& root, BaseObject* target, HealSite site,
+                           std::memory_order order = std::memory_order_relaxed) const
     {
-        if (PlainRootsEnabled()) {
-            return RefField<>(target);
-        }
-        return GetAndTryTagRefField(target);
+        RefField<> desired = RootSlotWriteback(target, root);
+        root.StoreCollectorRollback(desired.GetFieldValue(), order);
+        (void)site;
+        return true;
     }
 
     void CollectLargeGarbage()
