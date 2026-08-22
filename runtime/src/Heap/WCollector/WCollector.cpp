@@ -352,6 +352,30 @@ std::atomic<size_t> g_f3DeadarmUnknown{ 0 };
 // Orthogonal overlay (f3weak): dead-arm hits whose holder is IsWeakRef — not a
 // partition class. Reason classes still sum to total; weak_holder ⊆ total.
 std::atomic<size_t> g_f3DeadarmWeakHolder{ 0 };
+
+// f3state (A5): provenance of invalid_object_active_region. The counter at
+// NoteF3DeadarmHit("invalid_object") says HOW MANY; these buckets say WHERE the
+// bad to-address came from and WHAT sits at its tip word. Diagnostic only —
+// no decision in FixOldTaggedRefField changes. ZGC never needs this because the
+// mark-stack entry contract (zMarkStackEntry.hpp:81, address in bits 63-5) plus
+// the single producer (zMark.inline.hpp:49-87, assert_is_oop) make a non-start
+// address structurally impossible on the stack; our bad address here is a
+// to-version produced by route/receipt, so we bucket by that producer instead.
+enum F3LatestSrc : size_t { F3SRC_FROM = 0, F3SRC_ROUTE = 1, F3SRC_RECEIPT = 2, F3SRC_N = 3 };
+enum F3TipClass : size_t {
+    F3TIP_INTERIOR = 0,        // 甲: TryRecoverInteriorBase finds a valid host -> interior of a live object
+    F3TIP_HOLE_ABOVE_ALLOC = 1, // 丙: latest >= region allocPtr -- reserved to-space never filled
+    F3TIP_ZERO_BELOW_ALLOC = 2, // 乙: below allocPtr, whole state word zero
+    F3TIP_STATEBITS_ONLY = 3,  // 乙': below allocPtr, address part zero but state bits set
+    F3TIP_OTHER = 4,           // 丁
+    F3TIP_N = 5
+};
+std::atomic<size_t> g_f3InvalidBySrcTip[F3SRC_N][F3TIP_N]{ {} };
+std::atomic<size_t> g_f3InvalidRtype[16]{ {} };
+std::atomic<size_t> g_f3InvalidTail64{ 0 };     // regionEnd - latest <= 64 (tailslot geometry)
+std::atomic<size_t> g_f3InvalidHolderLive{ 0 }; // HolderObjectIsLive(holder) overlay
+std::atomic<size_t> g_f3InvalidFromInterior{ 0 }; // from itself is a recoverable interior
+std::atomic<size_t> g_f3InvalidLogged{ 0 };
 std::atomic<bool> g_f3DeadarmAtexit{ false };
 
 namespace {
@@ -460,6 +484,32 @@ void ReportF3DeadarmCounts(const char* point)
                  regionFree, regionNull + regionFree, latestNotHeap, validButNotLive, invalidObject, unknown,
                  weakHolder, classSum == total ? 1 : 0, F3DeadarmAssertEnabled() ? 1 : 0);
     std::fflush(stderr);
+    // f3state (A5): source x tipclass distribution of invalid_object_active_region.
+    static const char* kSrcName[F3SRC_N] = { "from", "route", "receipt" };
+    static const char* kTipName[F3TIP_N] = { "interior", "hole_above_alloc", "zero_below_alloc",
+                                             "statebits_only", "other" };
+    for (size_t s = 0; s < F3SRC_N; ++s) {
+        for (size_t t = 0; t < F3TIP_N; ++t) {
+            size_t n = g_f3InvalidBySrcTip[s][t].load(std::memory_order_relaxed);
+            if (n != 0) {
+                std::fprintf(stderr, "[GCV2][f3state] src=%s tip=%s n=%zu\n", kSrcName[s], kTipName[t], n);
+            }
+        }
+    }
+    std::fprintf(stderr,
+                 "[GCV2][f3state] tail64=%zu holder_live=%zu from_interior=%zu rtype=[%zu,%zu,%zu,%zu,%zu,%zu,%zu,%zu]\n",
+                 g_f3InvalidTail64.load(std::memory_order_relaxed),
+                 g_f3InvalidHolderLive.load(std::memory_order_relaxed),
+                 g_f3InvalidFromInterior.load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[0].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[1].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[2].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[3].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[4].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[5].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[6].load(std::memory_order_relaxed),
+                 g_f3InvalidRtype[7].load(std::memory_order_relaxed));
+    std::fflush(stderr);
     VLOG(REPORT,
          "[GCV2][f3-deadarm] point=%s total=%zu soft_null=%zu "
          "latest_null=%zu region_garbage=%zu region_null=%zu region_free=%zu "
@@ -512,6 +562,57 @@ const char* NoteF3DeadarmHit(const char* reason, BaseObject* holder)
         g_f3DeadarmUnknown.fetch_add(1, std::memory_order_relaxed);
     }
     return reason;
+}
+
+// f3state (A5): classify one invalid_object_active_region hit by tip-word shape
+// and by which route produced the bad to-address. Region is known active
+// (not free/garbage) at the call site, so reading the tip word is the same
+// access IsValidObject just performed. Read the raw word with a relaxed atomic
+// load: the mutator may be writing this unit concurrently.
+void NoteF3InvalidObjectDiag(BaseObject* holder, const void* field, BaseObject* fromObj, BaseObject* latest,
+                             RegionInfo* latestRegion, F3LatestSrc src)
+{
+    uintptr_t rawWord = __atomic_load_n(reinterpret_cast<const uintptr_t*>(latest), __ATOMIC_RELAXED);
+    uintptr_t addrPart = rawWord & ((1ull << StateWord::ADDRESS_BIT_COUNT) - 1);
+    F3TipClass tipClass = F3TIP_OTHER;
+    if (Collector::TryRecoverInteriorBase(latest) != nullptr) {
+        tipClass = F3TIP_INTERIOR; // 甲: interior of a still-valid object treated as a start
+    } else if (reinterpret_cast<MAddress>(latest) >= latestRegion->GetRegionAllocPtr()) {
+        tipClass = F3TIP_HOLE_ABOVE_ALLOC; // 丙: beyond the region tip -- never initialised
+    } else if (rawWord == 0) {
+        tipClass = F3TIP_ZERO_BELOW_ALLOC; // 乙: allocated span, word fully zeroed
+    } else if (addrPart == 0) {
+        tipClass = F3TIP_STATEBITS_ONLY; // 乙': address cleared, state bits left over
+    }
+    g_f3InvalidBySrcTip[src][tipClass].fetch_add(1, std::memory_order_relaxed);
+    unsigned rtype = static_cast<unsigned>(latestRegion->GetRegionType());
+    if (rtype < 16) {
+        g_f3InvalidRtype[rtype].fetch_add(1, std::memory_order_relaxed);
+    }
+    if (latestRegion->GetRegionEnd() - reinterpret_cast<MAddress>(latest) <= 64) {
+        g_f3InvalidTail64.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (HolderObjectIsLive(holder)) {
+        g_f3InvalidHolderLive.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) &&
+        Collector::TryRecoverInteriorBase(fromObj) != nullptr) {
+        g_f3InvalidFromInterior.fetch_add(1, std::memory_order_relaxed);
+    }
+    size_t n = g_f3InvalidLogged.fetch_add(1, std::memory_order_relaxed);
+    if (n < 32) {
+        static const char* kSrcName[F3SRC_N] = { "from", "route", "receipt" };
+        static const char* kTipName[F3TIP_N] = { "interior", "hole_above_alloc", "zero_below_alloc",
+                                                 "statebits_only", "other" };
+        std::fprintf(stderr,
+                     "[GCV2][f3state][sample] n=%zu src=%s tip=%s rtype=%u holder=%p field=%p from=%p latest=%p "
+                     "off=%#zx allocPtr=%#zx regionEnd=%#zx rawWord=%#zx\n",
+                     n, kSrcName[src], kTipName[tipClass], rtype, holder, field, fromObj, latest,
+                     static_cast<size_t>(latestRegion->GetAddressOffset(reinterpret_cast<MAddress>(latest))),
+                     static_cast<size_t>(latestRegion->GetRegionAllocPtr()),
+                     static_cast<size_t>(latestRegion->GetRegionEnd()), static_cast<size_t>(rawWord));
+        std::fflush(stderr);
+    }
 }
 
 void NoteNullslotWrite(const char* path, BaseObject* holder, void* field, BaseObject* from, BaseObject* latest,
@@ -2249,10 +2350,13 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
     // The three sibling sites all gate before the lookup -- ResolveMinorReference (:2849),
     // FindToVersion (WCollector.h:495) and ForwardUpdateRawRef (:1611).  This one did not.
     BaseObject* latest = receipt != nullptr ? receipt : fromObj;
+    // f3state (A5): which producer minted the to-address we end up rejecting.
+    F3LatestSrc latestSrc = receipt != nullptr ? F3SRC_RECEIPT : F3SRC_FROM;
     if (receipt == nullptr && fromObj != nullptr && Heap::IsHeapAddress(fromObj)) {
         BaseObject* dest = PlanRouteUnderStw(fromObj, stw).dest;
         if (dest != nullptr) {
             latest = dest;
+            latestSrc = F3SRC_ROUTE;
         }
     }
     // Non-heap targets (TypeInfo*, binary constants, immortal metadata): address is
@@ -2333,6 +2437,7 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
         // Active-region bad tip: do not CAS-null. Try identity from, else leave alone.
         if (latestInActiveRegion && !latestValidObj) {
             (void)NoteF3DeadarmHit("invalid_object", holder);
+            NoteF3InvalidObjectDiag(holder, &field, fromObj, latest, latestRegion, latestSrc);
             bool fromLive = false;
             if (fromObj != nullptr && Heap::IsHeapAddress(fromObj) && fromObj != latest) {
                 RegionInfo* fromRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(fromObj));
