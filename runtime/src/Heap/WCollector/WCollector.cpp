@@ -10272,7 +10272,7 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
     size_t size = RegionSpace::GetAllocSize(*obj);
     DLOG(FORWARD, "forward obj %p<%p>(%zu) to %p", obj, obj->GetTypeInfo(), size, toObj);
     CopyObject(*obj, *toObj, size);
-    // Publish a fully-initialized to-object. ZGC insert (zRelocate.cpp:371) is the
+    // Publish a fully-initialized to-object. ZGC insert (zRelocate.cpp:368-372) is the
     // publish of a completed copy; SetStateCode must precede InsertMapping so a
     // find() hit never observes the from-copy's LOCKED header bits on to.
     // In-place (GetRoute keep-from: to==from) the header is still LOCKED —
@@ -10283,6 +10283,10 @@ BaseObject* WCollector::ForwardObjectExclusive(BaseObject* obj, BaseObject* toOb
         toObj->SetStateCode(ObjectState::NORMAL);
     }
     std::atomic_thread_fence(std::memory_order_release);
+    if (toObj != obj && !ToHeaderCovered(toObj)) {
+        obj->UnlockObject(ObjectState::NORMAL);
+        return nullptr;
+    }
     const MAddress mapped =
         ForwardingTable::InsertMapping(reinterpret_cast<MAddress>(obj), reinterpret_cast<MAddress>(toObj));
     if (mapped == 0) {
