@@ -14,6 +14,7 @@
 #include "Heap/Allocator/RegionSpace.h"
 #include "Heap/Collector/Collector.h"
 #include "Heap/Collector/CollectorResources.h"
+#include "Heap/Collector/DeferredRemapDomain.h"
 #include "Heap/Heap.h"
 #include "Heap/Verify/HealPairDiag.h"
 #include "Heap/Verify/IdleEdgeDiag.h"
@@ -1689,6 +1690,11 @@ void Barrier::ReadGenericImpl(const ObjectPtr dstObj, ObjectPtr obj, void* field
 void Barrier::RecordCrossGenEdge(BaseObject* obj, MAddress fieldAddress, BaseObject* ref) const
 {
     using namespace RemsetPhaseProbe;
+    // Independent of the generational remset gate below: an old->old write can
+    // name an armed from page even when no young regions exist. Capture is a
+    // constant false branch unless REMAPDOMAIN_AUDIT/CJRT_REMAP_DOMAIN is on.
+    (void)DeferredRemapDomain::Capture(fieldAddress, ref,
+                                       DeferredRemapDomain::Producer::WriteBarrier);
     // promoteedge gen codes: 0=unknown 1=young 2=old 3=nonheap
     constexpr uint8_t kGenUnknown = 0;
     constexpr uint8_t kGenYoung = 1;

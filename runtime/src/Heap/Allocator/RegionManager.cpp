@@ -26,6 +26,7 @@
 #include "Collector/CollectorResources.h"
 #include "Collector/CopyCollector.h"
 #include "Collector/GcTrigger.h"
+#include "Collector/DeferredRemapDomain.h"
 #include "Collector/MutatorAllocRate.h"
 #include "Collector/TenuringThreshold.h"
 #include "Common/BaseObject.h"
@@ -373,6 +374,10 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
                 return;
             }
+            // A young holder promoted in this collection may not be revisited
+            // by the following old mark. Stage its final healed field image for
+            // the old relocation-set publication fence.
+            (void)DeferredRemapDomain::StagePromotedHolderCandidate(slot, target);
             RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
             if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                 rememberedSet.Record(slot);
@@ -1124,6 +1129,10 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
+    // Holder-death is the only non-heal discharge. Do it before any life bump
+    // or payload clear so a stale ticket can never validate against a new life.
+    (void)DeferredRemapDomain::DischargeHolderRegion(
+        rStart, rEnd, region->GetRegionLifeId());
     // Product path clears only the two bitmap slices owned by this region.
     if (!ScrubCostMeterEnabled() && !O2ORemsetDiag::Enabled()) {
         (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
@@ -3576,6 +3585,7 @@ void RegionManager::ForwardRegion(RegionInfo* region)
                         IdleEdgeDiag::NotePromoteTimeTarget(slot, /*null/nonheap*/ 3, false);
                         return;
                     }
+                    (void)DeferredRemapDomain::StagePromotedHolderCandidate(slot, target);
                     RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
                     if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
                         rememberedSet.Record(slot);

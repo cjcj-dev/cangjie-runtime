@@ -34,6 +34,7 @@
 #include "Concurrency/Concurrency.h"
 #include "Heap/Barrier/StoreBarrierBuffer.h"
 #include "Heap/Collector/GcTriggerFlags.h"
+#include "Heap/Collector/DeferredRemapDomain.h"
 #include "Heap/Collector/MarkPartialArray.h"
 #include "Heap/Collector/TenuringThreshold.h"
 #include "Heap/GcThreadPool.h"
@@ -1460,6 +1461,11 @@ void WCollector::EnumAndTagRawRoot(ObjectRef& ref, RootSet& rootSet) const
 // note each ref-field will not be traced twice, so each old pointer the tracer meets must come from previous gc.
 void WCollector::TraceRefField(BaseObject* obj, RefField<>& field, WorkStack& workStack) const
 {
+    // Capture after every return arm, so a mark-time heal leaves no shadow
+    // obligation. Partial-array chunks have no holder object, but the slot
+    // address still identifies and life-stamps the holder region.
+    DeferredRemapDomain::OldMarkCaptureScope deferredCapture(
+        reinterpret_cast<MAddress>(&field), gcReason != GC_REASON_YOUNG && DeferredRemapDomain::Active());
     RefField<> oldField(field);
     // markstale: the mark-good fast path returns without healing, which is only safe if mark-good
     // implies "target is current".  It does not here.  mark-good is a superset of load-good, the
@@ -2460,6 +2466,10 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     MRT_PHASE_TIMER(requireSurvivedMark ? "InvalidateOldTaggedRefs.preflip" : "InvalidateOldTaggedRefs.postflip");
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
+    const bool postflipDomain = !requireSurvivedMark && DeferredRemapDomain::Active();
+    if (postflipDomain) {
+        DeferredRemapDomain::BeginPostflip(FlipSeq().load(std::memory_order_relaxed));
+    }
 
     // A2: parallel full-heap STW walk (ops/design/REMSET_OPTION1_SPEC_0805.txt §六).
     // Sharding = atomic address cursor + region-head ownership; roots = 6 family tasks;
@@ -2481,7 +2491,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     const bool preflipVerify = preflipVerifyEnv;
     const bool preflipInject = preflipInjectEnv;
     // VERIFY always needs fixed counts so a non-zero residue can fail loud.
-    const bool trackFixed = account || (requireSurvivedMark && preflipVerify);
+    const bool trackFixed = account || (requireSurvivedMark && preflipVerify) || postflipDomain;
 
     constexpr size_t regionTypeCount = static_cast<size_t>(RegionInfo::RegionType::GARBAGE_REGION) + 1;
     // CHUNK = 256 units × UNIT_SIZE (16MiB @ 64KB unit). Spec §六 T1.
@@ -2533,7 +2543,7 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         };
     };
 
-    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed,
+    auto processObject = [this, requireSurvivedMark, rebuildRemset, account, trackFixed, postflipDomain,
                           &stw](BaseObject* obj, HeapAccount& acc) {
         RegionInfo* accountRegion = nullptr;
         if (account) {
@@ -2576,9 +2586,11 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
         bool forwardHolder = account && requireSurvivedMark && accountRegion != nullptr &&
                              accountRegion->IsFromRegion();
         obj->ForEachRefField([this, obj, recordCrossGen, rebuildRemset, forwardHolder, account, trackFixed,
+                              postflipDomain,
                               &acc, &stw](RefField<>& field) {
             uintptr_t oldValue = raw(field.GetFieldValue());
             bool oldTagged = trackFixed && IsOldPointer(field);
+            BaseObject* oldTarget = trackFixed ? to_object(field.GetTargetObject()) : nullptr;
             if (trackFixed) {
                 ++acc.fields;
                 if (forwardHolder) {
@@ -2589,8 +2601,17 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
                 }
             }
             FixOldTaggedRefField(obj, field, stw);
-            if (oldTagged && raw(field.GetFieldValue()) != oldValue) {
+            const bool changed = trackFixed && raw(field.GetFieldValue()) != oldValue;
+            if (changed) {
                 ++acc.fixedSlots;
+            }
+            if (postflipDomain && oldTarget != nullptr) {
+                RegionInfo* holderRegion = RegionInfo::TryGetRegionInfoAt(reinterpret_cast<MAddress>(obj));
+                const uint8_t holderType = holderRegion == nullptr
+                    ? static_cast<uint8_t>(255)
+                    : static_cast<uint8_t>(holderRegion->GetRegionType());
+                DeferredRemapDomain::NotePostflipSlot(
+                    reinterpret_cast<MAddress>(&field), obj, oldTarget, holderType, changed);
             }
             if (!recordCrossGen) {
                 return;
@@ -2946,6 +2967,9 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
             }
         }
     }
+    if (postflipDomain) {
+        DeferredRemapDomain::EndPostflip();
+    }
 }
 
 void WCollector::PostTrace()
@@ -2968,6 +2992,10 @@ void WCollector::PostTrace()
     // Anchor main 9ad991c4e8660c26d6bfe575f6425e1b227bdf94.
     InvalidateOldTaggedRefsBeforeDispel();
     fwdTable.PrepareForwardTable<Generation::Old>();
+    // Marking precedes relocation-set installation here. Promote the staged
+    // live-holder fields while selected from pages are armed and retainable,
+    // before preforward/copy can release them.
+    (void)DeferredRemapDomain::PublishOldMarkCandidates();
     // OPTION_2 mark-epoch release: TRACE+CLEAR_SATB done; publish quarantined post-dispel
     // units (from this PrepareForwardTable and any prior minor) to dirty for reuse.
     // INV-1 closed: concurrent mark can no longer follow plain edges into these ranges.
@@ -8170,6 +8198,16 @@ void WCollector::DoYoungGarbageCollection()
         // minortime: ④ remset / cross-gen edge consume (drain + pinned stamp; rescan below)
         MRT_PHASE_TIMER("young.remset_drain");
         RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
+        // ZGC scan_and_follow ordering: rotate the durable deferred face at
+        // young mark start, consume it before the ordinary remset previous
+        // face, and re-enter healed young targets through that ordinary set.
+        // Audit-only returns SimulatedHeal and never calls ResolveMinorReference.
+        if (DeferredRemapDomain::Active()) {
+            DeferredRemapDomain::FlipForYoung(minorTotalRuns + 1);
+            (void)DeferredRemapDomain::ConsumeYoungPrevious(
+                [this](MAddress slot) { return ResolveMinorReference(HeapSlotAt<>(slot)); },
+                [&rememberedSet](MAddress slot) { rememberedSet.Record(slot); });
+        }
         size_t prePinnedDistinct = ReffixConcProbeOn() ? rememberedSet.Size() : 0;
         size_t pinnedRemsetRecords = manager.RecordPinnedCrossGenEdges();
         size_t postPinnedDistinct = ReffixConcProbeOn() ? rememberedSet.Size() : 0;

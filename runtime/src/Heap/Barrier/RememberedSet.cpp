@@ -6,6 +6,8 @@
 
 #include "Heap/Barrier/RememberedSet.h"
 
+#include "Heap/Collector/DeferredRemapDomain.h"
+
 #include <cstdlib>
 #include <cstring>
 #include <new>
@@ -141,6 +143,10 @@ size_t RememberedSet::TransferObjectSlots(MAddress fromBase, MAddress toBase, si
     if (toBase < heapStart || toEnd > heapStart + heapSize) {
         return 0;
     }
+    // A remset bit is a generation hint; a deferred-remap ticket is a table
+    // lifetime obligation. Move both by the identical containing-field offset.
+    // The return value remains the number of product remset bits transferred.
+    (void)DeferredRemapDomain::TransferObjectSlots(fromBase, toBase, size);
     // Field-aligned addresses in [fromBase, fromEnd).
     size_t firstBit = (fromBase - heapStart + kFieldBytes - 1) / kFieldBytes;
     size_t endBit = (fromEnd - heapStart) / kFieldBytes;
