@@ -8417,34 +8417,28 @@ BaseObject* WCollector::TryForwardObject(BaseObject* obj)
                 return injected;
             }
         }
-        // secondclass ①: GetRoute is geometric plan; wait FORWARDED or read-lock
-        // before consuming to-slot (else null-tip → HasRefField SEGV si_addr=0x8).
-        for (;;) {
-            if (region->TryLockReadFromRegion()) {
-                // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
-                // The loop has no safepoint, so SetGCPhase can publish IDLE while
-                // this thread still holds the read lock. CHECK in ForwardObjectImpl
-                // stays; out-of-window after retain is table lookup, not copy.
-                const GCPhase retainedPhase = GetGCPhase();
-                if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
-                    retainedPhase != GCPhase::GC_PHASE_FORWARD) {
-                    region->UnlockReadFromRegion();
-                    return FindToVersion(obj);
-                }
-                BaseObject* toVersion = ForwardObjectImpl(obj, region);
+        // secondclass ①: GetRoute is geometric plan; retain before copying or
+        // consuming from-side state (else null-tip → HasRefField SEGV si_addr=0x8).
+        if (region->TryLockReadFromRegion()) {
+            // zRelocate.cpp:393-395: retain_page then assert is_phase_relocate.
+            // SetGCPhase can publish IDLE while this thread holds the retain.
+            // Release and consume only the forwarding-table answer in that case.
+            const GCPhase retainedPhase = GetGCPhase();
+            if (retainedPhase != GCPhase::GC_PHASE_PREFORWARD &&
+                retainedPhase != GCPhase::GC_PHASE_FORWARD) {
                 region->UnlockReadFromRegion();
-                return toVersion;
-            }
-            if (obj->IsForwarded()) {
                 return FindToVersion(obj);
             }
-            const GCPhase spinPhase = GetGCPhase();
-            if (spinPhase != GCPhase::GC_PHASE_PREFORWARD &&
-                spinPhase != GCPhase::GC_PHASE_FORWARD) {
-                return FindToVersion(obj);
-            }
-            sched_yield();
+            BaseObject* toVersion = ForwardObjectImpl(obj, region);
+            region->UnlockReadFromRegion();
+            return toVersion;
         }
+        // ZGC's relocate_object (zRelocate.cpp:362-393) calls forward_object
+        // after retain_page refuses; it never retries the retain with sched_yield.
+        // Our n<0 refusal is immediate (the caller may already hold an outer pin),
+        // so a table miss is allowed here. Returning null makes ForwardRegion's
+        // receipt audit keep the page instead of spinning outside a safepoint.
+        return FindToVersion(obj);
     } else if (region->IsCompacted()) {
         // Compact copies under region write-lock before COMPACTED is published.
         return FindToVersion(obj);
