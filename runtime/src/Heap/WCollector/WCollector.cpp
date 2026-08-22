@@ -8169,11 +8169,11 @@ void WCollector::DoYoungGarbageCollection()
     // Flags must be known before remset drain: FOLLOW STW1 only flips
     // (zRememberedSet.cpp:36), scan is concurrent (zRemembered.cpp:561-576).
     static const bool youngConcMark = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const bool youngConcFollowRequested = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_FOLLOW */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_FOLLOW");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     const bool youngConcFollow = youngConcFollowRequested && youngConcMark;
@@ -8332,11 +8332,11 @@ void WCollector::DoYoungGarbageCollection()
     // makes the first n mark-ends report "not converged" so the edge has a positive control
     // (a re-entry that is never taken cannot be shown to work).
     static const bool youngMarkEndReenter = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_REENTER */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_REENTER");
         return v != nullptr && std::strcmp(v, "1") == 0;
     }();
     static const size_t youngMarkEndForceReenter = []() -> size_t {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER */;
+        const char* v = std::getenv("MRT_GCV2_YOUNG_MARK_END_FORCE_REENTER");
         if (v == nullptr) {
             return 0;
         }
