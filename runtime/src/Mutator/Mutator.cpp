@@ -905,6 +905,36 @@ static void PreForwardHeaderlessRecord(BaseObject* record, Collector& collector,
     }
 }
 
+void VisitTaggedOopSlot(ObjectRef& root)
+{
+    GCPhase phase = Heap::GetHeap().GetGCPhase();
+    BaseObject* obj = PlainRootObject(root.LoadPlain());
+    if (Heap::IsHeapAddress(obj)) {
+        if (phase == GCPhase::GC_PHASE_PREFORWARD) {
+            Collector& collector = Heap::GetHeap().GetCollector();
+            if (collector.IsGhostFromObject(obj) && !collector.IsUnmovableFromObject(obj)) {
+                BaseObject* toObj = collector.ForwardObject(obj);
+                if (toObj != nullptr && obj != toObj) {
+                    HealRoot(root, from_object(toObj), HealSite::MutatorPreForwardRoot);
+                }
+            }
+        } else {
+            PushHeapRootIfPlausible(obj, "OopSlot");
+        }
+        return;
+    }
+    if (obj == nullptr) {
+        return;
+    }
+    if (phase == GCPhase::GC_PHASE_PREFORWARD) {
+        Collector& collector = Heap::GetHeap().GetCollector();
+        std::set<void*> once;
+        PreForwardHeaderlessRecord(obj, collector, once);
+    } else {
+        PushHeaderlessRecordField(obj, "OopSlot.headerless");
+    }
+}
+
 bool Mutator::DrainStackWatermark(const RootVisitor& visitor, uint64_t epoch, StackWatermark::Owner owner,
                                   const DerivedPtrVisitor* derivedPtrVisitor, size_t& scannedFrames)
 {
