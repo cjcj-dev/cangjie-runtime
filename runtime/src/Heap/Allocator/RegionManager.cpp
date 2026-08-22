@@ -1190,7 +1190,7 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
     // must not re-scan O(N) under remset mutex.
 
-    {
+    if (FromPageDetach::GateEnabled()) {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
     }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
@@ -1218,7 +1218,7 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
-    {
+    if (FromPageDetach::GateEnabled()) {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
     }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
@@ -1255,7 +1255,7 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
-    {
+    if (FromPageDetach::GateEnabled()) {
         RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
     }
     region->InitFreeUnits();
