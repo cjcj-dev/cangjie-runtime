@@ -70,6 +70,8 @@ public:
     static MAddress FindTo(MAddress from);
     static bool EntriesArmed(MAddress from);
     static MAddress LookupTo(MAddress from, ToAnswer* answer = nullptr);
+    // Diagnostic: MRT_GCV2_KILL_STALE_ROUTE=1 skips retired-generation find().
+    static bool KillStaleRouteEnabled();
     static uint64_t ArmedHitCount();
     static uint64_t ArmedMissCount();
     static uint64_t UnarmedCount();

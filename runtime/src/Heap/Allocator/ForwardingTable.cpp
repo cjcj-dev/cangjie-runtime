@@ -496,8 +496,20 @@ MAddress ZForwarding::resolve_live(MAddress to) const
 
 bool ZForwarding::receipt_live(MAddress to) const { return resolve_live(to) != 0; }
 
+bool ForwardingTable::KillStaleRouteEnabled()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_KILL_STALE_ROUTE");
+        return value != nullptr && value[0] == '1' && value[1] == '\0';
+    }();
+    return on;
+}
+
 static MAddress FindRetiredTo(MAddress from)
 {
+    if (ForwardingTable::KillStaleRouteEnabled()) {
+        return 0;
+    }
     std::lock_guard<std::mutex> lock(g_retiredLock);
     auto scan = [&](const std::vector<ZForwarding*>& gens) -> MAddress {
         for (auto it = gens.rbegin(); it != gens.rend(); ++it) {

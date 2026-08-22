@@ -32,6 +32,7 @@
 #include "Heap/Collector/CollectorResources.h"
 #include "Heap/Heap.h"
 #include "Heap/Allocator/RegionInfo.h"
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Verify/DiagGate.h"
 #include "Mutator/Mutator.h"
 #include "HeapManager.inline.h"
@@ -606,10 +607,8 @@ extern "C" void MCC_SdDriftDescribe(uint64_t curRef, uint64_t lastRef, int64_t g
                     static_cast<unsigned long long>(colour));
             return;
         }
-        uint64_t hdr = 0;
-        int64_t idAt = 0;
-        hdr = *reinterpret_cast<uint64_t*>(obj);
-        idAt = reinterpret_cast<int64_t*>(obj)[1];
+        uint64_t hdr = *reinterpret_cast<uint64_t*>(obj);
+        int64_t idAt = reinterpret_cast<int64_t*>(obj)[1];
         RegionInfo* region = RegionInfo::TryGetRegionInfoAt(obj);
         unsigned type = 99;
         unsigned young = 0;
@@ -617,7 +616,10 @@ extern "C" void MCC_SdDriftDescribe(uint64_t curRef, uint64_t lastRef, int64_t g
         unsigned garbage = 0;
         unsigned fwdDone = 0;
         unsigned route = 99;
+        unsigned long long life = 0;
         size_t live = 0;
+        uintptr_t rstart = 0;
+        uintptr_t alloc = 0;
         if (region != nullptr) {
             type = static_cast<unsigned>(region->GetRegionType());
             young = region->IsYoungRegion() ? 1 : 0;
@@ -626,41 +628,69 @@ extern "C" void MCC_SdDriftDescribe(uint64_t curRef, uint64_t lastRef, int64_t g
             fwdDone = region->IsForwardingDone() ? 1 : 0;
             route = static_cast<unsigned>(region->GetRouteState());
             live = region->GetLiveByteCount();
+            life = static_cast<unsigned long long>(region->GetRegionLifeId());
+            rstart = region->GetRegionStart();
+            alloc = region->GetRegionAllocPtr();
         }
         fprintf(stderr,
                 "[SDDRIFT] %s obj=0x%llx colour=0x%llx hdr=0x%llx id=%lld type=%u young=%u "
-                "from=%u garbage=%u fwdDone=%u route=%u live=%zu\n",
+                "from=%u garbage=%u fwdDone=%u route=%u live=%zu life=%llu rstart=0x%llx alloc=0x%llx\n",
                 tag, static_cast<unsigned long long>(obj), static_cast<unsigned long long>(colour),
                 static_cast<unsigned long long>(hdr), static_cast<long long>(idAt), type, young,
-                from, garbage, fwdDone, route, live);
+                from, garbage, fwdDone, route, live, life,
+                static_cast<unsigned long long>(rstart), static_cast<unsigned long long>(alloc));
     };
     const uint64_t curObj = curRef & 0xffffffffffffull;
     const uint64_t lastObj = lastRef & 0xffffffffffffull;
+    const uint64_t loadBad = static_cast<uint64_t>(::g_cjLoadBadMask);
+    const uint64_t storeBad = static_cast<uint64_t>(::g_cjStoreBadMask);
+    const int curOld = (curRef & loadBad) != 0 ? 1 : 0;
+    const int lastOld = (lastRef & loadBad) != 0 ? 1 : 0;
     const GCPhase phase = Heap::GetHeap().GetGCPhase();
     fprintf(stderr,
-            "[SDDRIFT] probe got=%lld exp=%lld d=%lld sameAddr=%d gcCount=%zu phase=%s\n",
+            "[SDDRIFT] probe got=%lld exp=%lld d=%lld sameAddr=%d gcCount=%zu phase=%s "
+            "rawCur=0x%llx rawLast=0x%llx loadBad=0x%llx storeBad=0x%llx curOld=%d lastOld=%d\n",
             static_cast<long long>(got), static_cast<long long>(exp),
             static_cast<long long>(exp - got), curObj == lastObj ? 1 : 0,
-            g_gcCount.load(std::memory_order_acquire), Collector::GetGCPhaseName(phase));
+            g_gcCount.load(std::memory_order_acquire), Collector::GetGCPhaseName(phase),
+            static_cast<unsigned long long>(curRef), static_cast<unsigned long long>(lastRef),
+            static_cast<unsigned long long>(loadBad), static_cast<unsigned long long>(storeBad),
+            curOld, lastOld);
     describe("cur", curRef);
     describe("last", lastRef);
-    const char* bucket = "丙";
-    if (curObj == lastObj) {
-        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(curObj);
-        const bool from = region != nullptr && (region->IsFromRegion() || region->IsLoneFromRegion());
-        const bool garbage = region != nullptr && region->IsGarbageRegion();
-        const bool freeReg = region != nullptr && region->GetRegionType() == RegionInfo::RegionType::FREE_REGION;
-        if (from) {
-            bucket = "甲";
-        } else if (garbage || freeReg) {
-            bucket = "乙";
-        } else {
-            bucket = "乙";
-        }
-    } else {
-        bucket = "丙";
+
+    BaseObject* lastPtr = lastObj == 0 ? nullptr : reinterpret_cast<BaseObject*>(lastObj);
+    Collector& collector = Heap::GetHeap().GetCollector();
+    ForwardingTable::ToAnswer ans = ForwardingTable::ToAnswer::Unarmed;
+    const MAddress receipt = lastPtr == nullptr ? 0 : ForwardingTable::LookupTo(reinterpret_cast<MAddress>(lastPtr), &ans);
+    BaseObject* toVer = lastPtr == nullptr ? nullptr : collector.FindToVersion(lastPtr);
+    RegionInfo* lastReg = lastObj == 0 ? nullptr : RegionInfo::TryGetRegionInfoAt(lastObj);
+    RegionInfo* curReg = curObj == 0 ? nullptr : RegionInfo::TryGetRegionInfoAt(curObj);
+    const int sameRegion = (lastReg != nullptr && lastReg == curReg) ? 1 : 0;
+    const char* src = "from";
+    if (receipt != 0 && receipt == curObj) {
+        src = "receipt";
+    } else if (toVer != nullptr && reinterpret_cast<uint64_t>(toVer) == curObj) {
+        src = "route";
+    } else if (curObj == lastObj) {
+        src = "from";
     }
-    fprintf(stderr, "[SDDRIFT] bucket=%s\n", bucket);
+    fprintf(stderr,
+            "[SDDRIFT] src=%s receipt=0x%llx ans=%u toVer=%p sameRegion=%d killStale=%d\n",
+            src, static_cast<unsigned long long>(receipt), static_cast<unsigned>(ans),
+            static_cast<void*>(toVer), sameRegion,
+            ForwardingTable::KillStaleRouteEnabled() ? 1 : 0);
+
+    const char* prime = "丙′";
+    if (src[0] == 'r' && lastReg != nullptr && curReg != nullptr &&
+        lastReg->GetRegionLifeId() != curReg->GetRegionLifeId()) {
+        prime = "甲′";
+    } else if (sameRegion == 1 && curObj != lastObj) {
+        prime = "乙′";
+    } else if (sameRegion == 1 && curObj == lastObj) {
+        prime = "乙′";
+    }
+    fprintf(stderr, "[SDDRIFT] prime=%s\n", prime);
     fflush(stderr);
 }
 

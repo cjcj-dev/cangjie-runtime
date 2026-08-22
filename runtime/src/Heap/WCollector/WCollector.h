@@ -694,6 +694,9 @@ public:
         if (fromRegionInfo == nullptr) {
             return stored;
         }
+        if (ForwardingTable::KillStaleRouteEnabled()) {
+            return stored;
+        }
         RegionSpace& space = reinterpret_cast<RegionSpace&>(theAllocator);
         BaseObject* geometric = space.GetRegionManager().FindPublishedRoute(obj).dest;
         if (geometric != nullptr) {
