@@ -223,7 +223,9 @@ void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSiz
             std::vector<ZForwarding*> keep;
             keep.reserve(gens.size());
             for (ZForwarding* tab : gens) {
-                if (tab != nullptr && tab->start() >= regionStart && tab->start() < regionEnd) {
+                const MAddress tabStart = tab == nullptr ? 0 : tab->start();
+                const MAddress tabEnd = tab == nullptr ? 0 : tabStart + tab->size();
+                if (tab != nullptr && tabStart < regionEnd && regionStart < tabEnd) {
                     victims.push_back(tab);
                 } else {
                     keep.push_back(tab);
@@ -272,6 +274,29 @@ void ForwardingTable::ReclaimRetired(const char* why)
             why == nullptr ? "?" : why, victims.size(), heldNow, g_retiredHeldPeak.load(std::memory_order_relaxed),
             g_retiredTotal.load(std::memory_order_relaxed), done);
     }
+}
+
+bool ForwardingTable::RetiredCovers(MAddress regionStart, size_t regionSize)
+{
+    if (regionSize == 0) {
+        return false;
+    }
+    const MAddress regionEnd = regionStart + regionSize;
+    std::lock_guard<std::mutex> lock(g_retiredLock);
+    auto covers = [regionStart, regionEnd](const std::vector<ZForwarding*>& tables) {
+        for (ZForwarding* tab : tables) {
+            if (tab == nullptr) {
+                continue;
+            }
+            const MAddress tabStart = tab->start();
+            const MAddress tabEnd = tabStart + tab->size();
+            if (tabStart < regionEnd && regionStart < tabEnd) {
+                return true;
+            }
+        }
+        return false;
+    };
+    return covers(g_retired) || covers(g_retiredAged);
 }
 
 ZForwarding* ForwardingTable::GetEntries(MAddress addr)

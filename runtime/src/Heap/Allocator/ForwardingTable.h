@@ -51,6 +51,10 @@ public:
     static void DropRetiredCovering(MAddress regionStart, size_t regionSize);
     static void Retire(ZForwarding* tab);
     static void ReclaimRetired(const char* why);
+    // Measurement face for FROM_PAGE_DETACH_GATE. True while either retired
+    // generation still contains a forwarding whose from range overlaps this
+    // region. It never changes table lifetime.
+    static bool RetiredCovers(MAddress regionStart, size_t regionSize);
 
     // zForwardingTable.inline.hpp:43-62
     static ZForwarding* get(MAddress addr);

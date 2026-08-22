@@ -877,6 +877,9 @@ public:
         // Cost metric same family as ghostorder: peak retained bytes under mark-epoch gate.
         VLOG(REPORT, "[GhostRetention] retained_regions=%zu retained_bytes=%zu", heldBefore,
              heldBefore * RegionInfo::UNIT_SIZE);
+        const size_t detachReleased = freeRegionManager.ReleaseDetachQuarantineAfterMajor();
+        VLOG(REPORT, "[GCV2][detach-quarantine] major_released_units=%zu major_released_bytes=%zu",
+             detachReleased, detachReleased * RegionInfo::UNIT_SIZE);
     }
 
     void ClearAllLiveInfo()
@@ -995,6 +998,10 @@ private:
         }
         if (candidate != nullptr) {
             RemoveRegionLocked(&garbageRegionList, candidate);
+            if (!FromPageDetach::FromPageDetachCheck(candidate, FromPageDetach::Site::TAKE_GARBAGE)) {
+                freeRegionManager.AddDetachQuarantineRegion(candidate);
+                candidate = nullptr;
+            }
         }
         if (gatedBytes != nullptr) {
             *gatedBytes = bytes;
@@ -1021,6 +1028,10 @@ private:
                     return false;
                 }
                 RemoveRegionLocked(&garbageRegionList, region);
+                if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::TAKE_AFTER_DISPEL)) {
+                    freeRegionManager.AddDetachQuarantineRegion(region);
+                    return false;
+                }
                 return true;
             }
         }

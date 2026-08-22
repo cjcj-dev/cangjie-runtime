@@ -12,6 +12,8 @@
 #include <thread>
 
 #include "Heap/Collector/ZForwardingLife.h"
+#include "Heap/Verify/FromPageDetachCheck.h"
+#include "gc_heap_fixture.hpp"
 #include "gc_unittest.hpp"
 
 using namespace MapleRuntime;
@@ -169,4 +171,61 @@ GC_TEST(ZForwardingLife, ResetIdleWakesRetainClaimed)
     waiter.join();
     GC_EXPECT_TRUE(finished.load(std::memory_order_acquire));
     GC_EXPECT_FALSE(retained.load(std::memory_order_acquire));
+}
+
+GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
+{
+    GcHeapFixture fx;
+    const auto site = FromPageDetach::Site::TAKE_GARBAGE_REUSE;
+    const FromPageDetach::Counters before = FromPageDetach::GetCounters(site);
+
+    fx.region0->SetRouteDestHold(1);
+    ZForwardingLife::ResetForForwarding(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                                        fx.region0->metadata.fwdDone);
+    fx.region0->NoteCopyInflight();
+
+    const bool allowed = FromPageDetach::FromPageDetachCheck(fx.region0, site);
+    GC_EXPECT_EQ(allowed, !FromPageDetach::GateEnabled());
+    const FromPageDetach::Counters after = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(after.checks, before.checks + 1);
+    GC_EXPECT_EQ(after.withEvidence, before.withEvidence + 1);
+    GC_EXPECT_EQ(after.blocked, before.blocked + (FromPageDetach::GateEnabled() ? 1 : 0));
+    GC_EXPECT_EQ(after.routeDestHeld, before.routeDestHeld + 1);
+    GC_EXPECT_EQ(after.forwardingPositive, before.forwardingPositive + 1);
+    GC_EXPECT_EQ(after.forwardingReaders, before.forwardingReaders);
+    GC_EXPECT_EQ(after.copyInflight, before.copyInflight + 1);
+
+    {
+        FromPageDetach::ReusePermitScope permit;
+        GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    }
+    const FromPageDetach::Counters permitted = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(permitted.checks, after.checks + 1);
+    GC_EXPECT_EQ(permitted.withEvidence, after.withEvidence + 1);
+    GC_EXPECT_EQ(permitted.blocked, after.blocked);
+
+    // Both arms observe without draining or clearing any evidence word here.
+    GC_EXPECT_EQ(fx.region0->ForwardingRefCount(), 1);
+    GC_EXPECT_EQ(fx.region0->CopyInflight(), 1);
+    GC_EXPECT_TRUE(fx.region0->IsRouteDestHeld());
+
+    fx.region0->EndCopyInflight();
+    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                               fx.region0->metadata.fwdDone);
+    fx.region0->SetRouteDestHold(0);
+
+    // A completed drain retains the claimed latch until the next region life.
+    // ref=0/done=1 is already detached and must not self-quarantine.
+    fx.region0->metadata.fwdClaimed.store(true, std::memory_order_release);
+    fx.region0->metadata.fwdDone.store(true, std::memory_order_release);
+    const FromPageDetach::Counters completedBefore = FromPageDetach::GetCounters(site);
+    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(fx.region0, site));
+    const FromPageDetach::Counters completedAfter = FromPageDetach::GetCounters(site);
+    GC_EXPECT_EQ(completedAfter.checks, completedBefore.checks + 1);
+    GC_EXPECT_EQ(completedAfter.withEvidence, completedBefore.withEvidence);
+    GC_EXPECT_EQ(completedAfter.forwardingClaimed, completedBefore.forwardingClaimed + 1);
+    GC_EXPECT_EQ(completedAfter.forwardingReleased, completedBefore.forwardingReleased + 1);
+    ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
+                               fx.region0->metadata.fwdDone);
+
 }

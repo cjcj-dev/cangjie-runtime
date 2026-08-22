@@ -882,7 +882,17 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
         if (node == nullptr) { break; }
         Index idx = node->GetIndex();
         UnitCount num = node->GetCount();
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(idx));
+        const bool detachReady = FromPageDetach::FromPageDetachCheck(
+            region, FromPageDetach::Site::RELEASE_GARBAGE_UNITS);
         dirtyUnitTree.ReleaseRootNode();
+
+        if (!detachReady) {
+            AddDetachQuarantineUnits(idx, num, false, false);
+            dirtyBytes = dirtyUnitTree.GetTotalCount() * RegionInfo::UNIT_SIZE;
+            continue;
+        }
+        FromPageDetach::ReusePermitScope reusePermit;
 
         std::lock_guard<std::mutex> lock2(releasedUnitTreeMutex);
         CHECK_DETAIL(releasedUnitTree.MergeInsert(idx, num, true), "tid %d: failed to release garbage units[%u+%u, %u)",
@@ -893,6 +903,91 @@ size_t FreeRegionManager::ReleaseGarbageRegions(size_t targetCachedSize)
     VLOG(REPORT, "release heap garbage memory %zu bytes, cache %zu(%zu) bytes",
          releasedBytes, dirtyBytes, targetCachedSize);
     return releasedBytes;
+}
+
+void FreeRegionManager::AddDetachQuarantineRegion(RegionInfo* region, bool releasePhysical)
+{
+    CHECK(region != nullptr);
+    AddDetachQuarantineUnits(region->GetUnitIdx(), region->GetUnitCount(), releasePhysical, true, releasePhysical);
+}
+
+void FreeRegionManager::AddDetachQuarantineUnits(UnitIndex idx, UnitCount num, bool released, bool needsInit,
+                                                 bool releasePhysical)
+{
+    static constexpr size_t kMaxEntries = 65536;
+    std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+    CHECK_DETAIL(detachQuarantine.size() < kMaxEntries,
+                 "CJRT_FROM_REUSE_GATE detach quarantine overflow entries=%zu max=%zu",
+                 detachQuarantine.size(), kMaxEntries);
+    detachQuarantine.push_back(DetachQuarantineEntry{ idx, num, 0, released, needsInit, releasePhysical });
+    FromPageDetach::NoteQuarantineAdmitted(detachQuarantine.size());
+}
+
+size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
+{
+    if (!FromPageDetach::GateEnabled()) {
+        return 0;
+    }
+    static constexpr uint8_t kMaxRechecks = 8;
+    std::vector<DetachQuarantineEntry> pending;
+    {
+        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+        pending.swap(detachQuarantine);
+    }
+
+    size_t releasedUnits = 0;
+    std::vector<DetachQuarantineEntry> held;
+    held.reserve(pending.size());
+    for (DetachQuarantineEntry entry : pending) {
+        RegionInfo* region = RegionInfo::TryGetRegionInfoAt(RegionInfo::GetUnitAddress(entry.idx));
+        // Quarantined regions are deliberately on no managed list, so the
+        // ordinary ClearRouteDestHoldFlags list walk cannot see them. This
+        // post-PrepareForwardTable major closure retired the only route
+        // generation that could have stamped the withheld address.
+        region->SetRouteDestHold(0);
+        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
+                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
+            ++entry.rechecks;
+            FromPageDetach::NoteQuarantineRecheckHeld();
+            CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
+                         "CJRT_FROM_REUSE_GATE detach quarantine did not close idx=%u units=%u rechecks=%u max=%u",
+                         entry.idx, entry.num, static_cast<unsigned>(entry.rechecks),
+                         static_cast<unsigned>(kMaxRechecks));
+            held.push_back(entry);
+            continue;
+        }
+
+        if (entry.needsInit) {
+            // Re-enter the original funnel after its evidence has healed so
+            // path-specific scrub/zap/huge-page work is not skipped. That
+            // funnel drains and performs a second central check after
+            // ClearEntries; a newly retired table is re-admitted as a
+            // needsInit=false quarantine entry rather than reaching a tree.
+            if (entry.releasePhysical) {
+                (void)regionManager.ReleaseRegion(region);
+            } else {
+                regionManager.ReclaimRegion(region);
+            }
+            FromPageDetach::NoteQuarantineReleased();
+            continue;
+        }
+        if (entry.released) {
+            AddReleaseUnits(entry.idx, entry.num);
+        } else {
+            AddGarbageUnits(entry.idx, entry.num);
+        }
+        releasedUnits += entry.num;
+        FromPageDetach::NoteQuarantineReleased();
+    }
+
+    if (!held.empty()) {
+        std::lock_guard<std::mutex> lock(detachQuarantineMutex);
+        CHECK_DETAIL(detachQuarantine.size() + held.size() <= 65536,
+                     "CJRT_FROM_REUSE_GATE detach quarantine overflow on recheck current=%zu held=%zu max=65536",
+                     detachQuarantine.size(), held.size());
+        detachQuarantine.insert(detachQuarantine.end(), held.begin(), held.end());
+    }
+    return releasedUnits;
 }
 
 void RegionManager::SetMaxUnitCountForRegion()
@@ -1082,6 +1177,10 @@ void RegionManager::DumpScrubCostAndReset(const char* point)
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
 {
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_DIRTY)) {
+        freeRegionManager.AddDetachQuarantineRegion(region);
+        return;
+    }
     // routedest: census, not a guard. The graft asked for CHECK(!IsRouteDestHeld()) here to
     // convert "I traced the paths" into a machine check, but none of the designs proved the
     // caller enumeration and five of the six ReclaimRegion callers have already detached the
@@ -1100,14 +1199,29 @@ void RegionManager::ReclaimRegion(RegionInfo* region)
     // STEER3: scrub is at CollectRegion only (see header). Reclaim/TakeRegion reuse
     // must not re-scan O(N) under remset mutex.
 
+    if (FromPageDetach::GateEnabled()) {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_DIRTY);
+    }
     // gcvroot Z2: poison reclaimed payload so use-after-free roots are identifiable (MRT_GCV2_ZAP_RECLAIM=1).
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
+    if (FromPageDetach::GateEnabled()) {
+        // The entry check proved there was no older retired debt; DrainScope
+        // completed the current remap reader closure. ClearEntries inside
+        // InitFreeUnits therefore produced a table that can be detached now,
+        // not a new reason to wait another major cycle.
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
+    }
     freeRegionManager.AddGarbageUnits(unitIndex, num);
 }
 
 void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
 {
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RECLAIM_MARK_QUARANTINE)) {
+        freeRegionManager.AddDetachQuarantineRegion(region);
+        return;
+    }
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReclaimRegionToMarkQuarantine");
     size_t num = region->GetUnitCount();
@@ -1117,13 +1231,25 @@ void RegionManager::ReclaimRegionToMarkQuarantine(RegionInfo* region)
     }
     DLOG(REGION, "mark-quarantine region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
          region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
+    if (FromPageDetach::GateEnabled()) {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RECLAIM_MARK_QUARANTINE);
+    }
     HeapZap::ZapReclaimedRegion(region->GetRegionStart(), region->GetRegionEnd());
     region->InitFreeUnits();
+    if (FromPageDetach::GateEnabled()) {
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
+    }
     freeRegionManager.AddMarkQuarantineUnits(unitIndex, num);
 }
 
 size_t RegionManager::ReleaseRegion(RegionInfo* region)
 {
+    if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::RELEASE_REGION)) {
+        const size_t heldBytes = region->GetRegionSize();
+        freeRegionManager.AddDetachQuarantineRegion(region, true);
+        return heldBytes;
+    }
     // routedest: census only, see ReclaimRegion.
     RouteDestHold::NoteReclaimFunnel(region, "ReleaseRegion");
     RegionLifeDiag::NoteRelease(region, RegionLifeDiag::PATH_RELEASE_LARGE);
@@ -1142,8 +1268,18 @@ size_t RegionManager::ReleaseRegion(RegionInfo* region)
     DLOG(REGION, "release region %p @[%#zx+%zu, %#zx) type %u", region, region->GetRegionStart(),
         region->GetRegionAllocatedSize(), region->GetRegionEnd(), region->GetRegionType());
 
+    if (FromPageDetach::GateEnabled()) {
+        RegionInfo::DrainScope drain(region, MutatorRelocate::Retire::RELEASE_REGION);
+    }
     region->InitFreeUnits();
-    RegionInfo::ReleaseUnits(unitIndex, num);
+    if (FromPageDetach::GateEnabled()) {
+        ForwardingTable::DropRetiredCovering(RegionInfo::GetUnitAddress(unitIndex),
+                                             num * RegionInfo::UNIT_SIZE);
+    }
+    {
+        FromPageDetach::ReusePermitScope reusePermit;
+        RegionInfo::ReleaseUnits(unitIndex, num);
+    }
     freeRegionManager.AddReleaseUnits(unitIndex, num);
     return res;
 }
@@ -1880,7 +2016,21 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
     RegionInfo* head = allowSaferegion ? TakeReclaimableGarbageRegion(&gatedBytes) : nullptr;
     if (head != nullptr) {
         DLOG(REGION, "take garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
-        if (head->GetUnitCount() == num) {
+        if (head->GetUnitCount() == num &&
+            !FromPageDetach::FromPageDetachCheck(head, FromPageDetach::Site::TAKE_GARBAGE_REUSE)) {
+            freeRegionManager.AddDetachQuarantineRegion(head);
+            head = nullptr;
+        }
+        // The ON arm makes the implicit active-table -> retired-table
+        // transition explicit before allocation. ReclaimRegion drains the
+        // current readers, retires the table, and detaches that now-closed
+        // answer before publishing the range to the free tree.
+        if (head != nullptr && head->GetUnitCount() == num && FromPageDetach::GateEnabled()) {
+            ReclaimRegion(head);
+            head = nullptr;
+        }
+        if (head != nullptr && head->GetUnitCount() == num) {
+            FromPageDetach::ReusePermitScope reusePermit;
             TraceClear::NoteRegionEvent(head->GetRegionStart(), head->GetRegionSize(), "garbage_reuse", head,
                                         head->GetLiveByteCount(),
                                         static_cast<unsigned int>(head->IsGhostFromRegion()),
@@ -1906,7 +2056,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             DLOG(REGION, "reuse garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             MutatorAllocRate::sample_allocation(size);
             return RegionInfo::InitRegion(idx, num, type);
-        } else {
+        } else if (head != nullptr) {
             DLOG(REGION, "reclaim garbage region %p@[%#zx, %#zx)", head, head->GetRegionStart(), head->GetRegionEnd());
             ReclaimRegion(head);
         }
@@ -1965,6 +2115,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         if ((n & (n - 1)) == 0) {
             VLOG(REPORT, "[Alloc] supply_gated_pressure gated_bytes=%zu n=%zu", gatedBytes, n);
         }
+    }
+    // A detach quarantine is released only by the next major PostTrace
+    // closure. If a minor filled it and allocation has exhausted every other
+    // source, waiting for organic allocation progress can deadlock the grace
+    // condition: no page means no progress towards the next major. Request
+    // that closure here; GC threads and ROUTING critical sections must not
+    // synchronously request a collection from inside their own operation.
+    if (FromPageDetach::GateEnabled() && allowSaferegion && !IsGcThread() &&
+        freeRegionManager.HasDetachQuarantine()) {
+        Heap::GetHeap().GetCollector().RequestGC(GC_REASON_HEU, true);
     }
     return nullptr;
 }
@@ -2183,6 +2343,11 @@ void RegionManager::CollectFromSpaceGarbage()
             }
             ExemptFromRegion(region);
         } else {
+            if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::COLLECT_FROM_GARBAGE)) {
+                freeRegionManager.AddDetachQuarantineRegion(region);
+                region = fromRegionList.TakeHeadRegion();
+                continue;
+            }
 #if defined(__OHOS__)
             if (region->IsGhostFromRegion()) {
                 garbageRegionList.PrependRegion(region, RegionInfo::RegionType::GARBAGE_REGION);
