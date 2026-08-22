@@ -15,7 +15,7 @@ constexpr unsigned kBuckets = 21;
 
 static const char* kSiteName[kSites] = {
     "slot_extra", "clear_units", "take_garbage", "take_inactive", "dirty_take",
-    "released_pre", "compact", "compact_partial",
+    "released_pre", "compact", "compact_partial", "route_reserve",
 };
 
 struct Row {

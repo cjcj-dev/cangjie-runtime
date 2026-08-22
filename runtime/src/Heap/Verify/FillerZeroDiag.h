@@ -16,7 +16,8 @@ enum class Site : unsigned {
     RELEASED_PRE = 5,
     COMPACT = 6,
     COMPACT_PARTIAL = 7,
-    N = 8,
+    ROUTE_RESERVE = 8,
+    N = 9,
 };
 
 void Note(Site site, uintptr_t start, size_t size);

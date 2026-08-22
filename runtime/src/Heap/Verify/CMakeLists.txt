@@ -63,6 +63,7 @@ set(SRC_LIST
     "Stw2CurrentAudit.cpp"
     "CsetEmptyWho.cpp"
     "FillerZeroDiag.cpp"
+    "HoleWhoDiag.cpp"
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR}/../)
