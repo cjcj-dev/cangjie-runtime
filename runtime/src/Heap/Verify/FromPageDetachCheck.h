@@ -61,6 +61,13 @@ struct QuarantineCounters {
     uint64_t peakEntries;
 };
 
+enum class Action : uint8_t {
+    OBSERVE = 0,
+    // A major remap closure is the grace point that may consume a retired
+    // answer, but only after every other evidence leg is absent.
+    MAJOR_CLOSE = 1,
+};
+
 // Product default is OFF. Only the exact value "1" enables phase-2 blocking.
 bool GateEnabled();
 
@@ -77,7 +84,7 @@ public:
 
 // The sole evidence predicate. With the product-default OFF it is a measuring
 // arm and always returns true; CJRT_FROM_REUSE_GATE=1 refuses evidence.
-bool FromPageDetachCheck(const RegionInfo* region, Site site);
+bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action = Action::OBSERVE);
 
 Counters GetCounters(Site site);
 QuarantineCounters GetQuarantineCounters();

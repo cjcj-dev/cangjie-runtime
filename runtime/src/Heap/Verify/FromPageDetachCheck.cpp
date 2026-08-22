@@ -100,7 +100,7 @@ const char* SiteName(Site site)
     return i < kSiteCount ? kNames[i] : "invalid";
 }
 
-bool FromPageDetachCheck(const RegionInfo* region, Site site)
+bool FromPageDetachCheck(const RegionInfo* region, Site site, Action action)
 {
     AtomicCounters& out = At(site);
     out.checks.fetch_add(1, std::memory_order_relaxed);
@@ -111,7 +111,8 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site)
     const MAddress start = region->GetRegionStart();
     const size_t size = region->GetRegionSizeForDetachCheck();
     const bool activeTable = ForwardingTable::GetEntries(start) != nullptr;
-    const bool retiredTable = ForwardingTable::RetiredCovers(start, size);
+    bool retiredTable = ForwardingTable::RetiredCovers(start, size);
+    const bool retiredObserved = retiredTable;
     const bool routeDestHeld = region->IsRouteDestHeld();
     const int32_t refCount = region->ForwardingRefCount();
     const bool forwardingPositive = refCount > 0;
@@ -129,13 +130,21 @@ bool FromPageDetachCheck(const RegionInfo* region, Site site)
     // them visible in the census, but do not call them an unhealed reader. A
     // retired covering table is different: reuse can erase the only remaining
     // answer for a stale slot, which is the i2 two-clock population.
-    const bool any = retiredTable || routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
+    const bool otherEvidence = routeDestHeld || forwardingReaders || forwardingClaimActive || copyInflight;
+    if (action == Action::MAJOR_CLOSE && GateEnabled() && retiredTable && !otherEvidence) {
+        // zRelocate.cpp:1018-1047: the remap closure is complete. No retained
+        // reader or route destination still names this page, so the retired
+        // answer has reached its actual grace condition and can be detached.
+        ForwardingTable::DropRetiredCovering(start, size);
+        retiredTable = ForwardingTable::RetiredCovers(start, size);
+    }
+    const bool any = retiredTable || otherEvidence;
 
     out.withEvidence.fetch_add(any ? 1 : 0, std::memory_order_relaxed);
     const bool blocked = GateEnabled() && g_reusePermitDepth == 0 && any;
     out.blocked.fetch_add(blocked ? 1 : 0, std::memory_order_relaxed);
     out.activeTable.fetch_add(activeTable ? 1 : 0, std::memory_order_relaxed);
-    out.retiredTable.fetch_add(retiredTable ? 1 : 0, std::memory_order_relaxed);
+    out.retiredTable.fetch_add(retiredObserved ? 1 : 0, std::memory_order_relaxed);
     out.routeDestHeld.fetch_add(routeDestHeld ? 1 : 0, std::memory_order_relaxed);
     out.forwardingPositive.fetch_add(forwardingPositive ? 1 : 0, std::memory_order_relaxed);
     out.forwardingReaders.fetch_add(forwardingReaders ? 1 : 0, std::memory_order_relaxed);

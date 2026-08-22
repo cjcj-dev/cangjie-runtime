@@ -11,6 +11,7 @@
 #include <chrono>
 #include <thread>
 
+#include "Heap/Allocator/ForwardingTable.h"
 #include "Heap/Collector/ZForwardingLife.h"
 #include "Heap/Verify/FromPageDetachCheck.h"
 #include "gc_heap_fixture.hpp"
@@ -227,4 +228,14 @@ GC_TEST(ZForwardingLife, DetachCheckMeasuresAndHonorsGate)
     GC_EXPECT_EQ(completedAfter.forwardingReleased, completedBefore.forwardingReleased + 1);
     ZForwardingLife::ResetIdle(fx.region0->metadata.fwdRefCount, fx.region0->metadata.fwdClaimed,
                                fx.region0->metadata.fwdDone);
+
+    ForwardingTable::EnsureEntries(fx.region0);
+    GC_EXPECT_TRUE(ForwardingTable::GetEntries(fx.region0->GetRegionStart()) != nullptr);
+    ForwardingTable::ClearEntries(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
+    GC_EXPECT_TRUE(ForwardingTable::RetiredCovers(fx.region0->GetRegionStart(), fx.region0->GetRegionSize()));
+    GC_EXPECT_TRUE(FromPageDetach::FromPageDetachCheck(
+        fx.region0, FromPageDetach::Site::MAJOR_RECHECK, FromPageDetach::Action::MAJOR_CLOSE));
+    GC_EXPECT_EQ(ForwardingTable::RetiredCovers(fx.region0->GetRegionStart(), fx.region0->GetRegionSize()),
+                 !FromPageDetach::GateEnabled());
+    ForwardingTable::DropRetiredCovering(fx.region0->GetRegionStart(), fx.region0->GetRegionSize());
 }

@@ -223,7 +223,9 @@ void ForwardingTable::DropRetiredCovering(MAddress regionStart, size_t regionSiz
             std::vector<ZForwarding*> keep;
             keep.reserve(gens.size());
             for (ZForwarding* tab : gens) {
-                if (tab != nullptr && tab->start() >= regionStart && tab->start() < regionEnd) {
+                const MAddress tabStart = tab == nullptr ? 0 : tab->start();
+                const MAddress tabEnd = tab == nullptr ? 0 : tabStart + tab->size();
+                if (tab != nullptr && tabStart < regionEnd && regionStart < tabEnd) {
                     victims.push_back(tab);
                 } else {
                     keep.push_back(tab);

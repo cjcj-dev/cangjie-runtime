@@ -937,7 +937,8 @@ size_t FreeRegionManager::ReleaseDetachQuarantineAfterMajor()
         // post-PrepareForwardTable major closure retired the only route
         // generation that could have stamped the withheld address.
         region->SetRouteDestHold(0);
-        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK)) {
+        if (!FromPageDetach::FromPageDetachCheck(region, FromPageDetach::Site::MAJOR_RECHECK,
+                                                 FromPageDetach::Action::MAJOR_CLOSE)) {
             ++entry.rechecks;
             FromPageDetach::NoteQuarantineRecheckHeld();
             CHECK_DETAIL(entry.rechecks <= kMaxRechecks,
