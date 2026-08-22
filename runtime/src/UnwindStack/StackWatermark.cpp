@@ -6,11 +6,18 @@
 
 #include "UnwindStack/StackWatermark.h"
 
+#include <cstdlib>
+#include <cstring>
+
 namespace MapleRuntime {
 
 bool StackWatermark::VerifyEnabled()
 {
-    return false;
+    static const bool on = []() {
+        const char* v = std::getenv("MRT_GCV2_STACK_WATERMARK_VERIFY");
+        return v != nullptr && std::strcmp(v, "1") == 0;
+    }();
+    return on;
 }
 
 } // namespace MapleRuntime

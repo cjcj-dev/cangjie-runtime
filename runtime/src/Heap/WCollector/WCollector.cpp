@@ -194,6 +194,47 @@ static void CensusFrameColoursAfterFlip(const char* site, uintptr_t prevRemap)
         MutatorManager::Instance().WorldStopped() ? 1 : 0);
 }
 
+namespace {
+bool VerifyStackRootPostconditionEnabled()
+{
+    static const bool on = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    return on;
+}
+
+void VerifyStackRootPostcondition(uint64_t stackScanEpoch, const char* source)
+{
+    if (!VerifyStackRootPostconditionEnabled()) {
+        return;
+    }
+
+    size_t checked = 0;
+    size_t incomplete = 0;
+    MutatorManager::Instance().VisitAllMutators([&](Mutator& mutator) {
+        ++checked;
+        StackWatermark& watermark = mutator.GetStackWatermark();
+        if (watermark.IsDone(stackScanEpoch)) {
+            return;
+        }
+        ++incomplete;
+        LOG(RTLOG_ERROR,
+            "[GCV2][verify][stack-roots-complete] INCOMPLETE source=%s epoch=%llu mutator=%p tid=%u cjthread=%p "
+            "managed=%d saferegion=%d wm_epoch=%llu phase=%u owner=%u cursor=%zu frames=%zu "
+            "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+            source, static_cast<unsigned long long>(stackScanEpoch), &mutator, mutator.GetTid(),
+            mutator.GetCjthreadPtr(), mutator.IsManagedContext() ? 1 : 0, mutator.InSaferegion() ? 1 : 0,
+            static_cast<unsigned long long>(watermark.GetEpoch()), static_cast<unsigned>(watermark.GetPhase()),
+            static_cast<unsigned>(watermark.GetOwner()), watermark.GetCursorIndex(), watermark.GetFrameCount());
+    });
+    LOG(RTLOG_ERROR,
+        "[GCV2][verify][stack-roots-complete] SUMMARY source=%s epoch=%llu checked=%zu incomplete=%zu "
+        "env=MRT_GCV2_VERIFY_STACK_ROOTS_COMPLETE=1",
+        source, static_cast<unsigned long long>(stackScanEpoch), checked, incomplete);
+}
+} // namespace
+
 // installdomain: positive control — how often Resolve/Fix would install a ghost-from that is
 // outside GetRoute's liveInfo0 survivor domain. Grant paints that bit before route geometry.
 // Report with MRT_GCV2_INSTALLDOMAIN_ACCOUNT=1 (also always VLOG once per minor if >0).
@@ -1615,6 +1656,7 @@ void WCollector::TraceHeap()
             // not started; this is the last point at which an incomplete stack-root
             // receipt can be reported before any mark-closure work consumes the roots.
             DoEnumeration(workStack, foreignStack);
+            VerifyStackRootPostcondition(stackScanEpoch, "major");
             StackRootSlotAttest::Finish();
             TransitionToGCPhase(GCPhase::GC_PHASE_TRACE, true);
         } else {
@@ -1896,12 +1938,24 @@ void WCollector::FixOldTaggedRefField(BaseObject* holder, RefField<>& field, con
 
 void WCollector::InvalidateOldTaggedRefsBeforeDispel()
 {
+    static const bool preflipWalk = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    if (!preflipWalk) {
+        return;
+    }
+    InvalidateOldTaggedRefs(true);
 }
 
 void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
 {
-    constexpr bool account = false;
-    constexpr bool trackFixed = false;
+    static const bool preflipVerify = []() {
+        const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool account = requireSurvivedMark && preflipVerify;
+    const bool trackFixed = requireSurvivedMark && preflipVerify;
     MRT_PHASE_TIMER(requireSurvivedMark ? "InvalidateOldTaggedRefs.preflip" : "InvalidateOldTaggedRefs.postflip");
     ScopedStopTheWorld stw(requireSurvivedMark ? "invalidate old tagged refs before dispel"
                                                : "invalidate old tagged refs after flip");
@@ -2245,6 +2299,32 @@ void WCollector::InvalidateOldTaggedRefs(bool requireSurvivedMark)
     ReportF3DeadarmCounts(requireSurvivedMark ? "preflip" : "postflip");
     F3Why2Diag::Report(requireSurvivedMark ? "preflip" : "postflip");
     GarbRegionDiag::Report(requireSurvivedMark ? "preflip" : "postflip");
+    if (requireSurvivedMark && preflipVerify) {
+        static const bool preflipVerifyFatal = []() {
+            const char* value = std::getenv("MRT_GCV2_PREFLIP_VERIFY_FATAL");
+            return value != nullptr && std::strcmp(value, "1") == 0;
+        }();
+        const size_t fixedTotal = heapTotals.fixedSlots + rootTotals.fixedRootSlots;
+        VLOG(REPORT,
+             "[GCV2][preflip-verify] fixed=%zu fixedRoots=%zu fixedTotal=%zu oldTagged=%zu oldTaggedRoots=%zu "
+             "fields=%zu rootSlots=%zu fatal=%d env=MRT_GCV2_PREFLIP_VERIFY=1",
+             heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
+             rootTotals.oldTaggedRootSlots, heapTotals.fields, rootTotals.rootSlots,
+             static_cast<int>(preflipVerifyFatal));
+        if (fixedTotal > 0) {
+            LOG(RTLOG_ERROR,
+                "[GCV2][preflip-verify] PREFLIP_RESIDUE fixed=%zu fixedRoots=%zu fixedTotal=%zu "
+                "oldTagged=%zu oldTaggedRoots=%zu (production skips preflip; residue means insurance needed)",
+                heapTotals.fixedSlots, rootTotals.fixedRootSlots, fixedTotal, heapTotals.oldTaggedSlots,
+                rootTotals.oldTaggedRootSlots);
+            if (preflipVerifyFatal) {
+                CHECK_DETAIL(false,
+                             "MRT_GCV2_PREFLIP_VERIFY_FATAL: preflip residue fixedTotal=%zu "
+                             "(fixed=%zu fixedRoots=%zu)",
+                             fixedTotal, heapTotals.fixedSlots, rootTotals.fixedRootSlots);
+            }
+        }
+    }
 }
 
 void WCollector::PostTrace()
@@ -4020,6 +4100,15 @@ void WCollector::TraceYoungClosureParallel(WorkStack& workStack, bool fullYoungS
     const int32_t helperNum = threadPool->GetMaxThreadNum();
     int32_t poolCap = helperNum + 1;
     int32_t workers = poolCap;
+    {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (value != nullptr && value[0] != '\0') {
+            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+            if (requested >= 1 && requested < workers) {
+                workers = requested;
+            }
+        }
+    }
     if (workers < 1) {
         workers = 1;
     }
@@ -4131,6 +4220,15 @@ void WCollector::TraceYoungClosureStriped(WorkStack& workStack, bool fullYoungSc
     const size_t dispelAtEntry = RegionInfo::GetDispelGhostCount();
 
     int32_t workers = threadPool->GetMaxThreadNum() + 1;
+    {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_WORKERS");
+        if (value != nullptr && value[0] != '\0') {
+            int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+            if (requested >= 1 && requested < workers) {
+                workers = requested;
+            }
+        }
+    }
     if constexpr (kGcTriggerDynamicWorkersEnabled) {
         // zDirector.cpp:783-793 — initial_workers selected each cycle.
         const uint32_t selected = g_gcTriggerYoungWorkers.load(std::memory_order_relaxed);
@@ -4245,21 +4343,39 @@ void WCollector::TraceYoungClosure(WorkStack& workStack, bool fullYoungScan, Min
         return;
     }
     GCThreadPool* threadPool = GetThreadPool();
-    if (kMarkStriped && threadPool != nullptr) {
+    static const bool forceSerial = []() {
+        const char* value = std::getenv("MRT_GCV2_MARKPAR_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool workersSet = std::getenv("MRT_GCV2_MARKPAR_WORKERS") != nullptr;
+    if (kMarkStriped && threadPool != nullptr && !forceSerial) {
         TraceYoungClosureStriped(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
                                  useBitmapLedger, threadPool, reachableSlotDomain);
         return;
     }
-    VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu",
-         threadPool == nullptr ? "pool_unavailable" : "striped_off",
-         static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
-         g_markStripeTurned.load(std::memory_order_relaxed));
-    TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
-                            useBitmapLedger, reachableSlotDomain);
-    VLOG(REPORT,
-         "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
-         "reachable_n=%zu parallel=0",
-         reachableVec.size(), reachableVec.size());
+    const bool useParallel = threadPool != nullptr && workersSet && !forceSerial;
+    if (!useParallel) {
+        const char* reason = "workers_unset";
+        if (threadPool == nullptr) {
+            reason = "pool_unavailable";
+        } else if (forceSerial) {
+            reason = "force_serial";
+        } else if (!kMarkStriped) {
+            reason = "striped_off";
+        }
+        VLOG(REPORT, "[GCV2][markpar][parallel] fallback=serial %s kMarkStriped=%d armed=%zu turned=%zu", reason,
+             static_cast<int>(kMarkStriped), g_markStripeArmed.load(std::memory_order_relaxed),
+             g_markStripeTurned.load(std::memory_order_relaxed));
+        TraceYoungClosureSerial(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                                useBitmapLedger, reachableSlotDomain);
+        VLOG(REPORT,
+             "[GCV2][markpar][parallel] workers_active=1 workers_scheduled=1 objects_marked=[%zu] "
+             "reachable_n=%zu parallel=0",
+             reachableVec.size(), reachableVec.size());
+        return;
+    }
+    TraceYoungClosureParallel(workStack, fullYoungScan, reachableObjects, reachableVec, reachableSlots, weakSlots,
+                              useBitmapLedger, threadPool, reachableSlotDomain);
 }
 
 // youngconc: SATB termination for concurrent young mark — same loop shape as
@@ -5532,7 +5648,11 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
     };
     const bool doYoungFlip = !youngFlipOff;
     GCThreadPool* threadPool = GetThreadPool();
-    const bool useParallel = threadPool != nullptr;
+    static const bool forceSerial = []() {
+        const char* value = std::getenv("MRT_GCV2_REFFIX_FORCE_SERIAL");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    const bool useParallel = threadPool != nullptr && !forceSerial;
 
     // Keep opt-in (`=1`): `=0` or unset is the immediate rollback path.
     std::vector<MAddress> remsetVec;
@@ -5593,6 +5713,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const size_t nSlot = remsetVec.size();
         const int32_t helperNum = pool->GetMaxThreadNum();
         int32_t heapWorkers = helperNum + 1;
+        {
+            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (value != nullptr && value[0] != '\0') {
+                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+                if (requested >= 1 && requested < heapWorkers) {
+                    heapWorkers = requested;
+                }
+            }
+        }
         if (heapWorkers < 1) {
             heapWorkers = 1;
         }
@@ -5672,6 +5801,15 @@ void WCollector::EvacuateYoungRegions(const std::vector<BaseObject*>& reachableV
         const int32_t helperNum = pool->GetMaxThreadNum();
         const int32_t poolCap = helperNum + 1;
         int32_t heapWorkers = poolCap;
+        {
+            const char* value = std::getenv("MRT_GCV2_REFFIX_WORKERS");
+            if (value != nullptr && value[0] != '\0') {
+                int32_t requested = static_cast<int32_t>(std::strtol(value, nullptr, 10));
+                if (requested >= 1 && requested < heapWorkers) {
+                    heapWorkers = requested;
+                }
+            }
+        }
         // At least 1 heap worker; root families = 5 additional tasks.
         if (heapWorkers < 1) {
             heapWorkers = 1;
@@ -6641,6 +6779,7 @@ void WCollector::DoYoungGarbageCollection()
                 (void)mutator.GcPhaseEnum(GCPhase::GC_PHASE_ENUM);
             }
         });
+        VerifyStackRootPostcondition(stackScanEpoch, "minor");
         StackRootSlotAttest::Finish();
     }
 
@@ -7373,6 +7512,16 @@ void WCollector::DoYoungGarbageCollection()
         }
     }
     EatArmDiag::DumpMinorSummary(minorTotalRuns + 1);
+    static const bool verifyRemsetEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_REMSET");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    static const bool verifyHeapEnabled = []() {
+        const char* value = std::getenv("MRT_GCV2_VERIFY_HEAP");
+        return value != nullptr && std::strcmp(value, "1") == 0;
+    }();
+    std::unordered_set<BaseObject*> rootReachableForVerify;
+    const bool needRootReachable = verifyRemsetEnabled || verifyHeapEnabled;
     {
         size_t runIndex = minorTotalRuns + 1;
         auto visitRoots = [this, &allocationRoots](const std::function<void(BaseObject*)>& visitor) {
@@ -7382,9 +7531,16 @@ void WCollector::DoYoungGarbageCollection()
             VisitMinorRoots(visitor);
         };
         auto resolveField = [this](RefField<>& field) -> BaseObject* { return ResolveMinorReference(field); };
-        RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
-                             &minorCandidateRegions, remsetStats, nullptr);
-        VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+        if (needRootReachable) {
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, &rootReachableForVerify);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false,
+                                         verifyRemsetEnabled ? &rootReachableForVerify : nullptr);
+        } else {
+            RunDiffPathExplainer(runIndex, visitRoots, resolveField, rememberedSlots, consumedSlots,
+                                 &minorCandidateRegions, remsetStats, nullptr);
+            VerifyRememberedSetInvariant("pre-evacuate", rememberedSlots, false, nullptr);
+        }
     }
     if (UNLIKELY(YyEdgeDiag::Enabled())) {
         YyEdgeDiag::PublishProductVec(reachableVec);
@@ -7395,10 +7551,10 @@ void WCollector::DoYoungGarbageCollection()
     // does not require global VERIFY_HEAP.
     if (kVerifyPostEvac) {
         VLOG(REPORT, "[GCV2][verify][post-evac] enter point=post-mark run=%zu", minorTotalRuns + 1);
-        VerifyHeapObjects("post-mark", true, nullptr);
+        VerifyHeapObjects("post-mark", true, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
         VLOG(REPORT, "[GCV2][verify][post-evac] point=post-mark run=%zu", minorTotalRuns + 1);
     } else {
-        VerifyHeapObjects("pre-evacuate", false, nullptr);
+        VerifyHeapObjects("pre-evacuate", false, verifyHeapEnabled ? &rootReachableForVerify : nullptr);
     }
 
     size_t liveBytes = 0;
