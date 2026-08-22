@@ -801,6 +801,11 @@ void TracingCollector::DoTracing(WorkStack& workStack, WorkStack& foreignRootsSe
     }
 
     {
+        // ZGC breaks termination on resurrection (zMarkTerminate.inline.hpp:125-139)
+        // and follows the resurrected closure before accepting mark end. Our
+        // finalizer discovery is controller-owned (no shared stripe): it follows
+        // that closure to empty here, after strict SATB termination and before
+        // the collector can leave the marking phase.
         MRT_PHASE_TIMER("concurrent resurrection");
         DoResurrection(workStack);
     }
@@ -892,8 +897,8 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // pre-value, so losing it leaves a still-reachable object unmarked -- and an
         // unmarked live object is exactly what makes its region look empty.
         if (!MarkTerminateInPauseEnabled()) {
-            // Ablation arm: the pre-existing behaviour, kept reachable so the pause can
-            // be measured against its own absence in one binary rather than two.
+            // Fault-injection/negative-control arm. The product constant is true;
+            // setting it false reconstructs the retired-only termination bug.
             TransitionToGCPhase(GCPhase::GC_PHASE_CLEAR_SATB_BUFFER, true);
             visitSatbObj();
             if (workStack.empty()) {
@@ -901,6 +906,14 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             }
             continue;
         }
+        // Our worker-termination barrier is the stronger owner/join invariant,
+        // not ZGC's shared-stripe condition variable: TracingImpl returned only
+        // after WaitFinish(), every split MarkStack node has one owner, and there
+        // can be no queued publication at this cut. There are no shared lock-free
+        // stripes, hence no ZMarkingSMR object to protect.
+        CHECK_DETAIL(workStack.empty(), "strict mark termination with owner work");
+        CHECK_DETAIL(GetThreadPool()->GetWorkCount() == 0,
+                     "strict mark termination with published worker work");
         bool terminated = false;
         {
             ScopedStopTheWorld stw("mark terminate", true, GCPhase::GC_PHASE_CLEAR_SATB_BUFFER);

@@ -27,13 +27,13 @@ namespace MapleRuntime {
 constexpr uint64_t NS_PER_US = 1000;
 constexpr uint64_t NS_PER_S = 1000000000;
 
-// Shared by MarkSatbBuffer (major) and MarkYoungSatbBuffer (young).
-// ZMark::end -> try_end (zMark.cpp:940-971) decides termination inside the
-// pause after ZMark::flush (zMark.cpp:587-596 / :998-1006). Young mark
-// termination uses the same ZMark (zMark.cpp:757-780 young roots).
-// Default false: the pre-existing concurrent test. Flip to true to measure
-// the pause arm. Compile-time, not an MRT_GCV2_ env (commit 05095555).
-constexpr bool kMarkTerminateInPause = false;
+// Strict mark-end cut shared by major MarkSatbBuffer and young
+// MarkYoungSatbBuffer. ZMark::end -> try_end (zMark.cpp:954-971) decides
+// termination with mutators stopped, after ZMark::flush (zMark.cpp:587-605,
+// :998-1006), and resumes concurrent follow when that cut exposes work
+// (zMark.cpp:973-990). This must stay compile-time and default-on: retired-only
+// sampling cannot see a mutator's non-full SATB node.
+constexpr bool kMarkTerminateInPause = true;
 inline bool MarkTerminateInPauseEnabled() { return kMarkTerminateInPause; }
 
 void NoteMarkTerminatePause();
