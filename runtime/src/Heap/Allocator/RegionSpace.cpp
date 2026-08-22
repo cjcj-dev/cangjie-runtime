@@ -28,23 +28,9 @@
 
 namespace MapleRuntime {
 namespace {
-// csetalloc: count mutator MOVEABLE bumps that would land in a region already in
-// the relocation set (FROM / LONE_FROM / route-in-progress). Always-on counters;
-// sample lines gated by MRT_GCV2_ALLOC_INTO_CSET_DIAG=1.
 std::atomic<size_t> g_allocIntoCSetCount{ 0 };
 std::atomic<size_t> g_allocIntoCSetRetired{ 0 };
 
-bool AllocIntoCSetDiagEnabled()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ALLOC_INTO_CSET_DIAG */;
-        return v != nullptr && v[0] == '1' && v[1] == '\0';
-    }();
-    return on;
-}
-
-// Region is currently a relocation-set member (or mid-route). Mutator bump into it
-// is the ZGC-forbidden "allocate into page being relocated" shape.
 bool RegionIsInRelocationSet(const RegionInfo* reg)
 {
     if (reg == nullptr || reg == RegionInfo::NullRegion()) {
@@ -60,23 +46,9 @@ bool RegionIsInRelocationSet(const RegionInfo* reg)
 
 void NoteAllocIntoCSet(RegionInfo* reg, const char* where)
 {
-    size_t n = g_allocIntoCSetCount.fetch_add(1, std::memory_order_relaxed) + 1;
-    if (!AllocIntoCSetDiagEnabled() || n > 64) {
-        return;
-    }
-    GCPhase heapP = Heap::GetHeap().GetGCPhase();
-    GCPhase mutP = GCPhase::GC_PHASE_UNDEF;
-    Mutator* m = Mutator::GetMutator();
-    if (m != nullptr) {
-        mutP = m->GetMutatorPhase();
-    }
-    VLOG(REPORT,
-         "[GCV2][csetalloc] n=%zu where=%s reg=%p type=%u route=%u young=%u "
-         "heapP=%u mutP=%u start=%#zx alloc=%#zx",
-         n, where, reg, static_cast<unsigned>(reg->GetRegionType()),
-         static_cast<unsigned>(reg->GetRouteState()), static_cast<unsigned>(reg->IsYoungRegion()),
-         static_cast<unsigned>(heapP), static_cast<unsigned>(mutP),
-         static_cast<size_t>(reg->GetRegionStart()), static_cast<size_t>(reg->GetRegionAllocPtr()));
+    (void)reg;
+    (void)where;
+    g_allocIntoCSetCount.fetch_add(1, std::memory_order_relaxed);
 }
 } // namespace
 
@@ -322,7 +294,7 @@ MAddress AllocBuffer::Allocate(size_t totalSize, AllocType allocType)
         // paint those objects stay live0Surv=0 at route under concurrent young mark.
         {
             static const bool youngConcMarkOn = []() {
-                const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_YOUNG_CONC_MARK */;
+                const char* v = std::getenv("MRT_GCV2_YOUNG_CONC_MARK");
                 return v != nullptr && std::strcmp(v, "1") == 0;
             }();
             if (youngConcMarkOn && reg != nullptr && !reg->IsLargeRegion()) {

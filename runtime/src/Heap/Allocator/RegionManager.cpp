@@ -363,54 +363,26 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
     if (region == nullptr || !region->IsYoungRegion()) {
         return 0;
     }
-    static const bool fysGapProbe = []() {
-        const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_FYSGAP_PROBE */;
-        return value != nullptr && std::strcmp(value, "1") == 0;
-    }();
     MarkView<Generation::Young> view = region->GetMarkView<Generation::Young>();
     if (region->IsSafeKnownYoungEmpty(view)) {
-        if (fysGapProbe) {
-            VLOG(REPORT,
-                 "[FYSGAP][promotion-summary] region=%p recorded=0 live=0 dead=0 unknown=0 "
-                 "knownEmpty=1 hasBitmap=%u mode=safe-empty",
-                 region,
-                 static_cast<unsigned>(region->GetMarkBitmap(view) != nullptr ||
-                                       region->GetResurrectBitmap() != nullptr));
-        }
         return 0;
     }
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     size_t recorded = 0;
-    size_t liveEdges = 0;
-    size_t deadEdges = 0;
-    size_t unknownEdges = 0;
     bool hasObjectLiveness = region->IsLargeRegion() || region->GetMarkBitmap(view) != nullptr ||
         region->GetResurrectBitmap() != nullptr;
     bool useLiveOnly = hasObjectLiveness && region->IsLiveCountAuthoritative();
-    auto recordFromObject = [region, view, &rememberedSet, &recorded, &liveEdges, &deadEdges,
-                             &unknownEdges, hasObjectLiveness, useLiveOnly](BaseObject* object) {
+    auto recordFromObject = [region, view, &rememberedSet, &recorded, hasObjectLiveness,
+                             useLiveOnly](BaseObject* object) {
         if (object == nullptr || !object->HasRefField()) {
             return;
         }
         bool survived = hasObjectLiveness &&
             region->IsSurvivedObject(view, region->GetAddressOffset(reinterpret_cast<MAddress>(object)));
         if (useLiveOnly && !survived) {
-            if (fysGapProbe) {
-                object->ForEachRefField([&deadEdges](RefField<>& field) {
-                    BaseObject* target = to_object(field.GetTargetObject());
-                    if (target == nullptr || !Heap::IsHeapAddress(target)) {
-                        return;
-                    }
-                    RegionInfo* targetRegion = RegionInfo::GetRegionInfoAt(reinterpret_cast<MAddress>(target));
-                    if (targetRegion != nullptr && targetRegion->IsYoungRegion()) {
-                        ++deadEdges;
-                    }
-                });
-            }
             return;
         }
-        object->ForEachRefField([&rememberedSet, &recorded, &liveEdges, &deadEdges, &unknownEdges,
-                                hasObjectLiveness, survived, object](RefField<>& field) {
+        object->ForEachRefField([&rememberedSet, &recorded, object](RefField<>& field) {
             BaseObject* target = ScanFieldHealedTarget(Heap::GetHeap().GetCollector(), field);
             MAddress slot = reinterpret_cast<MAddress>(&field);
             if (target == nullptr || !Heap::IsHeapAddress(target)) {
@@ -427,15 +399,6 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
                 FlipPromoDiag::NoteProductRecord(slot, /*path*/ 0);
                 NotePromoteGapField(object, field, true, false);
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*young*/ 1, true);
-                if (fysGapProbe) {
-                    if (!hasObjectLiveness) {
-                        ++unknownEdges;
-                    } else if (survived) {
-                        ++liveEdges;
-                    } else {
-                        ++deadEdges;
-                    }
-                }
             } else {
                 NotePromoteGapField(object, field, false, false);
                 IdleEdgeDiag::NotePromoteTimeTarget(slot, /*old*/ 2, false);
@@ -447,14 +410,6 @@ size_t RegionManager::RecordPromotedCrossGenEdges(RegionInfo* region)
         g_promotedCrossGenEdgeCount.fetch_add(recorded, std::memory_order_relaxed);
     }
     FlipPromoDiag::NotePromotedRegion(region, /*path*/ 0, recorded);
-    if (fysGapProbe) {
-        VLOG(REPORT,
-             "[FYSGAP][promotion-summary] region=%p recorded=%zu live=%zu dead=%zu unknown=%zu "
-             "knownEmpty=%u hasBitmap=%u mode=%s",
-             region, recorded, liveEdges, deadEdges, unknownEdges,
-             static_cast<unsigned>(region->IsKnownYoungEmpty(view)),
-             static_cast<unsigned>(hasObjectLiveness), useLiveOnly ? "live-only" : "scan-all");
-    }
     return recorded;
 }
 
@@ -467,17 +422,6 @@ size_t RegionManager::ConsumePromotedCrossGenEdgeCount()
 
 size_t RegionManager::RecordPinnedCrossGenEdges()
 {
-    // gcscanoff blocking test: skip whole conservative pinned/old scan (default off).
-    {
-        static const bool skip = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIP_PINNED_SCAN */;
-            return v != nullptr && std::strcmp(v, "1") == 0;
-        }();
-        if (skip) {
-            VLOG(REPORT, "[GCV2][block] skip RecordPinnedCrossGenEdges env=MRT_GCV2_SKIP_PINNED_SCAN=1");
-            return 0;
-        }
-    }
     MRT_PHASE_TIMER("young.pinned_scan");
     RememberedSet& rememberedSet = Heap::GetHeap().GetRememberedSet();
     std::atomic<size_t> recorded{ 0 };
@@ -1145,26 +1089,6 @@ void RegionManager::Initialize(size_t nUnit, uintptr_t regionInfoAddr)
          regionHeapStart, regionHeapEnd, nUnit);
 }
 
-namespace {
-// STEER4: metering gated by MRT_GCV2_SCRUB_COST (default off). Product path must not
-// emit per-Collect VLOG floods (calls_per_run ~1161 under ALOT).
-bool ScrubCostMeterEnabled()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SCRUB_COST */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
-std::atomic<uint64_t> g_scrubCalls{ 0 };
-std::atomic<uint64_t> g_scrubNs{ 0 };
-std::atomic<uint64_t> g_scrubWordsSum{ 0 };
-std::atomic<uint64_t> g_scrubErasedSum{ 0 };
-std::atomic<size_t> g_scrubWordsMax{ 0 };
-std::atomic<size_t> g_staleAtCollect{ 0 };
-} // namespace
-
 void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
 {
     if (region == nullptr) {
@@ -1172,64 +1096,20 @@ void RegionManager::ScrubRememberedSetForRegion(RegionInfo* region)
     }
     MAddress rStart = static_cast<MAddress>(region->GetRegionStart());
     MAddress rEnd = static_cast<MAddress>(region->GetRegionEnd());
-    // Product path clears only the two bitmap slices owned by this region.
-    if (!ScrubCostMeterEnabled() && !O2ORemsetDiag::Enabled()) {
+    if (!O2ORemsetDiag::Enabled()) {
         (void)Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, nullptr);
         return;
     }
     size_t words = 0;
-    uint64_t t0 = TimeUtil::NanoSeconds();
     size_t scrubbed = Heap::GetHeap().GetRememberedSet().ClearRegion(rStart, rEnd, &words);
-    if (O2ORemsetDiag::Enabled() && !region->IsYoungRegion()) {
+    if (!region->IsYoungRegion()) {
         O2ORemsetDiag::NoteScrubNonYoung(region, scrubbed);
-    }
-    if (!ScrubCostMeterEnabled()) {
-        return;
-    }
-    uint64_t dt = TimeUtil::NanoSeconds() - t0;
-    uint64_t callNo = g_scrubCalls.fetch_add(1, std::memory_order_relaxed) + 1;
-    g_scrubNs.fetch_add(dt, std::memory_order_relaxed);
-    g_scrubWordsSum.fetch_add(words, std::memory_order_relaxed);
-    g_scrubErasedSum.fetch_add(scrubbed, std::memory_order_relaxed);
-    size_t prevMax = g_scrubWordsMax.load(std::memory_order_relaxed);
-    while (words > prevMax && !g_scrubWordsMax.compare_exchange_weak(prevMax, words, std::memory_order_relaxed)) {
-    }
-    VLOG(REPORT,
-         "[GCV2][scrub-cost] call=%llu ns=%llu bitmapWords=%zu erased=%zu young=%u type=%u "
-         "env=MRT_GCV2_SCRUB_COST=1",
-         static_cast<unsigned long long>(callNo), static_cast<unsigned long long>(dt), words, scrubbed,
-         static_cast<unsigned>(region->IsYoungRegion()), region->GetRegionType());
-    if (scrubbed != 0) {
-        size_t n = g_staleAtCollect.fetch_add(1, std::memory_order_relaxed);
-        VLOG(REPORT,
-             "[GCV2][STALE_ENTRY_AT_COLLECT] yes scrubbed=%zu bitmapWords=%zu ns=%llu region=%p "
-             "[%#zx,%#zx) type=%u young=%u sample=%zu env=MRT_GCV2_SCRUB_COST=1",
-             scrubbed, words, static_cast<unsigned long long>(dt), region,
-             static_cast<size_t>(rStart), static_cast<size_t>(rEnd), region->GetRegionType(),
-             static_cast<unsigned>(region->IsYoungRegion()), n);
     }
 }
 
 void RegionManager::DumpScrubCostAndReset(const char* point)
 {
-    if (!ScrubCostMeterEnabled()) {
-        return;
-    }
-    uint64_t calls = g_scrubCalls.exchange(0, std::memory_order_relaxed);
-    uint64_t ns = g_scrubNs.exchange(0, std::memory_order_relaxed);
-    uint64_t wordsSum = g_scrubWordsSum.exchange(0, std::memory_order_relaxed);
-    uint64_t erasedSum = g_scrubErasedSum.exchange(0, std::memory_order_relaxed);
-    size_t wordsMax = g_scrubWordsMax.exchange(0, std::memory_order_relaxed);
-    if (calls == 0) {
-        return;
-    }
-    VLOG(REPORT,
-         "[GCV2][scrub-cost] point=%s calls=%llu ns=%llu avgNs=%llu bitmapWordsSum=%llu "
-         "bitmapWordsMax=%zu erasedSum=%llu env=MRT_GCV2_SCRUB_COST=1",
-         point == nullptr ? "?" : point, static_cast<unsigned long long>(calls),
-         static_cast<unsigned long long>(ns), static_cast<unsigned long long>(ns / calls),
-         static_cast<unsigned long long>(wordsSum), wordsMax,
-         static_cast<unsigned long long>(erasedSum));
+    (void)point;
 }
 
 void RegionManager::ReclaimRegion(RegionInfo* region)
@@ -1985,7 +1865,7 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
         // barriers/remset still run. Unset must match product path bit-for-bit.
         // gchot: TakeRegion is alloc-hot; cache once (genperf sets env at process start).
         static const bool disableMinor = []() {
-            const char* disableMinorEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DISABLE_MINOR */;
+            const char* disableMinorEnv = std::getenv("MRT_GCV2_DISABLE_MINOR");
             return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
         }();
         if (disableMinor) {
@@ -3343,108 +3223,12 @@ void RegionManager::CompactRegion(RegionInfo* region, RegionInfo* toRegion1)
 }
 
 namespace {
-// permhit: the receipt gate below (allLiveBitsHaveReceipt) accepts o->IsForwarded() as proof
-// that this cycle copied o. That state code carries no target and no cycle stamp — it is set
-// by UnlockObject(FORWARDED) (WCollector.cpp:6617) and only cleared when the memory is reused
-// (ClearUnits, RegionInfo.h:850-860). A route that is abandoned after copying part of the
-// region (:2346-2347) leaves those objects FORWARDED inside a region that survives on
-// unmovableFromRegionList (:1338-1341), so the next route reads a stale bit as a receipt.
-//
-// Consequence if it happens: the copy pass skips the object (:2317-2318, :2226 receipt), the gate
-// passes, the region publishes FORWARDED, and no path ever fills that object's tip — which is
-// what the read barrier reports as permhole. Audit it at the producer, where the answer is a
-// population per run instead of one rare abort.
-//
-// Gate: MRT_GCV2_PERMHIT_RECEIPT=1 (default off; the walk is the same shape the gate already
-// does twice, and it runs only for regions that are about to be published).
-bool PermhitReceiptOn()
-{
-    static const bool on = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PERMHIT_RECEIPT */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    return on;
-}
-
-std::atomic<size_t> g_phRegions{ 0 };
-std::atomic<size_t> g_phStarts{ 0 };
-std::atomic<size_t> g_phFwdStarts{ 0 };
-std::atomic<size_t> g_phNoTip{ 0 };
-std::atomic<size_t> g_phNoTipAbandon{ 0 };
-std::atomic<size_t> g_phRouteNull{ 0 };
-std::atomic<size_t> g_phLogged{ 0 };
-std::atomic<bool> g_phAtexit{ false };
-
-// point = "publish" (gate passed, about to SetRouteState(FORWARDED)) or "abandon" (gate
-// refused). Both are after the synchronous copy pass, so at either point a start that reads
-// FORWARDED must already have a tip-valid route unless its bit is stale.
 void PermhitReceiptAudit(RegionInfo* region, const char* point)
 {
-    if (!PermhitReceiptOn() || region == nullptr || !region->IsSmallRegion()) {
-        return;
-    }
-    const bool abandon = point != nullptr && point[0] == 'a';
-    bool expected = false;
-    if (g_phAtexit.compare_exchange_strong(expected, true, std::memory_order_relaxed)) {
-        std::atexit([]() {
-            std::fprintf(stderr,
-                         "[GCV2][permhit-receipt] atexit regions=%zu starts=%zu fwdStarts=%zu "
-                         "routeNull=%zu noTipPublish=%zu noTipAbandon=%zu\n",
-                         g_phRegions.load(std::memory_order_relaxed), g_phStarts.load(std::memory_order_relaxed),
-                         g_phFwdStarts.load(std::memory_order_relaxed),
-                         g_phRouteNull.load(std::memory_order_relaxed), g_phNoTip.load(std::memory_order_relaxed),
-                         g_phNoTipAbandon.load(std::memory_order_relaxed));
-            std::fflush(stderr);
-        });
-    }
-    g_phRegions.fetch_add(1, std::memory_order_relaxed);
-    uintptr_t start = region->GetRegionStart();
-    uintptr_t allocPtr = region->GetRegionAllocPtr();
-    LiveInfo* ghost = region->GetLiveInfo0ForProbe();
-    uintptr_t position = start;
-    while (position < allocPtr) {
-        BaseObject* o = from_region_addr(position);
-        if (!Collector::PlausibleManagedObjectGate("permhit-receipt", o)) {
-            break;
-        }
-        size_t allocSize = RegionSpace::GetAllocSize(*o);
-        if (allocSize == 0) {
-            break;
-        }
-        size_t offset = position - start;
-        bool survived = region->IsRouteSurvivedObject(offset);
-        if (survived) {
-            g_phStarts.fetch_add(1, std::memory_order_relaxed);
-            if (o->IsForwarded()) {
-                g_phFwdStarts.fetch_add(1, std::memory_order_relaxed);
-                BaseObject* to = region->GetRouteForProbe(o);
-                bool tipValid = to != nullptr && Heap::IsHeapAddress(to) && to->IsValidObject();
-                if (to == nullptr) {
-                    g_phRouteNull.fetch_add(1, std::memory_order_relaxed);
-                }
-                if (!tipValid) {
-                    if (abandon) {
-                        g_phNoTipAbandon.fetch_add(1, std::memory_order_relaxed);
-                    } else {
-                        g_phNoTip.fetch_add(1, std::memory_order_relaxed);
-                    }
-                    size_t n = g_phLogged.fetch_add(1, std::memory_order_relaxed) + 1;
-                    if (n <= 32) {
-                        LOG(RTLOG_ERROR,
-                            "[GCV2][permhit-receipt] n=%zu point=%s region=%p start=%#zx off=%zu size=%zu "
-                            "from=%p to=%p route=%u rtype=%u young=%u live=%zu "
-                            "— FORWARDED start whose route has no tip",
-                            n, point, region, start, offset, allocSize, o, to,
-                            static_cast<unsigned>(region->GetRouteState()),
-                            static_cast<unsigned>(region->GetRegionType()),
-                            static_cast<unsigned>(region->IsYoungRegion()), region->GetLiveByteCount());
-                    }
-                }
-            }
-        }
-        position += allocSize;
-    }
+    (void)region;
+    (void)point;
 }
+
 bool StayYoungThisCycle(RegionInfo* region)
 {
     if (!kPageAgeAdaptiveTenuring) {
@@ -3604,18 +3388,8 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         }
     }
 
-    // promodomain dual-run force: MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE=1 skips RouteRegion so
-    // the in-place arm (Register + RecordPromotedCrossGenEdges) fires. Default off; product
-    // still routes. Needed because natural_wave residualPromote≡0 and pathRec≡0 (routed-only).
-    // Only force on young GC — major also calls ForwardRegion but has no domain discharge.
-    static const bool forceInPlaceEnv = []() {
-        const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_PROMO_DOMAIN_FORCE_INPLACE */;
-        return v != nullptr && std::strcmp(v, "1") == 0;
-    }();
-    const bool forceInPlace =
-        forceInPlaceEnv && Heap::GetHeap().GetCollector().GetGCStats().reason == GC_REASON_YOUNG;
     const bool stayYoung = youngRegion && StayYoungThisCycle(region);
-    if (forceInPlace || stayYoung || !RouteRegion(region)) {
+    if (stayYoung || !RouteRegion(region)) {
         if (youngRegion && stayYoung) {
             EnlistStayYoungSurvivor(region);
             return;
@@ -3880,44 +3654,6 @@ void RegionManager::ForwardRegion(RegionInfo* region)
         return;
     }
     {
-        static const bool probe = []() {
-            const char* v = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCRECLAIM_PROBE */;
-            return v != nullptr && std::strcmp(v, "1") == 0;
-        }();
-        if (probe && !region->IsLargeRegion()) {
-            size_t start = region->GetRegionStart();
-            size_t alloc = region->GetRegionAllocPtr();
-            size_t totalObjs = 0;
-            size_t survivedObjs = 0;
-            size_t residualValid = 0;
-            uintptr_t pos = start;
-            while (pos < alloc) {
-                BaseObject* o = from_region_addr(pos);
-                if (!o->IsValidObject()) {
-                    break;
-                }
-                size_t sz = o->GetSize();
-                if (sz == 0) {
-                    break;
-                }
-                ++totalObjs;
-                size_t off = pos - start;
-                if (region->IsSurvivedObject(markView, off)) {
-                    ++survivedObjs;
-                } else {
-                    ++residualValid;
-                }
-                pos += sz;
-            }
-            if (residualValid > 0) {
-                VLOG(REPORT,
-                     "[GCRECLAIM][fwd-residual] region=%p start=%#zx alloc=%#zx live=%zu totalObjs=%zu "
-                     "survived=%zu residualUnmarked=%zu young=%u BYPASS=1",
-                     region, start, alloc, region->GetLiveByteCount(), totalObjs, survivedObjs, residualValid,
-                     static_cast<unsigned>(youngRegion));
-            }
-        }
-        // permhit: last point at which a real receipt must already be tip-valid.
         PermhitReceiptAudit(region, "publish");
         // insert-before-unlock (MutatorRelocate.h:124): a concurrent copier may
         // still hold LOCKED after insert. Do not publish FORWARDED/done while

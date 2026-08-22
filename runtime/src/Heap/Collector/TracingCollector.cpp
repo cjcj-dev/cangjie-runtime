@@ -6,9 +6,6 @@
 
 #include "TracingCollector.h"
 
-#include <cstdlib>
-#include <cstring>
-
 #include "Base/CString.h"
 #include "Common/Runtime.h"
 #include "Concurrency/Concurrency.h"
@@ -70,23 +67,7 @@ struct SkippedStackMapCounts {
 };
 
 SkippedStackMapCounts g_skippedStackMapCounts;
-SkippedStackMapCounts g_rootMapMissCounts;
 thread_local size_t g_currentThreadRootMapMissCount = 0;
-
-const bool STRICT_STACKMAP_ENABLED = []() {
-    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GC_STRICT_STACKMAP */;
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}();
-
-const bool ROOTMAP_MISS_COUNT_ENABLED = []() {
-    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS */;
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}();
-
-const bool ROOTMAP_MISS_FATAL_ENABLED = []() {
-    const char* value = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_ROOTMAP_MISS_FATAL */;
-    return value != nullptr && std::strcmp(value, "1") == 0;
-}();
 
 const char* StackMapInvalidReasonName(StackMapInvalidReason reason)
 {
@@ -108,38 +89,17 @@ void ResetSkippedStackMapCounts()
     g_skippedStackMapCounts.zeroEntries.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.pcMiss.store(0, std::memory_order_relaxed);
     g_skippedStackMapCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
-    g_rootMapMissCounts.zeroEntries.store(0, std::memory_order_relaxed);
-    g_rootMapMissCounts.pcMiss.store(0, std::memory_order_relaxed);
-    g_rootMapMissCounts.zeroRootIndices.store(0, std::memory_order_relaxed);
 }
 
 void RecordRootMapMiss(StackMapInvalidReason reason, const FrameInfo& frame, uintptr_t startIP, uintptr_t frameIP,
                        const Mutator& mutator)
 {
+    (void)reason;
+    (void)frame;
+    (void)startIP;
+    (void)frameIP;
+    (void)mutator;
     ++g_currentThreadRootMapMissCount;
-    if (!ROOTMAP_MISS_COUNT_ENABLED && !ROOTMAP_MISS_FATAL_ENABLED) {
-        return;
-    }
-    std::atomic<size_t>* missCount = &g_rootMapMissCounts.zeroRootIndices;
-    switch (reason) {
-        case StackMapInvalidReason::ZERO_ENTRIES:
-            missCount = &g_rootMapMissCounts.zeroEntries;
-            break;
-        case StackMapInvalidReason::PC_MISS:
-            missCount = &g_rootMapMissCounts.pcMiss;
-            break;
-        case StackMapInvalidReason::NONE:
-        case StackMapInvalidReason::ZERO_ROOT_INDICES:
-            break;
-    }
-    missCount->fetch_add(1, std::memory_order_relaxed);
-    if (ROOTMAP_MISS_FATAL_ENABLED) {
-        CString symbol = frame.GetFuncName();
-        LOG(RTLOG_FATAL,
-            "MRT_GCV2_ROOTMAP_MISS_FATAL=1: reason=%s symbol=%s start_ip=%p frame_ip=%p mutator=%p tid=%u",
-            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
-            reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), &mutator, mutator.GetTid());
-    }
 }
 
 // Per-process sample cap for SKIPPED_WHO lines (HotSpot-style named frames).
@@ -164,40 +124,19 @@ ATTR_NO_INLINE void RecordSkippedStackMap(StackMapInvalidReason reason, const Fr
     }
     skippedCount->fetch_add(1, std::memory_order_relaxed);
 
-    // Always-on (cheap): print named identity for first N unique-ish samples so
-    // SKIPPED_PC_MISS is not just a counter. Gate detail volume with env.
-    {
-        size_t maxWho = 16;
-        const char* maxEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_SKIPPED_WHO_MAX */;
-        if (maxEnv != nullptr && maxEnv[0] != '\0') {
-            char* end = nullptr;
-            unsigned long parsed = std::strtoul(maxEnv, &end, 10);
-            if (end != maxEnv) {
-                maxWho = static_cast<size_t>(parsed);
-            }
+    size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
+    if (printed < 16) {
+        if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
+            CString symbol = frame.GetFuncName();
+            uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
+            U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
+            LOG(RTLOG_ERROR,
+                "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
+                "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
+                StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
+                reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
+                reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
         }
-        size_t printed = g_skippedWhoPrinted.load(std::memory_order_relaxed);
-        if (printed < maxWho) {
-            if (g_skippedWhoPrinted.compare_exchange_strong(printed, printed + 1, std::memory_order_relaxed)) {
-                CString symbol = frame.GetFuncName();
-                uintptr_t fa = reinterpret_cast<uintptr_t>(frame.mFrame.GetFA());
-                U32 pcOff = (frameIP >= startIP) ? static_cast<U32>(frameIP - startIP) : 0;
-                LOG(RTLOG_ERROR,
-                    "GC stack map SKIPPED_WHO reason=%s symbol=%s start_ip=%p frame_ip=%p pc_off=%u fa=%p "
-                    "frameType=%u (PC_MISS=exact offset not in stackmap; ZERO_ENTRIES=RECORD_NUM=0)",
-                    StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(),
-                    reinterpret_cast<void*>(startIP), reinterpret_cast<void*>(frameIP), pcOff,
-                    reinterpret_cast<void*>(fa), static_cast<unsigned>(frame.GetFrameType()));
-            }
-        }
-    }
-
-    if (UNLIKELY(STRICT_STACKMAP_ENABLED)) {
-        CString symbol = frame.GetFuncName();
-        LOG(RTLOG_FATAL,
-            "MRT_GC_STRICT_STACKMAP=1: invalid stack map reason=%s symbol=%s start_ip=%p frame_ip=%p",
-            StackMapInvalidReasonName(reason), symbol.IsEmpty() ? "?" : symbol.Str(), reinterpret_cast<void*>(startIP),
-            reinterpret_cast<void*>(frameIP));
     }
 }
 
@@ -211,16 +150,6 @@ void ReportSkippedStackMapCounts()
             "GC stack map warning: SKIPPED_ZERO_ENTRIES=%zu SKIPPED_PC_MISS=%zu "
             "SKIPPED_OTHER_ZERO_ROOT_INDICES=%zu",
             zeroEntries, pcMiss, zeroRootIndices);
-    }
-
-    if (ROOTMAP_MISS_COUNT_ENABLED) {
-        size_t rootZeroEntries = g_rootMapMissCounts.zeroEntries.load(std::memory_order_relaxed);
-        size_t rootPcMiss = g_rootMapMissCounts.pcMiss.load(std::memory_order_relaxed);
-        size_t rootOther = g_rootMapMissCounts.zeroRootIndices.load(std::memory_order_relaxed);
-        LOG(RTLOG_ERROR,
-            "[GCV2][rootmap-miss] zero_entries=%zu pc_miss=%zu other=%zu total=%zu "
-            "env=MRT_GCV2_ROOTMAP_MISS=1",
-            rootZeroEntries, rootPcMiss, rootOther, rootZeroEntries + rootPcMiss + rootOther);
     }
 }
 } // namespace
@@ -921,7 +850,6 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
             GCThreadPool* threadPool = GetThreadPool();
             WorkStack tmp;
             TracingImpl(workStack, tmp, (workStack.size() > MAX_MARKING_WORK_SIZE) || (threadPool->GetWorkCount() > 0));
-            SatbBuffer::ReportCarryProbe();
             return workStack.empty();
         }
         if (LIKELY(!workStack.empty())) {
@@ -983,7 +911,6 @@ bool TracingCollector::MarkSatbBuffer(WorkStack& workStack)
         // the pre-pause termination test used to drop.
         NoteMarkTerminateContinue(workStack.size());
     } while (true);
-    SatbBuffer::ReportCarryProbe();
     ReportMarkTerminateContinue();
     return true;
 }
