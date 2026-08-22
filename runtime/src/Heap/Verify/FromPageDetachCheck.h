@@ -12,11 +12,13 @@
 namespace MapleRuntime {
 class RegionInfo;
 
-// Phase 1 of FROM_PAGE_DETACH_GATE: a measurement-only central checkpoint.
-// Every from-page free/reuse funnel calls the same function. It records evidence
-// that the old page still has consumers, but never waits, rejects or changes a
-// region/list/tree. Phase 2 may change the decision made after this observation;
-// it must not grow a second evidence predicate.
+// FROM_PAGE_DETACH_GATE central checkpoint. Every from-page free/reuse funnel
+// calls the same evidence predicate. The product-default OFF arm only measures;
+// CJRT_FROM_REUSE_GATE=1 refuses reuse and lets the caller quarantine the range.
+//
+// ZGC anchors: zForwarding.cpp:171-181 waits for ref_count==0 in detach_page;
+// zForwarding.inline.hpp makes retain/release the admission protocol; and
+// zRelocate.cpp:1018-1047 releases the page only after the remap closure.
 namespace FromPageDetach {
 
 enum class Site : uint8_t {
