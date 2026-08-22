@@ -86,8 +86,10 @@ struct GcTriggerInputs {
     size_t capacityBytes = 0;
     size_t softMaxBytes = 0;
     double lastGcDurationSec = 0.0;
+    double lastGcDurationSdSec = 0.0;
     double lastYoungGcDurationSec = 0.0;
     double lastOldGcDurationSec = 0.0;
+    size_t relocHeadroomBytes = 0;
     double timeSinceLastGcSec = 0.0;
     double timeSinceLastMajorSec = 0.0;
     double collectionIntervalSec = 0.0;
@@ -191,7 +193,9 @@ inline double GcTriggerFreeBytes(const GcTriggerInputs& in)
 {
     const size_t cap = GcTriggerSoftMaxBytes(in);
     const size_t used = std::min(in.usedBytes, cap);
-    return static_cast<double>(cap - used);
+    const size_t freeIncludingHeadroom = cap - used;
+    const size_t headroom = std::min(in.relocHeadroomBytes, freeIncludingHeadroom);
+    return static_cast<double>(freeIncludingHeadroom - headroom);
 }
 
 inline double GcTriggerTimeUntilOomSec(const GcTriggerInputs& in)
@@ -282,6 +286,13 @@ inline bool RuleWarmup(const GcTriggerInputs& in, bool requestGc = kGcTriggerWar
     const double usedThresholdPct = (static_cast<double>(in.warmupCyclesDone) + 1.0) * kGcTriggerWarmupStepPercent;
     const double usedPct = 100.0 * static_cast<double>(in.usedBytes) / static_cast<double>(in.capacityBytes);
     return usedPct >= usedThresholdPct;
+}
+
+inline double GcTriggerPredictedDurationSec(const GcTriggerInputs& in)
+{
+    // zDirector.cpp:277-283 — moving-average cycle time + ~3.3σ.
+    const double avg = in.lastYoungGcDurationSec > 0.0 ? in.lastYoungGcDurationSec : in.lastGcDurationSec;
+    return avg + (in.lastGcDurationSdSec * kGcTriggerOneIn1000);
 }
 
 inline bool RuleAllocRate(const GcTriggerInputs& in)

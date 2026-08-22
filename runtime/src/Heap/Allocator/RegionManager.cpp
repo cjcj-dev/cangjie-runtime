@@ -1936,6 +1936,12 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             const char* disableMinorEnv = static_cast<const char*>(nullptr) /* pinned-off:MRT_GCV2_DISABLE_MINOR */;
             return disableMinorEnv != nullptr && std::strcmp(disableMinorEnv, "1") == 0;
         }();
+        // zDirector.cpp:248-293 — default off. =1 replaces YOUNG/HEU occupancy
+        // lines with time_until_gc <= 0 (zDirector.cpp:288-293).
+        static const bool triggerRate = []() {
+            const char* env = std::getenv("MRT_GCV2_TRIGGER_RATE");
+            return env != nullptr && std::strcmp(env, "1") == 0;
+        }();
         if (disableMinor) {
             youngRegionTriggerBytes = std::numeric_limits<size_t>::max();
         }
@@ -1967,6 +1973,14 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
             in.warmupCyclesDone = gcStats.warmupCyclesDone.load(std::memory_order_relaxed);
             in.isWarm = gcStats.isWarm.load(std::memory_order_relaxed);
             in.isTimeTrustable = gcStats.isTimeTrustable.load(std::memory_order_relaxed);
+            if (triggerRate) {
+                in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
+                in.lastGcDurationSdSec = GCStats::lastYoungGcDurationSdSec.load(std::memory_order_relaxed);
+                in.lastGcDurationSec = GcTriggerPredictedDurationSec(in);
+                const uint32_t gcThreads = static_cast<uint32_t>(
+                    std::max(Heap::GetHeap().GetCollectorResources().GetGCThreadCount(false), 1));
+                in.relocHeadroomBytes = static_cast<size_t>(gcThreads) * RegionInfo::UNIT_SIZE;
+            }
             if constexpr (kGcTriggerProactiveEnabled || kGcTriggerDynamicWorkersEnabled) {
                 in.lastYoungGcDurationSec = GCStats::lastYoungGcDurationAvgSec.load(std::memory_order_relaxed);
                 in.lastOldGcDurationSec = GCStats::lastOldGcDurationAvgSec.load(std::memory_order_relaxed);
@@ -2007,6 +2021,13 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                      static_cast<int>(d.rule), allocated, in.capacityBytes);
                 collector.RequestGC(GC_REASON_HEU, true);
                 requested = true;
+            } else if (triggerRate && d.kind == GcTriggerKind::MINOR) {
+                g_gcTriggerTurned.fetch_add(1, std::memory_order_relaxed);
+                NoteGcTriggerRule(d.rule);
+                DLOG(ALLOC, "request young gc via trigger-rate rule=%d young=%zu",
+                     static_cast<int>(d.rule), youngAllocated);
+                collector.RequestGC(GC_REASON_YOUNG, true);
+                requested = true;
             } else if (ShouldRequestDirectorMinor(d.kind, youngAllocated, directorMinorBytes)) {
                 // zDirector.cpp:331-381 — alloc-rate / high-usage keep evaluating after
                 // the occupancy watermark has been raised. Occupancy young still uses
@@ -2021,14 +2042,16 @@ RegionInfo* RegionManager::TakeRegion(size_t num, RegionInfo::UnitRole type, boo
                 requested = true;
             }
         }
-        if (!requested && youngAllocated >= youngRegionTriggerBytes) {
-            DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
-            collector.RequestGC(GC_REASON_YOUNG, true);
-            requested = true;
-        }
-        if (!requested && allocated >= heapThreshold) {
-            DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
-            collector.RequestGC(GC_REASON_HEU, true);
+        if (!triggerRate) {
+            if (!requested && youngAllocated >= youngRegionTriggerBytes) {
+                DLOG(ALLOC, "request young gc: allocated %zu, threshold %zu", youngAllocated, youngRegionTriggerBytes);
+                collector.RequestGC(GC_REASON_YOUNG, true);
+                requested = true;
+            }
+            if (!requested && allocated >= heapThreshold) {
+                DLOG(ALLOC, "request heu gc: allocated %zu, threshold %zu", allocated, heapThreshold);
+                collector.RequestGC(GC_REASON_HEU, true);
+            }
         }
     }
 

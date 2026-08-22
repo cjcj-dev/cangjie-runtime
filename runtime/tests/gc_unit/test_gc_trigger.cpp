@@ -472,3 +472,27 @@ GC_TEST(GcTrigger, DynamicWorkersDefaultOffUsesPoolCap)
     const GcWorkerSelection on = SelectGcWorkers(in, 8, 8.0, true);
     GC_EXPECT_TRUE(on.youngWorkers >= 1u && on.youngWorkers <= 8u);
 }
+
+GC_TEST(GcTrigger, PredictedDurationAddsSigma)
+{
+    GcTriggerInputs in = BaseWarmHeap();
+    in.lastGcDurationSec = 0.50;
+    in.lastYoungGcDurationSec = 0.40;
+    in.lastGcDurationSdSec = 0.10;
+    const double got = GcTriggerPredictedDurationSec(in);
+    GC_EXPECT_TRUE(got > 0.40 + 0.10 * 3.0);
+    GC_EXPECT_TRUE(got < 0.40 + 0.10 * 3.5);
+}
+
+GC_TEST(GcTrigger, RelocHeadroomShrinksFree)
+{
+    GcTriggerInputs in = BaseWarmHeap();
+    in.usedBytes = 400 * 1024 * 1024;
+    in.capacityBytes = 1000 * 1024 * 1024;
+    in.softMaxBytes = 1000 * 1024 * 1024;
+    in.relocHeadroomBytes = 0;
+    const double free0 = GcTriggerFreeBytes(in);
+    in.relocHeadroomBytes = 50 * 1024 * 1024;
+    const double free1 = GcTriggerFreeBytes(in);
+    GC_EXPECT_TRUE(free1 + 50.0 * 1024 * 1024 == free0);
+}

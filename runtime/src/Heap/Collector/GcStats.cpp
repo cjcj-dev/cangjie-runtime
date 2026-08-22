@@ -29,6 +29,7 @@ std::atomic<size_t> GCStats::oldLiveAtMarkEnd{ 0 };
 std::atomic<double> GCStats::reclaimedPerYoungAvg{ 0.0 };
 std::atomic<double> GCStats::reclaimedPerOldAvg{ 0.0 };
 std::atomic<double> GCStats::lastYoungGcDurationAvgSec{ 0.0 };
+std::atomic<double> GCStats::lastYoungGcDurationSdSec{ 0.0 };
 std::atomic<double> GCStats::lastOldGcDurationAvgSec{ 0.0 };
 
 namespace {
@@ -90,6 +91,7 @@ void GCStats::Init()
     reclaimedPerYoungAvg.store(0.0, std::memory_order_relaxed);
     reclaimedPerOldAvg.store(0.0, std::memory_order_relaxed);
     lastYoungGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
+    lastYoungGcDurationSdSec.store(0.0, std::memory_order_relaxed);
     lastOldGcDurationAvgSec.store(0.0, std::memory_order_relaxed);
     g_youngDurationSeq.reset();
     g_oldDurationSeq.reset();
@@ -170,7 +172,9 @@ void GCStats::RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size
     g_youngDurationSeq.add(static_cast<double>(durationNs) / static_cast<double>(SECOND_TO_NANO_SECOND));
     g_youngReclaimedSeq.add(static_cast<double>(collectedBytes));
     lastYoungGcDurationAvgSec.store(g_youngDurationSeq.avg(), std::memory_order_relaxed);
+    lastYoungGcDurationSdSec.store(g_youngDurationSeq.sd(), std::memory_order_relaxed);
     reclaimedPerYoungAvg.store(g_youngReclaimedSeq.avg(), std::memory_order_relaxed);
+    isTimeTrustable.store(true, std::memory_order_relaxed);
     VLOG(REPORT,
          "[GCV2][gctrigger] young-watermark candidate=%zu promoted=%zu collected=%zu trigger=%zu cap=%zu heu=%zu",
          candidateBytes, promotedBytes, collectedBytes, trigger, maxCapacity, GetThreshold());

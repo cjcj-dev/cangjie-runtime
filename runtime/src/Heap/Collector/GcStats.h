@@ -128,6 +128,7 @@ public:
     static std::atomic<double> reclaimedPerYoungAvg;
     static std::atomic<double> reclaimedPerOldAvg;
     static std::atomic<double> lastYoungGcDurationAvgSec;
+    static std::atomic<double> lastYoungGcDurationSdSec;
     static std::atomic<double> lastOldGcDurationAvgSec;
 
     void RecordYoungStats(size_t candidateBytes, size_t promotedBytes, size_t collectedBytes, uint64_t durationNs,
