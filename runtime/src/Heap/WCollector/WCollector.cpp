@@ -8319,7 +8319,13 @@ void WCollector::DoYoungGarbageCollection()
         StackRootSlotAttest::Finish();
     }
 
-    constexpr bool fullYoungScan = false;
+    // Diagnostic: MRT_GCV2_FULL_YOUNG_SCAN=1. Default off — product young mark is
+    // remset+stack (c2d5fee432). FYS is the remaining insurance net after store-good
+    // remset skip was removed and format-2 stackmaps still omit user.main oop-slots.
+    static const bool fullYoungScan = []() {
+        const char* v = std::getenv("MRT_GCV2_FULL_YOUNG_SCAN");
+        return v != nullptr && v[0] == '1' && v[1] == '\0';
+    }();
     // remsetdrain: hash-work reduction defaults on; `=0` is the immediate rollback.
     // The drain side uses the bitmap's exact distinct count to reserve its destination.
     // The FYS-only consumed-ledger elision is decided later, after youngConcMark is known.
