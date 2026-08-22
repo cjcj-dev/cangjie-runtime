@@ -72,16 +72,16 @@ public:
     T GetAtomicValue(size_t pos, size_t bitLen) const
     {
         T value = __atomic_load_n(&fieldVal, __ATOMIC_ACQUIRE);
-        T bitMask = ((1 << bitLen) - 1) << pos;
+        T bitMask = FieldMask(pos, bitLen);
         return value & bitMask;
     }
     void SetAtomicValue(size_t pos, size_t bitLen, T newValue)
     {
         do {
             T oldValue = fieldVal;
-            T bitMask = ((1 << bitLen) - 1) << pos;
+            T bitMask = FieldMask(pos, bitLen);
             T unchangedBitMask = ~bitMask;
-            T newFieldValue = ((newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
+            T newFieldValue = (static_cast<T>(newValue << pos) & bitMask) | (oldValue & unchangedBitMask);
             if (__atomic_compare_exchange_n(&fieldVal, &oldValue, newFieldValue, false, __ATOMIC_ACQ_REL,
                                             __ATOMIC_ACQUIRE)) {
                 return;
@@ -90,6 +90,14 @@ public:
     }
 
 private:
+    static constexpr T FieldMask(size_t pos, size_t bitLen)
+    {
+        constexpr size_t width = std::numeric_limits<T>::digits;
+        const T lowMask = bitLen >= width ? static_cast<T>(~T(0))
+                                          : static_cast<T>((T(1) << bitLen) - T(1));
+        return static_cast<T>(lowMask << pos);
+    }
+
     T fieldVal;
 };
 // this class is the metadata of region, it contains all the information needed to manage its corresponding memory.
